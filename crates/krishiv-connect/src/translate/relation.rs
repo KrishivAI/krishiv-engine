@@ -3,8 +3,8 @@
 //! `SparkConnectPlanner.transformRelation`.
 //!
 //! Supported: `Read` (named tables and data sources), `SQL`, `Project`,
-//! `Filter`, `Join`, `Sort`, `Limit`, `Aggregate`, `SubqueryAlias` and
-//! `WithColumns`. The `plan_id` of a relation's `RelationCommon` becomes the
+//! `Filter`, `Join`, `Sort`, `Limit`, `Aggregate`, `SubqueryAlias`,
+//! `WithColumns` and `Range`. The `plan_id` of a relation's `RelationCommon` becomes the
 //! `Origin` of the node it translates to, as Spark tags the plan it builds
 //! for the relation; `df["a"]` references name that id.
 
@@ -99,6 +99,7 @@ impl Translator<'_> {
                 }
             }
             RelType::WithColumns(w) => self.with_columns(w)?,
+            RelType::Range(r) => self.range(r)?,
             other => {
                 return Err(unsupported_variant(
                     "relation",
@@ -323,6 +324,49 @@ impl Translator<'_> {
             input,
             grouping,
             aggregates: keys.into_iter().chain(aggregates).collect(),
+        })
+    }
+
+    /// `Range`: `range(start, end, step, numPartitions)`, as Spark builds
+    /// it (defaults: `start` 0, `numPartitions` from
+    /// `spark.sql.leafNodeDefaultParallelism` else default parallelism,
+    /// resolved at execution).
+    fn range(&mut self, r: &pb::Range) -> Result<PlanNode> {
+        use krishiv_common::error::{FailedFunctionCall, KrishivInvalidPartitionNumber};
+        use krishiv_plan::{AttrId, BoundColumn};
+        // The Connect path builds the resolved leaf directly, as
+        // `Session::range` does; the id is fresh within this
+        // translation (one per translated node).
+        let id = AttrId(self.nodes as u64);
+        let num_partitions = match r.num_partitions {
+            Some(n) if n <= 0 => {
+                return Err(KrishivInvalidPartitionNumber {
+                    num_partitions: n.to_string(),
+                }
+                .into());
+            }
+            Some(n) => Some(u32::try_from(n).map_err(|_| {
+                unsupported_field("Range", "num_partitions", "a partition count past u32")
+            })?),
+            None => None,
+        };
+        if r.step == 0 {
+            return Err(FailedFunctionCall {
+                func_name: "`range`".to_owned(),
+            }
+            .into());
+        }
+        Ok(PlanNode::Range {
+            start: r.start.unwrap_or(0),
+            end: r.end,
+            step: r.step,
+            num_slices: num_partitions,
+            output: BoundColumn {
+                id,
+                name: "id".to_owned(),
+                data_type: krishiv_types::DataType::Long,
+                nullable: false,
+            },
         })
     }
 

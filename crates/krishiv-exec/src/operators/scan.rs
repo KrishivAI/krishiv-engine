@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
+use krishiv_io::split::FilePartition;
 use krishiv_io::{
     ColumnPath, FieldMapping, FileRef, MetadataCols, PushdownExpr, RowLevel, RowSelection,
     ScanFilter,
@@ -139,6 +140,31 @@ pub trait ScanPushdown: Send + Sync {
     /// `INTERNAL_ERROR` for a projection path that does not exist or a
     /// selection the scan cannot honour.
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>>;
+    /// The same scan reading exactly `files` in `partitions` (split file
+    /// indexes refer to the files), as a distributed task does. The default
+    /// refuses: only file scans honour it.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a scan that does not read files.
+    fn with_file_splits(
+        &self,
+        files: Vec<FileRef>,
+        partitions: Vec<FilePartition>,
+    ) -> Result<Arc<dyn ScanPushdown>> {
+        let _ = (files, partitions);
+        Err(internal("this scan does not read files".to_owned()))
+    }
+    /// The same scan reading exactly `batches`, as a distributed task does.
+    /// The default refuses: only in-memory scans honour it.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a scan that does not read in-memory batches.
+    fn with_memory_batches(&self, batches: Vec<Batch>) -> Result<Arc<dyn ScanPushdown>> {
+        let _ = batches;
+        Err(internal(
+            "this scan does not read in-memory batches".to_owned(),
+        ))
+    }
     /// The schema of the batches a source built with `pushdowns` returns,
     /// without building it (planning reads it; the source is built when the
     /// plan is instantiated). The default builds the source.
@@ -195,6 +221,9 @@ pub(super) struct ScanLocal {
     pub(super) claimed: u64,
     /// The runtime filters' row stage.
     pub(super) rows: super::RowStage,
+    /// The driver's partition: pushed filters evaluate stateful functions
+    /// in it (see [`Predicate::evaluate_in`]).
+    pub(super) partition: u32,
 }
 
 impl MemoryScan {
@@ -278,7 +307,12 @@ impl MemoryScan {
 
     /// Reads the next piece of the claimed (non-empty) morsel, filtered and
     /// projected.
-    pub(super) fn next_piece(&self, local: &mut ScanLocal, batch_rows: usize) -> Result<Batch> {
+    pub(super) fn next_piece(
+        &self,
+        local: &mut ScanLocal,
+        batch_rows: usize,
+        partition: u32,
+    ) -> Result<Batch> {
         let batch = self
             .batches
             .get(local.batches.start)
@@ -301,7 +335,7 @@ impl MemoryScan {
             if piece.num_rows() == 0 {
                 break;
             }
-            let mask = filter.evaluate(piece.data())?;
+            let mask = filter.evaluate_in(piece.data(), partition)?;
             piece = piece.filter(&mask)?;
         }
         // After the pushed filters, as Spark evaluates a runtime filter
@@ -352,7 +386,8 @@ impl MemoryScan {
         // One piece per call, even an empty input batch or one a pushed
         // filter emptied: the driver must reach a batch boundary (cancel,
         // abort and spill checks) after every piece read.
-        let piece = self.next_piece(local, g.batch_rows)?;
+        let partition = local.partition;
+        let piece = self.next_piece(local, g.batch_rows, partition)?;
         g.returned
             .fetch_add(piece.num_rows() as u64, Ordering::Relaxed);
         Ok(Some(piece))
@@ -366,6 +401,29 @@ impl ScanPushdown for MemoryScan {
 
     fn filter_pushdown(&self, _filter: &PushedFilter) -> FilterPushdown {
         FilterPushdown::Exact
+    }
+
+    fn with_memory_batches(&self, batches: Vec<Batch>) -> Result<Arc<dyn ScanPushdown>> {
+        if let Some(bad) = batches
+            .iter()
+            .find(|b| b.schema().fields() != self.table.fields())
+        {
+            return Err(internal(format!(
+                "scan batch has fields {:?}, expected {:?}",
+                bad.schema().fields(),
+                self.table.fields()
+            )));
+        }
+        Ok(Arc::new(Self {
+            table: Arc::clone(&self.table),
+            batches: batches.into(),
+            projection: self.projection.clone(),
+            filters: self.filters.clone(),
+            limit: self.limit,
+            output: Arc::clone(&self.output),
+            rows_read: AtomicU64::new(0),
+            runtime: self.runtime.clone(),
+        }))
     }
 
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>> {
@@ -421,6 +479,7 @@ impl Source for MemoryScan {
             offset: 0,
             claimed: 0,
             rows: super::RowStage::new(&g.runtime, &self.table, self.runtime.settings()),
+            partition: _ctx.partition(),
         }))
     }
 

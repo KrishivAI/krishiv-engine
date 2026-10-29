@@ -31,9 +31,11 @@
 
 pub use krishiv_common::error::KrishivError as Error;
 pub use krishiv_session::{
-    Column, DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, ExplainVerbose, GroupedData,
-    JoinType, OptimizerStep, QueryProfile, RecordBatchStream, RuntimeConf, Session, SessionBuilder,
-    TextOptions, functions,
+    ArgField, Column, DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, ExplainVerbose,
+    GraphFormat, GroupedData, InvokeContext, JoinType, NullHandling, OptimizerStep, QueryProfile,
+    RecordBatchStream, ReturnField, RuntimeConf, ScalarUdf, Session, SessionBuilder, Signature,
+    TextOptions, UdfArg, UdfError, UdfInputType, UdfLibrary, UdfProperties, dot_of_profile,
+    functions, mermaid_of_profile,
 };
 /// Spark SQL data types, for [`Column::cast`].
 pub use krishiv_types::DataType;
@@ -52,3 +54,10 @@ pub mod arrow {
 /// Admin and UI server (feature `ui`).
 #[cfg(feature = "ui")]
 pub use krishiv_server as server;
+
+/// Starts the tokio-console subscriber when the `tokio-console` feature is
+/// on and `KRISHIV_TOKIO_CONSOLE=1` (see `krishiv_exec::console`); a no-op
+/// otherwise. The CLI calls this at startup; embedders call it before
+/// building a session.
+#[cfg(feature = "tokio-console")]
+pub use krishiv_exec::maybe_init_tokio_console;

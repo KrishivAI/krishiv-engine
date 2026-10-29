@@ -3,6 +3,10 @@
 //! reference over random partitions, orderings and batch splits; Spark's
 //! `NTile`, exact decimal frames, filters, memory, weights and plan checks.
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing and temp-dir cleanup; never runs on a compute worker"
+)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +40,7 @@ fn pool(limit: usize) -> Arc<TreePool> {
             spill_wait_timeout: Duration::from_secs(5),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: krishiv_memory::DEFAULT_SPILL_SCRATCH_RESERVE,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     )
@@ -155,6 +160,7 @@ fn agg(function: AggregateFunction, arg: Option<usize>) -> WindowFunction {
         function,
         args: arg.into_iter().collect(),
         input: AggInput::Raw,
+        mask: None,
         arg_type: match arg {
             Some(4) => DataType::Utf8View,
             Some(_) => DataType::Int64,
@@ -479,7 +485,16 @@ fn reference(
                         }
                         AggregateFunction::AnyValue { .. }
                         | AggregateFunction::MaxBy
-                        | AggregateFunction::MinBy => {
+                        | AggregateFunction::MinBy
+                        | AggregateFunction::StddevSamp
+                        | AggregateFunction::StddevPop
+                        | AggregateFunction::VarSamp
+                        | AggregateFunction::VarPop
+                        | AggregateFunction::Skewness
+                        | AggregateFunction::Kurtosis
+                        | AggregateFunction::Corr
+                        | AggregateFunction::CovarSamp
+                        | AggregateFunction::CovarPop => {
                             unreachable!("no window test aggregates with this function")
                         }
                     }
@@ -820,6 +835,7 @@ fn decimal_window(function: AggregateFunction, frame: WindowFrame, p: u8, ansi: 
                 function,
                 args: vec![1],
                 input: AggInput::Raw,
+                mask: None,
                 arg_type: DataType::Decimal128(p, 0),
                 name: "s".to_owned(),
             }),
@@ -942,6 +958,7 @@ async fn filters_and_ignore_nulls() {
             function,
             args: vec![1],
             input: AggInput::Raw,
+            mask: None,
             arg_type: DataType::Int64,
             name: "x".to_owned(),
         }),
@@ -1210,6 +1227,7 @@ async fn string_results_share_the_input_buffers() {
                 function: AggregateFunction::Max,
                 args: vec![1],
                 input: AggInput::Raw,
+                mask: None,
                 arg_type: DataType::Utf8View,
                 name: "m".to_owned(),
             }),
@@ -1518,6 +1536,7 @@ async fn exact_and_string_frames_from_disk() {
                     function,
                     args: vec![1],
                     input: AggInput::Raw,
+                    mask: None,
                     arg_type: DataType::Decimal128(20, 0),
                     name: "d".to_owned(),
                 }),

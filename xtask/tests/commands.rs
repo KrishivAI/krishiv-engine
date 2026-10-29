@@ -192,6 +192,46 @@ fn repo_sources_pass_the_source_guard() {
 }
 
 #[test]
+fn source_guard_rejects_blocking_calls_in_exec() {
+    let dir = tmp("guard-blocking");
+    write(&dir, "crates/krishiv-exec/src/lib.rs", "fn ok() {}\n");
+    assert!(
+        xtask(&["source-guard", dir.to_str().unwrap()])
+            .status
+            .success()
+    );
+    write(
+        &dir,
+        "crates/krishiv-exec/src/worker.rs",
+        "fn idle() { std::thread::sleep(d); }\n",
+    );
+    let out = xtask(&["source-guard", dir.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("worker.rs:1"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Test-only code is exempt: a `#[cfg(test)]` module and a `tests.rs`
+    // file may block (they never run on a compute worker).
+    write(
+        &dir,
+        "crates/krishiv-exec/src/worker.rs",
+        "#[cfg(test)]\nmod tests { fn idle(rt: &Runtime) { rt.block_on(run()); } }\n",
+    );
+    write(
+        &dir,
+        "crates/krishiv-exec/src/tests.rs",
+        "fn idle() { std::fs::read_to_string(p); }\n",
+    );
+    assert!(
+        xtask(&["source-guard", dir.to_str().unwrap()])
+            .status
+            .success()
+    );
+}
+
+#[test]
 fn dco_check_on_a_real_repo() {
     let dir = init_repo("dco");
     let repo = dir.to_str().unwrap();
@@ -903,6 +943,310 @@ fn wheel_sizes_record_and_gate() {
         .unwrap();
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("no wheels"),
+        "{out:?}"
+    );
+}
+
+/// `budgets --cache-main` + `budgets --precheck`: the local equivalent of
+/// CI's measure/compare split, through a fake `cargo` and a throwaway repo.
+/// Without a cached main measurement the step skips (never a false failure);
+/// with one it gates the delta with the CI rule. The throwaway repo has no
+/// `budgets.json` at all, so a passing run also proves the stale absolute
+/// baseline is never read.
+#[cfg(unix)]
+#[test]
+fn budgets_precheck_gates_the_delta_against_the_cached_main() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("budgets-precheck");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    write(&dir, "README.md", "hi\n");
+    // The unsafe-site scan reads `crates/`; an empty one measures nothing.
+    std::fs::create_dir_all(dir.join("crates")).unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    git(&dir, &["switch", "-q", "-c", "feature"]);
+    write(&dir, "feature.txt", "work\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "work"]);
+    let repo = dir.to_str().unwrap().to_owned();
+
+    // A fixed measurement (1 transitive crate, a 10-byte binary), whatever
+    // the checkout holds; the target directory comes from `FAKE_TARGET`.
+    let target = dir.join("target");
+    let fake = dir.join("cargo");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+case "$1" in
+  metadata) printf '{"workspace_members":["w"],"resolve":{"nodes":[{"id":"w"},{"id":"dep"}]},"target_directory":"%s"}' "$FAKE_TARGET" ;;
+  tree) printf 'krishiv-cli v0.1.0 (/w)\ndep v1.0.0\n' ;;
+  build)
+    while [ $# -gt 0 ]; do [ "$1" = --target-dir ] && d=$2; shift; done
+    mkdir -p "$d/dist" && printf '0123456789' > "$d/dist/krishiv" ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let sha_of = |rev: &str| {
+        let out = Command::new("git")
+            .args(["rev-parse", rev])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let run = |args: &[&str], approved: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.arg("budgets")
+            .args(args)
+            .env("CARGO", &fake)
+            .env("FAKE_TARGET", &target)
+            .env("CARGO_TARGET_DIR", &target)
+            .env_remove("GITHUB_STEP_SUMMARY")
+            .env_remove("BUDGET_APPROVED")
+            .env_remove("UNSAFE_APPROVED");
+        if approved {
+            c.env("BUDGET_APPROVED", "1");
+        }
+        c.output().unwrap()
+    };
+    let precheck = ["--precheck", "--repo", &repo, "--base", "main"];
+
+    // No cached measurement yet: skip, never fail.
+    let out = run(&precheck, false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains("budgets: skipped (no main baseline; CI checks it)"),
+        "{out:?}"
+    );
+    // An unknown base is an error, not a silent skip.
+    let out = run(
+        &["--precheck", "--repo", &repo, "--base", "no-such-ref"],
+        false,
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("merge-base"),
+        "{out:?}"
+    );
+
+    // Cache the main measurement (as on a main checkout), then switch back:
+    // the feature branch's merge-base is that main commit.
+    git(&dir, &["switch", "-q", "main"]);
+    let out = run(&["--cache-main", "--repo", &repo], false);
+    assert!(out.status.success(), "{out:?}");
+    let cache = target
+        .join("precheck")
+        .join(format!("budgets-main-{}.json", sha_of("HEAD")));
+    assert!(cache.is_file(), "cache-main wrote {cache:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("cached the main measurement"),
+        "{out:?}"
+    );
+    // Back on the branch: the delta against the cached main passes. The
+    // feature commit only adds a text file outside `crates/`, which the
+    // measurement does not see.
+    git(&dir, &["switch", "-q", "feature"]);
+    let out = run(&precheck, false);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("| transitive crates | 1 | 1 |"), "{out:?}");
+    assert!(
+        stdout.contains("| dist binary bytes | 10 | 10 |"),
+        "{out:?}"
+    );
+
+    // Growth over the cached main fails without the label, passes with it.
+    let mut measured: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
+    measured["binary_bytes"] = serde_json::json!(9);
+    std::fs::write(&cache, serde_json::to_string_pretty(&measured).unwrap()).unwrap();
+    let out = run(&precheck, false);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("dist binary bytes: 9 -> 10"),
+        "{out:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("budget-approved"),
+        "{out:?}"
+    );
+    assert!(
+        run(&precheck, true).status.success(),
+        "approved growth passes"
+    );
+    // A corrupt cache is an error, never a silent pass.
+    std::fs::write(&cache, "{").unwrap();
+    let out = run(&precheck, false);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("bad "),
+        "{out:?}"
+    );
+    // Flag soup is a usage error.
+    assert!(
+        !run(&["--precheck", "--compare", "x"], false)
+            .status
+            .success()
+    );
+}
+
+/// `budgets --cache-main` refuses a dirty tree: the cache is keyed by
+/// `HEAD`, so measuring with uncommitted changes would file a measurement
+/// that does not match the commit. Untracked `target/` output never counts.
+#[test]
+fn budgets_cache_main_rejects_a_dirty_working_tree() {
+    let dir = init_repo("budgets-dirty");
+    let repo = dir.to_str().unwrap();
+    // Tracked modification without a commit: the gate fails before measuring.
+    write(&dir, "README.md", "dirty\n");
+    let out = xtask(&["budgets", "--cache-main", "--repo", repo]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains("uncommitted changes") && stderr.contains("commit or stash"),
+        "{out:?}"
+    );
+}
+
+/// The real `git`, for fake-`git` scripts to delegate to.
+fn real_git() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|d| d.join("git"))
+        .find(|p| p.is_file())
+        .unwrap()
+}
+
+/// A `git` that answers `subcommand` with `answer` and delegates
+/// everything else to the real one, first on `PATH` for the child.
+#[cfg(unix)]
+fn fake_git(bin: &Path, subcommand: &str, answer: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    write(
+        bin,
+        "git",
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"{subcommand}\" ]; then printf '%s' \"{answer}\"; exit 0; fi\nexec \"$REAL_GIT\" \"$@\"\n"
+        ),
+    );
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn xtask_with_path(args: &[&str], bin: &Path) -> Output {
+    let path = format!(
+        "{}:{}",
+        bin.to_str().unwrap(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(args)
+        .env("PATH", path)
+        .env("REAL_GIT", real_git())
+        .output()
+        .unwrap()
+}
+
+/// `budgets --precheck` rejects a merge-base that is not a commit id: the
+/// cache lookup must never escape its directory.
+#[cfg(unix)]
+#[test]
+fn budgets_precheck_rejects_an_unsafe_merge_base() {
+    let dir = init_repo("budgets-bad-base");
+    let repo = dir.to_str().unwrap().to_owned();
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fake_git(&bin, "merge-base", "../evil");
+    let out = xtask_with_path(
+        &["budgets", "--precheck", "--repo", &repo, "--base", "main"],
+        &bin,
+    );
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("bad merge-base"),
+        "{out:?}"
+    );
+}
+
+/// `budgets --cache-main` rejects a `HEAD` id that is not a commit id.
+#[cfg(unix)]
+#[test]
+fn budgets_cache_main_rejects_an_unsafe_head_id() {
+    let dir = init_repo("budgets-bad-head");
+    let repo = dir.to_str().unwrap().to_owned();
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fake_git(&bin, "rev-parse", "not a sha");
+    let out = xtask_with_path(&["budgets", "--cache-main", "--repo", &repo], &bin);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("bad HEAD id"),
+        "{out:?}"
+    );
+}
+
+/// `budgets --cache-main` in a repository without a Rust project reports
+/// the cargo failure instead of caching anything.
+#[test]
+fn budgets_cache_main_reports_a_cargo_metadata_failure() {
+    let dir = init_repo("budgets-no-cargo");
+    let repo = dir.to_str().unwrap();
+    let out = xtask(&["budgets", "--cache-main", "--repo", repo]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cargo metadata failed"),
+        "{out:?}"
+    );
+}
+
+/// `budgets --cache-main` reports a cache write failure: measuring may
+/// succeed while filing the measurement fails.
+#[cfg(unix)]
+#[test]
+fn budgets_cache_main_reports_an_unwritable_cache() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("budgets-cache-unwritable");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    write(&dir, "README.md", "hi\n");
+    // The unsafe-site scan reads `crates/`; an empty one measures nothing.
+    std::fs::create_dir_all(dir.join("crates")).unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let repo = dir.to_str().unwrap().to_owned();
+    // The cache directory as a file: measuring succeeds, filing it fails.
+    let target = dir.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("precheck"), "blocker\n").unwrap();
+    let fake = dir.join("cargo");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+case "$1" in
+  metadata) printf '{"workspace_members":["w"],"resolve":{"nodes":[{"id":"w"},{"id":"dep"}]},"target_directory":"%s"}' "$FAKE_TARGET" ;;
+  tree) printf 'krishiv-cli v0.1.0 (/w)\ndep v1.0.0\n' ;;
+  build)
+    while [ $# -gt 0 ]; do [ "$1" = --target-dir ] && d=$2; shift; done
+    mkdir -p "$d/dist" && printf '0123456789' > "$d/dist/krishiv" ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["budgets", "--cache-main", "--repo", &repo])
+        .env("CARGO", &fake)
+        .env("FAKE_TARGET", &target)
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("GITHUB_STEP_SUMMARY")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cannot create"),
         "{out:?}"
     );
 }

@@ -1,0 +1,78 @@
+{
+  "entries": [
+    {
+      "id": "try_divide#438928ec5060/ansi_on",
+      "reason": "SELECT try_divide(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#438928ec5060/ansi_off",
+      "reason": "SELECT try_divide(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#5a3a4d187961/ansi_off",
+      "reason": "SELECT try_divide('1', 2) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_divide#67b5387c6e04/ansi_on",
+      "reason": "SELECT try_divide(interval 2 month, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#67b5387c6e04/ansi_off",
+      "reason": "SELECT try_divide(interval 2 month, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#7db17faa70ec/ansi_on",
+      "reason": "SELECT try_divide(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#7db17faa70ec/ansi_off",
+      "reason": "SELECT try_divide(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#9dd353d73dc5/ansi_on",
+      "reason": "SELECT try_divide(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_divide#9dd353d73dc5/ansi_off",
+      "reason": "SELECT try_divide(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_divide#a76d0c6954f9/ansi_on",
+      "reason": "SELECT try_divide(interval 2 month, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#a76d0c6954f9/ansi_off",
+      "reason": "SELECT try_divide(interval 2 month, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_divide#a7b6ef6ecc37/ansi_off",
+      "reason": "SELECT try_divide(3, 'abc') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_divide#ac80a139ec15/ansi_on",
+      "reason": "SELECT try_divide(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_divide#ac80a139ec15/ansi_off",
+      "reason": "SELECT try_divide(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_divide#c6f73e490267/ansi_on",
+      "reason": "SELECT try_divide(CAST(NULL AS interval month), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_divide#c6f73e490267/ansi_off",
+      "reason": "SELECT try_divide(CAST(NULL AS interval month), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_divide#d477c1bee5e3/ansi_off",
+      "reason": "SELECT try_divide(3, '1') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_divide#ff290cce7e9e/ansi_off",
+      "reason": "SELECT try_divide('abc', 2) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    }
+  ],
+  "format_version": 1,
+  "function": "try_divide"
+}

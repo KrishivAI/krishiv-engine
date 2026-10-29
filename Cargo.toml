@@ -15,7 +15,7 @@ unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
 # `--cfg loom` builds the loom model tests (krishiv-memory, krishiv-exec);
 # `cargo codspeed` builds benches with `--cfg codspeed`.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(codspeed)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(codspeed)", "cfg(tokio_unstable)", "cfg(coverage)"] }
 # ADR 0029 (2026-10-17 lint set).
 unreachable_pub = "warn"
 missing_debug_implementations = "warn"
@@ -27,6 +27,13 @@ broken_intra_doc_links = "deny"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+# `clippy.toml` bans blocking calls, but only crates that need the ban
+# deny the lint at their root (`krishiv-exec`, whose compute workers must
+# never block, and `krishiv-connect`, whose bounded prost decoder is the
+# only allowed decoder of untrusted bytes): everywhere else a compute
+# worker never runs, including build scripts and benches, so the ban stays
+# silent there even under `-D warnings`.
+disallowed_methods = "allow"
 panic = "deny"
 # Exceptions only via `#[expect(lint, reason = "...")]`, never a bare `allow` (ADR 0029).
 allow_attributes = "deny"
@@ -75,7 +82,17 @@ arrow-flight = { version = "60", default-features = false }
 parquet = { version = "60", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
 # update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
+# Cloud TLS (the `aws`, `gcp` and `azure` features) is opt-in through
+# `krishiv-io/cloud`: it brings reqwest over rustls (aws-lc-rs) and its HTTP
+# stack, which would otherwise blow the dependency and binary-size budgets for
+# the default build. OpenSSL stays banned (deny.toml).
 object_store = { version = "=0.14.2", default-features = false }
+# Avro container files (P2-T081b): datum encode/decode, codecs and schema
+# parsing. Only the pure-Rust codecs are enabled (deflate is built in;
+# snappy needs no OpenSSL). The `zstandard` feature stays off: it pulls
+# zstd 0.13, which carries RUSTSEC-2026-0391, and no apache-avro release
+# allows zstd 0.14; zstandard, bzip2 and xz files are refused.
+apache-avro = { version = "=0.22.0", default-features = false, features = ["snappy"] }
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }
@@ -141,6 +158,7 @@ prost-reflect = { version = "0.16.5", default-features = false }
 # Concurrency model checking (dev-dependency only, under `--cfg loom`).
 loom = { version = "0.7", default-features = false }
 # Self-removing test directories (dev-dependency only).
+rustix = { version = "=1.1.5", default-features = false, features = ["fs", "std"] }
 tempfile = { version = "3.27", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }
@@ -149,6 +167,9 @@ mimalloc = { version = "0.1.52", default-features = false }
 # FFI crate of mimalloc; dev-dependency only, for the allocator-linked test (P2-T012).
 libmimalloc-sys = { version = "0.1.49", default-features = false }
 clap = { version = "4.6", default-features = false }
+# Live async-task diagnostics (`tokio-console`, P2-T129): off by default, see
+# `crates/krishiv-exec/src/console.rs`.
+console-subscriber = { version = "0.5.0", default-features = false }
 reedline = { version = "0.52", default-features = false }
 uuid = { version = "1.28", default-features = false }
 

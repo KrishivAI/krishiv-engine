@@ -12,6 +12,17 @@
 //! | `date` | `Date32` | |
 //! | `timestamp` | `Timestamp(Microsecond, "UTC")` | |
 //! | `timestamp_ntz` | `Timestamp(Microsecond, None)` | |
+//! | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
+//! | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
+//! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
+//! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
+//! | `struct<...>` | `Struct` of the fields | |
+//!
+//! Nested children follow Spark's `ArrowUtils` names. Each child is a field
+//! built as [`DataType::to_arrow_field`] builds a column, so it carries its
+//! own type tag when it needs one, and a struct field's non-empty metadata
+//! rides in [`SPARK_METADATA_KEY`]. Nesting deeper than
+//! [`DataType::MAX_NESTING_DEPTH`] is refused.
 //!
 //! The plan schema (Spark [`DataType`]) is the source of truth; Arrow types
 //! and the [`SPARK_TYPE_METADATA_KEY`] field tag only carry it through storage
@@ -31,22 +42,49 @@
 //!   timestamp with any zone label is a `timestamp`; re-label it to `"UTC"` at
 //!   ingest ([`normalize_ingest_type`]). Client egress re-labels to the session
 //!   time zone and converts strings to `Utf8`, as Spark does.
+//! - **Times.** A `time` value is nanoseconds since midnight, the long Spark
+//!   hashes and sends over Spark Connect; the precision lives in the field
+//!   tag only.
+//! - **Spatial values.** Each row holds its SRID and its WKB bytes
+//!   (little-endian, as [`crate::geo::rewrite`] writes it for
+//!   [`crate::geo::ByteOrder::Ndr`]), so a `geometry(any)`
+//!   column can mix SRIDs. The struct alone does not say geometry or
+//!   geography, so these fields always carry the tag.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::{DataType as ArrowType, Field, TimeUnit};
+use arrow_schema::{DataType as ArrowType, Field, Fields, TimeUnit};
 
 use crate::error::{self, Result};
+use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
 use crate::{DataType, DecimalType};
 
 /// Arrow field-metadata key holding the Spark type (its `catalogString`)
 /// when the field's Arrow type alone does not determine it.
 pub const SPARK_TYPE_METADATA_KEY: &str = "krishiv.spark_type";
 
+/// Arrow field-metadata key holding a struct field's Spark `Metadata` (its
+/// JSON), when it has any.
+pub const SPARK_METADATA_KEY: &str = "krishiv.spark_metadata";
+
 /// Time zone of the canonical Arrow type for `timestamp` values, which are
 /// UTC instants; the session time zone is applied only at the edges.
 pub const TIMESTAMP_ARROW_TIME_ZONE: &str = "UTC";
+
+/// Name of the SRID child (`Int32`) of a spatial value's struct.
+pub const SPATIAL_SRID_FIELD: &str = "srid";
+
+/// Name of the WKB child of a spatial value's struct.
+pub const SPATIAL_WKB_FIELD: &str = "wkb";
+
+/// The in-memory struct of a geometry or geography value.
+fn spatial_struct() -> ArrowType {
+    ArrowType::Struct(Fields::from(vec![
+        Field::new(SPATIAL_SRID_FIELD, ArrowType::Int32, false),
+        Field::new(SPATIAL_WKB_FIELD, ArrowType::BinaryView, false),
+    ]))
+}
 
 /// The Arrow type an ingested column should carry: a zoned microsecond
 /// timestamp is re-labelled to `"UTC"` (the values are already UTC instants);
@@ -79,6 +117,26 @@ impl DataType {
                 Some(Arc::from(TIMESTAMP_ARROW_TIME_ZONE)),
             ),
             Self::TimestampNtz => ArrowType::Timestamp(TimeUnit::Microsecond, None),
+            Self::Time { .. } => ArrowType::Time64(TimeUnit::Nanosecond),
+            Self::Geometry { .. } | Self::Geography { .. } => spatial_struct(),
+            Self::Array(a) => ArrowType::List(Arc::new(
+                a.element_type()
+                    .to_arrow_field("element", a.contains_null()),
+            )),
+            Self::Map(m) => {
+                let entries = ArrowType::Struct(
+                    vec![
+                        m.key_type().to_arrow_field("key", false),
+                        m.value_type()
+                            .to_arrow_field("value", m.value_contains_null()),
+                    ]
+                    .into(),
+                );
+                ArrowType::Map(Arc::new(Field::new("entries", entries, false)), false)
+            }
+            Self::Struct(s) => {
+                ArrowType::Struct(s.fields().iter().map(struct_field_to_arrow).collect())
+            }
         }
     }
 
@@ -91,6 +149,21 @@ impl DataType {
     /// here (including non-microsecond timestamps and `Decimal64`), and the
     /// Spark decimal bound errors for an out-of-range decimal.
     pub fn from_arrow(arrow: &ArrowType) -> Result<Self> {
+        Self::from_arrow_at(arrow, 0)
+    }
+
+    /// [`Self::from_arrow`] of a type nested `depth` levels deep.
+    fn from_arrow_at(arrow: &ArrowType, depth: usize) -> Result<Self> {
+        let nested = matches!(
+            arrow,
+            ArrowType::List(_)
+                | ArrowType::LargeList(_)
+                | ArrowType::Map(..)
+                | ArrowType::Struct(_)
+        );
+        if nested && depth >= Self::MAX_NESTING_DEPTH {
+            return Err(error::too_deep());
+        }
         Ok(match arrow {
             ArrowType::Null => Self::Null,
             ArrowType::Boolean => Self::Boolean,
@@ -106,6 +179,28 @@ impl DataType {
             ArrowType::Date32 => Self::Date,
             ArrowType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             ArrowType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
+            ArrowType::Time64(TimeUnit::Nanosecond) => Self::Time {
+                precision: Self::TIME_DEFAULT_PRECISION,
+            },
+            ArrowType::List(f) | ArrowType::LargeList(f) => {
+                ArrayType::new(Self::from_arrow_field_at(f, depth + 1)?, f.is_nullable()).into()
+            }
+            ArrowType::Map(entries, _) => match entries.data_type() {
+                ArrowType::Struct(kv) if kv.len() == 2 => MapType::new(
+                    Self::from_arrow_field_at(&kv[0], depth + 1)?,
+                    Self::from_arrow_field_at(&kv[1], depth + 1)?,
+                    kv[1].is_nullable(),
+                )
+                .into(),
+                other => return Err(error::unsupported(format!("Arrow map entries {other}"))),
+            },
+            ArrowType::Struct(fields) => StructType::new(
+                fields
+                    .iter()
+                    .map(|f| struct_field_from_arrow(f, depth + 1))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .into(),
             other => return Err(error::unsupported(format!("Arrow type {other}"))),
         })
     }
@@ -118,13 +213,17 @@ impl DataType {
                 true
             }
             (Self::Decimal(_), ArrowType::Decimal128(..))
-            | (Self::Timestamp, ArrowType::Timestamp(..)) => *arrow == self.to_arrow(),
+            | (Self::Timestamp, ArrowType::Timestamp(..))
+            | (Self::Time { .. } | Self::Geometry { .. } | Self::Geography { .. }, _) => {
+                *arrow == self.to_arrow()
+            }
             _ => Self::from_arrow(arrow).is_ok_and(|t| t == *self),
         }
     }
 
     /// A field of the canonical Arrow type, tagged with the Spark type when
-    /// the Arrow type alone does not determine it (`decimal(0,0)`).
+    /// the Arrow type alone does not determine it (`decimal(0,0)`, `time(p)`
+    /// below precision 6, geometry and geography).
     pub fn to_arrow_field(&self, name: impl Into<String>, nullable: bool) -> Field {
         self.tagged_field(name, self.to_arrow(), nullable)
     }
@@ -171,10 +270,17 @@ impl DataType {
     /// `KRISHIV_UNSUPPORTED_FEATURE` when the metadata type cannot be stored
     /// in the field's Arrow type.
     pub fn from_arrow_field(field: &Field) -> Result<Self> {
+        Self::from_arrow_field_at(field, 0)
+    }
+
+    fn from_arrow_field_at(field: &Field, depth: usize) -> Result<Self> {
         match field.metadata().get(SPARK_TYPE_METADATA_KEY) {
-            None => Self::from_arrow(field.data_type()),
+            None => Self::from_arrow_at(field.data_type(), depth),
             Some(tag) => {
                 let t = crate::parse_data_type(tag)?;
+                if depth + t.nesting_depth() > Self::MAX_NESTING_DEPTH {
+                    return Err(error::too_deep());
+                }
                 if t.is_valid_storage(field.data_type()) {
                     Ok(t)
                 } else {
@@ -187,6 +293,33 @@ impl DataType {
             }
         }
     }
+}
+
+/// A struct field as an Arrow field: its metadata in [`SPARK_METADATA_KEY`].
+fn struct_field_to_arrow(f: &StructField) -> Field {
+    let field = f.data_type().to_arrow_field(f.name(), f.nullable());
+    if f.metadata().is_empty() {
+        return field;
+    }
+    let mut metadata = field.metadata().clone();
+    metadata.insert(
+        SPARK_METADATA_KEY.to_owned(),
+        crate::json::metadata_json(f.metadata()),
+    );
+    field.with_metadata(metadata)
+}
+
+fn struct_field_from_arrow(f: &Field, depth: usize) -> Result<StructField> {
+    let metadata = match f.metadata().get(SPARK_METADATA_KEY) {
+        Some(json) => crate::parse_metadata(json)?,
+        None => Metadata::empty(),
+    };
+    Ok(StructField::new(
+        f.name(),
+        DataType::from_arrow_field_at(f, depth)?,
+        f.is_nullable(),
+    )
+    .with_metadata(metadata))
 }
 
 /// Spark scales are 0..=38, so they always fit Arrow's `i8` scale.

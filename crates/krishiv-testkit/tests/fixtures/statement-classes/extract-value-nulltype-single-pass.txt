@@ -1,0 +1,1 @@
+READ	SELECT col.a FROM (SELECT null AS col) t

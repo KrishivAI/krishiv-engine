@@ -16,7 +16,8 @@ use krishiv_plan::{Expr, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
     CodecError, FORMAT_VERSION, Feature, FeatureKind, Limits, MIN_READER_VERSION,
-    POST_MIGRATION_READER_VERSION, ReaderFeatures, decode, decode_with, encode, to_message,
+    POST_MIGRATION_READER_VERSION, ReaderFeatures, decode, decode_with, encode, plan_features,
+    to_message,
 };
 use prost::Message as _;
 
@@ -37,6 +38,7 @@ macro_rules! variants {
 variants!(
     Scan,
     OneRow,
+    Range,
     Filter,
     Project,
     Limit,
@@ -58,6 +60,7 @@ fn variant_of(node: &PhysNode) -> Variant {
     match node {
         PhysNode::Scan(_) => Variant::Scan,
         PhysNode::OneRow => Variant::OneRow,
+        PhysNode::Range(_) => Variant::Range,
         PhysNode::Filter { .. } => Variant::Filter,
         PhysNode::Project { .. } => Variant::Project,
         PhysNode::Limit { .. } => Variant::Limit,
@@ -149,6 +152,140 @@ fn scan_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
         options,
     };
     plan_of(PhysNode::Scan(scan))
+}
+
+fn write_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
+    let mut write = inventory::write_plan();
+    write.options = options;
+    plan_of(PhysNode::WriteFiles {
+        input: Box::new(inventory::scan()),
+        write: Some(write),
+    })
+}
+
+#[test]
+fn a_write_plan_with_a_secret_reference_round_trips_without_the_secret() {
+    let canary = "canary-write-4d2a-secret";
+    let plan = write_with(BTreeMap::from([
+        (
+            "compression".to_owned(),
+            OptionValue::Plain("zstd".to_owned()),
+        ),
+        (
+            "token".to_owned(),
+            OptionValue::reference("prod-scope", "warehouse-key"),
+        ),
+    ]));
+    let bytes = encode(&plan).unwrap();
+    for needle in [&b"prod-scope"[..], b"warehouse-key"] {
+        assert!(bytes.windows(needle.len()).any(|w| w == needle));
+    }
+    assert!(!bytes.windows(canary.len()).any(|w| w == canary.as_bytes()));
+    assert_eq!(decode(&bytes).unwrap(), plan);
+}
+
+#[test]
+fn a_write_plan_with_an_inline_secret_is_refused_without_naming_it() {
+    let canary = "canary-write-9f3a-hunter2";
+    let plan = write_with(BTreeMap::from([(
+        "password".to_owned(),
+        OptionValue::from_user("password", canary),
+    )]));
+    let err = encode(&plan).unwrap_err();
+    assert!(matches!(err, CodecError::Unsupported(_)), "{err:?}");
+    let text = format!("{err} {err:?}");
+    assert!(text.contains("`password` is an inline secret"), "{text}");
+    assert!(!text.contains(canary), "{text}");
+}
+
+#[test]
+fn a_write_plan_with_a_url_with_credentials_is_refused_without_naming_it() {
+    let canary = "canary-write-7c21-sig";
+    let url = format!("s3://bucket/data?X-Amz-Signature={canary}");
+    let option = OptionValue::from_user("path", url);
+    assert!(matches!(option, OptionValue::Url(_)), "not a URL option");
+    let plan = write_with(BTreeMap::from([("path".to_owned(), option)]));
+    let err = encode(&plan).unwrap_err();
+    let text = format!("{err} {err:?}");
+    assert!(text.contains("`path` is a URL with credentials"), "{text}");
+    assert!(!text.contains(canary), "{text}");
+}
+
+#[test]
+fn a_reader_without_write_plan_refuses_the_plan_by_name() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files_with_plan")
+        .unwrap();
+    assert!(plan_features(&plan).contains(&Feature::WritePlan));
+    let bytes = encode(&plan).unwrap();
+    let reader = ReaderFeatures::only([Feature::LimitOffset]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["write_plan".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), plan);
+}
+
+#[test]
+fn a_write_plan_without_a_format_job_id_or_store_is_corrupt() {
+    let m = message("write_files_with_plan");
+    let edit = |f: &dyn Fn(&mut pb::WritePlan)| {
+        let mut m = m.clone();
+        for node in &mut m.nodes {
+            if let Some(pb::node::Kind::WriteFiles(w)) = &mut node.kind
+                && let Some(write) = w.write.as_mut()
+            {
+                f(write);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|w| w.format.clear()),
+        "a write plan without a format",
+    );
+    corrupt(
+        &edit(&|w| w.job_uuid.clear()),
+        "a write plan without a job id",
+    );
+    corrupt(&edit(&|w| w.store.clear()), "a write plan without a store");
+    // An absent `write` is a plan written before the `write_plan`
+    // feature, not corruption: it decodes to the legacy plan.
+    let mut missing = message("write_files_with_plan");
+    for node in &mut missing.nodes {
+        if let Some(pb::node::Kind::WriteFiles(w)) = &mut node.kind {
+            w.write = None;
+        }
+    }
+    missing.features.retain(|f| f != "write_plan");
+    missing.min_reader_version = MIN_READER_VERSION;
+    let (_, legacy) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files")
+        .unwrap();
+    assert_eq!(decode(&missing.encode_to_vec()).unwrap(), legacy);
+}
+
+#[test]
+fn a_write_without_a_write_plan_is_the_baseline() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files")
+        .unwrap();
+    assert!(plan_features(&plan).is_empty());
+    let m = to_message(&plan).unwrap();
+    assert!(m.features.is_empty());
+    assert_eq!(m.min_reader_version, MIN_READER_VERSION);
+    for node in &m.nodes {
+        if let Some(pb::node::Kind::WriteFiles(w)) = &node.kind {
+            assert!(w.write.is_none());
+        }
+    }
+    assert_eq!(round_trip(&plan), plan);
 }
 
 #[test]
@@ -293,9 +430,25 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             "window_ranking" | "window_aggregates" => 4,
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
-            "window_group_limit" => 6,
+            "window_group_limit"
+            | "rust_udf"
+            | "nested_types"
+            | "struct_field"
+            | "lambda_functions"
+            | "map_key_dedup_policy"
+            | "aggregate_filter"
+            | "range" => 6,
+            // Features added after the version was frozen: above every
+            // sequential format version.
+            n if n.starts_with("time_") || n.starts_with("geo_") => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
-            "window_frames" | "window_offset_values" => POST_MIGRATION_READER_VERSION,
+            "hash_join_existence"
+            | "hash_join_single_match"
+            | "nested_loop_existence"
+            | "exchange_hash_key_group"
+            | "window_frames"
+            | "window_offset_values"
+            | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -467,6 +620,85 @@ fn joins_that_build_their_preserved_side_are_a_feature() {
             "{name}"
         );
     }
+}
+
+/// The existence join type and the single-match flag are two semantic
+/// features (no equivalent plan exists without either), each refused by
+/// name by a reader without it; `distinct_build` needs none.
+#[test]
+fn existence_joins_and_single_match_are_features() {
+    for (name, feature) in [
+        ("hash_join_existence", Feature::ExistenceJoin),
+        ("nested_loop_existence", Feature::ExistenceJoin),
+        ("hash_join_single_match", Feature::JoinSingleMatch),
+    ] {
+        assert_eq!(feature.kind(), FeatureKind::Semantic);
+        let m = message(name);
+        assert_eq!(m.features, [feature.id()], "{name}");
+        assert_eq!(
+            m.min_reader_version, POST_MIGRATION_READER_VERSION,
+            "{name}"
+        );
+        // A reader without the feature refuses the plan, naming it.
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        let bytes = encode(&plan).unwrap();
+        let reader = ReaderFeatures::only([Feature::LimitOffset]);
+        let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec![feature.id().to_owned()]
+            },
+            "{name}"
+        );
+        // A reader with every feature reads it back exactly.
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+    assert_eq!(Feature::ExistenceJoin.to_string(), "existence_join");
+    assert_eq!(Feature::JoinSingleMatch.to_string(), "join_single_match");
+}
+
+/// `distinct_build` is only legal where the build's rows are never output
+/// nor read beyond their keys; anywhere else the plan is corrupt.
+#[test]
+fn a_misplaced_distinct_build_flag_is_corrupt() {
+    use pb::node::Kind;
+    // `hash_join` is an inner join with a residual condition.
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.distinct_build = true;
+    corrupt(
+        &m,
+        "a distinct build on a join that outputs or reads build rows",
+    );
+    // An existence join with a residual condition reads build columns.
+    let mut m = message("hash_join");
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.join_type = pb::JoinType::Existence as i32;
+    j.distinct_build = true;
+    m.features = vec!["existence_join".to_owned()];
+    corrupt(
+        &m,
+        "a distinct build on a join that outputs or reads build rows",
+    );
+}
+
+/// A single match on a join that is not left outer is corrupt.
+#[test]
+fn a_misplaced_single_match_flag_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.single_match = true;
+    corrupt(&m, "single match");
 }
 
 #[test]

@@ -135,6 +135,7 @@ pub struct CallTypes<'a> {
     sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     ansi: bool,
     decimal_loss: bool,
+    case_sensitive: bool,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -145,6 +146,7 @@ impl fmt::Debug for CallTypes<'_> {
             .field("literals", &self.literals)
             .field("ansi", &self.ansi)
             .field("decimal_loss", &self.decimal_loss)
+            .field("case_sensitive", &self.case_sensitive)
             .finish_non_exhaustive()
     }
 }
@@ -161,6 +163,7 @@ impl<'a> CallTypes<'a> {
             sql: None,
             ansi: true,
             decimal_loss: true,
+            case_sensitive: false,
         }
     }
 
@@ -199,6 +202,20 @@ impl<'a> CallTypes<'a> {
     #[must_use]
     pub const fn decimal_loss(&self) -> bool {
         self.decimal_loss
+    }
+
+    /// With `spark.sql.caseSensitive` (default off): struct field names
+    /// match by case when nested types meet.
+    #[must_use]
+    pub const fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
+    }
+
+    /// `spark.sql.caseSensitive`.
+    #[must_use]
+    pub const fn case_sensitive(&self) -> bool {
+        self.case_sensitive
     }
 
     /// With `sql(i)` rendering argument `i` as Spark's errors quote it
@@ -245,6 +262,15 @@ impl<'a> CallTypes<'a> {
         }
     }
 
+    /// Whether argument `i` is a plain literal, whether or not it folds to
+    /// a [`Constant`] (a timestamp or binary literal has no constant, but
+    /// Spark still folds it): what `schema_of_csv` needs to tell an
+    /// unfoldable literal from a non-foldable expression.
+    #[must_use]
+    pub fn is_plain_literal(&self, i: usize) -> bool {
+        self.literals.get(i).is_some_and(|plain| *plain)
+    }
+
     /// Whether any argument may be null.
     #[must_use]
     pub fn any_nullable(&self) -> bool {
@@ -277,6 +303,11 @@ pub enum InputType {
         /// Whether Spark's required type names ANSI intervals.
         intervals: bool,
     },
+    /// Any map type; an untyped `NULL` becomes `map<null, null>` (Spark's
+    /// implicit cast of `NULL` to the abstract map type).
+    Map,
+    /// Any array type; an untyped `NULL` becomes `array<null>`.
+    Array,
     /// One of these types (Spark's `TypeCollection`): an argument of one of
     /// them stays as it is, another is cast to the first it may be cast to
     /// implicitly.
@@ -290,6 +321,8 @@ impl InputType {
         match self {
             Self::Any => "\"ANY\"".to_owned(),
             Self::Exact(t) | Self::Strict(t) => format!("\"{}\"", t.sql()),
+            Self::Map => "\"MAP\"".to_owned(),
+            Self::Array => "\"ARRAY\"".to_owned(),
             Self::Numeric { intervals: false } => "\"NUMERIC\"".to_owned(),
             Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
             // Spark's `AnyTimestampType` names itself in words.
@@ -353,6 +386,19 @@ pub enum Inputs {
     /// Argument `i` takes `types[i]`; the last type repeats for further
     /// arguments.
     Expects(Vec<InputType>),
+    /// `map(k1, v1, ...)`: the keys (even positions) and the values (odd)
+    /// each take the type they meet at; `CREATE_MAP_KEY_DIFF_TYPES` and
+    /// `CREATE_MAP_VALUE_DIFF_TYPES` when either side has none.
+    Map,
+    /// `map_concat(m1, ...)`: every argument must be a map
+    /// (`MAP_CONCAT_DIFF_TYPES` otherwise, an untyped `NULL` included);
+    /// with ANSI they must share the type ignoring nullability, without it
+    /// they meet at their common type (`DATA_DIFF_TYPES` either way).
+    MapConcat,
+    /// `map_contains_key(map, key)`: the key meets the map's key type
+    /// without string promotion, and both are cast to the wider key type;
+    /// no casts when there is none (the result rule reports it).
+    MapContainsKey,
     /// Every argument takes the type all of them meet at (`coalesce`);
     /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` when there is none.
     Common,
@@ -399,6 +445,9 @@ impl Inputs {
             | Self::CommonNoStrings
             | Self::Leading(_)
             | Self::CommonWithZero
+            | Self::Map
+            | Self::MapConcat
+            | Self::MapContainsKey
             | Self::Comparable { .. }
             | Self::NullSafeEqual
             | Self::Operator(_)

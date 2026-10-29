@@ -1,0 +1,7 @@
+SESSION	create temporary view tab_a as select * from values (1, 1) as tab_a(a1, b1)
+SESSION	create temporary view tab_b as select * from values (1, 1) as tab_b(a2, b2)
+SESSION	create temporary view struct_tab as select struct(col1 as a, col2 as b) as record from
+READ	select 1 from tab_a where (a1, b1) not in (select a2, b2 from tab_b)
+READ	select 1 from tab_a where (a1, b1) not in (select (a2, b2) from tab_b)
+READ	select count(*) from struct_tab where record in
+READ	select count(*) from struct_tab where record not in

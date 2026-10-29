@@ -275,10 +275,13 @@ impl Sink for FileWriteSink {
             _in_flight: ctx.query().blocking_started(),
         };
         // Detached: it ends on its own once its channels close.
-        drop(
-            ctx.executor()
-                .spawn(ctx.query().class(), Box::pin(task.run())),
-        );
+        drop(crate::console::spawn_named(
+            ctx.executor(),
+            ctx.query(),
+            ctx.query().class(),
+            &crate::console::io_task_name("file-write"),
+            Box::pin(task.run()),
+        ));
         Ok(Box::new(WriteLocal {
             batches: batches_tx,
             commit: Some(commit_tx),

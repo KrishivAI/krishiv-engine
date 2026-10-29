@@ -33,13 +33,18 @@
 //! 12. [`writer`]: Spark file names, `maxRecordsPerFile` and target-size
 //!     rollover, writer statistics = reader statistics, abort leaves
 //!     nothing visible.
+//! 13. [`dynamic_filter_pruning`]: a `Final` membership filter and a range
+//!     filter prune only units they prove empty, and the result equals the
+//!     unfiltered result filtered.
 //!
 //! Split-planning parity with Spark is format-independent and checked in
 //! `krishiv-io` against Spark 4.2 goldens.
 
+pub mod avro;
 pub mod csv;
 pub mod data;
 pub mod drive;
+pub mod json;
 pub mod mock;
 pub mod parquet;
 
@@ -59,9 +64,11 @@ use krishiv_common::secret::OptionValue;
 use krishiv_io::io::cache::CacheKey;
 use krishiv_io::io::{FaultStore, IoCounters};
 use krishiv_io::{
-    ByteRange, ColumnPath, FIELD_ID_KEY, FieldMapping, FileFormat, FileRef, FormatOptions,
-    IoConfig, IoContext, IoScheduler, MetadataNeeds, OptionKind, OptionWarning, ROW_INDEX_COLUMN,
-    RowSelection, ScanOptions, ScanRequest, ScanStream, StoreId, WriteOptions,
+    ByteRange, CmpOp, ColumnPath, FIELD_ID_KEY, FieldMapping, FileFormat, FileRef, FilterId,
+    FilterSnapshot, FormatOptions, IoConfig, IoContext, IoScheduler, KeyFilterBuilder,
+    KeyFilterOptions, MetadataNeeds, OptionKind, OptionWarning, PushdownExpr, ROW_INDEX_COLUMN,
+    RowSelection, RuntimeFilter, ScalarValue, ScanFilter, ScanOptions, ScanRequest, ScanStream,
+    StoreId, WriteOptions,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
 use object_store::ObjectStore;
@@ -115,6 +122,11 @@ pub trait FormatFixture: Send + Sync {
     /// errors.
     fn footerless(&self) -> bool {
         false
+    }
+    /// Whether the format preserves field ids for [`FieldMapping::FieldId`]
+    /// (Avro has no field ids, so the field-id check does not apply to it).
+    fn supports_field_ids(&self) -> bool {
+        true
     }
     /// How scans and writes run: the framework's loops ([`drive::Direct`],
     /// the default) or the executor ([`drive::ThroughExecutor`]).
@@ -760,7 +772,8 @@ pub fn pruning_soundness(fx: &dyn FormatFixture) -> SuiteResult {
             }
         }
     }
-    // Not vacuous: statistics pruned some units.
+    // Not vacuous: statistics pruned some units (footerless formats
+    // store none and skip this).
     ensure!(
         fx.footerless() || returned_rows < 150 * input.num_rows(),
         "no predicate pruned anything"
@@ -1046,18 +1059,21 @@ pub fn schema_evolution(fx: &dyn FormatFixture) -> SuiteResult {
         b.column(0).null_count() == 300,
         "case-sensitive mode matched another case"
     );
-    // Field ids: renamed columns.
-    let b = read(
-        Schema::new(vec![
-            Field::new("renamed", DataType::Utf8View, true).with_metadata(id_meta("2")),
-        ]),
-        FieldMapping::FieldId,
-    )
-    .map_err(|e| e.to_string())?;
-    ensure!(
-        b.column(0).to_data() == input.column(1).to_data(),
-        "field-id mapping read other data"
-    );
+    // Field ids: renamed columns (formats without field ids, like Avro,
+    // skip this: their files carry no ids to map by).
+    if fx.supports_field_ids() {
+        let b = read(
+            Schema::new(vec![
+                Field::new("renamed", DataType::Utf8View, true).with_metadata(id_meta("2")),
+            ]),
+            FieldMapping::FieldId,
+        )
+        .map_err(|e| e.to_string())?;
+        ensure!(
+            b.column(0).to_data() == input.column(1).to_data(),
+            "field-id mapping read other data"
+        );
+    }
     // Ambiguous.
     let dup = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
@@ -1749,6 +1765,164 @@ pub fn writer(fx: &dyn FormatFixture) -> SuiteResult {
     Ok(())
 }
 
+/// Check 13: dynamic-filter pruning.
+///
+/// A `Final` membership filter on `i` plus a range filter on `i` prune only
+/// soundly: every row passing both filters is still read. A scan with only
+/// the dynamic filter isolates its path: it returns the same passing rows
+/// and, where the format keeps statistics, prunes units. Formats without
+/// statistics (CSV, JSON lines: [`FormatFixture::footerless`]) cannot prune
+/// by statistics, so only the soundness halves apply to them.
+///
+/// # Errors
+/// A dropped matching row.
+pub fn dynamic_filter_pruning(fx: &dyn FormatFixture) -> SuiteResult {
+    use arrow_array::types::Int32Type;
+    let env = Env::new(None)?;
+    let schema = pruning_schema();
+    let input = sorted_batch(&schema, 3000, 5)?;
+    let file = env.write(
+        fx,
+        "dyn/f",
+        &schema,
+        std::slice::from_ref(&input),
+        &fx.unit_rows(100),
+    )?;
+    // Keys clustered at the file's start (sorted on `i`): most units hold
+    // no key, so statistics prune them where the format keeps any.
+    let ints = arrow_array::cast::AsArray::as_primitive::<Int32Type>(input.column(0).as_ref());
+    let mut keys: Vec<i32> = Vec::new();
+    for v in ints.iter().flatten().take(40) {
+        if !keys.contains(&v) {
+            keys.push(v);
+        }
+        if keys.len() == 8 {
+            break;
+        }
+    }
+    ensure!(!keys.is_empty(), "no int keys in the input");
+    let (lo, hi) = (
+        *keys.iter().min().unwrap_or(&0),
+        *keys.iter().max().unwrap_or(&0),
+    );
+    let mut builder = KeyFilterBuilder::new(DataType::Int32, KeyFilterOptions::default())
+        .ok_or("int32 has no runtime filter")?;
+    builder
+        .add(&arrow_array::Int32Array::from(keys.clone()), None)
+        .map_err(|e| e.to_string())?;
+    let published = Arc::new(builder.finish());
+    let filter = Arc::new(RuntimeFilter::new(
+        FilterId(1),
+        ColumnPath::new("i"),
+        DataType::Int32,
+    ));
+    filter.publish(FilterSnapshot::Final(Arc::clone(&published)));
+    let key_set: std::collections::HashSet<i32> = keys.into_iter().collect();
+    // The range filter the membership implies: units outside `[lo, hi]`
+    // prove empty by bounds alone.
+    let range = PushdownExpr::And(vec![
+        PushdownExpr::cmp(ColumnPath::new("i"), CmpOp::GtEq, ScalarValue::Int32(lo)),
+        PushdownExpr::cmp(ColumnPath::new("i"), CmpOp::LtEq, ScalarValue::Int32(hi)),
+    ]);
+    let mut base = ScanRequest::all(Arc::clone(&schema));
+    base.metadata_cols.row_index = true;
+    let mut full = base.clone();
+    full.predicate = Some(range.clone());
+    full.dynamic
+        .push(ScanFilter::new(Arc::clone(&filter), &schema).ok_or("no column i")?);
+    let unfiltered = env
+        .scan(fx, &file, &base, None, ScanOptions::default())
+        .map_err(|e| e.to_string())?;
+    let filtered = env
+        .scan(fx, &file, &full, None, ScanOptions::default())
+        .map_err(|e| e.to_string())?;
+    let indexes = |batches: &[RecordBatch]| -> SuiteResult<std::collections::HashSet<i64>> {
+        let mut out = std::collections::HashSet::new();
+        for b in batches {
+            let idx = b.column_by_name(ROW_INDEX_COLUMN).ok_or("no row index")?;
+            let idx = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int64Type>(
+                idx.as_ref(),
+            );
+            out.extend(idx.values().iter().copied());
+        }
+        Ok(out)
+    };
+    let got = indexes(&filtered)?;
+    // The rows passing both filters, by the oracle.
+    let mut want = std::collections::HashSet::new();
+    for row in 0..input.num_rows() {
+        let ri = i64::try_from(row).map_err(|e| e.to_string())?;
+        if data::eval(&range, &input, row) != Some(true) {
+            continue;
+        }
+        if ints.is_null(row) || !key_set.contains(&ints.value(row)) {
+            continue;
+        }
+        want.insert(ri);
+    }
+    ensure!(!want.is_empty(), "the filters match no row");
+    for ri in &want {
+        ensure!(
+            got.contains(ri),
+            "dynamic pruning dropped matching row {ri}"
+        );
+    }
+    let all = indexes(&unfiltered)?;
+    // The oracle itself is checked: the unfiltered scan holds every
+    // passing row.
+    let unfiltered_restricted: std::collections::HashSet<i64> =
+        all.intersection(&want).copied().collect();
+    ensure!(
+        unfiltered_restricted == want,
+        "the unfiltered scan missed a row"
+    );
+    // Where the format keeps statistics, the filters prune something.
+    let o = env.options(fx, &[])?;
+    if !fx.footerless() && fx.format().capabilities(&o).statistics {
+        ensure!(
+            rows(&filtered) < rows(&unfiltered),
+            "no unit pruned by the dynamic or range filter"
+        );
+    }
+    // The dynamic filter in isolation: no range predicate, so only the
+    // membership filter can prune. A format that discards
+    // `ScanRequest::dynamic` still passes the combined scan above via the
+    // range predicate alone.
+    let mut dynamic_only = base;
+    dynamic_only
+        .dynamic
+        .push(ScanFilter::new(Arc::clone(&filter), &schema).ok_or("no column i")?);
+    let dynamic_scanned = env
+        .scan(fx, &file, &dynamic_only, None, ScanOptions::default())
+        .map_err(|e| e.to_string())?;
+    let got_dynamic = indexes(&dynamic_scanned)?;
+    let mut want_dynamic = std::collections::HashSet::new();
+    for row in 0..input.num_rows() {
+        if ints.is_null(row) || !key_set.contains(&ints.value(row)) {
+            continue;
+        }
+        want_dynamic.insert(i64::try_from(row).map_err(|e| e.to_string())?);
+    }
+    ensure!(
+        !want_dynamic.is_empty(),
+        "the dynamic filter matches no row"
+    );
+    for ri in &want_dynamic {
+        ensure!(
+            got_dynamic.contains(ri),
+            "dynamic pruning dropped matching row {ri}"
+        );
+    }
+    if !fx.footerless() && fx.format().capabilities(&o).statistics {
+        ensure!(
+            rows(&dynamic_scanned) < rows(&unfiltered),
+            "no unit pruned by the dynamic filter alone"
+        );
+    }
+    ensure!(env.root.reserved() == 0, "memory held after scans");
+    Ok(())
+}
+
 /// Instantiates the conformance suite for a fixture:
 /// `file_format_conformance!(module_name, fixture_expression);`
 #[macro_export]
@@ -1814,6 +1988,10 @@ macro_rules! file_format_conformance {
             #[test]
             fn writer() {
                 run(suite::writer)
+            }
+            #[test]
+            fn dynamic_filter_pruning() {
+                run(suite::dynamic_filter_pruning)
             }
         }
     };

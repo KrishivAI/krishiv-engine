@@ -135,7 +135,7 @@ fn ci_policy_wiring() {
     let fuzz_build = job(&ci, "fuzz-build");
     for needle in [
         "    needs: changes\n",
-        "    if: needs.changes.outputs.rust == 'true'\n",
+        "    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'\n",
         "        run: cargo \"+$NIGHTLY\" fuzz build --target x86_64-unknown-linux-gnu\n",
     ] {
         // Whole lines: a deeper-indented step-level `if:` or `run:` must not match.
@@ -539,10 +539,15 @@ fn security_workflows_are_wired() {
         .collect::<Vec<_>>()
         .join(" ");
     let purls: Vec<&str> = listed.split(',').map(str::trim).collect();
-    let exception_crates: Vec<&str> = deny
-        .lines()
-        .filter(|l| l.starts_with("exceptions = ["))
-        .flat_map(|l| l.split("crate = \"").skip(1))
+    // The exceptions array, on one line or one entry per line.
+    let exceptions = deny.split("\nexceptions = [").nth(1).unwrap();
+    let exceptions = &exceptions[..exceptions
+        .find("\n]")
+        .or_else(|| exceptions.find("}]"))
+        .unwrap()];
+    let exception_crates: Vec<&str> = exceptions
+        .split("crate = \"")
+        .skip(1)
         .filter_map(|l| l.split('"').next())
         .collect();
     let cargo: Vec<&str> = purls

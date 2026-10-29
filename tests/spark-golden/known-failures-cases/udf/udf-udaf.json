@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "depends-on-command": [
+      2,
+      3,
+      5
+    ],
+    "sql-commands": [
+      1,
+      4,
+      6,
+      7
+    ]
+  },
+  "file": "udf/udf-udaf",
+  "format_version": 1
+}

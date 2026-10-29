@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "regexp#10ceb5cfa22a/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#10ceb5cfa22a/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#22061d7b0026/ansi_on",
+      "reason": "SELECT regexp(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#22061d7b0026/ansi_off",
+      "reason": "SELECT regexp(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#6659866add7c/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#6659866add7c/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#75f562e9a5ab/ansi_on",
+      "reason": "SELECT regexp(INTERVAL '1 02:03:04' DAY TO SECOND, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#75f562e9a5ab/ansi_off",
+      "reason": "SELECT regexp(INTERVAL '1 02:03:04' DAY TO SECOND, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "regexp"
+}

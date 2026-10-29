@@ -17,11 +17,14 @@
 //! it, or ends with `._COPYING_`; hidden directories are skipped whole.
 //! The format infers the schema from the files by path (Spark without
 //! `mergeSchema`): Parquet reads the first file's footer, CSV samples
-//! all of them. Not yet supported, failing with
+//! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
+//! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
+//! [`StoreRegistry`]) are supported. Not yet supported, failing with
 //! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories (Spark's
-//! partition discovery), paths with a scheme other than `file`, and file
-//! sources without a [`FileFormat`] here, and merging the files' schemas
-//! (`mergeSchema`).
+//! partition discovery), paths with any other scheme, file sources Spark
+//! knows but the engine has no [`FileFormat`] for, and merging the files'
+//! schemas (`mergeSchema`). A name Spark does not know at all fails with
+//! Spark's `DATA_SOURCE_NOT_FOUND`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,25 +37,15 @@ use krishiv_common::error::{
     KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
-use krishiv_io::{FileFormat, FileRef, FormatOptions, IoContext, StoreId};
+use krishiv_io::{
+    FileFormat, FileRef, FormatOptions, FormatRegistry, IoContext, IoScheduler, StoreId,
+    StoreRegistry, is_spark_file_source, parse_object_url,
+};
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::DataType;
 use object_store::path::Path;
 
 use crate::error::Result;
-
-/// Spark 4.2's built-in data sources that read files (`` name.`path` ``
-/// reads them), as a Spark run classifies them.
-const SPARK_FILE_SOURCES: &[&str] = &[
-    "parquet",
-    "orc",
-    "json",
-    "csv",
-    "text",
-    "binaryfile",
-    "xml",
-    "libsvm",
-];
 
 /// Spark 4.2's built-in data sources that read no files:
 /// `UNSUPPORTED_DATASOURCE_FOR_DIRECT_QUERY`.
@@ -78,6 +71,33 @@ pub trait PathLocator: Send + Sync + fmt::Debug {
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a path it cannot place.
     fn locate(&self, path: &str) -> Result<LocatedPath>;
+
+    /// Where `path` lives for a read with per-relation `options`: cloud
+    /// stores resolve with the read's `fs.*` data-source options overriding
+    /// the session configuration (Spark's per-relation Hadoop
+    /// configuration). The default ignores the options.
+    ///
+    /// # Errors
+    /// As [`Self::locate`], plus the store's configuration errors.
+    fn locate_with_options(
+        &self,
+        path: &str,
+        options: &BTreeMap<String, OptionValue>,
+    ) -> Result<LocatedPath> {
+        let _ = options;
+        self.locate(path)
+    }
+
+    /// The display form of `path` without building any store (what
+    /// [`Self::locate`] would print). The default locates and prints; cloud
+    /// paths override it to re-parse the URL, so qualifying never needs the
+    /// read's options and never fails on store configuration.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a path it cannot place.
+    fn qualified_display(&self, path: &str) -> Result<String> {
+        self.locate(path).map(|at| at.display)
+    }
 }
 
 /// Local file-system paths, in a store rooted at `/` (an
@@ -140,6 +160,94 @@ impl PathLocator for LocalPaths {
     }
 }
 
+/// User paths in the local file system and in cloud object stores
+/// (P2-T084): `file:` URLs and bare paths resolve as [`LocalPaths`] does,
+/// while `s3://`, `s3a://`, `gs://`, `abfs://`, `abfss://` and `az://` URLs
+/// resolve through the session's [`StoreRegistry`],
+/// which builds (or reuses, within the query) the bucket's store from the
+/// session configuration with the read's per-relation `fs.*` options
+/// overriding it (Spark's per-relation Hadoop configuration) and registers
+/// it on the scheduler. Cloud URLs need the `cloud` feature: without it the
+/// registry reports them as unsupported. Locating is synchronous and performs
+/// no I/O: store construction only reads configuration and the environment.
+/// A located cloud path re-parses to itself through its [`LocatedPath::display`].
+/// Cloud URLs need the `cloud` feature: without it the
+/// registry reports them as unsupported.
+#[derive(Debug, Clone)]
+pub struct ObjectPaths {
+    local: LocalPaths,
+    sched: Arc<IoScheduler>,
+    stores: Arc<StoreRegistry>,
+}
+
+impl ObjectPaths {
+    /// Paths in `store` under `cwd`, with cloud stores built by `stores`
+    /// and registered on `sched`.
+    #[must_use]
+    pub fn new(
+        store: StoreId,
+        cwd: impl Into<String>,
+        sched: Arc<IoScheduler>,
+        stores: Arc<StoreRegistry>,
+    ) -> Self {
+        Self {
+            local: LocalPaths::new(store, cwd),
+            sched,
+            stores,
+        }
+    }
+}
+
+impl PathLocator for ObjectPaths {
+    fn locate(&self, path: &str) -> Result<LocatedPath> {
+        let cloud = match scheme(path) {
+            None | Some("file") => false,
+            Some(_) => true,
+        };
+        if !cloud {
+            return self.local.locate(path);
+        }
+        let (store, key, display) = self.stores.ensure(&self.sched, path)?;
+        Ok(LocatedPath {
+            store,
+            path: key,
+            display,
+        })
+    }
+
+    fn locate_with_options(
+        &self,
+        path: &str,
+        options: &BTreeMap<String, OptionValue>,
+    ) -> Result<LocatedPath> {
+        let cloud = match scheme(path) {
+            None | Some("file") => false,
+            Some(_) => true,
+        };
+        if !cloud {
+            return self.local.locate(path);
+        }
+        let (store, key, display) = self
+            .stores
+            .ensure_with_options(&self.sched, path, options)?;
+        Ok(LocatedPath {
+            store,
+            path: key,
+            display,
+        })
+    }
+
+    fn qualified_display(&self, path: &str) -> Result<String> {
+        // No store is built here, so qualifying never needs the read's
+        // options and never fails on store configuration: the store is
+        // instantiated at listing from the plan's option values.
+        match scheme(path) {
+            None | Some("file") => self.local.locate(path).map(|at| at.display),
+            Some(_) => parse_object_url(path).map(|url| url.display),
+        }
+    }
+}
+
 /// The URL scheme of `path` (`s3a` in `s3a://b/k`), if it has one.
 fn scheme(path: &str) -> Option<&str> {
     let (scheme, _) = path.split_once(':')?;
@@ -179,7 +287,7 @@ type ReadKey = (String, Vec<OptionValue>, BTreeMap<String, OptionValue>);
 /// Make one per query; the next query lists the files again.
 pub struct FileReads {
     io: IoContext,
-    formats: Vec<Arc<dyn FileFormat>>,
+    formats: Arc<FormatRegistry>,
     paths: Arc<dyn PathLocator>,
     session: Arc<Config>,
     listed: Mutex<Vec<(ReadKey, Arc<FileListing>)>>,
@@ -188,10 +296,7 @@ pub struct FileReads {
 impl fmt::Debug for FileReads {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileReads")
-            .field(
-                "formats",
-                &self.formats.iter().map(|x| x.name()).collect::<Vec<_>>(),
-            )
+            .field("formats", &self.formats.names())
             .field("paths", &self.paths)
             .finish_non_exhaustive()
     }
@@ -203,7 +308,7 @@ impl FileReads {
     #[must_use]
     pub fn new(
         io: IoContext,
-        formats: Vec<Arc<dyn FileFormat>>,
+        formats: Arc<FormatRegistry>,
         paths: Arc<dyn PathLocator>,
         session: Arc<Config>,
     ) -> Self {
@@ -220,9 +325,10 @@ impl FileReads {
     /// on the first call, the same listing after.
     ///
     /// # Errors
-    /// `PATH_NOT_FOUND`, `UNABLE_TO_INFER_SCHEMA`, option errors,
-    /// `KRISHIV_UNSUPPORTED_FEATURE` (see the module docs) and storage
-    /// failures.
+    /// `PATH_NOT_FOUND`, `UNABLE_TO_INFER_SCHEMA`, Spark's
+    /// `DATA_SOURCE_NOT_FOUND` for a name Spark does not know, option
+    /// errors, `KRISHIV_UNSUPPORTED_FEATURE` (see the module docs) and
+    /// storage failures.
     pub async fn listing(
         &self,
         format: &str,
@@ -266,18 +372,22 @@ impl FileReads {
             if text.contains(['*', '?', '[', '{']) {
                 return Err(unsupported("glob patterns in paths".to_owned()));
             }
-            let at = self.paths.locate(text)?;
+            // The store is instantiated from the plan's option values
+            // (plans stay pure data): the read's `fs.*` options override
+            // the session configuration.
+            let at = self.paths.locate_with_options(text, options)?;
             self.list_path(&at, &mut files).await?;
         }
         files.sort_by(|a, b| a.path.as_ref().cmp(b.path.as_ref()));
-        let Some(f) = self
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(format))
-        else {
-            return Err(unsupported(format!("the {format} file format")));
+        let format = match self.formats.get(format) {
+            Ok(format) => format,
+            Err(e) => {
+                if is_spark_file_source(format) {
+                    return Err(unsupported(format!("the {format} file format")));
+                }
+                return Err(e);
+            }
         };
-        let format = Arc::clone(f);
         if self.merges_schemas(format.name(), options) {
             return Err(unsupported(
                 "merging the schemas of files (mergeSchema)".to_owned(),
@@ -353,11 +463,15 @@ impl FileReads {
 impl FileSchemaResolver for FileReads {
     /// The located path's qualified form (`file:/abs/path`); a path with
     /// credentials stays as written (its read is refused).
+    /// The located path's qualified form; a path with credentials stays as
+    /// written (its read is refused). Qualifying never builds a store, so it
+    /// needs no options and never fails on store configuration: the store is
+    /// instantiated at listing from the read's options.
     fn qualify(&self, path: &OptionValue) -> std::result::Result<OptionValue, KrishivError> {
         match path.as_plain() {
             Some(text) => Ok(OptionValue::from_user(
                 "path",
-                self.paths.locate(text)?.display,
+                self.paths.qualified_display(text)?,
             )),
             None => Ok(path.clone()),
         }
@@ -365,9 +479,7 @@ impl FileSchemaResolver for FileReads {
 
     fn source_kind(&self, name: &str) -> SourceKind {
         let name = name.to_ascii_lowercase();
-        if SPARK_FILE_SOURCES.contains(&name.as_str())
-            || self.formats.iter().any(|f| f.name() == name)
-        {
+        if is_spark_file_source(&name) || self.formats.contains(&name) {
             SourceKind::File
         } else if SPARK_OTHER_SOURCES.contains(&name.as_str()) {
             SourceKind::Other
@@ -411,6 +523,7 @@ fn hidden(name: &str) -> bool {
 fn display_name(format: &str) -> String {
     match format {
         "parquet" => "Parquet".to_owned(),
+        "avro" => "Avro".to_owned(),
         "orc" => "ORC".to_owned(),
         "json" => "JSON".to_owned(),
         "csv" => "CSV".to_owned(),
@@ -461,6 +574,117 @@ mod tests {
         assert_eq!(locate("1a:b").unwrap().display, "file:/work/dir/1a:b");
     }
 
+    fn object_paths() -> ObjectPaths {
+        use krishiv_common::config::Config;
+        use krishiv_io::{IoConfig, IoScheduler, StoreRegistry};
+
+        let config = Config::new();
+        ObjectPaths::new(
+            StoreId::new("file"),
+            "/work/dir",
+            IoScheduler::new(IoConfig::from_config(&config)),
+            Arc::new(StoreRegistry::new(Arc::new(config))),
+        )
+    }
+
+    /// Qualifying never builds a store: cloud paths print their canonical
+    /// form whatever the build, local paths print as `LocalPaths` does, and
+    /// local locating is the same through the options form.
+    #[test]
+    fn object_paths_qualify_without_building_stores() {
+        let paths = object_paths();
+        for (input, display) in [
+            ("s3a://bucket/k", "s3a://bucket/k"),
+            ("gs://bucket/k", "gs://bucket/k"),
+            ("/a/b.parquet", "file:/a/b.parquet"),
+            ("rel", "file:/work/dir/rel"),
+            ("file:/a/b", "file:/a/b"),
+        ] {
+            assert_eq!(paths.qualified_display(input).unwrap(), display, "{input}");
+        }
+        assert_eq!(
+            paths
+                .qualified_display("ftp://x/y")
+                .unwrap_err()
+                .error_class()
+                .name(),
+            "KRISHIV_UNSUPPORTED_FEATURE"
+        );
+        let options = BTreeMap::new();
+        assert_eq!(
+            paths.locate_with_options("/a/b", &options).unwrap(),
+            paths.locate("/a/b").unwrap()
+        );
+    }
+
+    /// Without the `cloud` feature a cloud path locates to the unsupported
+    /// error rather than a store, with or without per-read options.
+    #[cfg(not(feature = "cloud"))]
+    #[test]
+    fn cloud_paths_need_the_cloud_feature_to_locate() {
+        let paths = object_paths();
+        let options = BTreeMap::new();
+        for e in [
+            paths.locate("s3://bucket/k").unwrap_err(),
+            paths
+                .locate_with_options("s3://bucket/k", &options)
+                .unwrap_err(),
+        ] {
+            assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+        }
+    }
+
+    #[cfg(feature = "cloud")]
+    #[test]
+    fn cloud_urls_locate_in_their_bucket_stores() {
+        use krishiv_common::config::Config;
+        use krishiv_io::{IoConfig, IoScheduler, StoreRegistry};
+
+        let (config, _) = Config::from_pairs([
+            ("fs.s3a.endpoint", "http://127.0.0.1:9000"),
+            ("fs.azure.account.name", "acct"),
+            (
+                "fs.azure.account.key.acct",
+                "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+            ),
+        ])
+        .unwrap();
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let paths = ObjectPaths::new(
+            StoreId::new("file"),
+            "/work/dir",
+            sched,
+            Arc::new(StoreRegistry::new(Arc::new(config))),
+        );
+        for (input, store, path, display) in [
+            ("s3a://bucket/k", "s3://bucket", "k", "s3a://bucket/k"),
+            ("s3://bucket/", "s3://bucket", "", "s3://bucket"),
+            ("gs://bucket/k", "gs://bucket", "k", "gs://bucket/k"),
+            (
+                "abfss://cont@acct.dfs.core.windows.net/k",
+                "abfss://cont@acct",
+                "k",
+                "abfss://cont@acct.dfs.core.windows.net/k",
+            ),
+            ("az://cont/k", "abfss://cont", "k", "az://cont/k"),
+            ("/a/b.parquet", "file", "a/b.parquet", "file:/a/b.parquet"),
+        ] {
+            let at = paths.locate(input).unwrap();
+            assert_eq!(at.store, StoreId::new(store), "{input}");
+            assert_eq!(at.path.as_ref(), path, "{input}");
+            assert_eq!(at.display, display, "{input}");
+            assert_eq!(paths.locate(&at.display).unwrap(), at, "{input}");
+        }
+        for input in ["ftp://x/y", "s3a://AKIA:secret@bucket/k"] {
+            let e = paths.locate(input).unwrap_err();
+            assert_eq!(
+                e.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{input}"
+            );
+        }
+    }
+
     #[test]
     fn hidden_names_follow_spark() {
         for name in [".x", "_SUCCESS", "_temporary", "a._COPYING_"] {
@@ -470,7 +694,87 @@ mod tests {
             assert!(!hidden(name), "{name}");
         }
         assert_eq!(display_name("parquet"), "Parquet");
+        assert_eq!(display_name("avro"), "Avro");
         assert_eq!(display_name("json"), "JSON");
         assert_eq!(display_name("mock"), "mock");
+    }
+
+    #[cfg(feature = "cloud")]
+    #[test]
+    fn cloud_locating_honours_per_read_options() {
+        use std::collections::BTreeMap;
+
+        use krishiv_common::config::Config;
+        use krishiv_io::{IoConfig, IoScheduler, StoreRegistry};
+
+        fn options(pairs: &[(&str, &str)]) -> BTreeMap<String, OptionValue> {
+            pairs
+                .iter()
+                .map(|&(k, v)| (k.to_owned(), OptionValue::from_user(k, v)))
+                .collect()
+        }
+
+        // An invalid session flag fails a plain locate ...
+        let (config, _) = Config::from_pairs([("fs.s3a.path.style.access", "banana")]).unwrap();
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let paths = ObjectPaths::new(
+            StoreId::new("file"),
+            "/work/dir",
+            sched,
+            Arc::new(StoreRegistry::new(Arc::new(config))),
+        );
+        let error = paths.locate("s3://bucket/k").unwrap_err();
+        assert_eq!(error.error_class().name(), "KRISHIV_INVALID_CONFIG_VALUE");
+        // ... but a valid per-read option overrides it, and an invalid
+        // per-read option beats a valid session value the other way.
+        let at = paths
+            .locate_with_options(
+                "s3://bucket/k",
+                &options(&[("fs.s3a.path.style.access", "true")]),
+            )
+            .unwrap();
+        assert_eq!(at.display, "s3://bucket/k");
+        let (good, _) = Config::from_pairs([("fs.s3a.path.style.access", "true")]).unwrap();
+        let sched = IoScheduler::new(IoConfig::from_config(&good));
+        let paths = ObjectPaths::new(
+            StoreId::new("file"),
+            "/work/dir",
+            sched,
+            Arc::new(StoreRegistry::new(Arc::new(good))),
+        );
+        let error = paths
+            .locate_with_options(
+                "s3://bucket/k",
+                &options(&[("fs.s3a.path.style.access", "banana")]),
+            )
+            .unwrap_err();
+        assert_eq!(error.error_class().name(), "KRISHIV_INVALID_CONFIG_VALUE");
+        assert!(!error.to_string().contains("banana"));
+        // Qualifying never builds a store: it succeeds despite the invalid
+        // session flag, and unknown schemes still fail as before.
+        assert_eq!(
+            paths.qualified_display("s3://bucket/k").unwrap(),
+            "s3://bucket/k"
+        );
+        for input in ["ftp://x/y", "s3a://AKIA:secret@bucket/k"] {
+            assert_eq!(
+                paths
+                    .locate_with_options(input, &options(&[]))
+                    .unwrap_err()
+                    .error_class()
+                    .name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{input}"
+            );
+            assert_eq!(
+                paths
+                    .qualified_display(input)
+                    .unwrap_err()
+                    .error_class()
+                    .name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{input}"
+            );
+        }
     }
 }

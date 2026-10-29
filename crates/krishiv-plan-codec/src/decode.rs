@@ -11,10 +11,10 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind,
+    SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
@@ -28,7 +28,7 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DecimalType, Srid};
 
 use crate::arrow::{schema_from, type_from};
 use crate::error::{CodecError, Result, corrupt};
@@ -288,9 +288,16 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .ok_or_else(|| corrupt("no expression environment"))?;
     let env = ExprEnv {
         ansi: env.ansi,
+        // The wire carries the flag for the `legacy_statistical_aggregate`
+        // feature: its absence in older bytes decodes as false, which is
+        // what every plan such an encoder could write carried (only a plan
+        // that sets it around a moment aggregate needs a reader with the
+        // feature).
+        legacy_statistical_aggregate: env.legacy_statistical_aggregate,
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),
+        map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
     };
     Ok(
         PhysicalPlan::new(root, schema_from(&m.schema)?, explain, env)
@@ -335,8 +342,11 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
     let (one, many): (Option<u32>, &[u32]) = match &m.kind {
         Some(Kind::Cast(c)) => (Some(c.expr), &[]),
         Some(Kind::Alias(a)) => (Some(a.expr), &[]),
+        Some(Kind::Lambda(l)) => (Some(l.body), &[]),
+        Some(Kind::Field(f)) => (Some(f.base), &[]),
         Some(Kind::Function(f)) => (f.filter, &f.args),
-        Some(Kind::Literal(_) | Kind::Column(_) | Kind::OuterColumn(_)) | None => (None, &[]),
+        Some(Kind::Literal(_) | Kind::Column(_) | Kind::OuterColumn(_) | Kind::LambdaVar(_))
+        | None => (None, &[]),
     };
     one.into_iter().chain(many.iter().copied())
 }
@@ -423,6 +433,17 @@ impl Decoder {
         Ok(match required(&m.kind, "a node kind")? {
             Kind::Scan(s) => PhysNode::Scan(self.scan(s)?),
             Kind::OneRow(_) => PhysNode::OneRow,
+            Kind::Range(r) if r.step == 0 => return Err(corrupt("a range with step 0")),
+            Kind::Range(r) if r.num_slices == Some(0) => {
+                return Err(corrupt("a range with 0 slices"));
+            }
+            Kind::Range(r) => PhysNode::Range(krishiv_exec::physical::RangeNode {
+                start: r.start,
+                end: r.end,
+                step: r.step,
+                num_slices: r.num_slices,
+                output: krishiv_plan::AttrId(r.output),
+            }),
             Kind::Filter(f) => PhysNode::Filter {
                 input: self.boxed(f.input)?,
                 layout: layout(&f.layout),
@@ -502,6 +523,7 @@ impl Decoder {
             },
             Kind::WriteFiles(w) => PhysNode::WriteFiles {
                 input: self.boxed(w.input)?,
+                write: w.write.as_ref().map(write_plan).transpose()?,
             },
             Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
         })
@@ -556,21 +578,33 @@ impl Decoder {
         if probe_keys.len() != build_keys.len() || probe_keys.len() != j.null_safe.len() {
             return Err(corrupt("a hash join whose key lists differ in length"));
         }
-        Ok(HashJoinPlan {
+        let join_type = join_type(j.join_type)?;
+        if j.single_match && join_type != JoinType::LeftOuter {
+            return Err(corrupt("single match on a join that is not left outer"));
+        }
+        let plan = HashJoinPlan {
             probe: self.boxed(j.probe)?,
             build: self.boxed(j.build)?,
-            join_type: join_type(j.join_type)?,
+            join_type,
             probe_keys,
             build_keys,
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
+            single_match: j.single_match,
+            distinct_build: j.distinct_build,
             runtime_filters: j
                 .runtime_filters
                 .iter()
                 .map(join_filter)
                 .collect::<Result<_>>()?,
             distribution: distribution(j.distribution)?,
-        })
+        };
+        if plan.distinct_build && !plan.distinct_build_allowed() {
+            return Err(corrupt(
+                "a distinct build on a join that outputs or reads build rows",
+            ));
+        }
+        Ok(plan)
     }
 
     fn exchange(&mut self, e: &pb::ExchangeNode) -> Result<ExchangePlan> {
@@ -631,6 +665,11 @@ impl Decoder {
             Kind::Literal(l) => ExprNode::Literal(literal(l)?),
             Kind::Column(c) => ExprNode::Resolved(ResolvedExpr::Column(bound_column(c)?)),
             Kind::OuterColumn(c) => ExprNode::Resolved(ResolvedExpr::OuterColumn(bound_column(c)?)),
+            Kind::LambdaVar(c) => ExprNode::Resolved(ResolvedExpr::LambdaVar(bound_column(c)?)),
+            Kind::Lambda(l) => ExprNode::Lambda {
+                params: l.params.iter().map(bound_column).collect::<Result<_>>()?,
+                body: self.expr_ref(l.body)?,
+            },
             Kind::Cast(c) => ExprNode::Cast {
                 expr: self.expr_ref(c.expr)?,
                 to: spark_type(required(&c.to, "a cast type")?)?,
@@ -645,6 +684,14 @@ impl Decoder {
                 output: bound_column(required(&a.output, "an alias output")?)?,
             }),
             Kind::Function(f) => ExprNode::Resolved(ResolvedExpr::Function(self.function(f)?)),
+            Kind::Field(f) => ExprNode::Resolved(ResolvedExpr::Field {
+                base: self.expr_ref(f.base)?,
+                ordinal: usize::try_from(f.ordinal)
+                    .map_err(|_| corrupt("a field ordinal that does not fit"))?,
+                name: f.name.clone(),
+                data_type: spark_type(required(&f.data_type, "a field type")?)?,
+                nullable: f.nullable,
+            }),
         };
         let mut origin = Origin::UNKNOWN;
         if let Some(o) = &m.origin {
@@ -666,6 +713,11 @@ impl Decoder {
             pb::function::Id::Registry(r) => FunctionId::Registry {
                 name: r.name.clone(),
                 id: r.id,
+            },
+            pb::function::Id::Udf(u) => FunctionId::Udf {
+                name: u.name.clone(),
+                version: u32::try_from(u.version)
+                    .map_err(|_| corrupt("a UDF version out of range"))?,
             },
         };
         Ok(ResolvedFunction {
@@ -850,6 +902,7 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         })?,
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
+        mask: a.mask.map(usize_of).transpose()?,
     })
 }
 
@@ -860,6 +913,7 @@ fn join_type(t: i32) -> Result<JoinType> {
         LeftSemi => JoinType::LeftSemi,
         LeftAnti => JoinType::LeftAnti,
         NullAwareAnti => JoinType::NullAwareAnti,
+        Existence => JoinType::Existence,
         RightSemi => JoinType::RightSemi,
         RightAnti => JoinType::RightAnti,
         RightOuter => JoinType::RightOuter,
@@ -883,6 +937,13 @@ fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
     Ok(match required(&p.kind, "a partitioning kind")? {
         Kind::Hash(h) => Partitioning::Hash {
             keys: usizes(&h.keys)?,
+            // Not `enum_map!`: 0 is not "unspecified" here but the scheme of
+            // plans written before the field existed.
+            scheme: match pb::HashScheme::try_from(h.scheme) {
+                Ok(pb::HashScheme::Unpinned) => HashScheme::Unpinned,
+                Ok(pb::HashScheme::KeyGroupV1) => HashScheme::KeyGroupV1,
+                Err(_) => return Err(corrupt("an unknown hash scheme")),
+            },
         },
         Kind::Single(_) => Partitioning::Single,
         Kind::Broadcast(_) => Partitioning::Broadcast,
@@ -949,6 +1010,31 @@ fn option(m: &pb::OptionValue) -> Result<OptionValue> {
     })
 }
 
+fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
+    if m.format.is_empty() {
+        return Err(corrupt("a write plan without a format"));
+    }
+    if m.job_uuid.is_empty() {
+        return Err(corrupt("a write plan without a job id"));
+    }
+    if m.store.is_empty() {
+        return Err(corrupt("a write plan without a store"));
+    }
+    Ok(WritePlan {
+        format: m.format.clone(),
+        options: m
+            .options
+            .iter()
+            .map(|(k, v)| Ok((k.clone(), option(v)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?,
+        store: m.store.clone(),
+        dir: m.dir.clone(),
+        job_uuid: m.job_uuid.clone(),
+        max_records_per_file: m.max_records_per_file,
+        target_file_bytes: m.target_file_bytes,
+    })
+}
+
 fn spark_type(t: &pb::DataType) -> Result<DataType> {
     use pb::data_type::Kind;
     let data_type = enum_map!(Kind, t.kind, "type", {
@@ -966,11 +1052,36 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         Date => DataType::Date,
         Timestamp => DataType::Timestamp,
         TimestampNtz => DataType::TimestampNtz,
+        Nested => nested(t)?,
+        Time => DataType::time(t.precision).map_err(|_| corrupt("an invalid time type"))?,
+        Geometry => DataType::geometry(Srid::from_i32(t.srid))
+            .map_err(|_| corrupt("an invalid geometry type"))?,
+        Geography => DataType::geography(Srid::from_i32(t.srid))
+            .map_err(|_| corrupt("an invalid geography type"))?,
     })?;
-    if !matches!(data_type, DataType::Decimal(_)) && (t.precision != 0 || t.scale != 0) {
-        return Err(corrupt("a precision or scale on a type that has none"));
+    let (precision, scale, srid) = match data_type {
+        DataType::Decimal(_) => (true, true, false),
+        DataType::Time { .. } => (true, false, false),
+        DataType::Geometry { .. } | DataType::Geography { .. } => (false, false, true),
+        _ => (false, false, false),
+    };
+    if (!precision && t.precision != 0) || (!scale && t.scale != 0) || (!srid && t.srid != 0) {
+        return Err(corrupt("a type parameter on a type that has none"));
+    }
+    if !data_type.is_nested() && !t.json.is_empty() {
+        return Err(corrupt("a JSON form on a type that is not nested"));
     }
     Ok(data_type)
+}
+
+/// A nested type from its Spark JSON (depth-bounded by `from_json`).
+fn nested(t: &pb::DataType) -> Result<DataType> {
+    // Only the canonical form the encoder writes: bytes decode to a plan
+    // that encodes to the same bytes.
+    match DataType::from_json(&t.json) {
+        Ok(d) if d.is_nested() && d.json() == t.json => Ok(d),
+        _ => Err(corrupt("an invalid nested type")),
+    }
 }
 
 fn decimal(t: &pb::DataType) -> Result<DecimalType> {

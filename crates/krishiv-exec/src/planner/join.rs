@@ -24,12 +24,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use arrow_schema::DataType as ArrowType;
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, JoinStrategy,
-    LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
+    AttrId, BoundColumn, Builtin, CastMode, Expr, ExprNode, FunctionId, JoinCondition, JoinKind,
+    JoinStrategy, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
 };
 
-use super::build::{Planned, Planner, unsupported};
+use super::build::{Planned, Planner, internal, unsupported};
+use super::eval::canonical_carrier;
 use super::explain::ExplainNode;
 use super::orient::{InputStats, StatsSource, orient};
 use super::properties::Distribution;
@@ -38,6 +40,7 @@ use crate::join::JoinType;
 use crate::physical::{
     HashJoinPlan, JoinDistribution, NestedLoopPlan, PhysNode, Residual, hash_join, nested_loop_join,
 };
+use crate::values::Producer;
 
 impl Planner<'_> {
     pub(crate) fn join(
@@ -132,26 +135,38 @@ impl Planner<'_> {
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
+        // Keys of one Spark `STRING`/`BINARY` in different Arrow encodings
+        // (a `Utf8` column joined to a `Utf8View` one) meet in the canonical
+        // carrier: the executor rejects mixed key types, and its row
+        // encoder needs one type per key. Keys of different Spark types are
+        // left for the join builder to reject as before.
+        let (probe, probe_keys, build, build_keys) =
+            self.unify_join_keys(probe, probe_keys, build, build_keys)?;
         let (probe_plan, build_plan) = if build_left {
             (&logical.1, &logical.0)
         } else {
             (&logical.0, &logical.1)
         };
         let build_rows = self.estimated_rows(build_plan);
+        // No logical join is a scalar subquery's single-match join yet
+        // (design P2-T115 unit 2); orientation already refuses to flip one.
+        let single_match = false;
         // Which side the statistics say to build (design P2-T166). The
         // joins that build their preserved side do not run yet: the plan
         // keeps the right build and shows the preference.
         let preferred = if choice.distribution.is_none() {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
-            let other = orient(join_type, &probe_stats, &build_stats);
+            let other = orient(join_type, single_match, &probe_stats, &build_stats);
             (other != join_type).then_some((other, probe_stats, build_stats))
         } else {
             None
         };
         // A hint decides, else the build's estimated size. The null-aware
         // anti join reads whether the whole build has a NULL key, so its
-        // build is always broadcast.
+        // build is always broadcast. An existence join reads only the build
+        // rows with the probe row's key (its `exists` is never NULL), so,
+        // like the other equi-joins, it is broadcast or partitioned by size.
         let distribution = if join_type == JoinType::NullAwareAnti {
             JoinDistribution::Broadcast
         } else {
@@ -232,6 +247,8 @@ impl Planner<'_> {
             build_keys,
             null_safe,
             residual: filter,
+            single_match,
+            distinct_build: false,
             runtime_filters,
             distribution,
         };
@@ -242,7 +259,8 @@ impl Planner<'_> {
             &plan,
             &self.env,
             None,
-            &mut |id| self.filter_cell(id),
+            &self.placeholder_values(plan.runtime_filters.iter().map(|f| f.id))?,
+            Producer::default(),
         )?
         .schema();
         Ok(Planned {
@@ -326,6 +344,98 @@ impl Planner<'_> {
             placement,
             sites,
         })
+    }
+
+    /// Each key pair's two columns in the canonical carrier of their Spark
+    /// type where the sides store one Spark `STRING`/`BINARY` in different
+    /// Arrow encodings: the side already there is kept, the other is
+    /// projected through an ANSI cast. Pairs of equal or of different Spark
+    /// types are untouched (the join builder rejects the latter as before).
+    fn unify_join_keys(
+        &mut self,
+        mut probe: Planned,
+        mut probe_keys: Vec<usize>,
+        mut build: Planned,
+        mut build_keys: Vec<usize>,
+    ) -> Result<(Planned, Vec<usize>, Planned, Vec<usize>)> {
+        for i in 0..probe_keys.len() {
+            let pt = probe
+                .schema
+                .fields()
+                .get(probe_keys[i])
+                .map(|f| f.data_type().clone())
+                .ok_or_else(|| internal("join key out of range"))?;
+            let bt = build
+                .schema
+                .fields()
+                .get(build_keys[i])
+                .map(|f| f.data_type().clone())
+                .ok_or_else(|| internal("join key out of range"))?;
+            if pt == bt {
+                continue;
+            }
+            let (Some(a), Some(b)) = (canonical_carrier(&pt), canonical_carrier(&bt)) else {
+                continue;
+            };
+            if a != b {
+                continue;
+            }
+            if pt != a {
+                let (p, k) = self.recast_key(probe, probe_keys[i], &a)?;
+                probe = p;
+                probe_keys[i] = k;
+            }
+            if bt != a {
+                let (b, k) = self.recast_key(build, build_keys[i], &a)?;
+                build = b;
+                build_keys[i] = k;
+            }
+        }
+        Ok((probe, probe_keys, build, build_keys))
+    }
+
+    /// `input` with key column `key` projected through an ANSI cast to the
+    /// canonical carrier `to` of its Spark type, and the new column. The
+    /// cast is over the key column itself, so runtime-filter sites still
+    /// resolve through it to the scan's column.
+    fn recast_key(
+        &mut self,
+        input: Planned,
+        key: usize,
+        to: &ArrowType,
+    ) -> Result<(Planned, usize)> {
+        let field = input
+            .schema
+            .fields()
+            .get(key)
+            .ok_or_else(|| internal("join key out of range"))?;
+        let stored = field.data_type().clone();
+        let spark = krishiv_types::DataType::from_arrow(&stored)
+            .map_err(|e| internal(&format!("a join key of unexpected type: {e}")))?;
+        let target = krishiv_types::DataType::from_arrow(to)
+            .map_err(|e| internal(&format!("a join key of unexpected type: {e}")))?;
+        let attr = input
+            .layout
+            .get(key)
+            .copied()
+            .ok_or_else(|| internal("join key out of range"))?;
+        let column = Expr::new(ExprNode::Resolved(ResolvedExpr::Column(BoundColumn {
+            id: attr,
+            name: field.name().clone(),
+            data_type: spark,
+            nullable: field.is_nullable(),
+        })));
+        let cast = Arc::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(column),
+            to: target,
+            mode: CastMode::Ansi,
+        }));
+        let (planned, columns) = self.with_columns(input, &[cast])?;
+        let key = columns
+            .first()
+            .copied()
+            .ok_or_else(|| internal("key arity"))?;
+        Ok((planned, key))
     }
 }
 

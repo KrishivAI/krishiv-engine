@@ -33,6 +33,18 @@ pub fn spark_file_name(task: u32, job_uuid: &str, file: u32, suffix: &str) -> St
     format!("part-{task:05}-{job_uuid}-c{file:03}{suffix}")
 }
 
+/// The job-id segment of a task's file names: `base` for attempt 0 (names
+/// exactly as before), `base_<attempt>` after that, so a retried attempt
+/// can never overwrite a committed attempt's file.
+#[must_use]
+pub fn effective_job_uuid(base: &str, attempt: u32) -> String {
+    if attempt == 0 {
+        base.to_owned()
+    } else {
+        format!("{base}_{attempt}")
+    }
+}
+
 /// Settings of one task's writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteOptions {
@@ -141,17 +153,23 @@ impl FileWriter {
     }
 
     async fn open_file(&mut self) -> Result<()> {
+        let file = self.next_file.fetch_add(1, Ordering::Relaxed);
         let name = spark_file_name(
             self.options.task,
             &self.options.job_uuid,
-            self.next_file.fetch_add(1, Ordering::Relaxed),
+            file,
             &self.suffix,
         );
         let path = self.options.dir.clone().join(name);
         let display = format!("{}/{}", self.options.store, path);
+        let seed = format!("{}/{}/{file}", self.options.job_uuid, self.options.task);
         let encoder = self
             .format
-            .writer(&self.io, Arc::clone(&self.schema), &self.format_options)
+            .writer(
+                &self.io,
+                Arc::clone(&self.schema),
+                &self.format_options.clone().with_write_seed(seed),
+            )
             .await
             .map_err(|e| e.into_error(&display))?;
         let upload = self.io.upload(&self.options.store, path.clone())?;

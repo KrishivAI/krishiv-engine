@@ -190,10 +190,12 @@ pub enum FunctionLookup {
 
 /// The function registry: built-in functions resolve in-process, so the
 /// lookup is synchronous. It is not asked about the canonical operators
-/// ([`crate::Builtin`] names).
+/// ([`crate::Builtin`] names). Registries hosting session UDFs also answer
+/// [`FunctionRegistry::resolve_udf`].
 pub trait FunctionRegistry: Send + Sync {
     /// The function named by `name`'s parts (as written, case-insensitive;
-    /// one part for a built-in, more for a qualified name) in `profile`.
+    /// one part for a bare built-in, more for a qualified name) in
+    /// `profile`.
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup;
     /// Whether Spark analyzes the built-in `name` (case-insensitive) as
     /// deterministic: `None` when the registry does not know. Inline
@@ -202,9 +204,106 @@ pub trait FunctionRegistry: Send + Sync {
     fn spark_deterministic(&self, _name: &str) -> Option<bool> {
         None
     }
+    /// The session UDF named `name` (already lower-case) at `version`, for
+    /// constant folding: `None` when the registry hosts no UDFs, or none
+    /// at that name and version. The default has none.
+    fn resolve_udf(
+        &self,
+        _name: &str,
+        _version: u32,
+    ) -> Option<Arc<dyn krishiv_udf_sdk::ScalarUdf>> {
+        None
+    }
     /// Changes whenever a lookup could answer differently (temporary and
     /// session functions); part of the context fingerprint.
     fn version(&self) -> u64;
+}
+
+/// A table-valued function the analyzer knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+/// What a table-function name resolves to.
+pub enum TableFunctionKind {
+    /// `range(start, end, step, numSlices)`.
+    Range,
+    /// `sql_keywords()`.
+    SqlKeywords,
+    /// A Spark generator TVF (`explode`, `inline`, `stack`, ...) the
+    /// engine does not implement yet: lowering used to reject it with
+    /// `KRISHIV_UNSUPPORTED_FEATURE` and the analyzer keeps doing so.
+    UnsupportedGenerator,
+}
+
+/// What a table-function lookup found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TableFunctionLookup {
+    /// A built-in table function.
+    Found(TableFunctionKind),
+    /// Not a table function Spark has in this profile.
+    NotFound,
+}
+
+/// The table-function registry: the built-in table-valued functions,
+/// looked up by lower-case name beside [`FunctionRegistry`]. No
+/// per-function logic lives in lowering; the analyzer resolves through
+/// this table.
+pub trait TableFunctionRegistry: Send + Sync {
+    /// The table function named `name` (as written; matched
+    /// case-insensitively) in `profile`.
+    fn lookup(&self, name: &str, profile: SparkProfile) -> TableFunctionLookup;
+    /// Changes whenever a lookup could answer differently; part of the
+    /// context fingerprint.
+    fn version(&self) -> u64;
+}
+
+/// The built-in table functions: `range` and `sql_keywords`, plus the
+/// Spark generator TVFs the engine rejects as unsupported (as lowering
+/// did before they lowered).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BuiltinTableFunctions;
+
+impl BuiltinTableFunctions {
+    /// A new registry.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+
+    /// Whether `name` (lower-case) is a generator TVF Spark has but the
+    /// engine does not implement yet.
+    fn is_generator(lower: &str) -> bool {
+        matches!(
+            lower,
+            "explode"
+                | "explode_outer"
+                | "inline"
+                | "inline_outer"
+                | "posexplode"
+                | "posexplode_outer"
+                | "json_tuple"
+                | "stack"
+        )
+    }
+}
+
+impl TableFunctionRegistry for BuiltinTableFunctions {
+    fn lookup(&self, name: &str, _profile: SparkProfile) -> TableFunctionLookup {
+        let mut lower = String::with_capacity(name.len());
+        lower.extend(name.chars().flat_map(char::to_lowercase));
+        match lower.as_str() {
+            "range" => TableFunctionLookup::Found(TableFunctionKind::Range),
+            "sql_keywords" => TableFunctionLookup::Found(TableFunctionKind::SqlKeywords),
+            n if Self::is_generator(n) => {
+                TableFunctionLookup::Found(TableFunctionKind::UnsupportedGenerator)
+            }
+            _ => TableFunctionLookup::NotFound,
+        }
+    }
+
+    fn version(&self) -> u64 {
+        0
+    }
 }
 
 /// Who runs a query. Build it with [`Principal::new`]; more attributes
@@ -295,9 +394,18 @@ pub enum Securable {
     View(TableIdent),
     /// A catalog function.
     Function(Vec<String>),
-    /// Files read by path (`volume`/path grant); a URL's credentials stay
+    /// Files read or written by path (`volume`/path grant), in the
+    /// qualified form the read or write uses; a URL's credentials stay
     /// typed.
     Path(OptionValue),
+    /// A namespace (database or schema): the catalog name, then the
+    /// namespace parts. Just the catalog name stands for the catalog
+    /// itself (where namespaces are created).
+    Namespace(Vec<String>),
+    /// A system object: `system.*` tables (`Monitor` reads other
+    /// principals' rows), or `cluster` for the cluster-scope statements
+    /// of the `ADMIN` class.
+    System(String),
 }
 
 impl fmt::Display for Securable {
@@ -307,6 +415,8 @@ impl fmt::Display for Securable {
             Self::View(t) => write!(f, "view {t}"),
             Self::Function(n) => write!(f, "function {}", quoted(n)),
             Self::Path(p) => write!(f, "path '{p}'"),
+            Self::Namespace(n) => write!(f, "namespace {}", quoted(n)),
+            Self::System(n) => write!(f, "system {}", quoted(std::slice::from_ref(n))),
         }
     }
 }
@@ -317,12 +427,35 @@ impl fmt::Display for Securable {
 pub enum Privilege {
     /// Read rows.
     Select,
+    /// Insert, overwrite, update or delete rows; write files under a path.
+    Modify,
+    /// Create an object in a namespace or catalog, or files at a new path.
+    Create,
+    /// Drop (or replace) the object.
+    Drop,
+    /// Read other principals' rows in `system.*` tables, and run the
+    /// cluster-scope statements of the `ADMIN` class.
+    Monitor,
+}
+
+impl Privilege {
+    /// Whether the privilege changes data or objects (`Modify`, `Create`,
+    /// `Drop`): a principal whose reads of the securable are filtered is
+    /// never granted one (see [`super::authorize`]).
+    #[must_use]
+    pub const fn changes(self) -> bool {
+        matches!(self, Self::Modify | Self::Create | Self::Drop)
+    }
 }
 
 impl fmt::Display for Privilege {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Select => "SELECT",
+            Self::Modify => "MODIFY",
+            Self::Create => "CREATE",
+            Self::Drop => "DROP",
+            Self::Monitor => "MONITOR",
         })
     }
 }
@@ -357,9 +490,10 @@ pub enum AccessDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PolicyVersion(pub u64);
 
-/// The access-policy hook (ADR 0036 R2): called once per securable a query
-/// reads, with the query's principal, before the resolver sees any of its
-/// metadata. Every error and every denial fails the query.
+/// The access-policy hook (ADR 0036 R2): called once per securable and
+/// privilege a statement uses, with the session's principal, before the
+/// resolver sees any of its metadata and before any side effect. Every
+/// error and every denial fails the statement (see [`super::authorize`]).
 pub trait AccessPolicy: Send + Sync {
     /// The policy version.
     fn version(&self) -> PolicyVersion;
@@ -391,6 +525,28 @@ impl AccessPolicy for AllowAll {
     }
 }
 
+/// A policy that denies everything (tests, and a closed default to build
+/// grants on).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DenyAll;
+
+impl AccessPolicy for DenyAll {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        _: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        Box::pin(std::future::ready(Ok(AccessDecision::Deny {
+            reason: "deny-all policy".to_owned(),
+        })))
+    }
+}
+
 /// The SQL front end, for `PlanNode::Sql` (and later view text): keeps this
 /// crate free of the parser.
 pub trait SqlFrontend: Send + Sync {
@@ -404,6 +560,10 @@ pub trait SqlFrontend: Send + Sync {
     /// A digest of the options that change how text parses; part of the
     /// context fingerprint.
     fn fingerprint(&self) -> u64;
+    /// The rows of `sql_keywords()`: `(keyword, reserved)` with the
+    /// session's enforced-keywords flag applied. The list comes from the
+    /// SQL front end so the analyzer never duplicates the parser's table.
+    fn keywords(&self) -> Vec<(String, bool)>;
 }
 
 /// What a data source name in `` format.`path` `` is, for Spark's
@@ -537,5 +697,20 @@ impl Catalog for MemoryCatalog {
             ..m.clone()
         });
         Box::pin(std::future::ready(Ok(found)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::BuiltinFunctions;
+    use super::FunctionRegistry;
+
+    #[test]
+    fn registries_without_udfs_resolve_none() {
+        // The default `resolve_udf`: registries hosting no UDFs answer `None`,
+        // so constant folding leaves UDF calls alone.
+        let builtins = BuiltinFunctions::new();
+        assert!(builtins.resolve_udf("my_udf", 1).is_none());
+        assert!(builtins.resolve_udf("upper", 2).is_none());
     }
 }

@@ -2,10 +2,13 @@
 //! `GROUP BY` and aggregates.
 //!
 //! An `Aggregate` relation becomes three steps, as in Spark's physical
-//! plan: a projection computing the grouping keys and the aggregates'
-//! arguments, the hash aggregate (two of them for `DISTINCT`), and a
-//! projection computing the output expressions from the keys and the
-//! aggregates' results (`sum(a) / count(b)`, a key under an alias).
+//! plan: a projection computing the grouping keys, the aggregates'
+//! arguments and their filters, the hash aggregate (two of them for
+//! `DISTINCT`), and a projection computing the output expressions from
+//! the keys and the aggregates' results (`sum(a) / count(b)`, a key
+//! under an alias). A call with a filter reads only the rows where its
+//! mask column is true (Spark's `FILTER (WHERE ...)`); other aggregates
+//! read all rows.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +22,7 @@ use krishiv_plan::{
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
 use super::properties::Distribution;
-use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, arity};
 use crate::error::Result;
 use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
@@ -47,7 +50,8 @@ impl Planner<'_> {
         for e in outputs {
             self.calls(e, &mut calls)?;
         }
-        // Step 1: keys, then each call's arguments.
+        // Step 1: keys, then each call's arguments, then each call's
+        // filter (a boolean mask column when the call filters).
         let mut wanted: Vec<Arc<Expr>> = keys.clone();
         let mut arg_at = Vec::with_capacity(calls.len());
         let mut lowered = Vec::with_capacity(calls.len());
@@ -58,16 +62,22 @@ impl Planner<'_> {
             wanted.extend(l.args.iter().cloned());
             lowered.push(l.function);
         }
+        let mut mask_at = Vec::with_capacity(calls.len());
+        for c in &calls {
+            mask_at.push(c.f.filter.as_ref().map(|f| {
+                let at = wanted.len();
+                wanted.push(Arc::clone(f));
+                at
+            }));
+        }
         let (input, columns) = self.with_columns(input, &wanted)?;
         let k = keys.len();
         let mut aggregates = Vec::with_capacity(calls.len());
         let mut distinct = Vec::with_capacity(calls.len());
-        for ((c, at), function) in calls.iter().zip(&arg_at).zip(lowered) {
-            if c.f.filter.is_some() {
-                return Err(unsupported("aggregate FILTER (WHERE ...) clauses"));
-            }
+        for (((c, at), function), mask) in calls.iter().zip(&arg_at).zip(lowered).zip(mask_at) {
             let args: Vec<usize> = columns[at.clone()].to_vec();
-            let agg = aggregate_expr(function, args, &input.schema, c.key.clone())?;
+            let mask = mask.map(|m| columns[m]);
+            let agg = aggregate_expr(function, args, mask, &input.schema, c.key.clone())?;
             let want = c.f.data_type.to_arrow();
             if agg.result_type()? != want {
                 return Err(internal(&format!(
@@ -97,7 +107,7 @@ impl Planner<'_> {
         };
         // Validates the aggregate (over an input that is never run) and
         // gives its schema.
-        let spec = aggregate_spec(&input.schema, &plan, self.env.ansi, None);
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
         let schema = spec.output_schema()?;
         aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
         let mut layout: Vec<AttrId> = columns[..k].iter().map(|c| input.layout[*c]).collect();
@@ -259,6 +269,19 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "any_value" => (AggregateFunction::AnyValue { ignore_nulls }, value),
         "max_by" if f.args.len() == 2 => (AggregateFunction::MaxBy, f.args.clone()),
         "min_by" if f.args.len() == 2 => (AggregateFunction::MinBy, f.args.clone()),
+        "stddev" | "std" | "stddev_samp" if f.args.len() == 1 => {
+            (AggregateFunction::StddevSamp, f.args.clone())
+        }
+        "stddev_pop" if f.args.len() == 1 => (AggregateFunction::StddevPop, f.args.clone()),
+        "variance" | "var_samp" if f.args.len() == 1 => {
+            (AggregateFunction::VarSamp, f.args.clone())
+        }
+        "var_pop" if f.args.len() == 1 => (AggregateFunction::VarPop, f.args.clone()),
+        "skewness" if f.args.len() == 1 => (AggregateFunction::Skewness, f.args.clone()),
+        "kurtosis" if f.args.len() == 1 => (AggregateFunction::Kurtosis, f.args.clone()),
+        "corr" if f.args.len() == 2 => (AggregateFunction::Corr, f.args.clone()),
+        "covar_samp" if f.args.len() == 2 => (AggregateFunction::CovarSamp, f.args.clone()),
+        "covar_pop" if f.args.len() == 2 => (AggregateFunction::CovarPop, f.args.clone()),
         _ => return None,
     };
     Some(Lowered { function, args })
@@ -291,12 +314,14 @@ fn null_if_false(c: &Arc<Expr>) -> Option<Arc<Expr>> {
     ))))
 }
 
-/// The executor's aggregate `function` over columns `args` of `schema`.
-/// Spark's STRING and BINARY are views here whatever carrier a registered
-/// table uses; the accumulators read any carrier.
+/// The executor's aggregate `function` over columns `args` with boolean
+/// mask column `mask` (`FILTER (WHERE ...)`; `None` reads all rows), of
+/// `schema`. Spark's STRING and BINARY are views here whatever carrier a
+/// registered table uses; the accumulators read any carrier.
 pub(super) fn aggregate_expr(
     function: AggregateFunction,
     args: Vec<usize>,
+    mask: Option<usize>,
     schema: &arrow_schema::Schema,
     name: String,
 ) -> Result<AggregateExpr> {
@@ -316,15 +341,13 @@ pub(super) fn aggregate_expr(
         let [value, key] = args[..] else {
             return Err(internal("max_by without a value and a key"));
         };
-        return Ok(AggregateExpr::by(
-            function,
-            (value, key),
-            (typed(&value), typed(&key)),
-            name,
-        ));
+        let mut expr =
+            AggregateExpr::by(function, (value, key), (typed(&value), typed(&key)), name);
+        expr.mask = mask;
+        return Ok(expr);
     }
-    if function != AggregateFunction::Count && args.len() != 1 {
-        return Err(internal("an aggregate of several arguments"));
+    if function != AggregateFunction::Count && args.len() != arity(function) {
+        return Err(internal("an aggregate with the wrong number of arguments"));
     }
     let arg_type = args.first().map_or(arrow_schema::DataType::Null, typed);
     Ok(AggregateExpr {
@@ -333,6 +356,7 @@ pub(super) fn aggregate_expr(
         input: crate::aggregate::AggInput::Raw,
         arg_type,
         name,
+        mask,
     })
 }
 

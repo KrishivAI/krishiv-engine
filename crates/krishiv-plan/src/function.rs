@@ -20,6 +20,7 @@
 //! | `a IN (x, y)` | `in(a, x, y)` |
 //! | `a BETWEEN x AND y` | `between(a, x, y)` |
 //! | `a LIKE p`, `ILIKE`, `RLIKE` | `like(a, p)`, `ilike`, `rlike` |
+//! | `a [NOT] LIKE ANY (p, ...)` and kin | one `*_any`/`*_all` call each, rewritten to `AND`/`OR` |
 //! | `CASE WHEN c THEN v ... ELSE e END` | `when(c, v, ..., e)` |
 //! | `a \|\| b` | `concat(a, b)` |
 //!
@@ -80,15 +81,42 @@ pub enum Builtin {
     ILike,
     /// `rlike`.
     RLike,
+    /// `x LIKE ANY (...)`: an OR of `LIKE`s, as the analyzer rewrites it.
+    LikeAny,
+    /// `x LIKE ALL (...)`: an AND of `LIKE`s, as the analyzer rewrites it.
+    LikeAll,
+    /// `x NOT LIKE ANY (...)`: an OR of `NOT LIKE`s.
+    NotLikeAny,
+    /// `x NOT LIKE ALL (...)`: an AND of `NOT LIKE`s.
+    NotLikeAll,
+    /// `x ILIKE ANY (...)`: an OR of `ILIKE`s (lowered `LIKE`s).
+    ILikeAny,
+    /// `x ILIKE ALL (...)`: an AND of `ILIKE`s (lowered `LIKE`s).
+    ILikeAll,
+    /// `x NOT ILIKE ANY (...)`: an OR of `NOT ILIKE`s.
+    NotILikeAny,
+    /// `x NOT ILIKE ALL (...)`: an AND of `NOT ILIKE`s.
+    NotILikeAll,
     /// `when`: condition/value pairs, then an optional `ELSE` value.
     When,
     /// `concat`.
     Concat,
 }
 
+/// The three axes of a [`Builtin`] `[NOT] LIKE|ILIKE ANY|ALL` operator.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QuantifiedLike {
+    /// `ILIKE` rather than `LIKE`.
+    pub insensitive: bool,
+    /// `NOT LIKE`: each pattern match is negated.
+    pub negated: bool,
+    /// `ALL` (an `AND` chain) rather than `ANY`/`SOME` (an `OR` chain).
+    pub all: bool,
+}
+
 impl Builtin {
     /// Every operator, in declaration order.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 33] = [
         Self::Eq,
         Self::EqNullSafe,
         Self::Lt,
@@ -112,6 +140,14 @@ impl Builtin {
         Self::Like,
         Self::ILike,
         Self::RLike,
+        Self::LikeAny,
+        Self::LikeAll,
+        Self::NotLikeAny,
+        Self::NotLikeAll,
+        Self::ILikeAny,
+        Self::ILikeAll,
+        Self::NotILikeAny,
+        Self::NotILikeAll,
         Self::When,
         Self::Concat,
     ];
@@ -143,9 +179,39 @@ impl Builtin {
             Self::Like => "like",
             Self::ILike => "ilike",
             Self::RLike => "rlike",
+            Self::LikeAny => "like_any",
+            Self::LikeAll => "like_all",
+            Self::NotLikeAny => "not_like_any",
+            Self::NotLikeAll => "not_like_all",
+            Self::ILikeAny => "ilike_any",
+            Self::ILikeAll => "ilike_all",
+            Self::NotILikeAny => "not_ilike_any",
+            Self::NotILikeAll => "not_ilike_all",
             Self::When => "when",
             Self::Concat => "concat",
         }
+    }
+
+    /// The shape of a `[NOT] LIKE|ILIKE ANY|ALL` operator, `None` for any
+    /// other. One mapping for the analyzer rewrite and the printers.
+    #[must_use]
+    pub const fn quantified_like(self) -> Option<QuantifiedLike> {
+        let (insensitive, negated, all) = match self {
+            Self::LikeAny => (false, false, false),
+            Self::LikeAll => (false, false, true),
+            Self::NotLikeAny => (false, true, false),
+            Self::NotLikeAll => (false, true, true),
+            Self::ILikeAny => (true, false, false),
+            Self::ILikeAll => (true, false, true),
+            Self::NotILikeAny => (true, true, false),
+            Self::NotILikeAll => (true, true, true),
+            _ => return None,
+        };
+        Some(QuantifiedLike {
+            insensitive,
+            negated,
+            all,
+        })
     }
 
     /// The operator with canonical name `name`, ASCII case-insensitively
@@ -161,11 +227,12 @@ impl Builtin {
 
 /// The identity of a resolved function.
 ///
-/// A function is identified by its canonical name: [`Builtin::name`] or the
-/// registry's lower-case name. Only the name (with the kind) enters the
-/// canonical encoding and the structural hash; a registry id is an
-/// in-process lookup handle and never part of a key, so keys stay valid
-/// across builds whose registries number functions differently.
+/// A function is identified by its canonical name: [`Builtin::name`], the
+/// registry's lower-case name, or a UDF's lower-case name and version. Only
+/// the name (with the kind), and for a UDF its version, enter the canonical
+/// encoding and the structural hash; a registry id is an in-process lookup
+/// handle and never part of a key, so keys stay valid across builds whose
+/// registries number functions differently.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum FunctionId {
@@ -178,6 +245,15 @@ pub enum FunctionId {
         /// The registry's handle for this process; not part of any key.
         id: u32,
     },
+    /// A session-registered native Rust UDF: its lower-case name and the
+    /// implementation [`version`](krishiv_udf_sdk::ScalarUdf::version) the
+    /// call was analyzed with.
+    Udf {
+        /// The canonical (lower-case) name: the identity, with `version`.
+        name: String,
+        /// The implementation version: part of the identity.
+        version: u32,
+    },
 }
 
 impl FunctionId {
@@ -186,7 +262,7 @@ impl FunctionId {
     pub fn name(&self) -> &str {
         match self {
             Self::Builtin(b) => b.name(),
-            Self::Registry { name, .. } => name,
+            Self::Registry { name, .. } | Self::Udf { name, .. } => name,
         }
     }
 }

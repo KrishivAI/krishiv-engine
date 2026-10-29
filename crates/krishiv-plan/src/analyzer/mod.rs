@@ -62,6 +62,7 @@
 //! provider's text. Catalog functions are not policy-checked yet (no
 //! catalog functions exist before P3).
 
+mod access;
 mod analytics;
 mod bind;
 mod builtins;
@@ -71,13 +72,19 @@ mod exprs;
 mod fold;
 mod fold_ops;
 mod hints;
+mod hof;
 pub(crate) mod legacy;
 mod ops;
+mod pivot;
 mod resolve;
 mod setops;
 mod subquery;
+mod suggest;
+pub mod table_functions;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod unexecutable;
+mod unpivot;
 mod variables;
 mod windows;
 
@@ -90,13 +97,15 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
+pub use access::{authorize, insufficient_permissions, namespace_parts, table_ident};
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
-    AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, CallTypes, Catalog,
-    CatalogResolver, Constant, FileSchemaResolver, FunctionEntry, FunctionLookup, FunctionRegistry,
-    InputBuilder, InputType, Inputs, MemoryCatalog, NameForm, Operator, PolicyVersion, Principal,
-    PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend,
-    TableColumn, TableIdent, TableKind, TableMeta,
+    AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, BuiltinTableFunctions,
+    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileSchemaResolver, FunctionEntry,
+    FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs, MemoryCatalog, NameForm,
+    Operator, PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy,
+    Securable, SourceKind, SqlFrontend, TableColumn, TableFunctionKind, TableFunctionLookup,
+    TableFunctionRegistry, TableIdent, TableKind, TableMeta,
 };
 pub use variables::{SessionVariable, VariableSnapshot, variable_name};
 
@@ -166,6 +175,9 @@ pub struct ResolutionConf {
     /// `spark.sql.decimalOperations.allowPrecisionLoss`: decimal
     /// arithmetic result types.
     pub decimal_precision_loss: bool,
+    /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`: duplicate map keys keep
+    /// the value inserted last (folded map calls depend on it).
+    pub map_key_dedup_last_win: bool,
     /// `spark.sql.runSQLOnFiles`: `` format.`path` `` reads files.
     pub run_sql_on_files: bool,
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: plain `TIMESTAMP '...'`
@@ -199,6 +211,7 @@ impl Default for ResolutionConf {
             order_by_ordinal: true,
             lateral_column_alias: true,
             decimal_precision_loss: true,
+            map_key_dedup_last_win: false,
             run_sql_on_files: true,
             timestamp_ntz: false,
             session_zone: Some(0),
@@ -211,7 +224,7 @@ impl Default for ResolutionConf {
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 13] = [
+    pub const KEYS: [&'static str; 14] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -220,6 +233,7 @@ impl ResolutionConf {
         "spark.sql.lateralColumnAlias.enableImplicitResolution",
         "spark.sql.decimalOperations.allowPrecisionLoss",
         "spark.sql.runSQLOnFiles",
+        "spark.sql.mapKeyDedupPolicy",
         "spark.sql.timestampType",
         "spark.sql.session.timeZone",
         "spark.sql.legacy.ctePrecedencePolicy",
@@ -255,17 +269,19 @@ impl ResolutionConf {
             lateral_column_alias: v[5],
             decimal_precision_loss: v[6],
             run_sql_on_files: v[7],
-            timestamp_ntz: conf(Self::KEYS[8])
+            map_key_dedup_last_win: conf(Self::KEYS[8])
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("LAST_WIN")),
+            timestamp_ntz: conf(Self::KEYS[9])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
-            session_zone: match conf(Self::KEYS[9]) {
+            session_zone: match conf(Self::KEYS[10]) {
                 None => Some(0),
                 Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
             },
-            cte_precedence: conf(Self::KEYS[10])
+            cte_precedence: conf(Self::KEYS[11])
                 .and_then(CtePrecedencePolicy::from_value)
                 .unwrap_or_default(),
-            allow_parameterless_count: on(Self::KEYS[11]),
-            allow_star_with_single_table_identifier_in_count: on(Self::KEYS[12]),
+            allow_parameterless_count: on(Self::KEYS[12]),
+            allow_star_with_single_table_identifier_in_count: on(Self::KEYS[13]),
         }
     }
 }
@@ -285,6 +301,8 @@ pub struct AnalysisContext {
     pub catalogs: Arc<dyn CatalogResolver>,
     /// The function registry.
     pub functions: Arc<dyn FunctionRegistry>,
+    /// The table-function registry.
+    pub table_functions: Arc<dyn TableFunctionRegistry>,
     /// The SQL front end, for SQL text inside plans.
     pub sql: Option<Arc<dyn SqlFrontend>>,
     /// Files read by path, for this query only (see
@@ -313,6 +331,8 @@ pub struct ContextFingerprint {
     pub catalog_epochs: BTreeMap<String, u64>,
     /// [`FunctionRegistry::version`].
     pub functions: u64,
+    /// [`TableFunctionRegistry::version`].
+    pub table_functions: u64,
     /// [`SqlFrontend::fingerprint`], when there is a front end.
     pub sql: Option<u64>,
     /// [`Principal::id`].
@@ -347,6 +367,7 @@ impl ContextFingerprint {
             c.order_by_ordinal,
             c.lateral_column_alias,
             c.decimal_precision_loss,
+            c.map_key_dedup_last_win,
             c.run_sql_on_files,
             c.timestamp_ntz,
             self.files,
@@ -383,6 +404,7 @@ impl ContextFingerprint {
             num(&mut b, *epoch);
         }
         num(&mut b, self.functions);
+        num(&mut b, self.table_functions);
         match self.sql {
             None => num(&mut b, 0),
             Some(v) => {
@@ -548,6 +570,7 @@ pub(crate) fn fingerprint(
         catalogs: ctx.catalogs.epoch(),
         catalog_epochs,
         functions: ctx.functions.version(),
+        table_functions: ctx.table_functions.version(),
         sql: ctx.sql.as_ref().map(|f| f.fingerprint()),
         principal: ctx.principal.id(),
         policy: ctx.policy.version(),
@@ -601,6 +624,7 @@ impl Analyzer for DefaultAnalyzer {
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
             let (root, output, securables, warnings) = resolve::resolve(plan, ctx, &bindings)?;
+            unexecutable::check(&root)?;
             let resolved =
                 Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
             let bind::Bindings {

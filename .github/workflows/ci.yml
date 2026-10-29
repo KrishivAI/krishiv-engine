@@ -5,6 +5,11 @@ on:
     types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
+  # A push to main re-runs only `test`, `clippy` and `wheels` (+ `wheels-ok`):
+  # they refresh the main-branch Rust build caches that pull-request and
+  # merge-queue runs restore from, and `wheels` uploads the Python coverage
+  # baseline to Codecov. Every other job already ran on the exact commit in the
+  # merge queue, so it is skipped on a push.
   push:
     branches: [main]
 
@@ -94,6 +99,7 @@ jobs:
 
   # Formatting and spelling of non-Rust files; no Rust toolchain needed.
   text-lint:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -122,6 +128,7 @@ jobs:
   # runs on every PR instead of being gated by `changes`. Required check (a maintainer
   # adds `python-quality` to branch protection). Versions come from each uv.lock.
   python-quality:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -158,7 +165,7 @@ jobs:
 
   fmt:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -223,7 +230,7 @@ jobs:
 
   deny:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -239,7 +246,7 @@ jobs:
 
   machete:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -256,7 +263,7 @@ jobs:
 
   hack:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -278,7 +285,7 @@ jobs:
 
   layering:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -300,7 +307,7 @@ jobs:
   # so the product dependency graph does not carry the protobuf compiler.
   connect-protos:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -323,7 +330,7 @@ jobs:
   # `tools/plan-protogen` is a workspace of its own, like connect-protogen.
   plan-protos:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -348,7 +355,7 @@ jobs:
   # committed fuzz/Cargo.lock pins the graph.
   fuzz-build:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -380,7 +387,7 @@ jobs:
 
   msrv:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -403,7 +410,7 @@ jobs:
 
   docs:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: -D warnings
@@ -427,7 +434,7 @@ jobs:
   # script runs on a scratch copy (see its header and RELEASING.md).
   release-dry-run:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -452,8 +459,9 @@ jobs:
   # check; the path gate is inside: it only does work when the PR touches what
   # Miri compiles: those crates, their path dependency krishiv-common, the
   # root Cargo.toml/Cargo.lock, rust-toolchain.toml or this workflow (and
-  # always on main).
+  # always in the merge queue).
   miri-kernels:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

@@ -1,0 +1,20 @@
+---
+source: crates/krishiv-sql/tests/lower.rs
+expression: "report(&[\"SELECT a FROM t PIVOT (sum(a) FOR b IN (1))\",\n\"SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))\",\n\"SELECT * FROM t PIVOT (sum(a) AS s, avg(b) FOR (c, d) IN ((1, 2) AS one, (3, 4) two)) p\",\n\"SELECT * FROM t UNPIVOT INCLUDE NULLS (v FOR n IN (a AS x, b)) AS u\",\n\"SELECT * FROM t UNPIVOT EXCLUDE NULLS ((v1, v2) FOR n IN ((a, b) AS ab, (c, d)))\",\n\"SELECT * FROM t JOIN u ON t.a = u.a PIVOT (count(*) FOR a IN ('x')) p JOIN v ON true\",\n\"SELECT * FROM t PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))\",\n\"SELECT * FROM t, u PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))\",])"
+---
+SELECT a FROM t PIVOT (sum(a) FOR b IN (1))
+  => Project [a] | +- Pivot [b], [[1]], [sum(a)] |    +- Read t | 
+SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))
+  => Project [a] | +- Join Inner |    :- Read t |    +- Pivot [b], [[1]], [sum(a)] |       +- Read u | 
+SELECT * FROM t PIVOT (sum(a) AS s, avg(b) FOR (c, d) IN ((1, 2) AS one, (3, 4) two)) p
+  => Project [*] | +- SubqueryAlias p |    +- Pivot [c, d], [[1, 2 AS one], [3, 4 AS two]], [sum(a) AS s, avg(b)] |       +- Read t | 
+SELECT * FROM t UNPIVOT INCLUDE NULLS (v FOR n IN (a AS x, b)) AS u
+  => Project [*] | +- SubqueryAlias u |    +- UnpivotIncludeNulls [v FOR n IN ([a AS x], [b])] |       +- Read t | 
+SELECT * FROM t UNPIVOT EXCLUDE NULLS ((v1, v2) FOR n IN ((a, b) AS ab, (c, d)))
+  => Project [*] | +- Unpivot [v1, v2 FOR n IN ([a, b AS ab], [c, d])] |    +- Read t | 
+SELECT * FROM t JOIN u ON t.a = u.a PIVOT (count(*) FOR a IN ('x')) p JOIN v ON true
+  => Project [*] | +- Join Inner, true |    :- SubqueryAlias p |    :  +- Pivot [a], [['x']], [count(*)] |    :     +- Join Inner, (t.a == u.a) |    :        :- Read t |    :        +- Read u |    +- Read v | 
+SELECT * FROM t PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))
+  => [NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT. SQLSTATE: 42601 @ 14..68
+SELECT * FROM t, u PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))
+  => [NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT. SQLSTATE: 42601 @ 17..71

@@ -12,6 +12,9 @@
     )
 )]
 
+mod archive;
+mod bundle;
+mod common;
 mod sql;
 
 use clap::Parser;
@@ -41,6 +44,13 @@ struct Cli {
 enum Command {
     /// Run SQL from `-e`, `-f` or stdin and print the result.
     Sql(sql::SqlArgs),
+    /// Collect a redacted diagnostic archive.
+    ///
+    /// Per-statement failures are recorded in the bundle and the exit status
+    /// stays 0; only I/O or setup failures exit non-zero (unlike
+    /// `krishiv sql`, which exits 1 on a query error).
+    #[command(name = "debug-bundle")]
+    DebugBundle(bundle::BundleArgs),
     /// Serve the web UI and admin API.
     #[cfg(feature = "ui")]
     Server {
@@ -63,15 +73,25 @@ fn main() {
     // configured limit that is not generous, mimalloc also purges promptly
     // (set before `main`, see `krishiv_alloc`).
     #[cfg(feature = "mimalloc")]
-    krishiv_memory::set_release_hook(krishiv_alloc::install());
+    {
+        krishiv_memory::set_release_hook(krishiv_alloc::install());
+        // Under that bounded policy the resident set follows the pools, and
+        // the pools keep it within their reservations plus an allowance.
+        if krishiv_alloc::bounded() {
+            krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
+        }
+    }
     run();
 }
 
 #[inline(never)]
 fn run() {
+    #[cfg(feature = "tokio-console")]
+    krishiv::maybe_init_tokio_console();
     let cli = Cli::parse();
     match cli.command {
         Command::Sql(args) => std::process::exit(sql::run(&args)),
+        Command::DebugBundle(args) => std::process::exit(bundle::run(&args)),
         #[cfg(feature = "ui")]
         Command::Server { port, host } => {
             let addr = std::net::SocketAddr::new(host, port);

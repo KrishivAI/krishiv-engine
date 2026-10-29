@@ -11,7 +11,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind,
@@ -28,14 +28,16 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DecimalType, Srid, parse_data_type};
 
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
         ansi: true,
+        legacy_statistical_aggregate: false,
         zone: Some(-28_800),
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
+        map_key_dedup_last_win: false,
     }
 }
 
@@ -99,6 +101,30 @@ pub(crate) fn scan_columns() -> Vec<BoundColumn> {
         column(1, "a", DataType::Integer, true),
         column(2, "s", DataType::String, false),
     ]
+}
+
+/// A write of a scan as Parquet files: the plan data a file sink is built
+/// from (format, options with a secret reference, store, directory, job
+/// id and file limits).
+pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
+    krishiv_exec::physical::WritePlan {
+        format: "parquet".to_owned(),
+        options: BTreeMap::from([
+            (
+                "compression".to_owned(),
+                OptionValue::Plain("zstd".to_owned()),
+            ),
+            (
+                "token".to_owned(),
+                OptionValue::reference("prod", "warehouse-token"),
+            ),
+        ]),
+        store: "memory://suite".to_owned(),
+        dir: "out".to_owned(),
+        job_uuid: "job-1".to_owned(),
+        max_records_per_file: 600,
+        target_file_bytes: 1 << 20,
+    }
 }
 
 /// A scan of a table, with a pushed filter and both runtime-filter specs.
@@ -189,6 +215,7 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
         input: AggInput::Raw,
         arg_type,
         name: "x".to_owned(),
+        mask: None,
     };
     vec![
         AggregateExpr::count_star("n"),
@@ -213,6 +240,7 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
             input: AggInput::State,
             arg_type: ArrowType::Int32,
             name: "merged".to_owned(),
+            mask: None,
         },
     ]
 }
@@ -369,6 +397,8 @@ fn join(join_type: JoinType) -> HashJoinPlan {
         build_keys: vec![1, 0],
         null_safe: vec![false, true],
         residual: Some(residual()),
+        single_match: false,
+        distinct_build: false,
         runtime_filters: vec![JoinFilterPlan {
             id: FilterId(3),
             key: 0,
@@ -382,6 +412,25 @@ fn join(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
             },
         }],
+        distribution: JoinDistribution::Broadcast,
+    }
+}
+
+/// An existence or single-match join over one key, without a residual
+/// condition or runtime filters (the single-match flag rides on a plain
+/// left outer join).
+fn subquery_join(join_type: JoinType) -> HashJoinPlan {
+    HashJoinPlan {
+        probe: boxed(scan()),
+        build: boxed(PhysNode::Scan(file_scan())),
+        join_type,
+        probe_keys: vec![0],
+        build_keys: vec![1],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+        distinct_build: false,
+        runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
     }
 }
@@ -445,6 +494,16 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         ("scan", scan()),
         ("file_scan", PhysNode::Scan(file_scan())),
         ("one_row", PhysNode::OneRow),
+        (
+            "range",
+            PhysNode::Range(krishiv_exec::physical::RangeNode {
+                start: 0,
+                end: 10,
+                step: 2,
+                num_slices: Some(4),
+                output: krishiv_plan::AttrId(1),
+            }),
+        ),
         (
             "filter",
             PhysNode::Filter {
@@ -615,6 +674,35 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_filter",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    distinct: vec![false, false],
+                    aggregates: vec![
+                        AggregateExpr {
+                            function: AggregateFunction::Count,
+                            args: vec![0],
+                            input: AggInput::Raw,
+                            arg_type: ArrowType::Int32,
+                            name: "masked".to_owned(),
+                            mask: Some(1),
+                        },
+                        AggregateExpr {
+                            function: AggregateFunction::Sum,
+                            args: vec![0],
+                            input: AggInput::Raw,
+                            arg_type: ArrowType::Int32,
+                            name: "plain".to_owned(),
+                            mask: None,
+                        },
+                    ],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join(JoinType::Inner))),
         (
             "hash_join_anti",
@@ -653,6 +741,29 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
+            "hash_join_existence",
+            PhysNode::HashJoin(HashJoinPlan {
+                distinct_build: true,
+                ..subquery_join(JoinType::Existence)
+            }),
+        ),
+        (
+            "hash_join_single_match",
+            PhysNode::HashJoin(HashJoinPlan {
+                single_match: true,
+                ..subquery_join(JoinType::LeftOuter)
+            }),
+        ),
+        (
+            "nested_loop_existence",
+            PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe: boxed(scan()),
+                build: boxed(PhysNode::OneRow),
+                join_type: JoinType::Existence,
+                residual: Some(residual()),
+            }),
+        ),
+        (
             "nested_loop_join",
             PhysNode::NestedLoopJoin(NestedLoopPlan {
                 probe: boxed(scan()),
@@ -671,6 +782,14 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             "write_files",
             PhysNode::WriteFiles {
                 input: boxed(scan()),
+                write: None,
+            },
+        ),
+        (
+            "write_files_with_plan",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(write_plan()),
             },
         ),
         (
@@ -678,7 +797,22 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Exchange(ExchangePlan {
                 id: ExchangeId(11),
                 input: boxed(scan()),
-                partitioning: Partitioning::Hash { keys: vec![0, 1] },
+                // A plan from before the routing hash was named.
+                partitioning: Partitioning::Hash {
+                    keys: vec![0, 1],
+                    scheme: HashScheme::Unpinned,
+                },
+            }),
+        ),
+        (
+            "exchange_hash_key_group",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(16),
+                input: boxed(scan()),
+                partitioning: Partitioning::Hash {
+                    keys: vec![1, 0],
+                    scheme: HashScheme::KeyGroupV1,
+                },
             }),
         ),
         (
@@ -720,6 +854,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
 
 /// A plan of `root`, with a two-level explain tree and a warning.
 pub(crate) fn plan_of(root: PhysNode) -> PhysicalPlan {
+    plan_of_env(root, env())
+}
+
+/// [`plan_of`] with `env`: the golden for the
+/// `legacy_statistical_aggregate` feature sets the flag the wire now
+/// carries.
+pub(crate) fn plan_of_env(root: PhysNode, env: ExprEnv) -> PhysicalPlan {
     let explain = ExplainNode::new(
         "Root",
         "details",
@@ -728,8 +869,7 @@ pub(crate) fn plan_of(root: PhysNode) -> PhysicalPlan {
             ExplainNode::new("Right", "", vec![ExplainNode::leaf("Leaf", "x")]),
         ],
     );
-    PhysicalPlan::new(root, schema(), explain, env())
-        .with_warnings(vec!["a hint was ignored".into()])
+    PhysicalPlan::new(root, schema(), explain, env).with_warnings(vec!["a hint was ignored".into()])
 }
 
 /// Every kind of expression and literal, in one projection.
@@ -844,6 +984,136 @@ pub(crate) fn expressions() -> PhysNode {
     }
 }
 
+/// A call of a session-registered native Rust UDF (`rust_udf`): the plan
+/// references it by name and version only.
+pub(crate) fn udf_call() -> PhysNode {
+    PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "u".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Udf {
+                        name: "my_udf".to_owned(),
+                        version: 7,
+                    },
+                    kind: FunctionKind::Scalar,
+                    args: vec![
+                        col(1, "a", DataType::Integer),
+                        lit(Literal::String("x".to_owned())),
+                    ],
+                    distinct: false,
+                    filter: None,
+                    data_type: DataType::String,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
+/// Lambda expressions and variables: a `transform` over an array column
+/// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
+pub(crate) fn lambda_functions() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let array = t("array<int>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(3, "xs", array.clone(), true));
+    }
+    let xs = col(3, "xs", array.clone());
+    let var = || {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            column(11, "x", DataType::Integer, true),
+        ))))
+    };
+    let doubled = call(
+        Builtin::Multiply,
+        vec![var(), lit(Literal::Integer(2))],
+        DataType::Integer,
+    );
+    let transform = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            // The codec passes ids through; this is not the registry's.
+            id: FunctionId::Registry {
+                name: "transform".to_owned(),
+                id: 0,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![
+                xs,
+                Arc::new(Expr::new(ExprNode::Lambda {
+                    params: vec![column(11, "x", DataType::Integer, true)],
+                    body: doubled,
+                })),
+            ],
+            distinct: false,
+            filter: None,
+            data_type: array,
+            nullable: true,
+            deterministic: true,
+        },
+    ))));
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "doubled".to_owned(),
+            expr: transform,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+/// Array, map and struct types (depth 4, nullability, a comment) in a
+/// scan column, a cast, a typed NULL, a function and an alias.
+pub(crate) fn nested_types() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let deep = t("array<struct<a:int not null comment 'c',b:map<string,array<double>>>>");
+    let map = t("map<string,struct<a:array<map<int,struct<b:timestamp_ntz>>>>>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(3, "n", deep.clone(), true));
+    }
+    let n = col(3, "n", deep.clone());
+    let items = vec![
+        ProjectItemPlan::Expr {
+            name: "cast".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&n),
+                to: t("array<struct<a:bigint,b:map<string,array<double>>>>"),
+                mode: CastMode::Ansi,
+            })),
+        },
+        ProjectItemPlan::Expr {
+            name: "null".to_owned(),
+            expr: lit(Literal::Null(Some(map))),
+        },
+        ProjectItemPlan::Expr {
+            name: "f".to_owned(),
+            expr: call(Builtin::Concat, vec![Arc::clone(&n)], deep),
+        },
+        ProjectItemPlan::Expr {
+            name: "alias".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: n,
+                output: column(11, "alias", t("struct<>"), true),
+            }))),
+        },
+    ];
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+        items,
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// The named plans the inventory test, the error tests and the golden
 /// files share.
 pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
@@ -852,5 +1122,139 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .map(|(name, node)| (name.to_owned(), plan_of(node)))
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
+    out.push(("rust_udf".to_owned(), plan_of(udf_call())));
+    // The expression environment flag the `legacy_statistical_aggregate`
+    // feature is about: the same root as `one_row`, under a session with
+    // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate
+    // in the plan it lists no feature, so readers without it keep reading
+    // the plan; the flag itself still travels on the wire.
+    let mut legacy = env();
+    legacy.legacy_statistical_aggregate = true;
+    out.push((
+        "one_row_legacy_statistical_aggregate".to_owned(),
+        plan_of_env(PhysNode::OneRow, legacy),
+    ));
+    out.push(("nested_types".to_owned(), plan_of(nested_types())));
+    out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
+    out.push(("struct_field".to_owned(), plan_of(struct_field())));
+    out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
+    out.extend(
+        typed()
+            .into_iter()
+            .map(|(name, node)| (name.to_owned(), plan_of(node))),
+    );
     out
+}
+
+/// A plan whose environment sets the map-key dedup policy to `LAST_WIN`.
+fn map_key_dedup_policy() -> PhysicalPlan {
+    let env = ExprEnv {
+        map_key_dedup_last_win: true,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A struct field access (`GetStructField`): the `b` of a struct column.
+pub(crate) fn struct_field() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let st = t("struct<a:int,b:string>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(4, "st", st.clone(), false));
+    }
+    let base = col(4, "st", st);
+    let field = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+        base,
+        ordinal: 1,
+        name: "b".to_owned(),
+        data_type: DataType::String,
+        nullable: true,
+    })));
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3), AttrId(4)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "b".to_owned(),
+            expr: field,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
+/// Plans that name the `TIME` and spatial types: in a cast nested below a
+/// baseline function, a typed `NULL`, a scan's output and a join residual.
+pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
+    let time_cast = Arc::new(Expr::new(ExprNode::Cast {
+        expr: col(1, "a", DataType::Integer),
+        to: DataType::Time { precision: 3 },
+        mode: CastMode::Ansi,
+    }));
+    let times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![
+            ProjectItemPlan::Expr {
+                name: "has_time".to_owned(),
+                expr: call(Builtin::IsNotNull, vec![time_cast], DataType::Boolean),
+            },
+            ProjectItemPlan::Expr {
+                name: "no_time".to_owned(),
+                expr: lit(Literal::Null(Some(DataType::Time { precision: 0 }))),
+            },
+        ],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    let mut spatial = file_scan();
+    spatial.scan.output = vec![
+        column(3, "g", DataType::Geometry { srid: Srid::Any }, true),
+        column(
+            4,
+            "gg",
+            DataType::Geography {
+                srid: Srid::Fixed(4326),
+            },
+            false,
+        ),
+    ];
+    let geometry = col(
+        5,
+        "g3857",
+        DataType::Geometry {
+            srid: Srid::Fixed(3857),
+        },
+    );
+    let residual_join = PhysNode::NestedLoopJoin(NestedLoopPlan {
+        probe: boxed(scan()),
+        build: boxed(PhysNode::OneRow),
+        join_type: JoinType::Inner,
+        residual: Some(Residual {
+            layout: vec![AttrId(1), AttrId(5)],
+            conjuncts: vec![call(Builtin::IsNull, vec![geometry], DataType::Boolean)],
+        }),
+    });
+    // A time inside an array, a map and a struct: the nested type needs
+    // `time_type` as well as `nested_types`.
+    let time3 = DataType::Time { precision: 3 };
+    let nested_times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "times".to_owned(),
+            expr: lit(Literal::Null(Some(DataType::Array(
+                krishiv_types::ArrayType::new(time3, true).into(),
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    vec![
+        ("time_nested", nested_times),
+        ("time_project", times),
+        ("geo_scan", PhysNode::Scan(spatial)),
+        ("geo_join_residual", residual_join),
+    ]
 }

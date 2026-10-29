@@ -38,6 +38,7 @@ const HELPERS: &[&str] = &[
     "_num_or_col",
     "_one_of",
     "_opt",
+    "_opts",
 ];
 
 /// The generated files.
@@ -70,6 +71,10 @@ pub(crate) struct Row {
     check: Check,
     reversed: bool,
     deprecated: Option<&'static str>,
+    /// A parameter with a `None` default that is sent even when `None` (as a SQL NULL) instead
+    /// of being left out of the call: `lag`/`lead`'s `default`, which the parser fills with NULL,
+    /// so the wrapper builds the same call the SQL form builds.
+    always: Option<&'static str>,
 }
 
 impl Row {
@@ -82,6 +87,7 @@ impl Row {
             check: Check::None,
             reversed: false,
             deprecated: None,
+            always: None,
         }
     }
 
@@ -94,6 +100,12 @@ impl Row {
     /// Sends the arguments to the registry in reverse order.
     pub(crate) const fn reversed(mut self) -> Self {
         self.reversed = true;
+        self
+    }
+
+    /// Sends `param` even when it is `None` (as a SQL NULL).
+    pub(crate) const fn always(mut self, param: &'static str) -> Self {
+        self.always = Some(param);
         self
     }
 
@@ -127,6 +139,9 @@ enum Conv {
     Int,
     /// A `Column`, or any other value is a literal.
     Literal,
+    /// A `Column`, a `dict[str, str]` as a map literal, or any other value
+    /// is a literal (PySpark's `options` parameters).
+    Opts,
 }
 
 impl Conv {
@@ -137,6 +152,7 @@ impl Conv {
             "ColumnOrName | int" => Some(Self::Int),
             "Column | int" | "Column | str" | "int | Column" | "str | Column" | "bool | Column"
             | "int" | "str" | "bool" | "Any" => Some(Self::Literal),
+            "dict[str, str]" => Some(Self::Opts),
             _ => None,
         }
     }
@@ -147,6 +163,7 @@ impl Conv {
             Self::Number => "_num_or_col",
             Self::Int => "_int_or_col",
             Self::Literal => "_lit",
+            Self::Opts => "_opts",
         }
     }
 }
@@ -173,11 +190,11 @@ impl Param {
         }
     }
 
-    fn argument(&self) -> String {
+    fn argument(&self, always: bool) -> String {
         let (name, helper) = (&self.name, self.conv.helper());
         if self.variadic {
             format!("*_cols({name})")
-        } else if self.default.as_deref() == Some("None") {
+        } else if !always && self.default.as_deref() == Some("None") {
             format!("*_opt({helper}, {name}, \"{name}\")")
         } else {
             format!("{helper}({name}, \"{name}\")")
@@ -186,9 +203,15 @@ impl Param {
 }
 
 /// Parses `name: annotation [= default]` items; `*name: ColumnOrName` is variadic.
+/// Annotations may hold `[...]` (as `dict[str, str]` does): items split on
+/// commas outside brackets.
 fn parse_params(spec: &str) -> Result<Vec<Param>, String> {
     let mut out = Vec::new();
-    for item in spec.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+    for item in split_params(spec) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
         let (head, default) = match item.split_once('=') {
             Some((h, d)) => (h.trim(), Some(d.trim().to_owned())),
             None => (item, None),
@@ -215,6 +238,26 @@ fn parse_params(spec: &str) -> Result<Vec<Param>, String> {
         });
     }
     Ok(out)
+}
+
+/// `spec` split on commas outside `[...]` (so `dict[str, str]` survives).
+fn split_params(spec: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = 0_usize;
+    for (i, c) in spec.char_indices() {
+        match c {
+            '[' => depth = depth.saturating_add(1),
+            ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(spec.get(start..i).unwrap_or_default());
+                start = i.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    out.push(spec.get(start..).unwrap_or_default());
+    out
 }
 
 /// `head` + `args` + `tail`, laid out as `ruff format` does: on one line if it fits, else the
@@ -267,7 +310,10 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 fn render_function(row: &Row, params: &[Param]) -> (String, String) {
     let declarations: Vec<String> = params.iter().map(Param::declaration).collect();
     let head = format!("def {}(", row.py);
-    let mut args: Vec<String> = params.iter().map(Param::argument).collect();
+    let mut args: Vec<String> = params
+        .iter()
+        .map(|p| p.argument(row.always == Some(p.name.as_str())))
+        .collect();
     if row.reversed {
         args.reverse();
     }
@@ -298,6 +344,19 @@ fn render_function(row: &Row, params: &[Param]) -> (String, String) {
     }
     if let Some(message) = row.deprecated {
         body.push_str(&format!("    _deprecated(\"{message}\")\n"));
+    }
+    if row.py == "str_to_map" {
+        // PySpark sends the default pair delimiter when only `keyValueDelim`
+        // is given, so the third argument keeps its position.
+        body.push_str("    if pairDelim is None and keyValueDelim is not None:\n");
+        let defaulted = vec![
+            format!("\"{}\"", row.registry),
+            "_named(text, \"text\")".to_owned(),
+            "_lit(\",\", \"pairDelim\")".to_owned(),
+            "_named(keyValueDelim, \"keyValueDelim\")".to_owned(),
+        ];
+        body.push_str(&wrap("        return _call(", &defaulted, ")", 8));
+        body.push('\n');
     }
     body.push_str(&wrap("    return _call(", &args, ")", 4));
     body.push('\n');

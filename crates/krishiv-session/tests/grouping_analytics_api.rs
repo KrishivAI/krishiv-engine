@@ -425,14 +425,14 @@ fn grouping_retype_keeps_distinct_and_filter() -> R {
         )?,
         sorted(&["1\t0", "2\t0", "NULL\t1"])
     );
-    // `FILTER` stays too: the engine rejects filtered aggregates, so keeping
-    // the filter fails instead of silently summing to 60.
+    // `FILTER` stays too: only the rows of grouping sets that group by
+    // `a` pass it, so the grand total is NULL instead of 60.
     assert_eq!(
-        error_class(
+        rows(
             &s,
             "SELECT a, sum(v) FILTER (WHERE grouping(a) = 0) FROM t GROUP BY ROLLUP(a)"
         )?,
-        ErrorClass::KrishivUnsupportedFeature
+        sorted(&["1\t30", "2\t30", "NULL\tNULL"])
     );
     Ok(())
 }

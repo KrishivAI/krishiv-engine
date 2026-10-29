@@ -1,0 +1,4 @@
+READ	select from_csv('1', 'create INT')
+READ	select from_csv('1', 'cube INT')
+READ	select from_json('{"create":1}', 'create INT')
+READ	select from_json('{"cube":1}', 'cube INT')

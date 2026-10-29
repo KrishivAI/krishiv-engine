@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "format_number#283272e56f35/ansi_on",
+      "reason": "SELECT format_number(INTERVAL '1-2' YEAR TO MONTH, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "format_number#283272e56f35/ansi_off",
+      "reason": "SELECT format_number(INTERVAL '1-2' YEAR TO MONTH, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "format_number#76613646826f/ansi_on",
+      "reason": "SELECT format_number(12332.123456, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "format_number#76613646826f/ansi_off",
+      "reason": "SELECT format_number(12332.123456, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "format_number#ba6583b472bc/ansi_on",
+      "reason": "SELECT format_number(12332.123456, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "format_number#ba6583b472bc/ansi_off",
+      "reason": "SELECT format_number(12332.123456, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "format_number#f2eb3f7a47db/ansi_on",
+      "reason": "SELECT format_number(INTERVAL '1 02:03:04' DAY TO SECOND, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "format_number#f2eb3f7a47db/ansi_off",
+      "reason": "SELECT format_number(INTERVAL '1 02:03:04' DAY TO SECOND, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "format_number"
+}

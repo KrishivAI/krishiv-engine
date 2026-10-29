@@ -1,0 +1,28 @@
+SESSION	create temporary view data as select * from values
+READ	select * from data order by 1 desc
+READ	select * from data order by 1 desc, b desc
+READ	select * from data order by 1 desc, 2 desc
+READ	select * from data order by 1 + 0 desc, b desc
+READ	select * from data order by 0
+READ	select * from data order by -1
+READ	select * from data order by 3
+READ	select * from data sort by 1 desc
+SESSION	set spark.sql.prioritizeOrdinalResolutionInSort.enabled=true
+READ	SELECT a FROM data ORDER BY 2, b
+READ	SELECT a FROM data ORDER BY b, 2
+READ	SELECT a FROM data ORDER BY 'b', 2
+READ	SELECT a FROM data ORDER BY `b`, 2
+READ	SELECT a FROM data ORDER BY a, 2
+READ	SELECT a FROM data ORDER BY b, 3
+READ	SELECT a, a + 1 FROM data ORDER BY b, 3
+SESSION	set spark.sql.prioritizeOrdinalResolutionInSort.enabled=false
+READ	SELECT a FROM data ORDER BY 2, b
+READ	SELECT a FROM data ORDER BY b, 2
+READ	SELECT a FROM data ORDER BY 'b', 2
+READ	SELECT a FROM data ORDER BY `b`, 2
+READ	SELECT a FROM data ORDER BY a, 2
+READ	SELECT a FROM data ORDER BY b, 3
+READ	SELECT a, a + 1 FROM data ORDER BY b, 3
+SESSION	set spark.sql.orderByOrdinal=false
+READ	select * from data order by 0
+READ	select * from data sort by 0

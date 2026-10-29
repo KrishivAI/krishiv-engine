@@ -1,0 +1,8 @@
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) WHERE k > 100 GROUP BY GROUPING SETS (())
+READ	SELECT sum(v) AS total, avg(v) AS mean, max(v) AS hi, count(*) AS c
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS (())
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS (()) HAVING grouping_id() = 0
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS (()) ORDER BY grouping_id()
+READ	SELECT count(*) AS c, grouping_id() AS g
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS ((), ()) HAVING grouping_id() = 0
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS ((), ()) ORDER BY grouping_id()

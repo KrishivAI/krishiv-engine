@@ -60,17 +60,24 @@ fn rows(batches: &[RecordBatch]) -> Vec<(i32, Option<String>)> {
         .iter()
         .flat_map(|b| {
             let ids = b.column(0).as_primitive::<Int32Type>();
-            let names = b.column(1).as_string::<i32>();
-            (0..b.num_rows()).map(|i| {
-                (
-                    ids.value(i),
-                    if names.is_null(i) {
-                        None
-                    } else {
-                        Some(names.value(i).to_owned())
-                    },
-                )
-            })
+            // `Utf8` as stored, `Utf8View` where a union mixed the carriers.
+            let names: Vec<Option<String>> = match b.column(1).data_type() {
+                ArrowType::Utf8View => b
+                    .column(1)
+                    .as_string_view()
+                    .iter()
+                    .map(|v| v.map(str::to_owned))
+                    .collect(),
+                _ => b
+                    .column(1)
+                    .as_string::<i32>()
+                    .iter()
+                    .map(|v| v.map(str::to_owned))
+                    .collect(),
+            };
+            (0..b.num_rows())
+                .map(|i| (ids.value(i), names[i].clone()))
+                .collect::<Vec<_>>()
         })
         .collect();
     out.sort();
@@ -166,12 +173,8 @@ fn union_by_name_matches_by_name() {
 }
 
 /// With `allow_missing_columns`, a column one side lacks reads NULL there
-/// (Spark 4.2 rows). Ignored until the physical planner unions a
-/// null-filled string branch with a `Utf8View` one: it rejects that union
-/// with `InternalError` today, as it does the SQL form `SELECT id, NULL AS
-/// name FROM t1 UNION ALL SELECT id, name FROM t1`.
+/// (Spark 4.2 rows).
 #[test]
-#[ignore = "physical planner rejects a union of Utf8 and Utf8View branches"]
 fn union_by_name_fills_missing_columns() {
     let s = session();
     let a = block_on(s.sql("SELECT id, name FROM t1 ORDER BY id LIMIT 1")).unwrap();

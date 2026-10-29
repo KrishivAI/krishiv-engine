@@ -3,6 +3,10 @@
 //! queries are quoted next to each case); the property test compares with
 //! a row-at-a-time oracle.
 #![cfg(not(loom))]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing; never runs on a compute worker"
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -65,6 +69,7 @@ fn pool(limit: usize) -> Arc<TreePool> {
             spill_wait_timeout: Duration::from_secs(5),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: krishiv_memory::DEFAULT_SPILL_SCRATCH_RESERVE,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     )
@@ -73,7 +78,7 @@ fn pool(limit: usize) -> Arc<TreePool> {
 /// Runs `plan` on a deterministic executor (seed `o.seed`); checks the pool is
 /// empty afterwards. Unless `o.both_layouts` is off, runs it again with the
 /// row-layout aggregate tables and checks the rows (or the error) are the
-/// same; returns the default layout's outcome.
+/// same; returns the columnar layout's outcome.
 async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, QueryMetrics)> {
     let off = exec_with(Arc::clone(&plan), o, false).await;
     if o.both_layouts {
@@ -99,7 +104,7 @@ async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, Qu
 
 /// Runs a fresh plan from `make` on each layout (operator counters add up
 /// across runs of one plan) and requires the same rows; returns both
-/// metrics, default first, so tests check each layout's spill counters.
+/// metrics, columnar first, so tests check each layout's spill counters.
 async fn exec_each(
     make: impl Fn() -> Arc<dyn ExecNode>,
     o: Opts,
@@ -237,6 +242,7 @@ fn spec(s: &SchemaRef, group_by: Vec<usize>, aggregates: Vec<AggregateExpr>) -> 
         ansi: true,
         spill: None,
         require_unit_weights: false,
+        legacy_statistical: false,
     }
 }
 
@@ -584,6 +590,125 @@ async fn distinct_aggregates_and_union() {
     assert_eq!(run_rows(plan).await, ["1", "2", "3", "NULL"]);
 }
 
+fn masked(f: AggregateFunction, col: usize, mask: usize, s: &SchemaRef) -> AggregateExpr {
+    AggregateExpr {
+        mask: Some(mask),
+        ..agg(f, col, s)
+    }
+}
+
+fn bools(v: &[Option<bool>]) -> ArrayRef {
+    Arc::new(arrow_array::BooleanArray::from(v.to_vec()))
+}
+
+/// `FILTER (WHERE ...)`: a masked aggregate reads only the rows where the
+/// mask column is true; a NULL mask is not true. Expected values are
+/// Spark 4.2's (`group-by-filter.sql`: `count(x) FILTER (WHERE m)` counts
+/// the passing rows with non-NULL `x`, `count(*)` the passing rows, `sum`
+/// of no rows is NULL).
+#[tokio::test]
+async fn filter_mask_reads_only_passing_rows() {
+    let s = schema(vec![("x", DataType::Int64), ("m", DataType::Boolean)]);
+    // x: 1, 2, NULL, 4, 5; m: true, false, true, NULL, true.
+    let x = i64s(&[Some(1), Some(2), None, Some(4), Some(5)]);
+    let m = bools(&[Some(true), Some(false), Some(true), None, Some(true)]);
+    let input = || scan(&s, vec![vec![Arc::clone(&x), Arc::clone(&m)]]);
+    let aggs = || {
+        vec![
+            AggregateExpr::count_star("c"),
+            masked(Count, 0, 1, &s),
+            masked(Sum, 0, 1, &s),
+            masked(Avg, 0, 1, &s),
+            masked(Min, 0, 1, &s),
+            masked(Max, 0, 1, &s),
+        ]
+    };
+    // Unmasked counts beside masked calls: the counts read all rows,
+    // the other calls only the passing ones (rows 0, 2, 4).
+    let mut all = aggs();
+    all[0].mask = None;
+    all[1].mask = None;
+    assert_eq!(
+        run_rows(node(input(), spec(&s, vec![], all))).await,
+        ["5|4|6|3.0|1|5"]
+    );
+    let mut only_masked = aggs();
+    for a in &mut only_masked {
+        a.mask = Some(1);
+    }
+    // count(*): rows 0, 2, 4; count(x): rows 0, 4; sum: 1 + 5.
+    assert_eq!(
+        run_rows(node(input(), spec(&s, vec![], only_masked))).await,
+        ["3|2|6|3.0|1|5"]
+    );
+    // A mask that passes nothing: counts are 0, other values NULL.
+    let none = bools(&[Some(false), None, Some(false), Some(false), None]);
+    let input_none = || scan(&s, vec![vec![Arc::clone(&x), Arc::clone(&none)]]);
+    // The unmasked `count(*)` still reads all rows; the masked calls
+    // read none.
+    assert_eq!(
+        run_rows(node(input_none(), spec(&s, vec![], aggs()))).await,
+        ["5|0|NULL|NULL|NULL|NULL"]
+    );
+    let mut masked_none = aggs();
+    for a in &mut masked_none {
+        a.mask = Some(1);
+    }
+    assert_eq!(
+        run_rows(node(input_none(), spec(&s, vec![], masked_none))).await,
+        ["0|0|NULL|NULL|NULL|NULL"]
+    );
+    // Grouped: k holds 10 and 20 in group 1, 30 in group 2; the mask
+    // drops the 20.
+    let g = schema(vec![
+        ("k", DataType::Int64),
+        ("x", DataType::Int64),
+        ("m", DataType::Boolean),
+    ]);
+    let grouped = scan(
+        &g,
+        vec![vec![
+            i64s(&[Some(1), Some(1), Some(2)]),
+            i64s(&[Some(10), Some(20), Some(30)]),
+            bools(&[Some(true), Some(false), Some(true)]),
+        ]],
+    );
+    let gaggs = vec![
+        masked(Count, 1, 2, &g),
+        masked(Sum, 1, 2, &g),
+        masked(Min, 1, 2, &g),
+    ];
+    assert_eq!(
+        run_rows(node(grouped, spec(&g, vec![0], gaggs))).await,
+        ["1|1|10|10", "2|1|30|30"]
+    );
+}
+
+/// A masked `DISTINCT` never reaches the single-distinct plan: the
+/// analyzer rewrites every one (group formation itself must skip the
+/// rows the mask drops), so this plan rejects them instead of
+/// miscounting. `merging` drops the mask: states hold filtered rows.
+#[tokio::test]
+async fn filter_mask_with_distinct_is_rejected() {
+    let s = schema(vec![("x", DataType::Int64), ("m", DataType::Boolean)]);
+    // `count(distinct x) FILTER (WHERE m)`: groups would form from the
+    // rows the mask drops, so the count would include them.
+    let x = i64s(&[Some(1), Some(2)]);
+    let m = bools(&[Some(false), Some(true)]);
+    let input = || scan(&s, vec![vec![Arc::clone(&x), Arc::clone(&m)]]);
+    let e = distinct_plan(
+        input(),
+        spec(&s, vec![], vec![masked(Count, 0, 1, &s)]),
+        &[true],
+    )
+    .err();
+    assert_eq!(
+        e.map(|e| e.error_class()),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    assert!(masked(Count, 0, 1, &s).merging(0).mask.is_none());
+}
+
 /// Z-set weights: `count` and `sum` scale; `min`/`max` and `DISTINCT`
 /// reject weights other than 1 until IVM.
 #[tokio::test]
@@ -670,9 +795,20 @@ fn two_phase(
     policy: BypassPolicy,
     spill: Option<SpillScope>,
 ) -> (Arc<dyn ExecNode>, Arc<PartialAggregate>) {
-    let mut first = spec(s, vec![0], grouped_aggs(s));
+    two_phase_of(input, spec(s, vec![0], grouped_aggs(s)), policy, spill)
+}
+
+/// [`two_phase`] of the aggregation `first` (raw input, final output).
+fn two_phase_of(
+    input: Arc<dyn ExecNode>,
+    mut first: AggregateSpec,
+    policy: BypassPolicy,
+    spill: Option<SpillScope>,
+) -> (Arc<dyn ExecNode>, Arc<PartialAggregate>) {
     first.output = AggregateOutput::Partial;
-    let second = second_phase(&first, spill);
+    let mut second = second_phase(&first, spill);
+    second.legacy_statistical = first.legacy_statistical;
+    second.ansi = first.ansi;
     let partial = PartialAggregate::new(first, policy, Some(7)).unwrap();
     let plan = node(PartialNode::new(input, Arc::clone(&partial)), second);
     (plan, partial)
@@ -1608,7 +1744,7 @@ fn row_mode(kind: u8, limit: usize) -> rowtable::Mode {
 
 proptest! {
     #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
-    /// The row-layout tables return exactly the default tables' rows: one
+    /// The row-layout tables return exactly the columnar tables' rows: one
     /// to three keys (with NULL, `-0.0`, NaN), every accumulator, partial
     /// duplicates from cleared indexes and append-only tables, one and
     /// several drivers, two phases, spilling under a tight memory limit.
@@ -1713,13 +1849,13 @@ fn row_case(
         HashAggregate::new(final_spec.clone()).map_err(|e| fail(&e))?,
         &sp,
     );
-    // Only cases the default tables finish compare; running out of memory
-    // is the one expected default failure.
+    // Only cases the columnar tables finish compare; running out of memory
+    // is the one expected columnar failure.
     let want = match rt.block_on(exec(off, o)) {
         Ok((want, _)) => want,
         Err(e) if e.error_class() == ErrorClass::UnableToAcquireMemory => {
             return Err(TestCaseError::reject(
-                "the default tables ran out of memory",
+                "the columnar tables ran out of memory",
             ));
         }
         Err(e) => return Err(fail(&e)),
@@ -1729,7 +1865,7 @@ fn row_case(
     let got = rt
         .block_on(exec_with(plan(agg, &sp), o, true))
         .map_err(|e| {
-            TestCaseError::fail(format!("row layout failed where the default did not: {e}"))
+            TestCaseError::fail(format!("row layout failed where the columnar did not: {e}"))
         })?;
     prop_assert_eq!(rows(&got.0), rows(&want));
     Ok(())
@@ -1873,7 +2009,7 @@ async fn row_final_phase_parallel_and_spill_fallback() {
 
 /// Every key type with a row encoding through the row tables (fixed
 /// indexes that abandon, several drivers, up to three keys at a time)
-/// returns the default tables' rows, NULL keys included: fixed widths, and
+/// returns the columnar tables' rows, NULL keys included: fixed widths, and
 /// strings and binaries of every carrier, empty, inline, 12 and 13 bytes
 /// and long (heap), binaries that are not UTF-8.
 #[tokio::test]
@@ -2045,7 +2181,7 @@ async fn row_layout_key_types_equal_default() {
                 .await
                 .unwrap();
             assert_eq!(rows(&got), want, "keys {keys:?} {mode:?}");
-            // The row tables ran (no fallback to the default tables).
+            // The row tables ran (no fallback to the columnar tables).
             let layout = m
                 .operators
                 .values()
@@ -2062,7 +2198,7 @@ async fn row_layout_key_types_equal_default() {
 /// (their own schema is nullable): both layouts fail the same way, when
 /// the output batch is checked against the declared schema (the row
 /// tables give every key a validity bit, so they group the NULLs first,
-/// as the default tables do).
+/// as the columnar tables do).
 #[tokio::test]
 async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
     let nullable = schema(vec![("k", DataType::Int64), ("x", DataType::Int64)]);
@@ -2101,7 +2237,7 @@ proptest! {
         rng_seed: proptest::test_runner::RngSeed::Fixed(20_261_020),
         ..ProptestConfig::default()
     })]
-    /// At 768 KiB the row tables finish wherever the default tables do,
+    /// At 768 KiB the row tables finish wherever the columnar tables do,
     /// with partial duplicates from tiny fixed indexes (one row per input
     /// row at `limit` 1): the final phase frees each driver partition once
     /// merged and writes finished partitions to the output file instead of
@@ -2251,7 +2387,7 @@ struct ByHand {
     rows: Vec<String>,
     /// Bytes the query pool held once every driver combined.
     combined: usize,
-    /// The finalizing consumer's peak bytes.
+    /// The final phase's peak bytes.
     peak: usize,
 }
 
@@ -2292,8 +2428,12 @@ async fn by_hand(
         agg.combine(l, &g).unwrap();
     }
     let combined = root.reserved();
-    agg.finalize(&g, &sink_ctx).await.unwrap();
-    let peak = sink_ctx.consumer().consumer().peak();
+    // The final phase runs on a consumer of its own (the tables are charged
+    // to it), so its peak is the final phase's, not the drivers' (who widen
+    // their tables when they combine).
+    let final_ctx = ctx(0, "agg");
+    agg.finalize(&g, &final_ctx).await.unwrap();
+    let peak = final_ctx.consumer().consumer().peak();
     let src = ctx(1, "src").with_dependency(Arc::clone(&g));
     let sg = Source::global_state(&**agg, &src).unwrap();
     let mut sl = Source::local_state(&**agg, &src, &sg).unwrap();
@@ -2301,7 +2441,7 @@ async fn by_hand(
     while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
         out.push(b);
     }
-    drop((sl, sg, src, g, sink_ctx));
+    drop((sl, sg, src, g, sink_ctx, final_ctx));
     assert_eq!(root.reserved(), 0);
     ByHand {
         rows: rows(&out),
@@ -2579,4 +2719,453 @@ async fn a_refused_widening_merges_in_one_task() {
     assert_eq!(got.rows, expected);
     assert_eq!(sink_metric(&agg, "row_final_tasks"), 1);
     assert_eq!(sink_metric(&agg, "row_final_spills"), 0);
+}
+
+// ---- the moment aggregates ----
+
+const MOMENTS: [AggregateFunction; 9] = [
+    AggregateFunction::StddevSamp,
+    AggregateFunction::StddevPop,
+    AggregateFunction::VarSamp,
+    AggregateFunction::VarPop,
+    AggregateFunction::Skewness,
+    AggregateFunction::Kurtosis,
+    AggregateFunction::Corr,
+    AggregateFunction::CovarSamp,
+    AggregateFunction::CovarPop,
+];
+
+/// Every moment aggregate over `x` (column 1) and, for the pair
+/// statistics, `y` (column 2).
+fn moment_aggs() -> Vec<AggregateExpr> {
+    MOMENTS
+        .iter()
+        .map(|&f| AggregateExpr {
+            function: f,
+            args: if super::arity(f) == 2 {
+                vec![1, 2]
+            } else {
+                vec![1]
+            },
+            input: AggInput::Raw,
+            arg_type: DataType::Float64,
+            mask: None,
+            name: format!("{f:?}"),
+        })
+        .collect()
+}
+
+fn f64s(v: Vec<Option<f64>>) -> ArrayRef {
+    Arc::new(Float64Array::from(v))
+}
+
+/// `n` rows `k = i % keys`, a `double` x (NULL every 7th) and a `double` y
+/// (NULL every 11th), in batches of 1000.
+fn moment_input(n: i64, keys: i64) -> (SchemaRef, Vec<Vec<ArrayRef>>) {
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("x", DataType::Float64),
+        ("y", DataType::Float64),
+    ]);
+    #[expect(clippy::cast_precision_loss, reason = "small test values")]
+    let batches = (0..n)
+        .step_by(1000)
+        .map(|start| {
+            let r = start..(start + 1000).min(n);
+            let k: Vec<_> = r.clone().map(|i| Some(i % keys)).collect();
+            let x = r
+                .clone()
+                .map(|i| (i % 7 != 0).then(|| (i * 37 % 101) as f64 / 3.0));
+            let y = r.map(|i| (i % 11 != 0).then(|| (i * 53 % 97) as f64 / 7.0 - (i % 5) as f64));
+            vec![i64s(&k), f64s(x.collect()), f64s(y.collect())]
+        })
+        .collect();
+    (s, batches)
+}
+
+type Moments = BTreeMap<String, Vec<Option<f64>>>;
+
+/// The output of a moment aggregation by key (`""` without keys).
+fn moment_rows(batches: &[Batch], keyed: bool) -> Moments {
+    rows(batches)
+        .iter()
+        .map(|r| {
+            let mut cells = r.split('|');
+            let key = if keyed { cells.next().unwrap() } else { "" };
+            let values = cells
+                .map(|c| (c != "NULL").then(|| c.parse::<f64>().unwrap()))
+                .collect();
+            (key.to_owned(), values)
+        })
+        .collect()
+}
+
+/// The aggregates of every group folded in one pass by one accumulator
+/// each: what a single driver computes.
+fn moment_oracle(b: &[Vec<ArrayRef>], keys: i64, keyed: bool, legacy: bool) -> Moments {
+    let groups = if keyed {
+        usize::try_from(keys).unwrap()
+    } else {
+        1
+    };
+    let mut accs: Vec<Accumulator> = moment_aggs()
+        .iter()
+        .map(|a| {
+            let mut acc = Accumulator::new(a, true)
+                .unwrap()
+                .legacy_statistical(legacy);
+            acc.resize(groups);
+            acc
+        })
+        .collect();
+    for cols in b {
+        let ids: Vec<u32> = cols[0]
+            .as_primitive::<Int64Type>()
+            .values()
+            .iter()
+            .map(|&k| if keyed { u32::try_from(k).unwrap() } else { 0 })
+            .collect();
+        for a in &mut accs {
+            a.update(&ids, cols, &Weights::Const(1)).unwrap();
+        }
+    }
+    let ids: Vec<u32> = (0..u32::try_from(groups).unwrap()).collect();
+    let columns: Vec<ArrayRef> = accs.iter().map(|a| a.evaluate(&ids).unwrap()).collect();
+    ids.iter()
+        .map(|&g| {
+            let values = columns
+                .iter()
+                .map(|c| {
+                    let c = c.as_primitive::<Float64Type>();
+                    (!c.is_null(g as usize)).then(|| c.value(g as usize))
+                })
+                .collect();
+            (if keyed { g.to_string() } else { String::new() }, values)
+        })
+        .collect()
+}
+
+/// The values agree to `1e-9` (merging partial states reassociates the
+/// arithmetic), NULLs and NaNs exactly.
+fn assert_moments_close(got: &Moments, want: &Moments, what: &str) {
+    assert_eq!(
+        got.keys().collect::<Vec<_>>(),
+        want.keys().collect::<Vec<_>>(),
+        "{what}"
+    );
+    for (key, want) in want {
+        for (i, (g, w)) in got[key].iter().zip(want).enumerate() {
+            let ok = match (g, w) {
+                (None, None) => true,
+                (Some(g), Some(w)) if g.is_nan() || w.is_nan() => g.is_nan() && w.is_nan(),
+                (Some(g), Some(w)) => (g - w).abs() <= 1e-9 * g.abs().max(w.abs()).max(1.0),
+                _ => false,
+            };
+            assert!(ok, "{what}: key {key:?} column {i}: {g:?} vs {w:?}");
+        }
+    }
+}
+
+/// Runs `plan` on each layout and checks both against `want`.
+async fn check_both_layouts(
+    make: impl Fn() -> Arc<dyn ExecNode>,
+    o: Opts,
+    keyed: bool,
+    want: &Moments,
+) {
+    for rows_layout in [false, true] {
+        let (out, _) = exec_with(make(), o, rows_layout).await.unwrap();
+        assert_moments_close(
+            &moment_rows(&out, keyed),
+            want,
+            &format!("row layout {rows_layout}"),
+        );
+    }
+}
+
+/// Grouped and global moment aggregates, on both table layouts, against a
+/// single-pass reference.
+#[tokio::test]
+async fn moments_grouped_and_global() {
+    let (s, b) = moment_input(8_000, 13);
+    let o = Opts {
+        both_layouts: false,
+        ..Opts::default()
+    };
+    let grouped = || node(scan(&s, b.clone()), spec(&s, vec![0], moment_aggs()));
+    check_both_layouts(grouped, o, true, &moment_oracle(&b, 13, true, false)).await;
+    let global = || node(scan(&s, b.clone()), spec(&s, vec![], moment_aggs()));
+    check_both_layouts(global, o, false, &moment_oracle(&b, 13, false, false)).await;
+    // A global aggregate of no rows is one row of NULLs; a grouped one has none.
+    let empty = |keys: Vec<usize>| node(scan(&s, vec![]), spec(&s, keys, moment_aggs()));
+    let (out, _) = exec(empty(vec![]), o).await.unwrap();
+    assert_eq!(rows(&out), ["NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL"]);
+    assert!(rows(&exec(empty(vec![0]), o).await.unwrap().0).is_empty());
+}
+
+/// `spark.sql.legacy.statisticalAggregate` reaches the accumulators of
+/// both layouts and of the final phase of a two-phase aggregation: groups
+/// of one row give NULL, or NaN with the flag.
+#[tokio::test]
+async fn moments_legacy_flag_reaches_every_accumulator() {
+    // Every group has one row, so the sample statistics divide by zero.
+    let (s, b) = moment_input(40, 40);
+    let o = Opts {
+        both_layouts: false,
+        ..Opts::default()
+    };
+    for legacy in [false, true] {
+        let mut sp = spec(&s, vec![0], moment_aggs());
+        sp.legacy_statistical = legacy;
+        let want = moment_oracle(&b, 40, true, legacy);
+        // The oracle itself shows the flag: some groups' cells are NaN or NULL.
+        let nan_cells = want
+            .values()
+            .flatten()
+            .filter(|v| v.is_some_and(f64::is_nan))
+            .count();
+        assert_eq!(nan_cells > 0, legacy);
+        let single = || node(scan(&s, b.clone()), sp.clone());
+        check_both_layouts(single, o, true, &want).await;
+        let phased = || {
+            two_phase_of(
+                scan(&s, b.clone()),
+                sp.clone(),
+                BypassPolicy::default(),
+                None,
+            )
+            .0
+        };
+        check_both_layouts(phased, o, true, &want).await;
+    }
+}
+
+type Plan<'a> = Box<dyn Fn(&[Vec<ArrayRef>]) -> Arc<dyn ExecNode> + 'a>;
+
+/// `corr` of several rows over a constant column: `DIVIDE_BY_ZERO` with ANSI
+/// and NULL without, on both layouts and across a partial and a final
+/// phase, whatever the legacy flag says; the other groups are unaffected
+/// when none is constant.
+#[tokio::test]
+async fn corr_of_a_constant_column_follows_ansi() {
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("x", DataType::Float64),
+        ("y", DataType::Float64),
+    ]);
+    let batch = |k: &[i64], x: &[f64], y: &[f64]| {
+        let some = |v: &[f64]| f64s(v.iter().map(|&v| Some(v)).collect());
+        let k: Vec<_> = k.iter().map(|&k| Some(k)).collect();
+        vec![i64s(&k), some(x), some(y)]
+    };
+    let corr = || vec![moment_aggs().remove(6)];
+    let o = Opts {
+        both_layouts: false,
+        ..Opts::default()
+    };
+    let varying = batch(
+        &[1, 1, 2, 2, 2],
+        &[1.0, 2.0, 1.0, 2.0, 4.0],
+        &[3.0, 1.0, 2.0, 5.0, 6.0],
+    );
+    let constant = batch(
+        &[1, 1, 2, 2, 2],
+        &[1.0, 2.0, 7.0, 7.0, 7.0],
+        &[3.0, 1.0, 2.0, 5.0, 6.0],
+    );
+    for legacy in [false, true] {
+        for ansi in [false, true] {
+            let mut sp = spec(&s, vec![0], corr());
+            sp.ansi = ansi;
+            sp.legacy_statistical = legacy;
+            let plans: [Plan<'_>; 2] = [
+                Box::new(|b| node(scan(&s, b.to_vec()), sp.clone())),
+                Box::new(|b| {
+                    two_phase_of(
+                        scan(&s, b.to_vec()),
+                        sp.clone(),
+                        BypassPolicy::default(),
+                        None,
+                    )
+                    .0
+                }),
+            ];
+            for plan in &plans {
+                for rows_layout in [false, true] {
+                    let ok = exec_with(plan(std::slice::from_ref(&varying)), o, rows_layout)
+                        .await
+                        .unwrap()
+                        .0;
+                    assert!(moment_rows(&ok, true).values().all(|v| v[0].is_some()));
+                    let got =
+                        exec_with(plan(std::slice::from_ref(&constant)), o, rows_layout).await;
+                    if ansi {
+                        let e = got.unwrap_err();
+                        assert_eq!(e.error_class(), ErrorClass::DivideByZero, "{e}");
+                    } else {
+                        let m = moment_rows(&got.unwrap().0, true);
+                        assert_eq!(m["2"], [None], "legacy={legacy} layout={rows_layout}");
+                        assert!(m["1"][0].is_some());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Partial → final over partial states equals one phase, also when the
+/// partial phase flushes and bypasses.
+#[tokio::test]
+async fn moments_two_phase_equals_single_phase() {
+    let (s, b) = moment_input(60_000, 700);
+    let want = moment_oracle(&b, 700, true, false);
+    let o = Opts {
+        both_layouts: false,
+        ..Opts::default()
+    };
+    let tiny = BypassPolicy {
+        max_table_bytes: 64 << 10,
+        min_rows: u64::MAX,
+        ..BypassPolicy::default()
+    };
+    let policies = [BypassPolicy::default(), tiny];
+    for policy in policies {
+        let make = || {
+            two_phase_of(
+                scan(&s, b.clone()),
+                spec(&s, vec![0], moment_aggs()),
+                policy,
+                None,
+            )
+            .0
+        };
+        check_both_layouts(make, o, true, &want).await;
+    }
+    // Unique keys: the partial phase passes rows through, one state per row.
+    let (s, b) = moment_input(40_000, 1_000_000);
+    let want = moment_oracle(&b, 40_000, true, false);
+    let bypass = BypassPolicy {
+        min_rows: 10_000,
+        ..BypassPolicy::default()
+    };
+    let (plan, partial) = two_phase_of(
+        scan(&s, b.clone()),
+        spec(&s, vec![0], moment_aggs()),
+        bypass,
+        None,
+    );
+    let (out, _) = exec_with(plan, o, false).await.unwrap();
+    assert!(partial.bypassed_drivers() > 0);
+    assert_moments_close(&moment_rows(&out, true), &want, "bypassed");
+}
+
+/// Under a small budget the moment states spill with the others, merge from
+/// the runs and give the in-memory result.
+#[tokio::test]
+async fn moments_spill_and_merge() {
+    let (s, b) = moment_input(30_000, 25_000);
+    // Three of the aggregates (one of each state width): the budget below
+    // holds about a third of their groups.
+    let aggs: Vec<AggregateExpr> = [0, 4, 6]
+        .into_iter()
+        .map(|i| moment_aggs().remove(i))
+        .collect();
+    let keep = |m: Moments| -> Moments {
+        m.into_iter()
+            .map(|(k, v)| (k, [0, 4, 6].iter().map(|&i| v[i]).collect()))
+            .collect()
+    };
+    let want = keep(moment_oracle(&b, 25_000, true, false));
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], aggs);
+    sp.spill = Some(scope.clone());
+    let o = Opts {
+        limit: 2 << 20,
+        both_layouts: false,
+        ..Opts::default()
+    };
+    for rows_layout in [false, true] {
+        let (out, m) = exec_with(node(scan(&s, b.clone()), sp.clone()), o, rows_layout)
+            .await
+            .unwrap();
+        assert!(
+            extra(&m, "HashAggregate", "spill_runs") > 0,
+            "rows {rows_layout}"
+        );
+        assert_eq!(extra(&m, "HashAggregate", "groups"), 25_000);
+        assert_moments_close(&moment_rows(&out, true), &want, "spilled");
+    }
+    let (plan, _) = two_phase_of(
+        scan(&s, b.clone()),
+        sp,
+        BypassPolicy::default(),
+        Some(scope),
+    );
+    let (out, _) = exec_with(plan, o, false).await.unwrap();
+    assert_moments_close(&moment_rows(&out, true), &want, "spilled two-phase");
+}
+
+/// `DISTINCT` pairs: `corr(DISTINCT x, y)` over the distinct non-NULL
+/// pairs, next to a plain `count(*)`.
+#[tokio::test]
+async fn moments_over_distinct_arguments() {
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("x", DataType::Float64),
+        ("y", DataType::Float64),
+    ]);
+    let k = i64s(&[Some(1); 6]);
+    let x = f64s(vec![
+        Some(1.0),
+        Some(1.0),
+        Some(2.0),
+        Some(3.0),
+        None,
+        Some(3.0),
+    ]);
+    let y = f64s(vec![
+        Some(2.0),
+        Some(2.0),
+        Some(4.5),
+        Some(5.0),
+        Some(1.0),
+        Some(5.0),
+    ]);
+    let input = || {
+        scan(
+            &s,
+            vec![vec![Arc::clone(&k), Arc::clone(&x), Arc::clone(&y)]],
+        )
+    };
+    let mut corr = moment_aggs().remove(6);
+    assert_eq!(corr.function, AggregateFunction::Corr);
+    corr.name = "c".to_owned();
+    let flags = [true, false];
+    let plan = distinct_plan(
+        input(),
+        spec(
+            &s,
+            vec![],
+            vec![corr.clone(), AggregateExpr::count_star("n")],
+        ),
+        &flags,
+    )
+    .unwrap();
+    // The distinct pairs (1,2), (2,4.5), (3,5), with a correlation of its own.
+    let pairs = vec![Some(1.0), Some(2.0), Some(3.0)];
+    let want = moment_oracle(
+        &[vec![
+            i64s(&[Some(1); 3]),
+            f64s(pairs),
+            f64s(vec![Some(2.0), Some(4.5), Some(5.0)]),
+        ]],
+        1,
+        false,
+        false,
+    );
+    let got = moment_rows(&exec(plan, Opts::default()).await.unwrap().0, false);
+    let corr_at = |m: &Moments, i: usize| m[""][i];
+    let want_corr = corr_at(&want, 6).unwrap();
+    assert!((got[""][0].unwrap() - want_corr).abs() < 1e-12, "{got:?}");
+    assert_eq!(got[""][1], Some(6.0));
 }

@@ -103,6 +103,27 @@ impl TableProvider for FileTable {
     }
 }
 
+impl FileTable {
+    /// The listed files, in listing order (split file indexes refer to
+    /// them).
+    #[must_use]
+    pub fn files(&self) -> &[FileRef] {
+        self.scan.files()
+    }
+
+    /// The format the files are read with.
+    #[must_use]
+    pub fn format(&self) -> Arc<dyn FileFormat> {
+        Arc::clone(self.scan.format())
+    }
+
+    /// The parsed read options.
+    #[must_use]
+    pub fn options(&self) -> FormatOptions {
+        self.scan.format_options().clone()
+    }
+}
+
 /// Runs `start(item)` for every item, at most `width` at a time, and
 /// hands each result to `each` in item order. Items go in chunks of
 /// `width * FOOTER_CHUNK`: no more futures than that exist at once. A
@@ -270,6 +291,10 @@ fn literal(v: &ScalarValue, t: &arrow_schema::DataType) -> Option<Literal> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing; never runs on a compute worker"
+)]
 mod tests {
     use super::*;
 

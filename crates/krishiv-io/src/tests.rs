@@ -291,16 +291,14 @@ fn inner2() -> Fields {
 // ---- statistics ------------------------------------------------------------
 
 fn stats(rows: u64, nulls: u64, min: ScalarValue, max: ScalarValue) -> FileStatistics {
+    let mut column = ColumnStatistics::new(col("c"));
+    column.null_count = Precision::Exact(nulls);
+    column.min = Precision::Exact(min);
+    column.max = Precision::Exact(max);
     FileStatistics {
         rows: Precision::Exact(rows),
         bytes: Precision::Absent,
-        columns: vec![ColumnStatistics {
-            path: col("c"),
-            null_count: Precision::Exact(nulls),
-            min: Precision::Exact(min),
-            max: Precision::Exact(max),
-            nan_count: Precision::Absent,
-        }],
+        columns: vec![column],
     }
 }
 
@@ -609,6 +607,18 @@ fn pruning_answers_all_none_or_unknown() {
     );
 }
 
+#[test]
+fn statistics_slots_default_to_absent_and_do_not_prune() {
+    let mut s = stats(10, 0, ScalarValue::Int32(5), ScalarValue::Int32(9));
+    assert_eq!(s.columns[0].distinct, Precision::Absent);
+    assert!(s.columns[0].sketch.is_none());
+    let before = prune(&cmp(CmpOp::Eq, 4), &s);
+    s.columns[0].distinct = Precision::Exact(3);
+    s.columns[0].sketch = Some(krishiv_common::SketchRef::new(1, vec![1, 2, 3]));
+    assert_eq!(prune(&cmp(CmpOp::Eq, 4), &s), before);
+    assert_eq!(ColumnStatistics::new(col("c")).distinct, Precision::Absent);
+}
+
 // ---- options ---------------------------------------------------------------
 
 static OPTS: OptionSchema = OptionSchema {
@@ -746,8 +756,32 @@ fn strict_mode_rejects_unknown_options() {
     assert!(e.to_string().contains("Did you mean \"mode\"?"));
     let e = parse(&[("zzzzzzzz", OptionValue::from_user("z", "x"))], &strict).unwrap_err();
     assert!(!e.to_string().contains("Did you mean"));
-    // Framework options are never unknown.
+    // Framework options are never unknown; object-store options are kept
+    // for EXPLAIN (non-secrets visible, secrets redacted), never an error
+    // even in strict mode.
     assert!(parse(&[("PATH", OptionValue::from_user("path", "/x"))], &strict).is_ok());
+    let (o, w) = parse(
+        &[
+            (
+                "fs.s3a.endpoint",
+                OptionValue::from_user("fs.s3a.endpoint", "http://127.0.0.1:9000"),
+            ),
+            (
+                "FS.S3A.SECRET.KEY",
+                OptionValue::from_user("FS.S3A.SECRET.KEY", "hunter2"),
+            ),
+        ],
+        &strict,
+    )
+    .unwrap();
+    assert!(w.is_empty());
+    assert_eq!(
+        o.ignored(),
+        &[
+            "FS.S3A.SECRET.KEY=*********(redacted)".to_owned(),
+            "fs.s3a.endpoint=http://127.0.0.1:9000".to_owned(),
+        ]
+    );
 }
 
 #[test]

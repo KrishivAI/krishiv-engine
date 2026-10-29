@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "lcase#5f8ebfb97b33/ansi_on",
+      "reason": "SELECT lcase(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "lcase#5f8ebfb97b33/ansi_off",
+      "reason": "SELECT lcase(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "lcase#b5e40db8ea93/ansi_on",
+      "reason": "SELECT lcase(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "lcase#b5e40db8ea93/ansi_off",
+      "reason": "SELECT lcase(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "lcase"
+}

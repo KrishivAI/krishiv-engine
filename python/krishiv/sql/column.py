@@ -10,7 +10,7 @@ fails with the engine's own error, as the SQL does.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
 from krishiv.errors import (
@@ -21,6 +21,9 @@ from krishiv.errors import (
     unsupported_feature,
 )
 from krishiv.sql.types import DataType, _simple_string_of
+
+if TYPE_CHECKING:
+    from krishiv.sql.window import WindowSpec
 
 
 def _literal(value: Any) -> _native.Column:
@@ -204,9 +207,6 @@ class Column:
         """Whether the string matches the pattern ignoring case, as
         ``pyspark.sql.Column.ilike``.
 
-        .. note:: The engine resolves ``ilike`` but cannot run it yet:
-            collecting fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-
         Examples
         --------
         >>> df = spark.createDataFrame([("Alice",), ("Bob",)], ["name"])
@@ -349,7 +349,7 @@ class Column:
     def getField(self, name: Any) -> Column:
         """The field ``name`` of a struct, as ``pyspark.sql.Column.getField``.
 
-        .. note:: The engine has no nested types yet: this always fails with
+        .. note:: Not supported yet: this always fails with
             the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
 
         Examples
@@ -374,7 +374,7 @@ class Column:
         """The struct with field ``fieldName`` added or replaced, as
         ``pyspark.sql.Column.withField``.
 
-        .. note:: The engine has no nested types yet: this always fails with
+        .. note:: Not supported yet: this always fails with
             the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
         """
         if not isinstance(fieldName, str):
@@ -387,7 +387,7 @@ class Column:
         """The struct without the named fields, as
         ``pyspark.sql.Column.dropFields``.
 
-        .. note:: The engine has no nested types yet: this always fails with
+        .. note:: Not supported yet: this always fails with
             the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
         """
         for name in fieldNames:
@@ -493,6 +493,35 @@ class Column:
 
     def desc_nulls_last(self) -> Column:
         return self.desc()
+
+    def over(self, window: WindowSpec) -> Column:
+        """Evaluates this column as a window function over ``window``, as
+        ``pyspark.sql.Column.over``: the same window expression the SQL
+        ``function OVER (...)`` builds, checked when the query runs.
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame(
+        ...     [(1, "a"), (1, "a"), (2, "a"), (1, "b"), (2, "b"), (3, "b")], ["id", "category"])
+        >>> from krishiv.sql import Window, functions as sf
+        >>> window = Window.partitionBy("category").orderBy("id")
+        >>> df.withColumn("row_number", sf.row_number().over(window)).show()
+        +---+--------+----------+
+        | id|category|row_number|
+        +---+--------+----------+
+        |  1|       a|         1|
+        |  1|       a|         2|
+        |  2|       a|         3|
+        |  1|       b|         1|
+        |  2|       b|         2|
+        |  3|       b|         3|
+        +---+--------+----------+
+        """
+        from krishiv.sql.window import WindowSpec
+
+        if not isinstance(window, WindowSpec):
+            raise not_expected_type("window", "WindowSpec", window)
+        return Column(self._c.over(window._s))
 
 
 class _WhenColumn(Column):

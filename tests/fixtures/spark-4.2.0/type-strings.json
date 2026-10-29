@@ -1,7 +1,7 @@
 {
  "format_version": 1,
  "spark_version": "4.2.0",
- "image": "apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89",
+ "image": "apache/spark:4.2.0",
  "generator": "tests/scripts/gen_type_strings.py",
  "notes": "DDL strings parsed by CatalystSqlParser.parseDataType; decimal_constructor builds DecimalType(precision, scale) directly. Errors carry Spark's condition, SQLSTATE and message parameters.",
  "ddl": [
@@ -1135,6 +1135,1494 @@
    "ddl": "decimal(99999999999)",
    "error_class": "UNCLASSIFIED",
    "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "ARRAY<INT>",
+   "simple_string": "array<int>",
+   "catalog_string": "array<int>",
+   "sql": "ARRAY<INT>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array< int >",
+   "simple_string": "array<int>",
+   "catalog_string": "array<int>",
+   "sql": "ARRAY<INT>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "Array<String>",
+   "simple_string": "array<string>",
+   "catalog_string": "array<string>",
+   "sql": "ARRAY<STRING>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"string\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<array<int>>",
+   "simple_string": "array<array<int>>",
+   "catalog_string": "array<array<int>>",
+   "sql": "ARRAY<ARRAY<INT>>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true},\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<array<array<array<int>>>>",
+   "simple_string": "array<array<array<array<int>>>>",
+   "catalog_string": "array<array<array<array<int>>>>",
+   "sql": "ARRAY<ARRAY<ARRAY<ARRAY<INT>>>>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<decimal(10,2)>",
+   "simple_string": "array<decimal(10,2)>",
+   "catalog_string": "array<decimal(10,2)>",
+   "sql": "ARRAY<DECIMAL(10,2)>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"decimal(10,2)\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<void>",
+   "simple_string": "array<void>",
+   "catalog_string": "array<void>",
+   "sql": "ARRAY<VOID>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"void\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<timestamp_ntz>",
+   "simple_string": "array<timestamp_ntz>",
+   "catalog_string": "array<timestamp_ntz>",
+   "sql": "ARRAY<TIMESTAMP_NTZ>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"timestamp_ntz\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<decimal(0,0)>",
+   "simple_string": "array<decimal(0,0)>",
+   "catalog_string": "array<decimal(0,0)>",
+   "sql": "ARRAY<DECIMAL(0,0)>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"decimal(0,0)\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "MAP<STRING, ARRAY<DOUBLE>>",
+   "simple_string": "map<string,array<double>>",
+   "catalog_string": "map<string,array<double>>",
+   "sql": "MAP<STRING, ARRAY<DOUBLE>>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":{\"type\":\"array\",\"elementType\":\"double\",\"containsNull\":true},\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<int,map<int,int>>",
+   "simple_string": "map<int,map<int,int>>",
+   "catalog_string": "map<int,map<int,int>>",
+   "sql": "MAP<INT, MAP<INT, INT>>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"integer\",\"valueType\":{\"type\":\"map\",\"keyType\":\"integer\",\"valueType\":\"integer\",\"valueContainsNull\":true},\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<map<int,int>,int>",
+   "simple_string": "map<map<int,int>,int>",
+   "catalog_string": "map<map<int,int>,int>",
+   "sql": "MAP<MAP<INT, INT>, INT>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":{\"type\":\"map\",\"keyType\":\"integer\",\"valueType\":\"integer\",\"valueContainsNull\":true},\"valueType\":\"integer\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<array<int>,int>",
+   "simple_string": "map<array<int>,int>",
+   "catalog_string": "map<array<int>,int>",
+   "sql": "MAP<ARRAY<INT>, INT>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true},\"valueType\":\"integer\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<struct<a:int>,string>",
+   "simple_string": "map<struct<a:int>,string>",
+   "catalog_string": "map<struct<a:int>,string>",
+   "sql": "MAP<STRUCT<a: INT>, STRING>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]},\"valueType\":\"string\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<void,int>",
+   "simple_string": "map<void,int>",
+   "catalog_string": "map<void,int>",
+   "sql": "MAP<VOID, INT>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"void\",\"valueType\":\"integer\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map< string , int >",
+   "simple_string": "map<string,int>",
+   "catalog_string": "map<string,int>",
+   "sql": "MAP<STRING, INT>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":\"integer\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a int>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:int,b:string>",
+   "simple_string": "struct<a:int,b:string>",
+   "catalog_string": "struct<a:int,b:string>",
+   "sql": "STRUCT<a: INT, b: STRING>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"b\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "STRUCT<a: INT, b: STRING>",
+   "simple_string": "struct<a:int,b:string>",
+   "catalog_string": "struct<a:int,b:string>",
+   "sql": "STRUCT<a: INT, b: STRING>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"b\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<A:int,b:STRING>",
+   "simple_string": "struct<A:int,b:string>",
+   "catalog_string": "struct<A:int,b:string>",
+   "sql": "STRUCT<A: INT, b: STRING>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"A\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"b\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<>",
+   "simple_string": "struct<>",
+   "catalog_string": "struct<>",
+   "sql": "STRUCT<>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct< >",
+   "simple_string": "struct<>",
+   "catalog_string": "struct<>",
+   "sql": "STRUCT<>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "STRUCT<>",
+   "simple_string": "struct<>",
+   "catalog_string": "struct<>",
+   "sql": "STRUCT<>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:int not null>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT NOT NULL>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":false,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int NOT NULL,b:string>",
+   "simple_string": "struct<a:int,b:string>",
+   "catalog_string": "struct<a:int,b:string>",
+   "sql": "STRUCT<a: INT NOT NULL, b: STRING>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":false,\"metadata\":{}},{\"name\":\"b\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment 'hello'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'hello'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"hello\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int not null comment 'x y'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT NOT NULL COMMENT 'x y'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":false,\"metadata\":{\"comment\":\"x y\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment \"dq\">",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'dq'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"dq\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment 'it\\'s'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'it\\'s'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"it's\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment 'a\\\\b'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'a\\b'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"a\\\\b\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment ''>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT ''>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment 'tab\\there'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'tab\there'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"tab\\there\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment 'q\"d'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'q\"d'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"q\\\"d\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<`a b`:int>",
+   "simple_string": "struct<a b:int>",
+   "catalog_string": "struct<a b:int>",
+   "sql": "STRUCT<`a b`: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a b\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<`a``b`:int>",
+   "simple_string": "struct<a`b:int>",
+   "catalog_string": "struct<a`b:int>",
+   "sql": "STRUCT<`a``b`: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a`b\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<`a.b`:int>",
+   "simple_string": "struct<a.b:int>",
+   "catalog_string": "struct<a.b:int>",
+   "sql": "STRUCT<`a.b`: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a.b\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<`1a`:int>",
+   "simple_string": "struct<1a:int>",
+   "catalog_string": "struct<1a:int>",
+   "sql": "STRUCT<`1a`: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"1a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<`1`:int>",
+   "simple_string": "struct<1:int>",
+   "catalog_string": "struct<1:int>",
+   "sql": "STRUCT<`1`: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"1\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<_a:int>",
+   "simple_string": "struct<_a:int>",
+   "catalog_string": "struct<_a:int>",
+   "sql": "STRUCT<_a: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"_a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a1:int>",
+   "simple_string": "struct<a1:int>",
+   "catalog_string": "struct<a1:int>",
+   "sql": "STRUCT<a1: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a1\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<select:int>",
+   "simple_string": "struct<select:int>",
+   "catalog_string": "struct<select:int>",
+   "sql": "STRUCT<select: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"select\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<`select`:int>",
+   "simple_string": "struct<select:int>",
+   "catalog_string": "struct<select:int>",
+   "sql": "STRUCT<select: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"select\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<from:int>",
+   "simple_string": "struct<from:int>",
+   "catalog_string": "struct<from:int>",
+   "sql": "STRUCT<from: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"from\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:int,a:string>",
+   "simple_string": "struct<a:int,a:string>",
+   "catalog_string": "struct<a:int,a:string>",
+   "sql": "STRUCT<a: INT, a: STRING>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"a\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<é:int>",
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "é"
+   }
+  },
+  {
+   "ddl": "struct<`é`:int>",
+   "simple_string": "struct<é:int>",
+   "catalog_string": "struct<é:int>",
+   "sql": "STRUCT<`é`: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"é\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<`a:b`:int>",
+   "simple_string": "struct<a:b:int>",
+   "catalog_string": "struct<a:b:int>",
+   "sql": "STRUCT<`a:b`: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a:b\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<` `:int>",
+   "simple_string": "struct< :int>",
+   "catalog_string": "struct< :int>",
+   "sql": "STRUCT<` `: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\" \",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:array<struct<b:map<string,array<double>>>>>",
+   "simple_string": "struct<a:array<struct<b:map<string,array<double>>>>>",
+   "catalog_string": "struct<a:array<struct<b:map<string,array<double>>>>>",
+   "sql": "STRUCT<a: ARRAY<STRUCT<b: MAP<STRING, ARRAY<DOUBLE>>>>>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"array\",\"elementType\":{\"type\":\"struct\",\"fields\":[{\"name\":\"b\",\"type\":{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":{\"type\":\"array\",\"elementType\":\"double\",\"containsNull\":true},\"valueContainsNull\":true},\"nullable\":true,\"metadata\":{}}]},\"containsNull\":true},\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "ARRAY<STRUCT<a: INT, b: MAP<STRING, ARRAY<DOUBLE>>>>",
+   "simple_string": "array<struct<a:int,b:map<string,array<double>>>>",
+   "catalog_string": "array<struct<a:int,b:map<string,array<double>>>>",
+   "sql": "ARRAY<STRUCT<a: INT, b: MAP<STRING, ARRAY<DOUBLE>>>>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"b\",\"type\":{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":{\"type\":\"array\",\"elementType\":\"double\",\"containsNull\":true},\"valueContainsNull\":true},\"nullable\":true,\"metadata\":{}}]},\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<string,struct<a:array<map<int,struct<b:int>>>>>",
+   "simple_string": "map<string,struct<a:array<map<int,struct<b:int>>>>>",
+   "catalog_string": "map<string,struct<a:array<map<int,struct<b:int>>>>>",
+   "sql": "MAP<STRING, STRUCT<a: ARRAY<MAP<INT, STRUCT<b: INT>>>>>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"array\",\"elementType\":{\"type\":\"map\",\"keyType\":\"integer\",\"valueType\":{\"type\":\"struct\",\"fields\":[{\"name\":\"b\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]},\"valueContainsNull\":true},\"containsNull\":true},\"nullable\":true,\"metadata\":{}}]},\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:struct<b:struct<c:struct<d:int>>>>",
+   "simple_string": "struct<a:struct<b:struct<c:struct<d:int>>>>",
+   "catalog_string": "struct<a:struct<b:struct<c:struct<d:int>>>>",
+   "sql": "STRUCT<a: STRUCT<b: STRUCT<c: STRUCT<d: INT>>>>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"struct\",\"fields\":[{\"name\":\"b\",\"type\":{\"type\":\"struct\",\"fields\":[{\"name\":\"c\",\"type\":{\"type\":\"struct\",\"fields\":[{\"name\":\"d\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]},\"nullable\":true,\"metadata\":{}}]},\"nullable\":true,\"metadata\":{}}]},\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<struct<a:int not null>>",
+   "simple_string": "array<struct<a:int>>",
+   "catalog_string": "array<struct<a:int>>",
+   "sql": "ARRAY<STRUCT<a: INT NOT NULL>>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":false,\"metadata\":{}}]},\"containsNull\":true}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:decimal(10,2),b:timestamp_ntz,c:binary,d:date>",
+   "simple_string": "struct<a:decimal(10,2),b:timestamp_ntz,c:binary,d:date>",
+   "catalog_string": "struct<a:decimal(10,2),b:timestamp_ntz,c:binary,d:date>",
+   "sql": "STRUCT<a: DECIMAL(10,2), b: TIMESTAMP_NTZ, c: BINARY, d: DATE>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"decimal(10,2)\",\"nullable\":true,\"metadata\":{}},{\"name\":\"b\",\"type\":\"timestamp_ntz\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c\",\"type\":\"binary\",\"nullable\":true,\"metadata\":{}},{\"name\":\"d\",\"type\":\"date\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:array<int>>",
+   "simple_string": "struct<a:array<int>>",
+   "catalog_string": "struct<a:array<int>>",
+   "sql": "STRUCT<a: ARRAY<INT>>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true},\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<c0:int,c1:int,c2:int,c3:int,c4:int,c5:int,c6:int,c7:int,c8:int,c9:int,c10:int,c11:int,c12:int,c13:int,c14:int,c15:int,c16:int,c17:int,c18:int,c19:int,c20:int,c21:int,c22:int,c23:int,c24:int,c25:int,c26:int,c27:int,c28:int,c29:int>",
+   "simple_string": "struct<c0:int,c1:int,c2:int,c3:int,c4:int,c5:int,c6:int,c7:int,c8:int,c9:int,c10:int,c11:int,c12:int,c13:int,c14:int,c15:int,c16:int,c17:int,c18:int,c19:int,c20:int,c21:int,c22:int,c23:int,c24:int,... 5 more fields>",
+   "catalog_string": "struct<c0:int,c1:int,c2:int,c3:int,c4:int,c5:int,c6:int,c7:int,c8:int,c9:int,c10:int,c11:int,c12:int,c13:int,c14:int,c15:int,c16:int,c17:int,c18:int,c19:int,c20:int,c21:int,c22:int,c23:int,c24:int,c25:int,c26:int,c27:int,c28:int,c29:int>",
+   "sql": "STRUCT<c0: INT, c1: INT, c2: INT, c3: INT, c4: INT, c5: INT, c6: INT, c7: INT, c8: INT, c9: INT, c10: INT, c11: INT, c12: INT, c13: INT, c14: INT, c15: INT, c16: INT, c17: INT, c18: INT, c19: INT, c20: INT, c21: INT, c22: INT, c23: INT, c24: INT, c25: INT, c26: INT, c27: INT, c28: INT, c29: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"c0\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c1\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c2\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c3\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c4\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c5\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c6\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c7\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c8\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c9\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c10\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c11\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c12\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c13\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c14\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c15\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c16\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c17\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c18\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c19\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c20\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c21\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c22\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c23\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c24\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c25\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c26\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c27\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c28\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c29\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<int>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
+   "simple_string": "array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<int>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
+   "catalog_string": "array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<int>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
+   "sql": "ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<ARRAY<INT>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true},\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array",
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "elementType": "<INT>"
+   }
+  },
+  {
+   "ddl": "array<>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<>'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<int,int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array(int)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<foo>",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   }
+  },
+  {
+   "ddl": "array<int>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ": extra input '>'"
+   }
+  },
+  {
+   "ddl": "map",
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.MAP",
+   "sql_state": "42K01",
+   "message_parameters": {}
+  },
+  {
+   "ddl": "map<int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "map<int,int,int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "map<int,>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "map<,int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct",
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.STRUCT",
+   "sql_state": "42K01",
+   "message_parameters": {}
+  },
+  {
+   "ddl": "struct<a>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int,>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<,a:int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a-b:int>",
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "a-b"
+   }
+  },
+  {
+   "ddl": "struct<a:int null>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int not>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int comment>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int comment 5>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int comment 'x' not null>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<int> not null",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'not'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ": extra input '>'"
+   }
+  },
+  {
+   "ddl": "struct<a:foo>",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   }
+  },
+  {
+   "ddl": "struct<a::int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<int not null>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:decimal(39,0)>",
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "39"
+   }
+  },
+  {
+   "ddl": "array<decimal(5,6)>",
+   "error_class": "_LEGACY_ERROR_TEMP_1228",
+   "sql_state": "",
+   "message_parameters": {
+    "precision": "5",
+    "scale": "6"
+   }
+  },
+  {
+   "ddl": "struct<a:int comment 'c\\u0001\\u0085\\u2028\\u00e9\\u007f\\u001f'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'c\u0001 é\u001f'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"c\\u0001 é\\u001F\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<map:int,array:string>",
+   "simple_string": "struct<map:int,array:string>",
+   "catalog_string": "struct<map:int,array:string>",
+   "sql": "STRUCT<map: INT, array: STRING>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"map\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"array\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<int>=",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int,b:array<int>>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ": extra input '>'"
+   }
+  },
+  {
+   "ddl": "array<array<int>>>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>>'",
+    "hint": ": extra input '>>'"
+   }
+  },
+  {
+   "ddl": "array<int>,",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ": extra input ','"
+   }
+  },
+  {
+   "ddl": "array<int> int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ": extra input 'int'"
+   }
+  },
+  {
+   "ddl": "struct<a:int> x",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   }
+  },
+  {
+   "ddl": "array<array<int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<struct<a>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "map<string,array<int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<int>>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>>'",
+    "hint": ": extra input '>>'"
+   }
+  },
+  {
+   "ddl": "struct<a:int>,",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ": extra input ','"
+   }
+  },
+  {
+   "ddl": "map<>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<>'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<array<>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:array<>>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<int> /* c */",
+   "simple_string": "array<int>",
+   "catalog_string": "array<int>",
+   "sql": "ARRAY<INT>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a int Not Null Comment 'x', b string>",
+   "simple_string": "struct<a:int,b:string>",
+   "catalog_string": "struct<a:int,b:string>",
+   "sql": "STRUCT<a: INT NOT NULL COMMENT 'x', b: STRING>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":false,\"metadata\":{\"comment\":\"x\"}},{\"name\":\"b\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "array<array<foo>>",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   }
+  },
+  {
+   "ddl": "array<struct<é:int>>",
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "é"
+   }
+  },
+  {
+   "ddl": "struct<a:struct<b-c:int>>",
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "b-c"
+   }
+  },
+  {
+   "ddl": "array<int>>,",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<decimal(39,0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int comment 'x'",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:int comment 'unterminated>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<string collate utf8_lcase>",
+   "simple_string": "array<string collate UTF8_LCASE>",
+   "catalog_string": "array<string collate UTF8_LCASE>",
+   "sql": "ARRAY<STRING COLLATE UTF8_LCASE>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"string collate UTF8_LCASE\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<interval year>",
+   "simple_string": "array<interval year>",
+   "catalog_string": "array<interval year>",
+   "sql": "ARRAY<INTERVAL YEAR>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"interval year\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<char(3)>",
+   "simple_string": "array<char(3)>",
+   "catalog_string": "array<char(3)>",
+   "sql": "ARRAY<CHAR(3)>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"char(3)\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:variant>",
+   "simple_string": "struct<a:variant>",
+   "catalog_string": "struct<a:variant>",
+   "sql": "STRUCT<a: VARIANT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"variant\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<string,int>/* c */",
+   "simple_string": "map<string,int>",
+   "catalog_string": "map<string,int>",
+   "sql": "MAP<STRING, INT>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":\"integer\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:int comment r'raw\\n'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'raw\\n'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"raw\\\\n\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment 'x' 'y'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'xy'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"xy\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment 'line\\nbreak'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'line\nbreak'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"line\\nbreak\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:int comment '\\u0041\\101'>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT COMMENT 'AA'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"AA\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "TIME",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(0)",
+   "simple_string": "time(0)",
+   "catalog_string": "time(0)",
+   "sql": "TIME(0)",
+   "type_name": "time(0)",
+   "json": "\"time(0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(3)",
+   "simple_string": "time(3)",
+   "catalog_string": "time(3)",
+   "sql": "TIME(3)",
+   "type_name": "time(3)",
+   "json": "\"time(3)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIME(6)",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(06)",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(7)",
+   "error_class": "UNSUPPORTED_TIME_PRECISION",
+   "sql_state": "0A001",
+   "message_parameters": {
+    "precision": "7"
+   }
+  },
+  {
+   "ddl": "time(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'-'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time()",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time(1,2)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIME(1,2)\""
+   }
+  },
+  {
+   "ddl": "time(99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "time without time zone",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIME(3) WITHOUT TIME ZONE",
+   "simple_string": "time(3)",
+   "catalog_string": "time(3)",
+   "sql": "TIME(3)",
+   "type_name": "time(3)",
+   "json": "\"time(3)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time with time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time with local time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time(3) with time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time_ntz",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIME_NTZ\""
+   }
+  },
+  {
+   "ddl": "time without",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'without'",
+    "hint": ": extra input 'without'"
+   }
+  },
+  {
+   "ddl": "time(3) without time",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing 'ZONE'"
+   }
+  },
+  {
+   "ddl": "geometry(0)",
+   "simple_string": "geometry(0)",
+   "catalog_string": "geometry(0)",
+   "sql": "GEOMETRY(0)",
+   "type_name": "geometry(0)",
+   "json": "\"geometry(SRID:0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOMETRY(4326)",
+   "simple_string": "geometry(4326)",
+   "catalog_string": "geometry(4326)",
+   "sql": "GEOMETRY(4326)",
+   "type_name": "geometry(4326)",
+   "json": "\"geometry(OGC:CRS84)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(3857)",
+   "simple_string": "geometry(3857)",
+   "catalog_string": "geometry(3857)",
+   "sql": "GEOMETRY(3857)",
+   "type_name": "geometry(3857)",
+   "json": "\"geometry(EPSG:3857)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry( 3857 )",
+   "simple_string": "geometry(3857)",
+   "catalog_string": "geometry(3857)",
+   "sql": "GEOMETRY(3857)",
+   "type_name": "geometry(3857)",
+   "json": "\"geometry(EPSG:3857)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(04326)",
+   "simple_string": "geometry(4326)",
+   "catalog_string": "geometry(4326)",
+   "sql": "GEOMETRY(4326)",
+   "type_name": "geometry(4326)",
+   "json": "\"geometry(OGC:CRS84)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(any)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOMETRY(ANY)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(Any)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(`any`)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(anything)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY\""
+   }
+  },
+  {
+   "ddl": "geometry()",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(9999)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "9999"
+   }
+  },
+  {
+   "ddl": "geometry(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(1)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "1"
+   }
+  },
+  {
+   "ddl": "geometry(99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "geometry(4326,0)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY(4326,0)\""
+   }
+  },
+  {
+   "ddl": "geometry(srid:0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(any",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(any,1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geography(any) int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ": extra input 'int'"
+   }
+  },
+  {
+   "ddl": "geography(4326)",
+   "simple_string": "geography(4326)",
+   "catalog_string": "geography(4326)",
+   "sql": "GEOGRAPHY(4326)",
+   "type_name": "geography(4326)",
+   "json": "\"geography(OGC:CRS84, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOGRAPHY(ANY)",
+   "simple_string": "geography(any)",
+   "catalog_string": "geography(any)",
+   "sql": "GEOGRAPHY(ANY)",
+   "type_name": "geography(any)",
+   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geography(any)",
+   "simple_string": "geography(any)",
+   "catalog_string": "geography(any)",
+   "sql": "GEOGRAPHY(ANY)",
+   "type_name": "geography(any)",
+   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geography",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOGRAPHY\""
+   }
+  },
+  {
+   "ddl": "geography(0)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "0"
+   }
+  },
+  {
+   "ddl": "geography(3857)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "3857"
+   }
+  },
+  {
+   "ddl": "geography(9999)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "9999"
+   }
+  },
+  {
+   "ddl": "geography(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geography(4326, spherical)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'spherical'",
+    "hint": ""
+   }
   }
  ],
  "decimal_constructor": [
@@ -1236,6 +2724,29 @@
    ],
    "sqlState": "22003"
   },
+  "INCOMPLETE_TYPE_DEFINITION": {
+   "message": [
+    "Incomplete complex type:"
+   ],
+   "subClass": {
+    "ARRAY": {
+     "message": [
+      "The definition of \"ARRAY\" type is incomplete. You must provide an element type. For example: \"ARRAY<elementType>\"."
+     ]
+    },
+    "MAP": {
+     "message": [
+      "The definition of \"MAP\" type is incomplete. You must provide a key type and a value type. For example: \"MAP<TIMESTAMP, INT>\"."
+     ]
+    },
+    "STRUCT": {
+     "message": [
+      "The definition of \"STRUCT\" type is incomplete. You must provide at least one field type. For example: \"STRUCT<name STRING, phone DECIMAL(10, 0)>\"."
+     ]
+    }
+   },
+   "sqlState": "42K01"
+  },
   "INVALID_IDENTIFIER": {
    "message": [
     "The unquoted identifier <ident> is invalid and must be back quoted as: `<ident>`.",
@@ -1279,6 +2790,18 @@
    "message": [
     "Decimal scale (<scale>) cannot be greater than precision (<precision>)."
    ]
+  },
+  "ST_INVALID_SRID_VALUE": {
+   "message": [
+    "Invalid or unsupported SRID (spatial reference identifier) value: <srid>."
+   ],
+   "sqlState": "22023"
+  },
+  "UNSUPPORTED_TIME_PRECISION": {
+   "message": [
+    "The seconds precision <precision> of the TIME data type is out of the supported range [0, 6]."
+   ],
+   "sqlState": "0A001"
   }
  }
 }

@@ -11,10 +11,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use xtask::precheck::{
-    Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg, REQUIRED_CI_CHECKS, STEP_IDS,
-    Scope, Status, Step, cap_prefix, dependents_closure, failed, host_has_x86_64v3,
-    kernel_require_targets, mapping, memory_cap_error, parse_packages, plan, render_table,
-    tracked_files_cmd, tracked_files_cmd_literal,
+    ADVISORY_STEPS, Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg,
+    REQUIRED_CI_CHECKS, STEP_IDS, Scope, Status, Step, cap_prefix, dependents_closure, failed,
+    host_has_x86_64v3, kernel_require_targets, mapping, memory_cap_error, parse_packages, plan,
+    render_table, tracked_files_cmd, tracked_files_cmd_literal,
 };
 
 fn pkg(name: &str, deps: &[&str]) -> Pkg {
@@ -378,6 +378,57 @@ fn budgets_run_for_manifest_changes_or_full_and_never_with_fast() {
 }
 
 #[test]
+fn tokio_console_check_runs_on_manifest_changes_only() {
+    let manifest = make_plan(&detect(&["crates/exec/Cargo.toml"]), &opts(&[]), true);
+    let Action::Run(cmds) = &step(&manifest, "tokio-console").action else {
+        panic!("tokio-console should run")
+    };
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0].args, ["tokio-console-check"]);
+    assert_eq!(cmds[0].program, "/x/xtask");
+    let code = make_plan(&detect(&["crates/exec/src/lib.rs"]), &opts(&[]), true);
+    assert_eq!(
+        skip_reason(&code, "tokio-console"),
+        Some("no Cargo.toml/Cargo.lock change")
+    );
+    let docs = make_plan(&detect(&["docs/a.md"]), &opts(&[]), true);
+    assert_eq!(
+        skip_reason(&docs, "tokio-console"),
+        Some("no Cargo.toml/Cargo.lock change")
+    );
+}
+
+#[test]
+fn budgets_step_compares_against_the_cached_main_baseline() {
+    let manifest = detect(&["crates/exec/Cargo.toml"]);
+    let steps = make_plan(&manifest, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "budgets").action else {
+        panic!()
+    };
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0].program, "/x/xtask");
+    assert_eq!(
+        cmds[0].args,
+        ["budgets", "--precheck", "--base", "origin/main"]
+    );
+    assert!(cmds[0].heavy);
+    // A custom base is threaded through; budgets.json is never an argument.
+    let dev = make_plan(&manifest, &opts(&["--base", "origin/dev"]), true);
+    let Action::Run(cmds) = &step(&dev, "budgets").action else {
+        panic!()
+    };
+    assert_eq!(
+        cmds[0].args,
+        ["budgets", "--precheck", "--base", "origin/dev"]
+    );
+    assert!(
+        !cmds[0].args.iter().any(|a| a.contains("budgets.json")),
+        "{:?}",
+        cmds[0].args
+    );
+}
+
+#[test]
 fn fast_skips_both_coverage_gates() {
     let ch = detect(&["crates/exec/src/lib.rs", "bench/src/krishiv_bench/a.py"]);
     let steps = make_plan(&ch, &opts(&["--fast"]), true);
@@ -395,15 +446,12 @@ fn fast_skips_both_coverage_gates() {
 }
 
 #[test]
-fn github_changes_run_workflow_lint_and_zizmor_only_then() {
+fn workflow_lint_always_runs_and_zizmor_only_for_github_changes() {
     let on = make_plan(&detect(&[".github/workflows/ci.yml"]), &opts(&[]), true);
     assert!(matches!(step(&on, "workflow-lint").action, Action::Run(_)));
     assert!(matches!(step(&on, "zizmor").action, Action::Run(_)));
     let off = make_plan(&detect(&["crates/exec/src/lib.rs"]), &opts(&[]), true);
-    assert_eq!(
-        skip_reason(&off, "workflow-lint"),
-        Some("no .github change")
-    );
+    assert!(matches!(step(&off, "workflow-lint").action, Action::Run(_)));
     assert_eq!(skip_reason(&off, "zizmor"), Some("no .github change"));
 }
 
@@ -721,7 +769,11 @@ fn every_step_backs_a_required_check() {
         })
         .flatten()
         .collect();
-    let all: BTreeSet<&str> = STEP_IDS.iter().copied().collect();
+    let all: BTreeSet<&str> = STEP_IDS
+        .iter()
+        .copied()
+        .filter(|s| !ADVISORY_STEPS.contains(s))
+        .collect();
     let unclaimed: Vec<&&str> = all.difference(&claimed).collect();
     assert!(
         unclaimed.is_empty(),
@@ -1106,5 +1158,209 @@ fn markdownlint_paths_are_passed_as_literal_paths() {
     assert!(
         cmds.iter()
             .all(|c| !c.args.iter().any(|a| a.contains("printf ':%s")))
+    );
+}
+
+#[test]
+fn coverage_is_scoped_to_touched_crates_in_a_dedicated_target_dir() {
+    let steps = make_plan(&detect(&["crates/common/src/lib.rs"]), &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    assert_eq!(cmds[0].args, ["coverage", "--no-branch", "-p", "common"]);
+    assert!(cmds[0].heavy);
+    let target = |c: &xtask::precheck::Cmd| {
+        c.env
+            .iter()
+            .find(|(k, _)| k == "CARGO_TARGET_DIR")
+            .map(|(_, v)| v.clone())
+    };
+    // Both coverage commands (the run and the diff) use the one directory the options name.
+    assert_eq!(cmds.len(), 2);
+    for c in cmds {
+        assert_eq!(target(c).as_deref(), Some("target/precheck-cov"));
+    }
+    let mut custom = opts(&[]);
+    custom.cov_dir = "/t/unit-precheck-cov".to_owned();
+    let steps = make_plan(&detect(&["crates/common/src/lib.rs"]), &custom, true);
+    let Action::Run(cmds) = &step(&steps, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    for c in cmds {
+        assert_eq!(target(c).as_deref(), Some("/t/unit-precheck-cov"));
+    }
+    let wide = make_plan(&detect(&["Cargo.toml"]), &opts(&[]), true);
+    let Action::Run(cmds) = &step(&wide, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    assert_eq!(cmds[0].args, ["coverage", "--no-branch"]);
+}
+
+#[test]
+fn staleness_and_attribution_are_checked_unless_allowed() {
+    let ch = detect(&["crates/common/src/lib.rs"]);
+    let fresh = make_plan(&ch, &opts(&["--base", "main"]), true);
+    let Action::Run(cmds) = &step(&fresh, "base-fresh").action else {
+        panic!("base-fresh should run");
+    };
+    // Run the planned command in a throwaway repository: a base ahead of HEAD fails.
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let st = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    };
+    let planned = |expect_ok: bool| {
+        let out = std::process::Command::new(&cmds[0].program)
+            .args(&cmds[0].args)
+            .current_dir(dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.success(),
+            expect_ok,
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&["checkout", "-q", "-b", "feature"]);
+    // The base is an ancestor of HEAD: fresh.
+    planned(true);
+    git(&["checkout", "-q", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "two"]);
+    git(&["checkout", "-q", "feature"]);
+    // The base moved on: stale, and the message names the fix.
+    let why = planned(false);
+    assert!(
+        why.contains("1 new commit(s)") && why.contains("git merge main"),
+        "{why}"
+    );
+    assert_eq!(
+        skip_reason(
+            &make_plan(&ch, &opts(&["--allow-stale"]), true),
+            "base-fresh"
+        ),
+        Some("--allow-stale")
+    );
+    let steps = make_plan(&ch, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "policy").action else {
+        panic!("policy should run");
+    };
+    // The attribution check is the repository's script, run by `bash` over the selected base and
+    // `HEAD` (the base is `origin/main` unless `--base` says otherwise).
+    assert!(cmds.iter().any(|c| c.program == "bash"
+        && c.args
+            == [
+                ".github/scripts/check-ai-attribution.sh",
+                "origin/main",
+                "HEAD"
+            ]));
+}
+
+#[test]
+fn python_wheel_tests_follow_python_and_the_bindings_crate() {
+    let none = make_plan(&detect(&["crates/common/src/lib.rs"]), &opts(&[]), true);
+    // `common` has no dependent named krishiv-python in the fixture workspace.
+    assert!(skip_reason(&none, "python-wheel-tests").is_some());
+    let py = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&[]), true);
+    let Action::Run(cmds) = &step(&py, "python-wheel-tests").action else {
+        panic!("python-wheel-tests should run");
+    };
+    // One `bash -c` script: a per-run temporary environment, then maturin and pytest in it.
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0].program, "bash");
+    assert_eq!(cmds[0].args[0], "-c");
+    let script = &cmds[0].args[1];
+    assert!(script.contains("mktemp -d"), "{script}");
+    assert!(script.contains("maturin develop"), "{script}");
+    assert!(script.contains("/bin/pytest"), "{script}");
+    let fast = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&["--fast"]), true);
+    assert_eq!(skip_reason(&fast, "python-wheel-tests"), Some("--fast"));
+    // A Rust-only change reaching `krishiv-python` through a dependency plans
+    // the wheel tests; one that does not reach it does not.
+    let mut with_bindings = pkgs();
+    with_bindings.push(pkg("krishiv-python", &["exec"]));
+    let rust_only = |path: &str| {
+        let p = vec![path.to_owned()];
+        make_plan(&Changes::detect(&p, &with_bindings), &opts(&[]), true)
+    };
+    let reaches = rust_only("crates/common/src/lib.rs");
+    let Action::Run(reaches_cmds) = &step(&reaches, "python-wheel-tests").action else {
+        panic!("python-wheel-tests should run for a change reaching krishiv-python")
+    };
+    let Action::Run(py_cmds) = &step(&py, "python-wheel-tests").action else {
+        panic!("python-wheel-tests should run")
+    };
+    // The Rust-only change plans the exact same wheel-test command as a python/ change.
+    assert_eq!(reaches_cmds, py_cmds);
+    assert_eq!(reaches_cmds.len(), 1);
+    assert_eq!(
+        reaches_cmds[0].args[2..],
+        [
+            "python-wheel-tests".to_owned(),
+            "target/precheck/pyvenv".to_owned()
+        ]
+    );
+    assert!(reaches_cmds[0].heavy);
+    assert_eq!(
+        skip_reason(&rust_only("crates/other/src/lib.rs"), "python-wheel-tests"),
+        Some("no python/ change and krishiv-python is not affected")
+    );
+}
+
+#[test]
+fn coverage_dir_is_a_sibling_of_the_target_dir() {
+    let root = Path::new("/w");
+    assert_eq!(
+        xtask::precheck::cov_dir_for(root, Some("/t/unit/")),
+        "/t/unit-precheck-cov"
+    );
+    assert_eq!(
+        xtask::precheck::cov_dir_for(root, None),
+        "/w/target/precheck-cov"
+    );
+}
+
+#[test]
+fn coverage_can_include_dependents() {
+    let steps = make_plan(
+        &detect(&["crates/common/src/lib.rs"]),
+        &opts(&["--coverage-dependents"]),
+        true,
+    );
+    let Action::Run(cmds) = &step(&steps, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    // `common` and everything that depends on it, once each.
+    assert_eq!(
+        cmds[0].args,
+        [
+            "coverage",
+            "--no-branch",
+            "-p",
+            "cli",
+            "-p",
+            "common",
+            "-p",
+            "exec",
+            "-p",
+            "xtask"
+        ]
     );
 }

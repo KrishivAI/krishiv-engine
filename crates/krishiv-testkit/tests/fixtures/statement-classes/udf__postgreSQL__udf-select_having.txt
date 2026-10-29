@@ -1,0 +1,22 @@
+DDL	CREATE TABLE test_having (a int, b int, c string, d string) USING parquet
+WRITE	INSERT INTO test_having VALUES (0, 1, 'XXXX', 'A')
+WRITE	INSERT INTO test_having VALUES (1, 2, 'AAAA', 'b')
+WRITE	INSERT INTO test_having VALUES (2, 2, 'AAAA', 'c')
+WRITE	INSERT INTO test_having VALUES (3, 3, 'BBBB', 'D')
+WRITE	INSERT INTO test_having VALUES (4, 3, 'BBBB', 'e')
+WRITE	INSERT INTO test_having VALUES (5, 3, 'bbbb', 'F')
+WRITE	INSERT INTO test_having VALUES (6, 4, 'cccc', 'g')
+WRITE	INSERT INTO test_having VALUES (7, 4, 'cccc', 'h')
+WRITE	INSERT INTO test_having VALUES (8, 4, 'CCCC', 'I')
+WRITE	INSERT INTO test_having VALUES (9, 4, 'CCCC', 'j')
+READ	SELECT udf(b), udf(c) FROM test_having
+READ	SELECT udf(b), udf(c) FROM test_having
+READ	SELECT udf(c), max(udf(a)) FROM test_having
+READ	SELECT udf(udf(min(udf(a)))), udf(udf(max(udf(a)))) FROM test_having HAVING udf(udf(min(udf(a)))) = udf(udf(max(udf(a)))
+READ	SELECT udf(min(udf(a))), udf(udf(max(a))) FROM test_having HAVING udf(min(a)) < udf(max(udf(a)))
+READ	SELECT udf(a) FROM test_having HAVING udf(min(a)) < udf(max(a))
+READ	SELECT 1 AS one FROM test_having HAVING udf(a) > 1
+READ	SELECT 1 AS one FROM test_having HAVING udf(udf(1) > udf(2))
+READ	SELECT 1 AS one FROM test_having HAVING udf(udf(1) < udf(2))
+READ	SELECT 1 AS one FROM test_having WHERE 1/udf(a) = 1 HAVING 1 < 2
+DDL	DROP TABLE test_having

@@ -86,6 +86,12 @@ fn analyze_text_is_stable() {
 fn analyze_counts_the_rows_the_query_returns() {
     for threads in [1, 4] {
         let s = session(threads);
+        // The columnar tables: this test checks their probe-length counters,
+        // which the row layout does not collect.
+        s.conf().set("krishiv.exec.agg.rowLayout", "false").unwrap();
+        s.conf()
+            .set("krishiv.exec.join.rowLayout", "false")
+            .unwrap();
         let df = block_on(s.sql(QUERY)).unwrap();
         let plain = block_on(df.collect()).unwrap();
         let (got, profile) = block_on(df.collect_with_profile()).unwrap();

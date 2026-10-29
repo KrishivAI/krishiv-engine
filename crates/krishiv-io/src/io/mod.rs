@@ -24,6 +24,7 @@ pub mod cache;
 mod coalesce;
 pub mod fault;
 mod pace;
+pub mod stores;
 pub mod upload;
 
 use std::collections::HashMap;
@@ -37,9 +38,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::future::{BoxFuture, try_join_all};
 use krishiv_common::config::{
-    Config, ConfigValue, IO_COALESCE_BYTES, IO_FOOTER_READ_BYTES, IO_MAX_CONCURRENT_REQUESTS,
-    IO_MAX_REQUEST_BYTES, IO_MAX_RETRIES, IO_METADATA_CACHE_BYTES, IO_MULTIPART_PART_BYTES,
-    IO_REQUEST_TIMEOUT,
+    Config, ConfigValue, IO_COALESCE_BYTES, IO_COALESCE_WASTE_BYTES, IO_COALESCE_WASTE_DIVISOR,
+    IO_FOOTER_READ_BYTES, IO_MAX_CONCURRENT_REQUESTS, IO_MAX_REQUEST_BYTES, IO_MAX_RETRIES,
+    IO_METADATA_CACHE_BYTES, IO_MULTIPART_PART_BYTES, IO_REQUEST_TIMEOUT,
 };
 use krishiv_common::secret::{OptionValue, SecretString};
 use krishiv_memory::{ConsumerHandle, MemoryPool, Reservation};
@@ -48,10 +49,16 @@ use object_store::{GetOptions, GetRange, ObjectMeta, ObjectStore, PutOptions, Pu
 use tokio::sync::Semaphore;
 
 pub use self::cache::{CacheKey, MetadataCache};
-pub use self::coalesce::coalesce;
+pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
 pub use self::pace::StorePolicy;
 use self::pace::{Direction, Pacer};
+pub use self::stores::{
+    AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
+    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, ParsedUrl, S3_ACCESS_KEY, S3_ENDPOINT,
+    S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY, S3_SESSION_TOKEN,
+    StoreRegistry, parse_object_url,
+};
 pub use self::upload::Upload;
 use crate::error::{
     Result, cancelled, changed, internal, not_found, read_failed, store_failed, write_failed,
@@ -72,6 +79,18 @@ impl StoreId {
     #[must_use]
     pub fn new(id: impl AsRef<str>) -> Self {
         Self(Arc::from(id.as_ref()))
+    }
+
+    /// Whether the store is an object store or HTTP (by the id's URL
+    /// scheme), where a request costs latency: local files are `file`.
+    #[must_use]
+    pub fn is_remote(&self) -> bool {
+        const REMOTE: [&str; 10] = [
+            "s3", "s3a", "gs", "gcs", "az", "azure", "abfs", "abfss", "http", "https",
+        ];
+        self.0
+            .split_once("://")
+            .is_some_and(|(scheme, _)| REMOTE.iter().any(|r| scheme.eq_ignore_ascii_case(r)))
     }
 }
 
@@ -219,6 +238,11 @@ pub struct IoConfig {
     pub coalesce_bytes: u64,
     /// Coalesced requests stay below this.
     pub max_request_bytes: u64,
+    /// Gap bytes any coalesced request may read; `None`: by store
+    /// ([`Waste::LOCAL`], [`Waste::REMOTE`]).
+    pub coalesce_waste_bytes: Option<u64>,
+    /// A coalesced request may read up to `span / this` gap bytes.
+    pub coalesce_waste_divisor: u64,
     /// Default speculative footer read.
     pub footer_read_bytes: u64,
     /// Metadata cache size.
@@ -243,19 +267,25 @@ impl Default for IoConfig {
     }
 }
 
-/// A coalesced request of `span` bytes is wasteful when more than 1/16 of
-/// it is gap bytes outside the `wanted` ranges: its ranges are then copied
-/// out instead of sliced, so what callers hold is within 1/16 of what they
-/// reserve.
-fn wasteful(span: u64, wanted: u64) -> bool {
-    span.saturating_sub(wanted) > span / 16
-}
-
 fn size_of(c: &Config, e: &'static krishiv_common::config::ConfigEntry, default: u64) -> u64 {
     c.get(e).and_then(ConfigValue::as_size).unwrap_or(default)
 }
 
 impl IoConfig {
+    /// The coalescing waste bound for reads from `store`.
+    #[must_use]
+    pub fn waste(&self, store: &StoreId) -> Waste {
+        let default = if store.is_remote() {
+            Waste::REMOTE
+        } else {
+            Waste::LOCAL
+        };
+        Waste {
+            floor: self.coalesce_waste_bytes.unwrap_or(default.floor),
+            divisor: self.coalesce_waste_divisor.max(1),
+        }
+    }
+
     /// The settings in `c` (defaults for unset keys).
     #[must_use]
     pub fn from_config(c: &Config) -> Self {
@@ -266,6 +296,12 @@ impl IoConfig {
                 .max(1),
             coalesce_bytes: size_of(c, &IO_COALESCE_BYTES, 1 << 20),
             max_request_bytes: size_of(c, &IO_MAX_REQUEST_BYTES, 16 << 20).max(1),
+            coalesce_waste_bytes: c
+                .get(&IO_COALESCE_WASTE_BYTES)
+                .and_then(ConfigValue::as_size),
+            coalesce_waste_divisor: u64::try_from(int(&IO_COALESCE_WASTE_DIVISOR, 16))
+                .unwrap_or(16)
+                .max(1),
             footer_read_bytes: size_of(c, &IO_FOOTER_READ_BYTES, 64 << 10).clamp(8, MAX_TAIL_BYTES),
             metadata_cache_bytes: size_of(c, &IO_METADATA_CACHE_BYTES, 64 << 20),
             multipart_part_bytes: size_of(c, &IO_MULTIPART_PART_BYTES, 8 << 20),
@@ -391,7 +427,7 @@ impl IoScheduler {
     }
 
     /// Registers (or replaces) the store `id` with a pacing `policy`
-    /// ([`StorePolicy::S3`] for S3).
+    /// (one [`StorePolicy`] per cloud scheme).
     pub fn register_store_with(
         &self,
         id: StoreId,
@@ -659,9 +695,16 @@ impl IoContext {
         file: &FileRef,
         ranges: &[Range<u64>],
     ) -> Result<Held<Vec<Bytes>>> {
-        let bytes = ranges.iter().map(|r| r.end.saturating_sub(r.start)).sum();
-        let reservation = self.reserve(bytes).await?;
+        let bytes: u64 = ranges.iter().map(|r| r.end.saturating_sub(r.start)).sum();
+        // The requests' whole span while they are read; once the ranges are
+        // copied or sliced out of them, only the ranges' bytes stay.
+        let span = self.request_bytes(file, ranges);
+        let mut reservation = self.reserve(span.max(bytes)).await?;
         let value = self.get_ranges(file, ranges).await?;
+        if let Some(r) = reservation.as_mut() {
+            let held = usize::try_from(bytes).unwrap_or(usize::MAX);
+            r.shrink(r.size().saturating_sub(held));
+        }
         Ok(Held {
             value,
             _reservation: reservation,
@@ -711,24 +754,22 @@ impl IoContext {
                 &format!("range {bad:?} is outside the {}-byte file", file.size),
             ));
         }
-        let cfg = &self.sched.config;
         // Empty ranges need no bytes (and must never become a whole-object GET).
         let wanted: Vec<Range<u64>> = ranges.iter().filter(|r| r.start < r.end).cloned().collect();
-        let (requests, owner) = coalesce(&wanted, cfg.coalesce_bytes, cfg.max_request_bytes);
+        let Coalesced {
+            requests,
+            owner,
+            covered,
+        } = self.plan(file, &wanted);
         let fetched = try_join_all(requests.iter().map(|r| self.get_one(file, r.clone()))).await?;
-        // A request that read gap bytes between its ranges: its ranges are
-        // copied out, so the request's buffer (gaps included) is freed here.
-        // A slice would keep the whole buffer alive while callers account
-        // only their ranges' bytes (a coalesced projection of 4 of 16
-        // columns read about 3x the bytes it reserved).
-        let mut wanted_bytes = vec![0u64; requests.len()];
-        for (r, &i) in wanted.iter().zip(&owner) {
-            wanted_bytes[i] = wanted_bytes[i].saturating_add(r.end - r.start);
-        }
+        // A request that read any gap bytes: its ranges are copied out, so
+        // the request's buffer (gaps included) is freed here and what the
+        // caller holds afterwards is exactly its ranges. (The caller
+        // reserved the whole span for the read, `Self::request_bytes`.)
         let copy: Vec<bool> = requests
             .iter()
-            .zip(&wanted_bytes)
-            .map(|(req, &w)| wasteful(req.end - req.start, w))
+            .zip(&covered)
+            .map(|(req, &inside)| req.end - req.start > inside)
             .collect();
         let mut owner = owner.into_iter();
         ranges
@@ -755,6 +796,27 @@ impl IoContext {
                     .ok_or_else(|| internal("range offset overflows usize"))
             })
             .collect()
+    }
+
+    /// How [`Self::get_ranges`] reads `ranges` of `file`.
+    fn plan(&self, file: &FileRef, ranges: &[Range<u64>]) -> Coalesced {
+        let cfg = &self.sched.config;
+        let wanted: Vec<Range<u64>> = ranges.iter().filter(|r| r.start < r.end).cloned().collect();
+        coalesce_with(
+            &wanted,
+            cfg.coalesce_bytes,
+            cfg.max_request_bytes,
+            cfg.waste(&file.store),
+        )
+    }
+
+    /// The bytes [`Self::get_ranges`] reads for `ranges` of `file`,
+    /// coalescing gaps included: what to reserve while the read is in
+    /// flight. Once it returns, the result holds exactly the ranges' bytes
+    /// (the gap bytes are freed).
+    #[must_use]
+    pub fn request_bytes(&self, file: &FileRef, ranges: &[Range<u64>]) -> u64 {
+        self.plan(file, ranges).span_bytes()
     }
 
     /// Like [`Self::get_ranges`], but owned: runs on the I/O runtime when

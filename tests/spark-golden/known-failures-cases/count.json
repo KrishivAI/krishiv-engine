@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2,
+      4,
+      12
+    ]
+  },
+  "file": "count",
+  "format_version": 1
+}

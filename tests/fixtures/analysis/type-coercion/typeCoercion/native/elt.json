@@ -1,0 +1,10 @@
+{
+  "entries": [
+    {
+      "query": "SELECT elt(1, col1, col2) col\nFROM (\n  SELECT\n    encode(string(id), 'utf-8') col1,\n    encode(string(id + 1), 'utf-8') col2\n  FROM range(10)\n)",
+      "reason": "resolves to struct<col:binary>"
+    }
+  ],
+  "file": "typeCoercion/native/elt",
+  "format_version": 1
+}

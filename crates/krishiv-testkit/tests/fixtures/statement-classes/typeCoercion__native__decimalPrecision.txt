@@ -1,0 +1,1145 @@
+SESSION	CREATE TEMPORARY VIEW t AS SELECT 1
+READ	SELECT cast(1 as tinyint) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) + cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) + cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) + cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  + cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  + cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) + cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) + cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) - cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) - cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) - cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  - cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  - cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) - cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) - cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00.0' as timestamp) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00.0' as timestamp) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00.0' as timestamp) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00.0' as timestamp) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00' as date) * cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00' as date) * cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00' as date) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017*12*11 09:30:00' as date) * cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast('2017*12*11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast('2017*12*11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast('2017*12*11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast('2017*12*11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  * cast('2017*12*11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  * cast('2017*12*11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) * cast('2017*12*11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) * cast('2017*12*11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00.0' as timestamp) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00.0' as timestamp) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00.0' as timestamp) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00.0' as timestamp) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00' as date) / cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00' as date) / cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00' as date) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017/12/11 09:30:00' as date) / cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast('2017/12/11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast('2017/12/11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast('2017/12/11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast('2017/12/11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  / cast('2017/12/11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  / cast('2017/12/11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) / cast('2017/12/11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) / cast('2017/12/11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) % cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) % cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) % cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  % cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  % cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) % cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) % cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT pmod(cast(1 as tinyint), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast(1 as tinyint), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast(1 as tinyint), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as tinyint), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast(1 as smallint), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast(1 as smallint), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast(1 as smallint), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as smallint), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast(1 as int), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast(1 as int), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast(1 as int), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as int), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast(1 as bigint), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast(1 as bigint), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast(1 as bigint), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as bigint), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast(1 as float), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast(1 as float), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast(1 as float), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as float), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast(1 as double), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast(1 as double), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast(1 as double), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as double), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast('1' as binary), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast('1' as binary), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast('1' as binary), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast('1' as binary), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(3, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(5, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(20, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as tinyint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as tinyint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as tinyint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as tinyint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as smallint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as smallint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as smallint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as smallint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as int)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as int)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as int)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as int)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as bigint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as bigint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as bigint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as bigint)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as float)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as float)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as float)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as float)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as double)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as double)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as double)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as double)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as decimal(10, 0))) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as string)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as string)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as string)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as string)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast('1' as binary)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast('1' as binary)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast('1' as binary)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast('1' as binary)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as boolean)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as boolean)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as boolean)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as boolean)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT pmod(cast(1 as decimal(3, 0)) , cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT pmod(cast(1 as decimal(5, 0)) , cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT pmod(cast(1 as decimal(20, 0)), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT cast(1 as tinyint) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) = cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) = cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) = cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  = cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  = cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) = cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <=> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <=> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <=> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <=> cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <=> cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <=> cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <=> cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) < cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) < cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) < cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  < cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  < cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) < cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) > cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) > cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) > cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  > cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  > cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) > cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) >= cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) >= cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) >= cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  >= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  >= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) >= cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as tinyint) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as tinyint) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as smallint) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as smallint) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as smallint) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as smallint) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as int) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as int) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as int) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as int) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as bigint) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as bigint) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as bigint) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as bigint) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as float) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as float) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as float) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as float) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as double) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as double) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as double) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('1' as binary) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('1' as binary) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('1' as binary) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('1' as binary) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <> cast(1 as decimal(3, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <> cast(1 as decimal(5, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date) <> cast(1 as decimal(20, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as int) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as float) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as double) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as string) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast('1' as binary) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast(1 as boolean) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT cast(1 as decimal(3, 0))  <> cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(5, 0))  <> cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast('2017-12-11 09:30:00' as date) FROM t
+READ	SELECT cast(1 as decimal(20, 0)) <> cast('2017-12-11 09:30:00' as date) FROM t

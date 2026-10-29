@@ -54,6 +54,22 @@ pub fn lit(value: impl IntoLiteral) -> Column {
     Column::new(Expr::literal(value.into_literal()))
 }
 
+/// A `MAP<STRING, STRING>` literal, from its entries in order: the JSON
+/// options of one call, as the Python wrappers build them.
+///
+/// ```
+/// use krishiv_session::functions::map_literal;
+/// let options = map_literal(vec![("mode".to_owned(), "FAILFAST".to_owned())]);
+/// let shown = format!("{options:?}");
+/// assert!(shown.contains("Map"), "{shown}");
+/// assert!(shown.contains("mode"), "{shown}");
+/// assert!(shown.contains("FAILFAST"), "{shown}");
+/// ```
+#[must_use]
+pub fn map_literal(pairs: Vec<(String, String)>) -> Column {
+    Column::new(Expr::literal(Literal::Map(pairs)))
+}
+
 /// The untyped `NULL` literal (`lit(None)` in PySpark; Spark's `void` type).
 ///
 /// ```
@@ -188,6 +204,7 @@ pub fn count(c: Column) -> Column {
 pub fn count_star() -> Column {
     let star = Column::new(Expr::new(ExprNode::Star(Star {
         qualifier: Vec::new(),
+        except: Vec::new(),
         plan_id: None,
     })));
     call_function("count", [star])

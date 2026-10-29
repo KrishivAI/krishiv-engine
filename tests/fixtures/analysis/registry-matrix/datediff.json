@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "datediff#1ada08a843e8/ansi_on",
+      "reason": "SELECT datediff('2009-07-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "datediff#1ada08a843e8/ansi_off",
+      "reason": "SELECT datediff('2009-07-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "datediff#4ae76939f035/ansi_on",
+      "reason": "SELECT datediff('2009-07-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "datediff#4ae76939f035/ansi_off",
+      "reason": "SELECT datediff('2009-07-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "datediff#844299ffb54b/ansi_on",
+      "reason": "SELECT datediff(INTERVAL '1-2' YEAR TO MONTH, '2009-07-30') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "datediff#844299ffb54b/ansi_off",
+      "reason": "SELECT datediff(INTERVAL '1-2' YEAR TO MONTH, '2009-07-30') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "datediff#9191f9843b3d/ansi_on",
+      "reason": "SELECT datediff(INTERVAL '1 02:03:04' DAY TO SECOND, '2009-07-30') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "datediff#9191f9843b3d/ansi_off",
+      "reason": "SELECT datediff(INTERVAL '1 02:03:04' DAY TO SECOND, '2009-07-30') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "datediff"
+}

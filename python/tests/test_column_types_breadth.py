@@ -68,17 +68,19 @@ def test_when_takes_columns_and_literals(df: DataFrame) -> None:
         Row(w="n"),
         Row(w="y"),
     ]
-    # A scanned string column as a branch fails exactly as the SQL CASE does
-    # (a pre-existing engine gap with string storage in CASE).
+    # A scanned string column as a branch works: branches of one Spark
+    # `STRING` in different carriers meet the `CASE` type.
     spark = df.sparkSession
     df.createOrReplaceTempView("when_people")
     try:
-        with pytest.raises(errors.SparkRuntimeException) as py:
-            df.select(F.when(df.age > 3, df.name).otherwise(df.name)).collect()
-        with pytest.raises(errors.SparkRuntimeException) as sql:
-            spark.sql("SELECT CASE WHEN age > 3 THEN name ELSE name END AS w FROM when_people").collect()
-        assert type(py.value) is type(sql.value)
-        assert str(py.value) == str(sql.value)
+        assert df.select(F.when(df.age > 3, df.name).otherwise(df.name).alias("w")).collect() == [
+            Row(w="Alice"),
+            Row(w="Bob"),
+        ]
+        assert spark.sql("SELECT CASE WHEN age > 3 THEN name ELSE name END AS w FROM when_people").collect() == [
+            Row(w="Alice"),
+            Row(w="Bob"),
+        ]
     finally:
         spark.catalog.dropTempView("when_people")
     with pytest.raises(errors.PySparkTypeError, match="NOT_EXPECTED_TYPE"):
@@ -119,12 +121,7 @@ def test_like(df: DataFrame) -> None:
 def test_rlike_ilike(df: DataFrame) -> None:
     # PySpark's docstring examples.
     assert df.filter(df.name.rlike("ice$")).collect() == [Row(age=2, name="Alice")]
-    # The engine cannot run `ilike` yet; the DataFrame form fails as the SQL form does.
-    assert df.filter(df.name.ilike("%ICE")).columns == df.columns
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        _ = df.filter(df.name.ilike("%ICE")).collect()
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "ilike" in str(bad.value)
+    assert df.filter(df.name.ilike("%ICE")).collect() == [Row(age=2, name="Alice")]
     with pytest.raises(errors.PySparkTypeError):
         df.name.rlike(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):
@@ -219,9 +216,10 @@ def test_try_cast(spark: SparkSession) -> None:
     assert df.select(df.name.try_cast(T.LongType()).alias("n")).dtypes == [("n", "bigint")]
     with pytest.raises(errors.PySparkTypeError):
         df.name.try_cast(1)  # ty: ignore[invalid-argument-type]
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
+    # Arrays are a supported type; a string simply cannot be cast to one.
+    with pytest.raises(errors.AnalysisException) as bad:
         _ = df.select(df.name.try_cast(T.ArrayType(T.StringType()))).columns
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    assert bad.value.getCondition() == "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
 
 
 # types ---------------------------------------------------------------------------

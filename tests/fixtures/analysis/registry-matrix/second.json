@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "second#4677d9179dae/ansi_on",
+      "reason": "SELECT second(TIME'13:25:59.999999') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "second#4677d9179dae/ansi_off",
+      "reason": "SELECT second(TIME'13:25:59.999999') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "second#4c0d7dec1580/ansi_on",
+      "reason": "SELECT second(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "second#4c0d7dec1580/ansi_off",
+      "reason": "SELECT second(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "second#ade2ed5d7b44/ansi_on",
+      "reason": "SELECT second(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "second#ade2ed5d7b44/ansi_off",
+      "reason": "SELECT second(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "second"
+}

@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "round#286ac35a7044/ansi_on",
+      "reason": "SELECT round(2.5, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "round#286ac35a7044/ansi_off",
+      "reason": "SELECT round(2.5, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "round#2ad8eea25e86/ansi_on",
+      "reason": "SELECT round(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "round#2ad8eea25e86/ansi_off",
+      "reason": "SELECT round(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "round#a2f79b63a119/ansi_on",
+      "reason": "SELECT round(2.5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "round#a2f79b63a119/ansi_off",
+      "reason": "SELECT round(2.5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "round#a6a1524bee2c/ansi_on",
+      "reason": "SELECT round(INTERVAL '1-2' YEAR TO MONTH, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "round#a6a1524bee2c/ansi_off",
+      "reason": "SELECT round(INTERVAL '1-2' YEAR TO MONTH, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "round"
+}

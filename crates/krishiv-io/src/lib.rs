@@ -27,13 +27,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod avro;
 mod commit;
 pub mod csv;
 mod error;
 mod format;
 pub mod io;
+pub mod json;
 mod options;
 pub mod parquet;
+mod registry;
 mod request;
 pub mod runtime_filter;
 mod scan;
@@ -42,8 +45,10 @@ mod schema_map;
 pub mod split;
 mod stats;
 pub mod text;
+pub mod text_format;
 mod write;
 
+pub use avro::AvroFormat;
 pub use commit::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
 pub use csv::CsvFormat;
 pub use error::{FormatError, FormatResult, Result};
@@ -52,13 +57,16 @@ pub use format::{
     PushReadAt, ReadAt, ScanUnit, ScanUnitMetrics, Splittable, Step, UnitPlan, WrittenFile,
 };
 pub use io::{
-    ByteRange, FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, SecretResolver,
-    StoreId, StorePolicy, Tail, VersionToken,
+    ByteRange, FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, ObjectScheme,
+    ParsedUrl, SecretResolver, StoreId, StorePolicy, StoreRegistry, Tail, VersionToken,
+    parse_object_url,
 };
+pub use json::JsonFormat;
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,
 };
+pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,
     ROW_INDEX_COLUMN, RowFilterPolicy, RowLevel, RowSelection, ScalarValue, ScanRequest,
@@ -72,7 +80,8 @@ pub use scan::{ScanOptions, ScanStream};
 pub use scan_gate::ScanGate;
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
-pub use write::{FileWriter, WriteOptions, WrittenFileInfo, spark_file_name};
+pub use text_format::TextFormat;
+pub use write::{FileWriter, WriteOptions, WrittenFileInfo, effective_job_uuid, spark_file_name};
 
 #[cfg(test)]
 mod tests;

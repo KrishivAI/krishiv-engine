@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      7,
+      8
+    ]
+  },
+  "file": "subexp-elimination",
+  "format_version": 1
+}

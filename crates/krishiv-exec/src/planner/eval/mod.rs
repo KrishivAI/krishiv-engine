@@ -25,22 +25,32 @@
 mod arith;
 mod cast;
 mod cond;
+mod field;
 mod func;
+mod hof;
 mod logic;
+mod nested_cast;
 mod strings;
+
+pub(crate) use cast::canonical_carrier;
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
-use krishiv_common::config::{ANSI_ENABLED, Config, SESSION_TIME_ZONE};
+use krishiv_common::config::{
+    ANSI_ENABLED, Config, LEGACY_STATISTICAL_AGGREGATE, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE,
+};
+use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_kernels::KernelCtx;
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
     ResolvedFunction,
 };
+use krishiv_udf_sdk::UdfLibrary;
 
 use super::build::{internal, unsupported};
 use crate::error::Result;
@@ -90,11 +100,13 @@ pub(crate) fn broadcast(s: &ArrayRef, rows: usize) -> Result<ArrayRef> {
 
 /// `e` over the rows of `batch` selected by `mask`, as a column of every
 /// row (NULL where not selected): `e` sees only the selected rows, so it
-/// raises only for them.
+/// raises only for them. `partition` is the executing partition's index
+/// (see [`PhysExpr::eval`]).
 pub(crate) fn eval_where(
     e: &dyn PhysExpr,
     batch: &RecordBatch,
     mask: &arrow_buffer::BooleanBuffer,
+    partition: u32,
 ) -> Result<ArrayRef> {
     let rows = batch.num_rows();
     let selected = mask.count_set_bits();
@@ -104,7 +116,7 @@ pub(crate) fn eval_where(
     let chosen =
         arrow_select::filter::filter_record_batch(batch, &BooleanArray::new(mask.clone(), None))
             .map_err(|err| internal(&err.to_string()))?;
-    let values = e.eval(&chosen)?.into_array(selected)?;
+    let values = e.eval(&chosen, partition)?.into_array(selected)?;
     scatter(values.as_ref(), mask)
 }
 
@@ -144,8 +156,13 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
     fn data_type(&self) -> &ArrowType;
     /// Whether a value may be NULL.
     fn nullable(&self) -> bool;
-    /// Its values over `batch`.
-    fn eval(&self, batch: &RecordBatch) -> Result<Value>;
+    /// Its values over `batch` in the executing partition `partition`
+    /// (Spark's partition index): a stateful function (`rand`, `uuid`,
+    /// `monotonically_increasing_id`, ...) owns one value stream per
+    /// partition, and this evaluates the next values of that stream. The
+    /// same query runs each partition's stream from its start, so one
+    /// partition's values never depend on another's rows.
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value>;
 }
 
 /// What every expression of one query is evaluated with.
@@ -153,6 +170,8 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
 pub(crate) struct EvalEnv {
     /// `spark.sql.ansi.enabled`.
     pub(crate) ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`.
+    pub(crate) legacy_statistical_aggregate: bool,
     /// The session time zone as a fixed offset in seconds, when it is one
     /// (`UTC`, `+hh:mm`); region zones need the tz database (P2-T021b).
     pub(crate) zone: Option<i32>,
@@ -163,6 +182,17 @@ pub(crate) struct EvalEnv {
     pub(crate) query_start_micros: i64,
     /// The session user (`current_user()`).
     pub(crate) user: Arc<str>,
+    /// The session's UDFs, resolved by (name, version) at instantiation.
+    /// Never plan data: the planner sets it from its context, and
+    /// instantiation overwrites it from the worker.
+    pub(crate) udfs: Option<Arc<UdfLibrary>>,
+    /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`: duplicate map keys keep
+    /// the value inserted last. It travels in the plan (`ExprEnv`), so a
+    /// worker instantiating a plan without the feature refuses it.
+    pub(crate) map_key_dedup_last_win: bool,
+    /// Counts the unseeded random binds of one plan instantiation (see
+    /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
+    pub(crate) seed_salt: Arc<AtomicU64>,
 }
 
 impl EvalEnv {
@@ -171,10 +201,18 @@ impl EvalEnv {
             .get(&ANSI_ENABLED)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let legacy_statistical_aggregate = config
+            .get(&LEGACY_STATISTICAL_AGGREGATE)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(false);
         let zone = config
             .get(&SESSION_TIME_ZONE)
             .and_then(|v| v.as_str())
             .and_then(|z| krishiv_kernels::cast::FixedOffset::parse(z).map(|o| o.0));
+        let map_key_dedup_last_win = config
+            .get(&MAP_KEY_DEDUP_POLICY)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("LAST_WIN"));
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -182,21 +220,32 @@ impl EvalEnv {
             .unwrap_or_default();
         Self {
             ansi,
+            legacy_statistical_aggregate,
             zone,
             kernels: KernelCtx::new(),
             query_start_micros,
             user,
+            udfs: None,
+            map_key_dedup_last_win,
+            seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// The environment a plan fixed, with this worker's kernels.
+    /// The environment a plan fixed, with this worker's kernels. UDFs are
+    /// not plan data: instantiation sets them from the worker. Lambda
+    /// variables match by stable identity, so no name-resolution flag is
+    /// plan data. The map-key dedup policy is plan data.
     pub(crate) fn from_plan(env: &ExprEnv) -> Self {
         Self {
             ansi: env.ansi,
+            legacy_statistical_aggregate: env.legacy_statistical_aggregate,
             zone: env.zone,
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
+            udfs: None,
+            map_key_dedup_last_win: env.map_key_dedup_last_win,
+            seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -204,9 +253,11 @@ impl EvalEnv {
     pub(crate) fn to_plan(&self) -> ExprEnv {
         ExprEnv {
             ansi: self.ansi,
+            legacy_statistical_aggregate: self.legacy_statistical_aggregate,
             zone: self.zone,
             query_start_micros: self.query_start_micros,
             user: Arc::clone(&self.user),
+            map_key_dedup_last_win: self.map_key_dedup_last_win,
         }
     }
 }
@@ -224,6 +275,23 @@ pub(crate) struct Input<'a> {
     pub(crate) subqueries: &'a [(AttrId, Arc<dyn PhysExpr>)],
 }
 
+/// A column of `input`'s batch: the layout position's field. A lambda
+/// variable reads such a column of the flattened batch the higher-order
+/// call compiled around the body (see `hof`).
+fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
+    let index = input
+        .layout
+        .iter()
+        .position(|a| *a == c.id)
+        .ok_or_else(|| internal(&format!("attribute #{} is not an input column", c.id.0)))?;
+    let field = input.schema.field(index);
+    Ok(Arc::new(Column {
+        index,
+        data_type: field.data_type().clone(),
+        nullable: field.is_nullable(),
+    }))
+}
+
 /// Compiles `e` over `input`.
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
@@ -232,23 +300,31 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             if let Some((_, v)) = input.subqueries.iter().find(|(a, _)| *a == c.id) {
                 return Ok(Arc::clone(v));
             }
-            let index = input
-                .layout
-                .iter()
-                .position(|a| *a == c.id)
-                .ok_or_else(|| {
-                    internal(&format!("attribute #{} is not an input column", c.id.0))
-                })?;
-            let field = input.schema.field(index);
-            Ok(Arc::new(Column {
-                index,
-                data_type: field.data_type().clone(),
-                nullable: field.is_nullable(),
-            }))
+            column(input, c)
         }
+        // A lambda variable: a column of the flattened batch the
+        // higher-order call compiled around the body (see `hof`).
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
+        ExprNode::Resolved(ResolvedExpr::Field {
+            base,
+            ordinal,
+            data_type,
+            nullable,
+            ..
+        }) => field::compile(
+            compile(base, input)?,
+            *ordinal,
+            &data_type.to_arrow(),
+            *nullable,
+        ),
         ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
+            if let FunctionId::Registry { name, .. } = &f.id
+                && hof::is_supported(name)
+            {
+                return hof::compile(name, f, input, e);
+            }
             let args = f
                 .args
                 .iter()
@@ -258,7 +334,7 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
                 FunctionId::Registry { name, .. } => {
                     if name == "coalesce" {
-                        cond::coalesce(f, args)
+                        cond::coalesce(f, args, input.env)
                     } else if name == "nullif" || name == "nullifzero" {
                         cond::null_if(f, args, input)
                     } else if name == "nanvl" {
@@ -266,6 +342,20 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     } else {
                         func::compile(name, f, args, input, e)
                     }
+                }
+                FunctionId::Udf { name, version } => {
+                    let udf = input
+                        .env
+                        .udfs
+                        .as_ref()
+                        .and_then(|lib| lib.get_versioned(name, *version))
+                        .ok_or_else(|| {
+                            KrishivError::from(KrishivUdfNotAvailable {
+                                name: name.clone(),
+                                version: version.to_string(),
+                            })
+                        })?;
+                    func::compile_udf(&udf, f, args, input, e)
                 }
                 _ => Err(unsupported_expr(e)),
             }
@@ -331,15 +421,13 @@ fn builtin(
             let hi = args.pop().ok_or_else(arity)?;
             let lo = args.pop().ok_or_else(arity)?;
             let v = args.pop().ok_or_else(arity)?;
-            let ge = logic::compare(Builtin::GtEq, Arc::clone(&v), lo, env)?;
-            let le = logic::compare(Builtin::LtEq, v, hi, env)?;
-            logic::and_or(true, ge, le)
+            cond::between(v, lo, hi, env)?
         }
         (Builtin::Like, 2 | 3) => strings::like(args)?,
-        // `rlike(a, b)` is Spark's `RLike(a, b)`: the registry's
-        // `regexp_like` kernel over the same arguments.
-        (Builtin::RLike, 2) => func::compile("regexp_like", f, args, input, e)?,
-        (Builtin::When, n) if n >= 2 => cond::when(args, out)?,
+        // `rlike(a, b)` is Spark's `RLike(a, b)`: the `regexp_like` kernel
+        // over the same arguments, reporting Spark's `rlike` name.
+        (Builtin::RLike, 2) => func::compile("rlike", f, args, input, e)?,
+        (Builtin::When, n) if n >= 2 => cond::when(args, out, env)?,
         (Builtin::Concat, _) => strings::concat(args, f.nullable)?,
         _ => {
             return Err(unsupported(&format!(
@@ -381,7 +469,7 @@ impl PhysExpr for Column {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, _partition: u32) -> Result<Value> {
         batch
             .columns()
             .get(self.index)
@@ -414,7 +502,7 @@ impl PhysExpr for Lit {
         self.value.logical_null_count() > 0
     }
 
-    fn eval(&self, _batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, _batch: &RecordBatch, _partition: u32) -> Result<Value> {
         Ok(Value::Scalar(Arc::clone(&self.value)))
     }
 }
@@ -423,9 +511,11 @@ impl PhysExpr for Lit {
 pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
     use arrow_array::{
         BinaryViewArray, BooleanArray as B, Date32Array, Decimal128Array, Float32Array,
-        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, NullArray, StringViewArray,
-        TimestampMicrosecondArray,
+        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, MapArray, NullArray,
+        StringArray, StringViewArray, StructArray, TimestampMicrosecondArray,
     };
+    use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    use arrow_schema::Field;
     use krishiv_types::DataType;
     Ok(match l {
         Literal::Null(None) => Arc::new(NullArray::new(1)),
@@ -458,6 +548,42 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
                 .with_data_type(DataType::Timestamp.to_arrow()),
         ),
         Literal::TimestampNtz(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v])),
+        // A one-row string map, as the JSON options bind.
+        Literal::Map(pairs) => {
+            let keys: ArrayRef = Arc::new(StringArray::from(
+                pairs
+                    .iter()
+                    .map(|(k, _)| Some(k.as_str()))
+                    .collect::<Vec<_>>(),
+            ));
+            let values: ArrayRef = Arc::new(StringArray::from(
+                pairs
+                    .iter()
+                    .map(|(_, v)| Some(v.as_str()))
+                    .collect::<Vec<_>>(),
+            ));
+            let entries = StructArray::new(
+                vec![
+                    Field::new("key", ArrowType::Utf8, false),
+                    Field::new("value", ArrowType::Utf8, true),
+                ]
+                .into(),
+                vec![keys, values],
+                None,
+            );
+            let len = i32::try_from(pairs.len())
+                .map_err(|_| internal("a map literal past the 32-bit offset limit"))?;
+            Arc::new(
+                MapArray::try_new(
+                    Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, len])),
+                    entries,
+                    None,
+                    false,
+                )
+                .map_err(|e| internal(&e.to_string()))?,
+            )
+        }
         _ => return Err(unsupported("interval literals in physical plans")),
     })
 }
@@ -468,18 +594,22 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
 pub(crate) struct Compiled(pub(crate) Arc<dyn PhysExpr>);
 
 impl Compiled {
-    /// The values over `batch`. When evaluation fails, the error is the
+    /// The values over `batch` in `partition`. When evaluation fails, the error is the
     /// first failing row's, as Spark's row-at-a-time evaluation raises it:
     /// a batch evaluates sub-expressions one after another (and each lazy
     /// `CASE` branch over its own rows), so the first error found need not
     /// be the first row's. Only the failing path pays for the search.
-    fn values(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+    fn values(&self, batch: &RecordBatch, partition: u32) -> Result<ArrayRef> {
         let rows = batch.num_rows();
-        match self.0.eval(batch).and_then(|v| v.into_array(rows)) {
+        match self
+            .0
+            .eval(batch, partition)
+            .and_then(|v| v.into_array(rows))
+        {
             Ok(v) => Ok(v),
             Err(e) if rows > 1 => {
                 for i in 0..rows {
-                    self.0.eval(&batch.slice(i, 1))?;
+                    self.0.eval(&batch.slice(i, 1), partition)?;
                 }
                 Err(e)
             }
@@ -490,7 +620,11 @@ impl Compiled {
 
 impl Predicate for Compiled {
     fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray> {
-        let v = self.values(batch)?;
+        <Self as Predicate>::evaluate_in(self, batch, 0)
+    }
+
+    fn evaluate_in(&self, batch: &RecordBatch, partition: u32) -> Result<BooleanArray> {
+        let v = self.values(batch, partition)?;
         v.as_boolean_opt()
             .cloned()
             .ok_or_else(|| internal("a predicate is not boolean"))
@@ -507,16 +641,28 @@ impl ScalarExpr for Compiled {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        self.values(batch)
+        <Self as ScalarExpr>::evaluate_in(self, batch, 0)
+    }
+
+    fn evaluate_in(&self, batch: &RecordBatch, partition: u32) -> Result<ArrayRef> {
+        self.values(batch, partition)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use krishiv_plan::Literal;
-    use krishiv_types::DataType;
+    use std::sync::Arc;
 
-    use super::{Lit, PhysExpr as _};
+    use arrow_schema::Schema;
+    use krishiv_common::error::ErrorClass;
+    use krishiv_plan::{FunctionId, FunctionKind, Literal};
+    use krishiv_types::DataType;
+    use krishiv_udf_sdk::{
+        ArgField, InvokeContext, ReturnField, ScalarUdf, Signature, UdfArg, UdfError, UdfInputType,
+        UdfLibrary,
+    };
+
+    use super::{EvalEnv, Input, Lit, PhysExpr as _, compile};
 
     #[test]
     fn a_null_literal_is_nullable_typed_or_not() {
@@ -527,6 +673,26 @@ mod tests {
                 .nullable()
         );
         assert!(!Lit::new(&Literal::Integer(1)).unwrap().nullable());
+    }
+
+    #[test]
+    fn a_map_literal_is_a_one_row_string_map() {
+        use arrow_array::Array;
+        use arrow_array::cast::AsArray;
+
+        let array = super::literal_array(&Literal::Map(vec![
+            ("mode".to_owned(), "FAILFAST".to_owned()),
+            ("timestampFormat".to_owned(), "dd/MM/yyyy".to_owned()),
+        ]))
+        .unwrap();
+        assert_eq!(array.len(), 1);
+        let map = array.as_map();
+        assert_eq!((map.value_length(0), map.is_null(0)), (2, false));
+        let entries = map.entries();
+        let keys: Vec<Option<&str>> = entries.column(0).as_string::<i32>().iter().collect();
+        let values: Vec<Option<&str>> = entries.column(1).as_string::<i32>().iter().collect();
+        assert_eq!(keys, [Some("mode"), Some("timestampFormat")]);
+        assert_eq!(values, [Some("FAILFAST"), Some("dd/MM/yyyy")]);
     }
 
     /// `scatter` puts the i-th value at the i-th set row, NULL elsewhere,
@@ -551,5 +717,155 @@ mod tests {
         let none = BooleanBuffer::new_unset(4);
         let out = super::scatter(&BooleanArray::from(Vec::<bool>::new()), &none).unwrap();
         assert_eq!((out.len(), out.null_count()), (4, 4));
+    }
+
+    /// The identity over `INT`, for the UDF compilation tests.
+    #[derive(Debug)]
+    struct Identity(u32);
+
+    impl ScalarUdf for Identity {
+        fn name(&self) -> &str {
+            "my_udf"
+        }
+
+        fn version(&self) -> u32 {
+            self.0
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            args: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, UdfError> {
+            Ok(args[0].array())
+        }
+    }
+
+    fn udf_call() -> krishiv_plan::Expr {
+        use krishiv_plan::{Expr, ExprNode, ResolvedExpr, ResolvedFunction};
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Udf {
+                    name: "my_udf".to_owned(),
+                    version: 2,
+                },
+                kind: FunctionKind::Scalar,
+                args: vec![Arc::new(Expr::literal(Literal::Integer(1)))],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: true,
+                deterministic: true,
+            },
+        )))
+    }
+
+    fn env_with(udfs: Option<Arc<UdfLibrary>>) -> EvalEnv {
+        EvalEnv {
+            ansi: true,
+            legacy_statistical_aggregate: false,
+            zone: None,
+            kernels: krishiv_kernels::KernelCtx::new(),
+            query_start_micros: 0,
+            user: Arc::from("test"),
+            udfs,
+            map_key_dedup_last_win: false,
+            seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Compiling a UDF call without the UDF on the executing side fails
+    /// with `KRISHIV_UDF_NOT_AVAILABLE`, naming `name@version`.
+    #[test]
+    fn a_missing_udf_fails_compilation_naming_name_and_version() {
+        let schema = Arc::new(Schema::empty());
+        let e = udf_call();
+        for udfs in [None, Some(Arc::new(UdfLibrary::new()))] {
+            let env = env_with(udfs);
+            let input = Input {
+                layout: &[],
+                schema: &schema,
+                env: &env,
+                subqueries: &[],
+            };
+            let err = compile(&e, input).unwrap_err();
+            assert_eq!(err.error_class(), ErrorClass::KrishivUdfNotAvailable);
+            assert!(err.to_string().contains("my_udf@2"), "{err}");
+        }
+        // A library holding another version is the same failure: the
+        // plan names `my_udf@2`.
+        let other = Arc::new(UdfLibrary::new());
+        other.register(Arc::new(Identity(9))).unwrap();
+        let env = env_with(Some(other));
+        let input = Input {
+            layout: &[],
+            schema: &schema,
+            env: &env,
+            subqueries: &[],
+        };
+        let err = compile(&e, input).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::KrishivUdfNotAvailable);
+        assert!(err.to_string().contains("my_udf@2"), "{err}");
+    }
+
+    /// Compiling a UDF call with its version present binds it.
+    #[test]
+    fn a_registered_udf_binds_where_the_analyzer_typed_it() {
+        let lib = Arc::new(UdfLibrary::new());
+        lib.register(Arc::new(Identity(2))).unwrap();
+        let env = env_with(Some(lib));
+        let schema = Arc::new(Schema::empty());
+        let e = udf_call();
+        let input = Input {
+            layout: &[],
+            schema: &schema,
+            env: &env,
+            subqueries: &[],
+        };
+        let compiled = compile(&e, input).unwrap();
+        assert_eq!(compiled.data_type(), &arrow_schema::DataType::Int32);
+    }
+
+    /// The fixture exposes its declared contract directly.
+    #[test]
+    fn udf_fixture_exposes_its_contract() {
+        let udf = Identity(2);
+        assert_eq!(udf.name(), "my_udf");
+        assert_eq!(udf.version(), 2);
+        assert_eq!(
+            udf.signature(),
+            &Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)])
+        );
+        let field = udf.return_field(&[]).unwrap();
+        assert_eq!(field.data_type, DataType::Integer);
+        assert!(field.nullable);
+        let array: arrow_array::ArrayRef =
+            std::sync::Arc::new(arrow_array::Int32Array::from(vec![1]));
+        let out = udf
+            .invoke(
+                &[UdfArg::Column(&array)],
+                1,
+                &InvokeContext {
+                    partition: 0,
+                    ansi: true,
+                    time_zone: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(out.len(), 1);
     }
 }

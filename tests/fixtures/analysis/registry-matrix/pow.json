@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "pow#0ebc9f0c4365/ansi_on",
+      "reason": "SELECT pow(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "pow#0ebc9f0c4365/ansi_off",
+      "reason": "SELECT pow(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "pow#6e2b7ff3457e/ansi_on",
+      "reason": "SELECT pow(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "pow#6e2b7ff3457e/ansi_off",
+      "reason": "SELECT pow(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "pow#8a8284f79bbe/ansi_on",
+      "reason": "SELECT pow(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "pow#8a8284f79bbe/ansi_off",
+      "reason": "SELECT pow(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "pow#a5c5256f4fbf/ansi_on",
+      "reason": "SELECT pow(2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "pow#a5c5256f4fbf/ansi_off",
+      "reason": "SELECT pow(2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "pow"
+}

@@ -32,6 +32,7 @@ mod file_write;
 mod filter;
 mod limit;
 mod project;
+mod range;
 mod replicate;
 mod runtime_filter;
 mod scan;
@@ -45,6 +46,7 @@ pub use file_write::{FileWrite, FileWriteSink};
 pub use filter::Filter;
 pub use limit::Limit;
 pub use project::{Project, ProjectItem};
+pub(crate) use range::Range;
 pub use replicate::ReplicateRows;
 pub(crate) use runtime_filter::RowStage;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
@@ -82,6 +84,14 @@ pub(crate) fn global_ref<'a, T: Send + Sync + 'static>(
 /// Unit local state of the stateless operators.
 pub(crate) fn no_state() -> LocalState {
     Box::new(())
+}
+
+/// Per-driver local state of an operator evaluating row expressions: the
+/// driver's partition index (see [`TaskContext::partition`](crate::context::TaskContext::partition)).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PartitionState {
+    /// The driver's partition index.
+    pub(crate) partition: u32,
 }
 
 #[cfg(all(test, not(loom)))]

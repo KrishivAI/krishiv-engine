@@ -296,6 +296,60 @@ fn project_filter_limit_and_alias() {
 }
 
 #[test]
+fn range_builds_the_range_leaf() {
+    use crate::proto::v4_2 as pb;
+    let r = relation(RelType::Range(pb::Range {
+        start: Some(1),
+        end: 10,
+        step: 3,
+        num_partitions: Some(2),
+    }));
+    let got = node(&r);
+    let PlanNode::Range {
+        start,
+        end,
+        step,
+        num_slices,
+        output,
+    } = &got
+    else {
+        panic!("{got:?}");
+    };
+    assert_eq!((*start, *end, *step, *num_slices), (1, 10, 3, Some(2)));
+    assert_eq!(output.name, "id");
+    assert!(format!("{got:?}").contains("Range"));
+    // Defaults: `start` 0, no partition count.
+    let r = relation(RelType::Range(pb::Range {
+        start: None,
+        end: 5,
+        step: 1,
+        num_partitions: None,
+    }));
+    let PlanNode::Range {
+        start, num_slices, ..
+    } = node(&r)
+    else {
+        panic!()
+    };
+    assert_eq!((start, num_slices), (0, None));
+    // `step = 0` and a non-positive partition count fail.
+    let bad = relation(RelType::Range(pb::Range {
+        start: Some(0),
+        end: 5,
+        step: 0,
+        num_partitions: None,
+    }));
+    assert_eq!(code(&bad), ErrorClass::FailedFunctionCall);
+    let bad = relation(RelType::Range(pb::Range {
+        start: Some(0),
+        end: 5,
+        step: 1,
+        num_partitions: Some(0),
+    }));
+    assert_eq!(code(&bad), ErrorClass::KrishivInvalidPartitionNumber);
+}
+
+#[test]
 fn project_without_input_and_qualified_alias_are_unsupported() {
     let no_input = relation(RelType::Project(Box::default()));
     let e = fails(translate(&no_input));
@@ -652,7 +706,6 @@ fn unsupported_relations_are_named() {
             "SetOperation (spark.connect.Relation.set_op)",
         ),
         (RelType::Deduplicate(Box::default()), "Deduplicate"),
-        (RelType::Range(Default::default()), "Range"),
         (RelType::LocalRelation(Default::default()), "LocalRelation"),
         (RelType::Drop(Box::default()), "Drop"),
         (RelType::WithRelations(Box::default()), "WithRelations"),

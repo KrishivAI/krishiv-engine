@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "try_url_decode#6344512c210e/ansi_on",
+      "reason": "SELECT try_url_decode(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_url_decode#6344512c210e/ansi_off",
+      "reason": "SELECT try_url_decode(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_url_decode#781e0c1724f2/ansi_on",
+      "reason": "SELECT try_url_decode(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_url_decode#781e0c1724f2/ansi_off",
+      "reason": "SELECT try_url_decode(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "try_url_decode"
+}

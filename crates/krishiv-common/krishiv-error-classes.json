@@ -29,6 +29,12 @@
     ],
     "sqlState" : "22000"
   },
+  "KRISHIV_INVALID_BASE64_INPUT" : {
+    "message" : [
+      "The input is not valid base64: <reason>. Spark raises a Java `IllegalArgumentException` here without an error class."
+    ],
+    "sqlState" : "22018"
+  },
   "KRISHIV_INVALID_CONFIG_VALUE" : {
     "message" : [
       "The value <value> for config <key> is invalid: <reason>."
@@ -58,6 +64,12 @@
       "A hash join partition with <buildRows> build rows still does not fit in memory after <depth> rounds of repartitioning: its build side is skewed on very few join keys. Increase \"krishiv.memory.limit\", or rewrite the query so the skewed keys are joined separately."
     ],
     "sqlState" : "53200"
+  },
+  "KRISHIV_MALFORMED_JSON" : {
+    "message" : [
+      "The JSON string <json> is malformed. Provide valid JSON."
+    ],
+    "sqlState" : "22018"
   },
   "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
     "message" : [
@@ -106,6 +118,12 @@
       "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."
     ],
     "sqlState" : "42K0I"
+  },
+  "KRISHIV_UDF_NOT_AVAILABLE" : {
+    "message" : [
+      "The user-defined function <name>@<version> is not available on this worker: register it on the executing session before running the plan."
+    ],
+    "sqlState" : "39000"
   },
   "KRISHIV_UNKNOWN_FORMAT_OPTION" : {
     "message" : [

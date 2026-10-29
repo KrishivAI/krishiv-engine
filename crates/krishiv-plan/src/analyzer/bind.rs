@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    KrishivCatalogFailure, KrishivInsufficientPermissions, KrishivUnsupportedFeature,
+    KrishivCatalogFailure, KrishivUnsupportedFeature, NamedParametersNotSupported,
     RequiresSinglePartNamespace, TableOrViewNotFound, UnresolvedRoutine,
     UnsupportedDatasourceForDirectQuery,
 };
@@ -15,8 +15,8 @@ use krishiv_common::secret::OptionValue;
 
 use super::catalog::quoted;
 use super::{
-    AccessDecision, AnalysisContext, AnalysisError, Catalog, FunctionLookup, NameForm, Privilege,
-    Securable, SourceKind, TableColumn, TableIdent, TableKind, TableMeta,
+    AnalysisContext, AnalysisError, Catalog, FunctionLookup, NameForm, Privilege, Securable,
+    SourceKind, TableColumn, TableIdent, TableKind, TableMeta,
 };
 use crate::walk::{self, Node};
 use crate::{
@@ -85,21 +85,13 @@ pub(super) fn unsupported(feature: impl Into<String>, origin: Origin) -> Analysi
 }
 
 /// Whether `a` and `b` name the same thing: Java's `equalsIgnoreCase`
-/// unless `case_sensitive`. Java compares UTF-16 units and Rust `char`s;
-/// they differ only for characters whose case mapping is several
-/// characters (`ß` and the like), which no identifier comparison of Spark's
-/// relies on.
+/// unless `case_sensitive` (the one implementation field names of nested
+/// types use too).
 pub(super) fn same(a: &str, b: &str, case_sensitive: bool) -> bool {
     if case_sensitive {
         return a == b;
     }
-    a.len() == b.len() && a.eq_ignore_ascii_case(b)
-        || a.chars().count() == b.chars().count()
-            && a.chars().zip(b.chars()).all(|(x, y)| {
-                x == y
-                    || x.to_uppercase().eq(y.to_uppercase())
-                    || x.to_lowercase().eq(y.to_lowercase())
-            })
+    krishiv_types::equals_ignore_case(a, b)
 }
 
 pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings, AnalysisError> {
@@ -233,7 +225,7 @@ fn visit<'a>(
         }
         Node::Expr(e) => {
             if let ExprNode::Function(f) = &e.node {
-                check_function(ctx, &f.name, e.origin)?;
+                check_function(ctx, f, e.origin)?;
             }
             if let ExprNode::Subquery { plan, .. } = &e.node {
                 next.push((Node::Plan(plan), Arc::clone(env)));
@@ -244,30 +236,148 @@ fn visit<'a>(
     Ok(())
 }
 
-fn check_function(ctx: &AnalysisContext, name: &str, origin: Origin) -> Result<(), AnalysisError> {
+fn check_function(
+    ctx: &AnalysisContext,
+    f: &crate::FunctionCall,
+    origin: Origin,
+) -> Result<(), AnalysisError> {
+    // `builtin.f` / `system.builtin.f` (case-insensitively) resolve to the
+    // builtin function; `session.f` / `system.session.f` reach a session
+    // UDF only; any other qualifier is an unresolved routine.
+    let (parts, builtin) = qualified_parts(f, &search_path(ctx), origin)?;
+    // A session-qualified call resolves through the full parts (UDFs only).
+    if is_session_qualifier(&f.qualifier) {
+        let named = f.arg_names.iter().any(Option::is_some);
+        let registry = ctx.functions.lookup(&parts, ctx.profile);
+        if matches!(registry, FunctionLookup::NotFound) {
+            return Err(AnalysisError::new(
+                UnresolvedRoutine {
+                    routine_name: quoted(&parts),
+                    search_path: search_path(ctx),
+                },
+                origin,
+            ));
+        }
+        if named && super::builtins::named_signature(&f.name).is_none() {
+            return Err(AnalysisError::new(
+                NamedParametersNotSupported {
+                    function_name: quoted(&parts),
+                },
+                origin,
+            ));
+        }
+        return match registry {
+            FunctionLookup::KnownUnsupported => {
+                Err(unsupported(format!("function {}", parts.join(".")), origin))
+            }
+            _ => Ok(()),
+        };
+    }
+    let name = builtin.as_deref().unwrap_or(&f.name);
+    let named = f.arg_names.iter().any(Option::is_some);
     // The canonical operators exist in every profile; the analyzer types
     // them itself.
-    if crate::Builtin::from_name(name).is_some() {
-        return Ok(());
-    }
+    let builtin_op = crate::Builtin::from_name(name).is_some();
     // `grouping` and `grouping_id` are the analyzer's too (grouping sets).
-    if super::analytics::GroupingFn::from_name(name).is_some() {
-        return Ok(());
-    }
-    match ctx
-        .functions
-        .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile)
-    {
-        FunctionLookup::Found(_) => Ok(()),
-        FunctionLookup::KnownUnsupported => Err(unsupported(format!("function {name}"), origin)),
-        FunctionLookup::NotFound => Err(AnalysisError::new(
+    // `qualify` is lowering's marker for a `QUALIFY` predicate, resolved
+    // (and stripped) by the analyzer's filter path, never a routine.
+    let grouping = super::analytics::GroupingFn::from_name(name).is_some()
+        || super::ops::is_qualify_wrapper(name);
+    let registry = if builtin_op || grouping {
+        None
+    } else {
+        Some(
+            ctx.functions
+                .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile),
+        )
+    };
+    // A builtin-qualified call (`builtin.f`, `system.builtin.f`) reaches
+    // built-ins only: a session UDF of the same name stays unresolved.
+    let unresolved = matches!(&registry, Some(FunctionLookup::NotFound) | None)
+        || (builtin.is_some()
+            && matches!(
+                &registry,
+                Some(FunctionLookup::Found(entry))
+                    if matches!(entry.id, crate::FunctionId::Udf { .. })
+            ));
+    // Unknown functions fail before any named-argument check (Spark never
+    // reaches a builder for them).
+    if !builtin_op && !grouping && unresolved {
+        return Err(AnalysisError::new(
             UnresolvedRoutine {
-                routine_name: quoted(&[name.to_owned()]),
+                routine_name: quoted(&parts),
                 search_path: search_path(ctx),
             },
             origin,
-        )),
+        ));
     }
+    // A named call of a function without a named-parameter signature is
+    // rejected before the function itself is (as Spark's builders do); a
+    // call with a signature is checked during resolution, which rearranges
+    // first.
+    if named {
+        if super::builtins::named_signature(name).is_none() {
+            return Err(AnalysisError::new(
+                NamedParametersNotSupported {
+                    function_name: quoted(&parts),
+                },
+                origin,
+            ));
+        }
+        return Ok(());
+    }
+    match registry {
+        Some(FunctionLookup::KnownUnsupported) => {
+            Err(unsupported(format!("function {}", parts.join(".")), origin))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Whether `qualifier` names the built-in catalog (`builtin` or
+/// `system.builtin`, case-insensitively): such a call reaches built-ins
+/// only.
+pub(super) fn is_builtin_qualifier(qualifier: &[String]) -> bool {
+    matches!(qualifier, [q] if q.eq_ignore_ascii_case("builtin"))
+        || matches!(qualifier, [s, b]
+        if s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"))
+}
+
+/// Whether `qualifier` names a session UDF catalog (`session` or
+/// `system.session`, case-insensitively): such a call reaches UDFs only.
+pub(super) fn is_session_qualifier(qualifier: &[String]) -> bool {
+    matches!(qualifier, [q] if q.eq_ignore_ascii_case("session"))
+        || matches!(qualifier, [s, q]
+        if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"))
+}
+
+/// The routine a call names: every part as written (`parts`), and the
+/// builtin name when the qualifier is `builtin` or `system.builtin`
+/// (case-insensitively). A session qualifier (`session`, `system.session`)
+/// carries no builtin name; any other qualifier is `UNRESOLVED_ROUTINE`.
+pub(super) fn qualified_parts(
+    f: &crate::FunctionCall,
+    search_path: &str,
+    origin: Origin,
+) -> Result<(Vec<String>, Option<String>), AnalysisError> {
+    let mut parts = f.qualifier.clone();
+    parts.push(f.name.clone());
+    if f.qualifier.is_empty() {
+        return Ok((parts, None));
+    }
+    if is_session_qualifier(&f.qualifier) {
+        return Ok((parts, None));
+    }
+    if !is_builtin_qualifier(&f.qualifier) {
+        return Err(AnalysisError::new(
+            UnresolvedRoutine {
+                routine_name: quoted(&parts),
+                search_path: search_path.to_owned(),
+            },
+            origin,
+        ));
+    }
+    Ok((parts, Some(f.name.clone())))
 }
 
 fn search_path(ctx: &AnalysisContext) -> String {
@@ -356,29 +466,9 @@ async fn authorize(
         return Ok(*i);
     }
     let privilege = Privilege::Select;
-    let decision = ctx
-        .policy
-        .check(&ctx.principal, &securable, privilege)
-        .await;
-    match decision {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::AllowWith(_)) => {
-            return Err(unsupported(
-                format!("row filters and column masks (on {securable})"),
-                origin,
-            ));
-        }
-        Ok(AccessDecision::Deny { .. }) | Err(_) => {
-            return Err(AnalysisError::new(
-                KrishivInsufficientPermissions {
-                    principal: quoted(std::slice::from_ref(&ctx.principal.name)),
-                    privilege: privilege.to_string(),
-                    securable: securable.to_string(),
-                },
-                origin,
-            ));
-        }
-    }
+    super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
+        .await
+        .map_err(|e| AnalysisError::new(e, origin))?;
     b.securables.push((securable.clone(), privilege));
     checked.push((securable, b.securables.len() - 1));
     Ok(b.securables.len() - 1)

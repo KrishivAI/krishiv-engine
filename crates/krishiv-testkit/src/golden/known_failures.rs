@@ -1,16 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The frozen statement-level baseline of the session engine's golden run
-//! (`tests/spark-golden/known-failures.json`): every statement that does not pass, each with a
-//! category, and the ratchet that keeps the list from growing.
+//! The frozen statement-level baseline of the session engine's golden run.
+//! It is split into one file per key so that two PRs never touch the same
+//! file unless they touch the same key:
+//!
+//! - `tests/spark-golden/known-failures.json` holds only the format version,
+//!   the Spark tag and the freeze date;
+//! - `tests/spark-golden/known-failures-categories/` holds one file per
+//!   category, with the classification rules that assign it;
+//! - `tests/spark-golden/known-failures-cases/` holds one file per golden
+//!   input file with that file's failing statement indices by category.
+//!
+//! Totals are computed from the run, never stored.
 //!
 //! ```json
-//! {"format_version": 1, "spark_tag": "v4.2.0", "frozen_at": "2026-10-22",
-//!  "categories": {
-//!    "ddl": {"kind": "unsupported", "task": "P2-T075a", "summary": "DDL statements"},
-//!    "float-text": {"kind": "divergence", "adr": "0023", "summary": "..."},
-//!    "wrong-sum": {"kind": "bug", "owner": "U-agg", "summary": "..."}},
-//!  "cases": {"group-by": {"ddl": [0, 1], "wrong-sum": [7]}}}
+//! {"format_version": 1, "spark_tag": "v4.2.0", "frozen_at": "2026-10-22"}
 //! ```
+//! ```json
+//! {"format_version": 1, "category": "ddl", "kind": "unsupported", "task": "P2-T075a",
+//!  "summary": "DDL statements", "rules": [{"order": 10, "command": true}]}
+//! ```
+//! ```json
+//! {"format_version": 1, "file": "group-by", "cases": {"ddl": [0, 1], "wrong-sum": [7]}}
+//! ```
+//! A category's kind is `unsupported` (with `task`), `divergence` (with `adr`) or
+//! `bug` (with `owner`).
+//!
+//! Rules are tried in ascending `order` across all category files, and the first that
+//! matches a failure assigns its category; rules with equal `order` are tried by
+//! category key, then by position in the file. Leave gaps between orders so that a
+//! new rule can go anywhere without renumbering the others.
 //!
 //! A category is one of three kinds, each with a mandatory reference: an unsupported feature
 //! names the plan task that adds it (`P2-T075a`), a known divergence names the ADR that records
@@ -18,6 +36,11 @@
 //! list. Indices are statement positions in the golden file (0-based). The ratchet
 //! ([`KnownFailures::check`]) fails on a statement that fails but is not listed (a regression)
 //! and on a listed statement that passes (the list must shrink with it).
+//!
+//! [`KnownFailures::parse`] reads the legacy single-file form (header,
+//! categories, rules and cases in one document, as the unit tests use);
+//! [`KnownFailures::load`] reads the split on-disk form, where the
+//! categories and cases directories next to the header file supply them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -31,6 +54,12 @@ use super::run::{RunResult, load_statements};
 
 /// Format version this loader reads.
 pub const KNOWN_FAILURES_FORMAT_VERSION: u64 = 1;
+
+/// Name of the per-file cases directory next to the header file.
+pub const CASES_DIR_NAME: &str = "known-failures-cases";
+
+/// Name of the per-category directory next to the header file.
+pub const CATEGORIES_DIR_NAME: &str = "known-failures-categories";
 
 /// The ADR a known divergence must cite.
 pub const DIVERGENCE_ADR: &str = "0023";
@@ -144,7 +173,7 @@ impl Ratchet {
         if !self.newly_failing.is_empty() {
             s.push_str(&format!(
                 "{} statement(s) fail that the baseline does not list (fix them, or list them \
-                 with a category in tests/spark-golden/known-failures.json):\n",
+                 with a category under tests/spark-golden/known-failures-cases/):\n",
                 self.newly_failing.len()
             ));
             for d in &self.newly_failing {
@@ -154,7 +183,7 @@ impl Ratchet {
         if !self.newly_passing.is_empty() {
             s.push_str(&format!(
                 "{} listed statement(s) now pass; remove them from \
-                 tests/spark-golden/known-failures.json:\n",
+                 tests/spark-golden/known-failures-cases/:\n",
                 self.newly_passing.len()
             ));
             for d in &self.newly_passing {
@@ -166,6 +195,38 @@ impl Ratchet {
         }
         s
     }
+}
+
+/// One golden file's cases (`category -> statement indices`), validated
+/// against the categories: every category known, every index a `u32`, no
+/// index listed twice, at least one statement.
+fn file_cases(
+    file: &str,
+    by_category: &Map<String, Value>,
+    categories: &BTreeMap<String, Category>,
+) -> Result<BTreeMap<u32, String>, String> {
+    let mut indices = BTreeMap::new();
+    for (key, list) in by_category {
+        if !categories.contains_key(key) {
+            return Err(format!("`{file}`: unknown category `{key}`"));
+        }
+        for i in list
+            .as_array()
+            .ok_or_else(|| format!("`{file}`/`{key}`: expected an array"))?
+        {
+            let i = i
+                .as_u64()
+                .and_then(|i| u32::try_from(i).ok())
+                .ok_or_else(|| format!("`{file}`/`{key}`: bad index {i}"))?;
+            if indices.insert(i, key.clone()).is_some() {
+                return Err(format!("`{file}`#{i} is listed twice"));
+            }
+        }
+    }
+    if indices.is_empty() {
+        return Err(format!("`{file}` lists no statements"));
+    }
+    Ok(indices)
 }
 
 fn is_task_id(s: &str) -> bool {
@@ -184,8 +245,156 @@ fn is_task_id(s: &str) -> bool {
         && task.len() - digits.len() <= 1
 }
 
+fn invalid(message: String) -> KnownFailuresError {
+    KnownFailuresError::Invalid(message)
+}
+
+fn text_field(v: &Value, k: &str) -> Option<String> {
+    v.get(k).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn check_format_version(v: &Value) -> bool {
+    v.get("format_version").and_then(Value::as_u64) == Some(KNOWN_FAILURES_FORMAT_VERSION)
+}
+
+/// The Spark tag and freeze date of a header document.
+fn parse_meta(root: &Value) -> Result<(String, String), KnownFailuresError> {
+    if !check_format_version(root) {
+        return Err(invalid("unsupported or missing `format_version`".into()));
+    }
+    let spark_tag =
+        text_field(root, "spark_tag").ok_or_else(|| invalid("missing `spark_tag`".into()))?;
+    let frozen_at =
+        text_field(root, "frozen_at").ok_or_else(|| invalid("missing `frozen_at`".into()))?;
+    Ok((spark_tag, frozen_at))
+}
+
+/// One category from its JSON object (`kind`, the reference it needs, `summary`).
+fn parse_category(key: &str, c: &Value) -> Result<Category, KnownFailuresError> {
+    let summary = text_field(c, "summary")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| invalid(format!("category `{key}` without a `summary`")))?;
+    let reference = |k: &str| {
+        text_field(c, k)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| invalid(format!("category `{key}` without `{k}`")))
+    };
+    let kind = match c.get("kind").and_then(Value::as_str) {
+        Some("unsupported") => {
+            let task = reference("task")?;
+            if !is_task_id(&task) {
+                return Err(invalid(format!(
+                    "category `{key}`: `{task}` is not a task ID"
+                )));
+            }
+            CategoryKind::Unsupported { task }
+        }
+        Some("divergence") => {
+            let adr = reference("adr")?;
+            if adr != DIVERGENCE_ADR {
+                return Err(invalid(format!(
+                    "category `{key}`: a divergence cites ADR {DIVERGENCE_ADR}, not `{adr}`"
+                )));
+            }
+            CategoryKind::Divergence { adr }
+        }
+        Some("bug") => CategoryKind::Bug {
+            owner: reference("owner")?,
+        },
+        other => {
+            return Err(invalid(format!("category `{key}`: unknown kind {other:?}")));
+        }
+    };
+    Ok(Category { kind, summary })
+}
+
+/// A category as the JSON object that holds it (`kind`, its reference, `summary`).
+fn category_json(c: &Category) -> Map<String, Value> {
+    let value = match &c.kind {
+        CategoryKind::Unsupported { task } => {
+            json!({"kind": "unsupported", "task": task, "summary": c.summary})
+        }
+        CategoryKind::Divergence { adr } => {
+            json!({"kind": "divergence", "adr": adr, "summary": c.summary})
+        }
+        CategoryKind::Bug { owner } => {
+            json!({"kind": "bug", "owner": owner, "summary": c.summary})
+        }
+    };
+    match value {
+        Value::Object(o) => o,
+        _ => Map::new(),
+    }
+}
+
+/// The key of a per-key file: its path relative to the directory without `.json`.
+fn file_key(rel: &Path) -> Result<String, KnownFailuresError> {
+    rel.to_str()
+        .and_then(|s| s.strip_suffix(".json"))
+        .map(|s| s.replace('\\', "/"))
+        .ok_or_else(|| invalid(format!("{}: not a JSON file name", rel.display())))
+}
+
+/// Every category file of `dir` as the categories and the rules of all of them in
+/// matching order (see the module docs).
+fn load_categories(
+    dir: &Path,
+) -> Result<(BTreeMap<String, Category>, Vec<Rule>), KnownFailuresError> {
+    let files =
+        crate::manifest_dir::read_json_dir(dir).map_err(|source| KnownFailuresError::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+    let mut categories = BTreeMap::new();
+    let mut ordered: Vec<(u32, String, usize, Rule)> = Vec::new();
+    for (rel, text) in &files {
+        let name = rel.display();
+        let stem = file_key(rel)?;
+        let value: Value =
+            serde_json::from_str(text).map_err(|e| invalid(format!("{name}: {e}")))?;
+        if !check_format_version(&value) {
+            return Err(invalid(format!(
+                "{name}: unsupported or missing `format_version`"
+            )));
+        }
+        let key = text_field(&value, "category")
+            .ok_or_else(|| invalid(format!("{name}: missing `category`")))?;
+        if key != stem {
+            return Err(invalid(format!(
+                "{name}: names category `{key}`, not its file"
+            )));
+        }
+        let category = parse_category(&key, &value)?;
+        let rules = match value.get("rules") {
+            None => &[][..],
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| invalid(format!("{name}: `rules` is not an array")))?,
+        };
+        for (i, rule) in rules.iter().enumerate() {
+            let mut object = rule
+                .as_object()
+                .cloned()
+                .ok_or_else(|| invalid(format!("{name}: rule {i} is not an object")))?;
+            let order = object
+                .remove("order")
+                .and_then(|o| o.as_u64())
+                .and_then(|o| u32::try_from(o).ok())
+                .ok_or_else(|| invalid(format!("{name}: rule {i} without a numeric `order`")))?;
+            object.insert("category".to_owned(), Value::String(key.clone()));
+            let mut rule = Rule::parse(&Value::Object(object))
+                .map_err(|e| invalid(format!("{name}: rule {i}: {e}")))?;
+            rule.order = order;
+            ordered.push((order, key.clone(), i, rule));
+        }
+        categories.insert(key, category);
+    }
+    ordered.sort_by(|a, b| (a.0, &a.1, a.2).cmp(&(b.0, &b.1, b.2)));
+    Ok((categories, ordered.into_iter().map(|o| o.3).collect()))
+}
+
 impl KnownFailures {
-    /// Default path in the repo.
+    /// Default path of the header file in the repo.
     #[must_use]
     pub fn default_path() -> PathBuf {
         crate::tests_dir()
@@ -193,114 +402,160 @@ impl KnownFailures {
             .join("known-failures.json")
     }
 
-    /// Load from `path`.
+    /// Default path of the per-file cases directory in the repo.
+    #[must_use]
+    pub fn default_cases_dir() -> PathBuf {
+        crate::tests_dir().join("spark-golden").join(CASES_DIR_NAME)
+    }
+
+    /// Default path of the per-category directory in the repo.
+    #[must_use]
+    pub fn default_categories_dir() -> PathBuf {
+        crate::tests_dir()
+            .join("spark-golden")
+            .join(CATEGORIES_DIR_NAME)
+    }
+
+    /// Load the split baseline: the header file at `path`, the categories
+    /// and rules in the [`CATEGORIES_DIR_NAME`] directory next to it, and the
+    /// per-file cases in the [`CASES_DIR_NAME`] directory next to it. Each
+    /// directory, when it exists, supplies everything of its kind (the
+    /// header's own `categories`, `rules` and `cases`, if any, are ignored);
+    /// otherwise the header's embedded ones apply (the legacy single-file
+    /// form the unit tests use).
     pub fn load(path: &Path) -> Result<Self, KnownFailuresError> {
         let text = std::fs::read_to_string(path).map_err(|source| KnownFailuresError::Io {
             path: path.to_path_buf(),
             source,
         })?;
-        Self::parse(&text)
+        let categories_dir = path
+            .parent()
+            .map(|p| p.join(CATEGORIES_DIR_NAME))
+            .filter(|d| d.is_dir());
+        let mut known = if let Some(dir) = &categories_dir {
+            let root: Value = serde_json::from_str(&text).map_err(|e| invalid(e.to_string()))?;
+            let (spark_tag, frozen_at) = parse_meta(&root)?;
+            let (categories, rules) = load_categories(dir)?;
+            Self {
+                spark_tag,
+                frozen_at,
+                categories,
+                rules,
+                cases: BTreeMap::new(),
+            }
+        } else {
+            Self::parse(&text)?
+        };
+        let Some(dir) = path.parent().map(|p| p.join(CASES_DIR_NAME)) else {
+            return Ok(known);
+        };
+        if !dir.is_dir() {
+            return Ok(known);
+        }
+        // The split on-disk form: the cases directory supplies every file's
+        // cases, replacing the header's own (unit-test) ones.
+        let mut cases = BTreeMap::new();
+        let bad = KnownFailuresError::Invalid;
+        let files =
+            crate::manifest_dir::read_json_dir(&dir).map_err(|source| KnownFailuresError::Io {
+                path: dir.clone(),
+                source,
+            })?;
+        for (rel, text) in &files {
+            let stem = rel
+                .to_str()
+                .and_then(|s| s.strip_suffix(".json"))
+                .map(|s| s.replace('\\', "/"))
+                .ok_or_else(|| bad(format!("{}: not a case file", rel.display())))?;
+            let value: Value =
+                serde_json::from_str(text).map_err(|e| bad(format!("{}: {e}", rel.display())))?;
+            if value.get("format_version").and_then(Value::as_u64)
+                != Some(KNOWN_FAILURES_FORMAT_VERSION)
+            {
+                return Err(bad(format!(
+                    "{}: unsupported or missing `format_version`",
+                    rel.display()
+                )));
+            }
+            let file = value
+                .get("file")
+                .and_then(Value::as_str)
+                .ok_or_else(|| bad(format!("{}: missing `file`", rel.display())))?;
+            if file != stem {
+                return Err(bad(format!(
+                    "{}: names `{file}`, not its golden file",
+                    rel.display()
+                )));
+            }
+            let indices = file_cases(
+                file,
+                value
+                    .get("cases")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| bad(format!("`{file}`: missing `cases` object")))?,
+                &known.categories,
+            )
+            .map_err(bad)?;
+            if cases.insert(file.to_owned(), indices).is_some() {
+                return Err(bad(format!("`{file}` is listed twice")));
+            }
+        }
+        known.cases = cases;
+        Ok(known)
     }
 
-    /// Parse JSON text, validating every category and case.
+    /// Parse JSON text (the legacy single-file form), validating every
+    /// category and case. A document without `cases` parses to a baseline
+    /// without cases.
     pub fn parse(text: &str) -> Result<Self, KnownFailuresError> {
-        let bad = |m: String| KnownFailuresError::Invalid(m);
+        let bad = invalid;
         let root: Value = serde_json::from_str(text).map_err(|e| bad(e.to_string()))?;
-        if root.get("format_version").and_then(Value::as_u64) != Some(KNOWN_FAILURES_FORMAT_VERSION)
-        {
-            return Err(bad("unsupported or missing `format_version`".into()));
-        }
-        let text_field = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
-        let spark_tag =
-            text_field(&root, "spark_tag").ok_or_else(|| bad("missing `spark_tag`".into()))?;
-        let frozen_at =
-            text_field(&root, "frozen_at").ok_or_else(|| bad("missing `frozen_at`".into()))?;
+        let (spark_tag, frozen_at) = parse_meta(&root)?;
         let mut categories = BTreeMap::new();
         for (key, c) in root
             .get("categories")
             .and_then(Value::as_object)
             .ok_or_else(|| bad("missing `categories` object".into()))?
         {
-            let summary = text_field(c, "summary")
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| bad(format!("category `{key}` without a `summary`")))?;
-            let reference = |k: &str| {
-                text_field(c, k)
-                    .filter(|s| !s.trim().is_empty())
-                    .ok_or_else(|| bad(format!("category `{key}` without `{k}`")))
-            };
-            let kind = match c.get("kind").and_then(Value::as_str) {
-                Some("unsupported") => {
-                    let task = reference("task")?;
-                    if !is_task_id(&task) {
-                        return Err(bad(format!("category `{key}`: `{task}` is not a task ID")));
-                    }
-                    CategoryKind::Unsupported { task }
-                }
-                Some("divergence") => {
-                    let adr = reference("adr")?;
-                    if adr != DIVERGENCE_ADR {
-                        return Err(bad(format!(
-                            "category `{key}`: a divergence cites ADR {DIVERGENCE_ADR}, not `{adr}`"
-                        )));
-                    }
-                    CategoryKind::Divergence { adr }
-                }
-                Some("bug") => CategoryKind::Bug {
-                    owner: reference("owner")?,
-                },
-                other => {
-                    return Err(bad(format!("category `{key}`: unknown kind {other:?}")));
-                }
-            };
-            categories.insert(key.clone(), Category { kind, summary });
+            categories.insert(key.clone(), parse_category(key, c)?);
         }
         let mut rules = Vec::new();
-        for r in root
+        for (i, r) in root
             .get("rules")
             .and_then(Value::as_array)
             .ok_or_else(|| bad("missing `rules` array".into()))?
+            .iter()
+            .enumerate()
         {
-            let rule = Rule::parse(r).map_err(bad)?;
+            let mut rule = Rule::parse(r).map_err(bad)?;
             if !categories.contains_key(&rule.category) {
                 return Err(bad(format!(
                     "a rule names the unknown category `{}`",
                     rule.category
                 )));
             }
+            // The document order is the match order; gaps leave room to insert.
+            rule.order = u32::try_from((i + 1) * 10).map_err(|e| bad(e.to_string()))?;
             rules.push(rule);
         }
         let mut cases = BTreeMap::new();
-        for (file, by_category) in root
-            .get("cases")
-            .and_then(Value::as_object)
-            .ok_or_else(|| bad("missing `cases` object".into()))?
-        {
-            let mut indices = BTreeMap::new();
-            for (key, list) in by_category
+        // A header file without `cases` (the split on-disk form) parses to
+        // an empty baseline; `load` fills the cases from the directory.
+        if let Some(object) = root.get("cases") {
+            for (file, by_category) in object
                 .as_object()
-                .ok_or_else(|| bad(format!("`{file}`: expected an object of categories")))?
+                .ok_or_else(|| bad("`cases` is not an object".into()))?
             {
-                if !categories.contains_key(key) {
-                    return Err(bad(format!("`{file}`: unknown category `{key}`")));
-                }
-                for i in list
-                    .as_array()
-                    .ok_or_else(|| bad(format!("`{file}`/`{key}`: expected an array")))?
-                {
-                    let i = i
-                        .as_u64()
-                        .and_then(|i| u32::try_from(i).ok())
-                        .ok_or_else(|| bad(format!("`{file}`/`{key}`: bad index {i}")))?;
-                    if indices.insert(i, key.clone()).is_some() {
-                        return Err(bad(format!("`{file}`#{i} is listed twice")));
-                    }
-                }
+                let indices = file_cases(
+                    file,
+                    by_category.as_object().ok_or_else(|| {
+                        bad(format!("`{file}`: expected an object of categories"))
+                    })?,
+                    &categories,
+                )
+                .map_err(bad)?;
+                cases.insert(file.clone(), indices);
             }
-            if indices.is_empty() {
-                return Err(bad(format!("`{file}` lists no statements")));
-            }
-            cases.insert(file.clone(), indices);
         }
         Ok(Self {
             spark_tag,
@@ -314,34 +569,26 @@ impl KnownFailures {
     /// The JSON form (stable key order; one file per line in the pretty form).
     #[must_use]
     pub fn to_json(&self) -> Value {
+        let mut header = self.header_json();
+        if let Some(object) = header.as_object_mut() {
+            let cases: Map<String, Value> = self
+                .cases
+                .iter()
+                .map(|(file, indices)| (file.clone(), Self::indices_json(indices)))
+                .collect();
+            object.insert("cases".to_owned(), Value::Object(cases));
+        }
+        header
+    }
+
+    /// The legacy single-file header JSON: everything but the per-file
+    /// cases, in one document.
+    #[must_use]
+    pub fn header_json(&self) -> Value {
         let categories: Map<String, Value> = self
             .categories
             .iter()
-            .map(|(k, c)| {
-                let v = match &c.kind {
-                    CategoryKind::Unsupported { task } => {
-                        json!({"kind": "unsupported", "task": task, "summary": c.summary})
-                    }
-                    CategoryKind::Divergence { adr } => {
-                        json!({"kind": "divergence", "adr": adr, "summary": c.summary})
-                    }
-                    CategoryKind::Bug { owner } => {
-                        json!({"kind": "bug", "owner": owner, "summary": c.summary})
-                    }
-                };
-                (k.clone(), v)
-            })
-            .collect();
-        let cases: Map<String, Value> = self
-            .cases
-            .iter()
-            .map(|(file, indices)| {
-                let mut by: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
-                for (i, k) in indices {
-                    by.entry(k).or_default().push(*i);
-                }
-                (file.clone(), json!(by))
-            })
+            .map(|(k, c)| (k.clone(), Value::Object(category_json(c))))
             .collect();
         json!({
             "format_version": KNOWN_FAILURES_FORMAT_VERSION,
@@ -349,8 +596,92 @@ impl KnownFailures {
             "frozen_at": self.frozen_at,
             "categories": categories,
             "rules": self.rules.iter().map(Rule::to_json).collect::<Vec<_>>(),
-            "cases": cases,
         })
+    }
+
+    /// The on-disk header file text (`known-failures.json`): the format
+    /// version, the Spark tag and the freeze date; pretty JSON with a
+    /// trailing newline.
+    #[must_use]
+    pub fn meta_text(&self) -> String {
+        let doc = json!({
+            "format_version": KNOWN_FAILURES_FORMAT_VERSION,
+            "spark_tag": self.spark_tag,
+            "frozen_at": self.frozen_at,
+        });
+        serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"
+    }
+
+    /// One category's file (`known-failures-categories/<key>.json`): the
+    /// category and the rules that assign it, each with its `order`; `None`
+    /// for a key that is not a category.
+    #[must_use]
+    pub fn category_file_json(&self, key: &str) -> Option<Value> {
+        let category = self.categories.get(key)?;
+        let rules: Vec<Value> = self
+            .rules
+            .iter()
+            .filter(|r| r.category == key)
+            .map(|r| {
+                let mut rule = r.to_json().clone();
+                if let Some(o) = rule.as_object_mut() {
+                    o.remove("category");
+                    o.insert("order".to_owned(), json!(r.order));
+                }
+                rule
+            })
+            .collect();
+        let mut doc = category_json(category);
+        doc.insert(
+            "format_version".to_owned(),
+            json!(KNOWN_FAILURES_FORMAT_VERSION),
+        );
+        doc.insert("category".to_owned(), json!(key));
+        doc.insert("rules".to_owned(), Value::Array(rules));
+        Some(Value::Object(doc))
+    }
+
+    /// The category file text: pretty JSON with a trailing newline, or
+    /// `None` for a key that is not a category.
+    #[must_use]
+    pub fn category_file_text(&self, key: &str) -> Option<String> {
+        self.category_file_json(key)
+            .map(|doc| serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n")
+    }
+
+    /// One golden file's indices as `category -> sorted indices`, the value
+    /// the per-file case file holds under `cases`.
+    fn indices_json(indices: &BTreeMap<u32, String>) -> Value {
+        let mut by: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
+        for (i, k) in indices {
+            by.entry(k).or_default().push(*i);
+        }
+        for list in by.values_mut() {
+            list.sort_unstable();
+        }
+        json!(by)
+    }
+
+    /// One golden file's case file (`known-failures-cases/<file>.json`):
+    /// the file's failing indices by category, or `None` when the file
+    /// lists nothing.
+    #[must_use]
+    pub fn case_file_json(&self, file: &str) -> Option<Value> {
+        self.cases.get(file).map(|indices| {
+            json!({
+                "format_version": KNOWN_FAILURES_FORMAT_VERSION,
+                "file": file,
+                "cases": Self::indices_json(indices),
+            })
+        })
+    }
+
+    /// The case file text: pretty JSON with a trailing newline, or `None`
+    /// when the file lists nothing.
+    #[must_use]
+    pub fn case_file_text(&self, file: &str) -> Option<String> {
+        self.case_file_json(file)
+            .map(|doc| serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n")
     }
 
     /// The file text: pretty JSON, with each golden file's cases on one line so that a change
@@ -416,23 +747,48 @@ impl KnownFailures {
         ))
     }
 
-    /// [`Self::update_with_set`] on the file at `path`, rewriting it; `Err` (and the file
-    /// untouched) when a failure matches no rule.
+    /// [`Self::update_with_set`] on the file at `path`, rewriting the header
+    /// and syncing the per-category and per-file cases directories next to
+    /// it (only changed files are rewritten; category and case files with
+    /// nothing left are deleted); `Err` (and nothing written) when a failure
+    /// matches no rule.
     pub fn update_file(path: &Path, run: &RunResult, set: &GoldenSet) -> Result<String, String> {
         let mut known = Self::load(path).map_err(|e| e.to_string())?;
         let up = known.update_with_set(run, set)?;
         if !up.unclassified.is_empty() {
             let mut msg = format!(
-                "{} failure(s) match no rule; add a rule or category to {} (nothing written):\n",
+                "{} failure(s) match no rule; add a rule or category under {} (nothing written):\n",
                 up.unclassified.len(),
-                path.display()
+                path.with_file_name(CATEGORIES_DIR_NAME).display()
             );
             for d in &up.unclassified {
                 msg.push_str(&format!("  {}#{}: {}\n", d.file, d.index, d.detail));
             }
             return Err(msg);
         }
-        std::fs::write(path, known.to_text()).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::manifest_dir::write_if_changed(path, &known.meta_text())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("{}: no parent directory", path.display()))?;
+        let mut categories = BTreeMap::new();
+        for key in known.categories.keys() {
+            let text = known
+                .category_file_text(key)
+                .ok_or_else(|| format!("category `{key}` vanished while writing"))?;
+            categories.insert(PathBuf::from(format!("{key}.json")), text);
+        }
+        crate::manifest_dir::sync_json_dir(&parent.join(CATEGORIES_DIR_NAME), &categories)
+            .map_err(|e| e.to_string())?;
+        let dir = parent.join(CASES_DIR_NAME);
+        let mut wanted = BTreeMap::new();
+        for file in known.cases.keys() {
+            let text = known
+                .case_file_text(file)
+                .ok_or_else(|| format!("`{file}` vanished while writing"))?;
+            wanted.insert(PathBuf::from(format!("{file}.json")), text);
+        }
+        crate::manifest_dir::sync_json_dir(&dir, &wanted).map_err(|e| e.to_string())?;
         Ok(format!(
             "ratchet: {} added, {} removed, {} listed in {}",
             up.added.len(),
@@ -954,6 +1310,283 @@ mod tests {
         let msg = KnownFailures::update_file(&path, &fewer, &set)?;
         assert!(msg.contains("0 added, 1 removed, 3 listed"), "{msg}");
         assert!(KnownFailures::check_file(&path, &fewer).is_ok());
+        Ok(())
+    }
+
+    /// Writes the split on-disk form of `k` into `dir`: `known.json`, one file per category and
+    /// one per golden file.
+    fn write_split(dir: &Path, k: &KnownFailures) -> R {
+        std::fs::write(dir.join("known.json"), k.meta_text())?;
+        let categories = dir.join(super::CATEGORIES_DIR_NAME);
+        std::fs::create_dir_all(&categories)?;
+        for key in k.categories.keys() {
+            let text = k.category_file_text(key).ok_or("missing category file")?;
+            std::fs::write(categories.join(format!("{key}.json")), text)?;
+        }
+        let cases = dir.join(super::CASES_DIR_NAME);
+        for file in k.cases.keys() {
+            let text = k.case_file_text(file).ok_or("missing case file")?;
+            std::fs::create_dir_all(cases.join(file).parent().ok_or("no parent")?)?;
+            std::fs::write(cases.join(format!("{file}.json")), text)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn header_category_and_case_files_round_trip_through_the_split_form() -> R {
+        let k = KnownFailures::parse(DOC)?;
+        // The header holds the version, tag and date only.
+        let meta = k.meta_text();
+        assert!(
+            ["categories", "rules", "cases"]
+                .iter()
+                .all(|w| !meta.contains(w)),
+            "{meta}"
+        );
+        assert!(
+            KnownFailures::parse(&meta).is_err(),
+            "the header alone is not a legacy document"
+        );
+        // Header plus one category file per category and one case file per listed file loads
+        // back to the same baseline.
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("known.json");
+        write_split(dir.path(), &k)?;
+        let cases = dir.path().join(super::CASES_DIR_NAME);
+        // A nested golden name lands in a subdirectory, like the real baseline.
+        std::fs::create_dir_all(cases.join("nonansi"))?;
+        std::fs::write(
+            cases.join("nonansi/array.json"),
+            "{\"format_version\":1,\"file\":\"nonansi/array\",\"cases\":{\"zzz\":[0]}}",
+        )?;
+        let err = KnownFailures::load(&path).unwrap_err();
+        assert!(err.to_string().contains("unknown category"), "{err}");
+        std::fs::remove_file(cases.join("nonansi/array.json"))?;
+        std::fs::remove_dir(cases.join("nonansi"))?;
+        assert_eq!(KnownFailures::load(&path)?, k);
+        assert_eq!(KnownFailures::load(&path)?.listed(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn case_files_must_name_their_file_and_version() -> R {
+        let k = KnownFailures::parse(DOC)?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("known.json");
+        write_split(dir.path(), &k)?;
+        let cases = dir.path().join(super::CASES_DIR_NAME);
+        std::fs::create_dir_all(&cases)?;
+        let write_case = |name: &str, text: &str| -> R {
+            std::fs::write(cases.join(name), text)?;
+            Ok(())
+        };
+        write_case(
+            "a.json",
+            &k.case_file_text("a")
+                .ok_or("missing")?
+                .replace("\"a\"", "\"b\""),
+        )?;
+        let err = KnownFailures::load(&path).unwrap_err();
+        assert!(err.to_string().contains("not its golden file"), "{err}");
+        write_case("a.json", &k.case_file_text("a").ok_or("missing")?)?;
+        assert!(KnownFailures::load(&path).is_ok());
+        write_case(
+            "a.json",
+            "{\"format_version\":2,\"file\":\"a\",\"cases\":{}}",
+        )?;
+        let err = KnownFailures::load(&path).unwrap_err();
+        assert!(err.to_string().contains("format_version"), "{err}");
+        write_case(
+            "a.json",
+            "{\"format_version\":1,\"file\":\"a\",\"cases\":{\"ddl\":[]}}",
+        )?;
+        let err = KnownFailures::load(&path).unwrap_err();
+        assert!(err.to_string().contains("no statements"), "{err}");
+        Ok(())
+    }
+
+    fn category_dir(
+        rules: &[(&str, &str)],
+    ) -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        std::fs::write(
+            dir.path().join("known.json"),
+            r#"{"format_version":1,"spark_tag":"v4.2.0","frozen_at":"2026-10-22"}"#,
+        )?;
+        let categories = dir.path().join(super::CATEGORIES_DIR_NAME);
+        std::fs::create_dir_all(&categories)?;
+        for (name, text) in rules {
+            std::fs::write(categories.join(name), text)?;
+        }
+        Ok(dir)
+    }
+
+    #[test]
+    fn rules_match_in_global_order_across_category_files() -> R {
+        let file = |key: &str, orders: &[u32]| {
+            let rules: Vec<String> = orders
+                .iter()
+                .map(|o| format!(r#"{{"order":{o},"detail":"x{o}"}}"#))
+                .collect();
+            (
+                format!("{key}.json"),
+                format!(
+                    r#"{{"format_version":1,"category":"{key}","kind":"bug","owner":"o",
+                        "summary":"s","rules":[{}]}}"#,
+                    rules.join(",")
+                ),
+            )
+        };
+        let (a, b) = (file("a", &[30, 5]), file("b", &[10, 30]));
+        let dir = category_dir(&[(&a.0, &a.1), (&b.0, &b.1)])?;
+        let k = KnownFailures::load(&dir.path().join("known.json"))?;
+        // Ascending `order`; equal orders go by category key, then position.
+        let got: Vec<(&str, u32)> = k
+            .rules
+            .iter()
+            .map(|r| (r.category.as_str(), r.order))
+            .collect();
+        assert_eq!(got, [("a", 5), ("b", 10), ("a", 30), ("b", 30)]);
+        assert!(k.cases.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn category_files_must_name_their_category_and_number_their_rules() -> R {
+        let ok = r#"{"format_version":1,"category":"a","kind":"bug","owner":"o","summary":"s",
+                     "rules":[{"order":1,"command":true}]}"#;
+        let cases = [
+            (
+                ok.replace(r#""category":"a""#, r#""category":"b""#),
+                "not its file",
+            ),
+            (
+                ok.replace(r#""format_version":1"#, r#""format_version":2"#),
+                "format_version",
+            ),
+            (ok.replace(r#""order":1,"#, ""), "without a numeric `order`"),
+            (
+                ok.replace(r#""order":1"#, r#""order":-1"#),
+                "without a numeric `order`",
+            ),
+            (
+                ok.replace(r#"{"order":1,"command":true}"#, r#"{"order":1}"#),
+                "no condition",
+            ),
+            (
+                ok.replace(r#""kind":"bug""#, r#""kind":"later""#),
+                "unknown kind",
+            ),
+            (ok.replace(r#""owner":"o","#, ""), "without `owner`"),
+            (
+                ok.replace(r#""rules":[{"order":1,"command":true}]"#, r#""rules":{}"#),
+                "not an array",
+            ),
+        ];
+        for (text, msg) in cases {
+            let dir = category_dir(&[("a.json", &text)])?;
+            let err = KnownFailures::load(&dir.path().join("known.json")).unwrap_err();
+            assert!(err.to_string().contains(msg), "{msg}: {err}");
+        }
+        let dir = category_dir(&[("a.json", ok)])?;
+        assert_eq!(
+            KnownFailures::load(&dir.path().join("known.json"))?
+                .rules
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
+    /// The checked-in baseline is exactly what update mode writes, so a hand-edited or stale
+    /// per-key file fails here without running the whole golden suite.
+    #[test]
+    fn the_checked_in_baseline_is_in_canonical_form() -> R {
+        let path = KnownFailures::default_path();
+        let known = KnownFailures::load(&path)?;
+        assert_eq!(std::fs::read_to_string(&path)?, known.meta_text());
+        let on_disk =
+            |dir: PathBuf, key: &str| std::fs::read_to_string(dir.join(format!("{key}.json")));
+        for key in known.categories.keys() {
+            let want = known.category_file_text(key).ok_or("missing category")?;
+            let got = on_disk(KnownFailures::default_categories_dir(), key)?;
+            assert_eq!(got, want, "category `{key}` is not in canonical form");
+        }
+        for file in known.cases.keys() {
+            let want = known.case_file_text(file).ok_or("missing case file")?;
+            let got = on_disk(KnownFailures::default_cases_dir(), file)?;
+            assert_eq!(got, want, "case file `{file}` is not in canonical form");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn update_file_writes_the_split_and_rewrites_nothing_twice() -> R {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("known.json");
+        std::fs::write(&path, DOC)?;
+        let set = GoldenSet::default();
+        let fewer = RunResult {
+            files: vec![
+                file("a", vec![case(0, false), case(1, true), case(3, false)]),
+                file("b", vec![case(2, false)]),
+            ],
+            ..RunResult::default()
+        };
+        KnownFailures::update_file(&path, &fewer, &set)?;
+        // The header holds no cases, categories or rules; each category and each listed file
+        // has its own file.
+        let header: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| e.to_string())?;
+        for key in ["cases", "categories", "rules"] {
+            assert!(header.get(key).is_none(), "{header}");
+        }
+        let cases = dir.path().join(super::CASES_DIR_NAME);
+        let categories = dir.path().join(super::CATEGORIES_DIR_NAME);
+        assert!(cases.join("a.json").is_file());
+        assert!(cases.join("b.json").is_file());
+        for key in ["ddl", "sum", "text"] {
+            assert!(categories.join(format!("{key}.json")).is_file(), "{key}");
+        }
+        let loaded = KnownFailures::load(&path)?;
+        assert_eq!(loaded.listed(), 3);
+        assert_eq!(loaded.rules.len(), 2);
+        // A second update changes no bytes and touches no file.
+        let before: BTreeMap<String, (Vec<u8>, std::time::SystemTime)> = ["known.json"]
+            .into_iter()
+            .map(|n| dir.path().join(n))
+            .chain([cases.join("a.json"), cases.join("b.json")])
+            .chain(["ddl", "sum", "text"].map(|k| categories.join(format!("{k}.json"))))
+            .map(|p| {
+                Ok((
+                    p.to_string_lossy().into_owned(),
+                    (std::fs::read(&p)?, std::fs::metadata(&p)?.modified()?),
+                ))
+            })
+            .collect::<Result<_, std::io::Error>>()?;
+        KnownFailures::update_file(&path, &fewer, &set)?;
+        for (name, (bytes, mtime)) in &before {
+            let p = Path::new(name);
+            assert_eq!(&std::fs::read(p)?, bytes, "{name} was rewritten");
+            assert_eq!(
+                &std::fs::metadata(p)?.modified()?,
+                mtime,
+                "{name} was touched"
+            );
+        }
+        // A category with no statements left loses its file, and only its file.
+        let without_b = RunResult {
+            files: vec![file(
+                "a",
+                vec![case(0, false), case(1, true), case(3, false)],
+            )],
+            ..RunResult::default()
+        };
+        KnownFailures::update_file(&path, &without_b, &set)?;
+        assert!(!categories.join("text.json").exists());
+        assert!(categories.join("ddl.json").is_file());
+        assert!(!cases.join("b.json").exists());
+        assert_eq!(KnownFailures::load(&path)?.categories.len(), 2);
         Ok(())
     }
 }

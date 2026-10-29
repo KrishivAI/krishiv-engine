@@ -12,7 +12,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
 use super::rowtable::{RowPrepared, RowTable};
-use super::{AggregateOutput, AggregateSpec};
+use super::{AggregateExpr, AggregateOutput, AggregateSpec};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, KeyEncoder, KeyTable, ProbeCount, ProbeTotals, spill_partition};
 use crate::rows::RowLayout;
@@ -73,6 +73,11 @@ impl AggCore {
 
     fn keys(&self) -> usize {
         self.spec.group_by.len()
+    }
+
+    /// The accumulator of aggregate `a`, with the spec's semantics flags.
+    pub(crate) fn accumulator(&self, a: &AggregateExpr) -> Result<Accumulator> {
+        Ok(Accumulator::new(a, self.spec.ansi)?.legacy_statistical(self.spec.legacy_statistical))
     }
 
     /// Row indices of a state batch per spill partition at `level`.
@@ -152,7 +157,7 @@ impl AggTable {
             .spec
             .aggregates
             .iter()
-            .map(|a| Accumulator::new(a, core.spec.ansi))
+            .map(|a| core.accumulator(a))
             .collect::<Result<Vec<_>>>()?;
         let mut t = Self {
             core: Arc::clone(core),
@@ -345,7 +350,7 @@ impl AggTable {
         let ids: Vec<u32> =
             (0..u32::try_from(n).map_err(|_| internal("batch too large".to_owned()))?).collect();
         for a in &core.spec.aggregates {
-            let mut acc = Accumulator::new(a, core.spec.ansi)?;
+            let mut acc = core.accumulator(a)?;
             acc.resize(n);
             acc.update(&ids, cols, batch.weights())?;
             out.extend(acc.state(&ids)?);
@@ -393,12 +398,22 @@ pub(crate) enum TablePrepared {
 }
 
 impl Table {
-    /// Widens a narrow row table that is due to, if `reserve` grants the
-    /// bytes it needs while it runs (returned to the caller after); a
-    /// table that cannot stays narrow. No-op for other tables.
-    pub(crate) fn widen_if(&mut self, reserve: impl FnOnce(usize) -> bool) -> Result<()> {
+    /// Widens a narrow row table that is due to (`early`: while its input
+    /// is still being folded, see [`RowTable::wants_widen_early`]), if
+    /// `reserve` grants the bytes it needs while it runs (returned to the
+    /// caller after); a table that cannot stays narrow. No-op for other
+    /// tables.
+    pub(crate) fn widen_if(
+        &mut self,
+        early: bool,
+        reserve: impl FnOnce(usize) -> bool,
+    ) -> Result<()> {
         if let Self::Rows(t) = self
-            && t.wants_widen()
+            && (if early {
+                t.wants_widen_early()
+            } else {
+                t.wants_widen()
+            })
             && reserve(t.widen_bytes())
         {
             t.widen()?;

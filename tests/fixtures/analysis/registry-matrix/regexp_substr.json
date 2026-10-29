@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "regexp_substr#5cb59df0f0ef/ansi_on",
+      "reason": "SELECT regexp_substr(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#5cb59df0f0ef/ansi_off",
+      "reason": "SELECT regexp_substr(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#77e7335bfb95/ansi_on",
+      "reason": "SELECT regexp_substr(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#77e7335bfb95/ansi_off",
+      "reason": "SELECT regexp_substr(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#8231e7fc3dac/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#8231e7fc3dac/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#892ffdc712e7/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#892ffdc712e7/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "regexp_substr"
+}

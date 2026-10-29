@@ -11,7 +11,7 @@ Paths are relative to this crate.
 - `src/config/registry.rs` typed registry of the `krishiv.*` keys (the source for the generated config docs)
 - `src/config/mod.rs` configuration types and lookup
 - `src/experimental.rs` `krishiv.experimental.*` gating
-- `src/error/mod.rs` error type carrying a Spark error class and SQLSTATE; `src/error/template.rs` message templates
+- `src/error/mod.rs` error type carrying a Spark error class and SQLSTATE; `src/error/template.rs` message templates; `src/error/render.rs` `render_with_context` (message plus the SQL span: the summary text is engine-defined, the offsets follow the Spark 4.2.0 goldens)
 - `build.rs` generates the error registry from `vendored/spark-error-conditions.json` and `krishiv-error-classes.json`
 - `src/secret/mod.rs` typed secrets; `OptionValue::from_user` is the single classifier (ADR 0038)
 - `src/redact.rs` redaction of untyped free text

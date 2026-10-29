@@ -49,7 +49,7 @@ use krishiv_kernels::{KernelCtx, SparkVersion};
 use krishiv_types::DataType;
 
 use super::fold_ops;
-use super::{Constant, SparkProfile};
+use super::{Constant, FunctionRegistry, SparkProfile};
 use crate::{
     Builtin, CastMode, Expr, ExprNode, FunctionId, Literal, ResolvedExpr, ResolvedFunction,
 };
@@ -61,6 +61,11 @@ pub(super) struct Conf {
     pub ansi: bool,
     /// `spark.sql.decimalOperations.allowPrecisionLoss`.
     pub decimal_loss: bool,
+    /// The session time zone as a fixed offset in seconds, when it is one.
+    /// UDFs folding over literals see it in their [`InvokeContext`](krishiv_udf_sdk::InvokeContext).
+    pub zone: Option<i32>,
+    /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`.
+    pub map_key_dedup_last_win: bool,
     /// The kernels' context: the session's Spark line, whose error classes
     /// and messages the kernels raise.
     pub kernel: KernelCtx,
@@ -68,7 +73,13 @@ pub(super) struct Conf {
 
 impl Conf {
     /// The settings of a session on `profile`.
-    pub(super) fn new(ansi: bool, decimal_loss: bool, profile: SparkProfile) -> Self {
+    pub(super) fn new(
+        ansi: bool,
+        decimal_loss: bool,
+        map_key_dedup_last_win: bool,
+        profile: SparkProfile,
+        zone: Option<i32>,
+    ) -> Self {
         // The kernels model 4.0 as their oldest line; 3.5 behaves as it.
         let version = match profile {
             SparkProfile::V3_5 | SparkProfile::V4_0 => SparkVersion::V4_0,
@@ -78,6 +89,8 @@ impl Conf {
         Self {
             ansi,
             decimal_loss,
+            zone,
+            map_key_dedup_last_win,
             kernel: KernelCtx::new().with_spark_version(version),
         }
     }
@@ -89,7 +102,7 @@ type Folded = Option<Result<ArrayRef, KrishivError>>;
 
 /// What a folded node's value depends on besides the node: its address
 /// and the settings it was folded under.
-type Key = (usize, bool, bool, SparkVersion);
+type Key = (usize, bool, bool, bool, SparkVersion, Option<i32>);
 
 /// The values of the expressions folded so far in one resolver pass, by
 /// node address. Folding a call folds its arguments, and `Resolver::expr`
@@ -113,14 +126,25 @@ pub(super) const fn is_literal(e: &Expr) -> bool {
 /// timestamp, which never folds here) has no [`Constant`]: it is not a
 /// value the typing rules read, so it is not a constant rather than an
 /// error, while the calls evaluated from it still fold.
-pub(super) fn constant(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Option<Constant> {
+///
+/// Session UDFs fold through `functions`: a deterministic scalar UDF call
+/// of literal arguments invokes its implementation here; a failure folds
+/// to [`Constant::Error`], the analyzer's raising-literal form, so the
+/// error surfaces when the plan runs the call (or when an outer function
+/// reads the value, as with built-ins).
+pub(super) fn constant(
+    e: &Arc<Expr>,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Option<Constant> {
     match &e.node {
         ExprNode::Literal(Literal::Null(_)) => return Some(Constant::Null),
         ExprNode::Literal(Literal::Boolean(v)) => return Some(Constant::Boolean(*v)),
         ExprNode::Literal(Literal::String(v)) => return Some(Constant::String(v.clone())),
         _ => {}
     }
-    let folded = fold(e, conf, memo)?;
+    let folded = fold(e, conf, memo, functions)?;
     let array = match folded {
         Err(e) => return Some(Constant::Error(e)),
         Ok(a) => a,
@@ -203,18 +227,23 @@ fn unsupported() -> KrishivError {
 
 /// `e` as a one-row array: `None` when it is not foldable here. Every
 /// `STEP` levels run on a fresh stack (see `Resolver::rel`).
-fn fold(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
+fn fold(e: &Arc<Expr>, conf: Conf, memo: &mut Memo, functions: &dyn FunctionRegistry) -> Folded {
     memo.depth += 1;
     let r = if memo.depth.is_multiple_of(STEP) {
-        on_big_stack(|| fold_on_stack(e, conf, memo)).unwrap_or(None)
+        on_big_stack(|| fold_on_stack(e, conf, memo, functions)).unwrap_or(None)
     } else {
-        fold_on_stack(e, conf, memo)
+        fold_on_stack(e, conf, memo, functions)
     };
     memo.depth -= 1;
     r
 }
 
-fn fold_on_stack(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
+fn fold_on_stack(
+    e: &Arc<Expr>,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
     if let ExprNode::Literal(l) = &e.node {
         return literal(l).map(Ok);
     }
@@ -222,22 +251,31 @@ fn fold_on_stack(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
         Arc::as_ptr(e) as usize,
         conf.ansi,
         conf.decimal_loss,
+        conf.map_key_dedup_last_win,
         conf.kernel.spark_version(),
+        conf.zone,
     );
     if let Some((_, hit)) = memo.map.get(&key) {
         return hit.clone();
     }
     let folded = match &e.node {
-        ExprNode::Cast { expr, to, mode: m } => fold_cast(expr, to, *m, conf, memo),
-        ExprNode::Resolved(ResolvedExpr::Function(f)) => call(f, conf, memo),
+        ExprNode::Cast { expr, to, mode: m } => fold_cast(expr, to, *m, conf, memo, functions),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => call(f, conf, memo, functions),
         _ => None,
     };
     memo.map.insert(key, (Arc::clone(e), folded.clone()));
     folded
 }
 
-fn fold_cast(expr: &Arc<Expr>, to: &DataType, m: CastMode, conf: Conf, memo: &mut Memo) -> Folded {
-    let inner = match fold(expr, conf, memo)? {
+fn fold_cast(
+    expr: &Arc<Expr>,
+    to: &DataType,
+    m: CastMode,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
+    let inner = match fold(expr, conf, memo, functions)? {
         // The executor reads strings through their `Utf8` carrier too.
         Ok(a) => normalized(a),
         Err(e) => return Some(Err(e)),
@@ -295,20 +333,75 @@ fn kids(
     f: &ResolvedFunction,
     conf: Conf,
     memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
 ) -> Option<Vec<Result<ArrayRef, KrishivError>>> {
     // Stops at the first argument that is not foldable (a column), so a
     // deep non-constant tree costs one descent, not an evaluation.
-    f.args.iter().map(|a| fold(a, conf, memo)).collect()
+    f.args
+        .iter()
+        .map(|a| fold(a, conf, memo, functions))
+        .collect()
 }
 
-fn call(f: &ResolvedFunction, conf: Conf, memo: &mut Memo) -> Folded {
+fn call(
+    f: &ResolvedFunction,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
     if !f.deterministic || f.distinct || f.filter.is_some() || f.kind != FunctionKind::Scalar {
         return None;
     }
-    let kids = kids(f, conf, memo)?;
     match &f.id {
-        FunctionId::Builtin(b) => operator(*b, f, kids, conf),
-        FunctionId::Registry { name, .. } => registry(name, f, kids, conf),
+        FunctionId::Builtin(b) => {
+            let kids = kids(f, conf, memo, functions)?;
+            operator(*b, f, kids, conf)
+        }
+        FunctionId::Registry { name, .. } => {
+            let kids = kids(f, conf, memo, functions)?;
+            registry(name, f, kids, conf)
+        }
+        FunctionId::Udf { name, version } => udf(name, *version, f, conf, memo, functions),
+    }
+}
+
+/// A deterministic scalar session-UDF call of foldable arguments, invoked
+/// through the same binding execution uses. A nondeterministic UDF, a
+/// non-foldable argument, an unknown version or a failure to bind never
+/// folds; a bound call that fails folds to its error (the analyzer's
+/// raising-literal form).
+fn udf(
+    name: &str,
+    version: u32,
+    f: &ResolvedFunction,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
+    let udf = functions.resolve_udf(name, version)?;
+    // Folded (not syntactic) arguments, as for built-ins: casts and nested
+    // calls fold, and an argument error propagates.
+    let kids = kids(f, conf, memo, functions)?;
+    let literals = match values(kids) {
+        Ok(a) => a,
+        Err(e) => return Some(Err(e)),
+    };
+    let literals: Vec<ArrayRef> = literals.into_iter().map(normalized).collect();
+    let arg_types: Vec<ArrowType> = literals.iter().map(|a| a.data_type().clone()).collect();
+    let bound = krishiv_functions::scalar::bind_udf(
+        &udf,
+        &arg_types,
+        &f.data_type,
+        f.nullable,
+        conf.ansi,
+        conf.zone,
+    )
+    .ok()?;
+    let literals: Vec<Arg> = literals.into_iter().map(Arg::Scalar).collect();
+    match bound.invoke(&literals, 1) {
+        Ok(a) => Some(Ok(normalized(a))),
+        Err(e) if e.error_class() == ErrorClass::KrishivUnsupportedFeature => None,
+        Err(e) => Some(Err(e)),
     }
 }
 
@@ -480,10 +573,17 @@ fn registry(
     {
         return None;
     }
+    use krishiv_kernels::map::DedupPolicy;
+    let policy = if conf.map_key_dedup_last_win {
+        DedupPolicy::LastWin
+    } else {
+        DedupPolicy::Exception
+    };
     let opts = BindOptions::new()
         .with_kernel(conf.kernel)
         .with_ansi(conf.ansi)
-        .with_decimal_precision_loss(conf.decimal_loss);
+        .with_decimal_precision_loss(conf.decimal_loss)
+        .with_map_key_dedup_policy(policy);
     let bind: Vec<BindArg> = args.iter().cloned().map(BindArg::Literal).collect();
     let run = bind_scalar(name, &bind, &opts).and_then(|func| {
         let call: Vec<Arg> = args.into_iter().map(Arg::Scalar).collect();
@@ -547,12 +647,14 @@ mod tests {
     use krishiv_types::DecimalType;
 
     use super::*;
+    use crate::analyzer::{BuiltinFunctions, FunctionLookup};
 
     fn constant(e: &Expr, ansi: bool) -> Option<Constant> {
         super::constant(
             &Arc::new(e.clone()),
-            Conf::new(ansi, true, SparkProfile::V4_2),
+            Conf::new(ansi, true, false, SparkProfile::V4_2, None),
             &mut Memo::default(),
+            &BuiltinFunctions::new(),
         )
     }
 
@@ -804,6 +906,265 @@ mod tests {
         )
     }
 
+    fn udf(name: &str, version: u32, args: Vec<Expr>, deterministic: bool) -> Expr {
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Udf {
+                    name: name.to_owned(),
+                    version,
+                },
+                kind: FunctionKind::Scalar,
+                args: args.into_iter().map(Arc::new).collect(),
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: true,
+                deterministic,
+            },
+        )))
+    }
+
+    /// `x + 1` over `INT`, deterministic or not, failing at version 9.
+    #[derive(Debug)]
+    struct TestUdf {
+        name: &'static str,
+        version: u32,
+        deterministic: bool,
+    }
+
+    impl krishiv_udf_sdk::ScalarUdf for TestUdf {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn version(&self) -> u32 {
+            self.version
+        }
+
+        fn signature(&self) -> &krishiv_udf_sdk::Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<krishiv_udf_sdk::Signature> = OnceLock::new();
+            SIG.get_or_init(|| {
+                krishiv_udf_sdk::Signature::Exact(vec![krishiv_udf_sdk::UdfInputType::Exact(
+                    DataType::Integer,
+                )])
+            })
+        }
+
+        fn return_field(
+            &self,
+            _: &[krishiv_udf_sdk::ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Ok(krishiv_udf_sdk::ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn properties(&self) -> krishiv_udf_sdk::UdfProperties {
+            krishiv_udf_sdk::UdfProperties {
+                deterministic: self.deterministic,
+                null_handling: krishiv_udf_sdk::NullHandling::Strict,
+            }
+        }
+
+        fn invoke(
+            &self,
+            args: &[krishiv_udf_sdk::UdfArg<'_>],
+            rows: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<ArrayRef, krishiv_udf_sdk::UdfError> {
+            use arrow_array::Int32Array;
+            if self.version == 9 {
+                return Err(krishiv_udf_sdk::UdfError::new("test failure"));
+            }
+            let input = args[0].array();
+            let input = input
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or_else(|| krishiv_udf_sdk::UdfError::new("needs INT"))?;
+            assert_eq!(
+                input.len(),
+                if matches!(args[0], krishiv_udf_sdk::UdfArg::Scalar(_)) {
+                    1
+                } else {
+                    rows
+                }
+            );
+            Ok(Arc::new(
+                input
+                    .iter()
+                    .map(|v| v.map(|v| v.wrapping_add(1)))
+                    .collect::<Int32Array>(),
+            ))
+        }
+    }
+
+    /// A registry hosting `TestUdf` at versions 2 (deterministic) and 3
+    /// (nondeterministic), plus a failing version 9.
+    #[derive(Debug, Default)]
+    struct TestUdfs {
+        library: krishiv_udf_sdk::UdfLibrary,
+    }
+
+    impl TestUdfs {
+        fn new() -> Self {
+            let library = krishiv_udf_sdk::UdfLibrary::new();
+            for (name, version, deterministic) in [
+                ("test_udf", 2, true),
+                ("test_udf_nondet", 3, false),
+                ("test_udf_failing", 9, true),
+            ] {
+                library
+                    .register(Arc::new(TestUdf {
+                        name,
+                        version,
+                        deterministic,
+                    }))
+                    .unwrap();
+            }
+            Self { library }
+        }
+    }
+
+    impl FunctionRegistry for TestUdfs {
+        fn lookup(&self, _name: &[String], _profile: SparkProfile) -> FunctionLookup {
+            FunctionLookup::NotFound
+        }
+
+        fn resolve_udf(
+            &self,
+            name: &str,
+            version: u32,
+        ) -> Option<Arc<dyn krishiv_udf_sdk::ScalarUdf>> {
+            self.library.get_versioned(name, version)
+        }
+
+        fn version(&self) -> u64 {
+            self.library.version()
+        }
+    }
+
+    fn fold_udf(name: &str, version: u32, deterministic: bool) -> Option<Constant> {
+        super::constant(
+            &Arc::new(udf(name, version, vec![int(41)], deterministic)),
+            Conf::new(true, true, false, SparkProfile::V4_2, None),
+            &mut Memo::default(),
+            &TestUdfs::new(),
+        )
+    }
+
+    /// A deterministic UDF call of literals folds through the binding; a
+    /// failure folds to the raising-literal form, and anything else does
+    /// not fold.
+    #[test]
+    fn udf_calls_fold_like_builtin_calls() {
+        // `test_udf@2` is deterministic: folds to its value.
+        assert_eq!(fold_udf("test_udf", 2, true), Some(Constant::Integral(42)));
+        // `test_udf_nondet@3` is nondeterministic: never folds.
+        assert_eq!(fold_udf("test_udf_nondet", 3, false), None);
+        // An unregistered version never folds.
+        assert_eq!(fold_udf("test_udf", 4, true), None);
+        // A failure folds to the raising-literal form.
+        assert_eq!(
+            class(fold_udf("test_udf_failing", 9, true)),
+            Some(ErrorClass::FailedExecuteUdf)
+        );
+        // A non-literal argument never folds.
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec!["a".to_owned()],
+            plan_id: None,
+        }));
+        assert_eq!(
+            super::constant(
+                &Arc::new(udf("test_udf", 2, vec![col], true)),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
+                &mut Memo::default(),
+                &TestUdfs::new(),
+            ),
+            None
+        );
+        // A cast of a literal folds first, as for built-ins (implicit
+        // casts no longer block folding).
+        assert_eq!(
+            super::constant(
+                &Arc::new(udf(
+                    "test_udf",
+                    2,
+                    vec![cast_of(lit(Literal::Short(41)), DataType::Integer)],
+                    true
+                )),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
+                &mut Memo::default(),
+                &TestUdfs::new(),
+            ),
+            Some(Constant::Integral(42))
+        );
+        // A nested UDF call folds first too.
+        assert_eq!(
+            super::constant(
+                &Arc::new(udf(
+                    "test_udf",
+                    2,
+                    vec![udf("test_udf", 2, vec![int(41)], true)],
+                    true
+                )),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
+                &mut Memo::default(),
+                &TestUdfs::new(),
+            ),
+            Some(Constant::Integral(43))
+        );
+        // An argument that folds to an error propagates, as for built-ins.
+        assert_eq!(
+            class(super::constant(
+                &Arc::new(udf(
+                    "test_udf",
+                    2,
+                    vec![udf("test_udf_failing", 9, vec![int(41)], true)],
+                    true
+                )),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
+                &mut Memo::default(),
+                &TestUdfs::new(),
+            )),
+            Some(ErrorClass::FailedExecuteUdf)
+        );
+        // The fixtures expose their contracts directly.
+        let registry = TestUdfs::new();
+        assert!(matches!(
+            registry.lookup(&["anything".to_owned()], SparkProfile::V4_2),
+            FunctionLookup::NotFound
+        ));
+        assert!(registry.version() > 0);
+        let udf_impl = TestUdf {
+            name: "test_udf",
+            version: 2,
+            deterministic: true,
+        };
+        assert_eq!(krishiv_udf_sdk::ScalarUdf::name(&udf_impl), "test_udf");
+        assert_eq!(krishiv_udf_sdk::ScalarUdf::version(&udf_impl), 2);
+        let field = krishiv_udf_sdk::ScalarUdf::return_field(&udf_impl, &[]).unwrap();
+        assert_eq!(field.data_type, DataType::Integer);
+        assert!(field.nullable);
+        let props = krishiv_udf_sdk::ScalarUdf::properties(&udf_impl);
+        assert!(props.deterministic);
+        // The column path reports its rows.
+        let array: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1, 2]));
+        let out = krishiv_udf_sdk::ScalarUdf::invoke(
+            &udf_impl,
+            &[krishiv_udf_sdk::UdfArg::Column(&array)],
+            2,
+            &krishiv_udf_sdk::InvokeContext {
+                partition: 0,
+                ansi: true,
+                time_zone: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
+    }
+
     fn int(v: i32) -> Expr {
         lit(Literal::Integer(v))
     }
@@ -851,17 +1212,20 @@ mod tests {
                 },
             ))));
         }
-        let conf = Conf::new(false, true, SparkProfile::V4_2);
+        let conf = Conf::new(false, true, false, SparkProfile::V4_2, None);
         let mut memo = Memo::default();
         // 2 * 2^200 wraps to 0 in legacy mode: the value is the kernels'.
-        let first = super::constant(&e, conf, &mut memo);
+        let first = super::constant(&e, conf, &mut memo, &BuiltinFunctions::new());
         assert!(first.is_some());
         assert_eq!(memo.map.len(), depth + 1, "one entry per distinct node");
-        assert_eq!(super::constant(&e, conf, &mut memo), first);
+        assert_eq!(
+            super::constant(&e, conf, &mut memo, &BuiltinFunctions::new()),
+            first
+        );
         assert_eq!(memo.map.len(), depth + 1);
         // Another setting folds under its own entries.
-        let ansi = Conf::new(true, true, SparkProfile::V4_2);
-        let _ = super::constant(&e, ansi, &mut memo);
+        let ansi = Conf::new(true, true, false, SparkProfile::V4_2, None);
+        let _ = super::constant(&e, ansi, &mut memo, &BuiltinFunctions::new());
         assert_eq!(memo.map.len(), 2 * (depth + 1));
     }
 
@@ -876,8 +1240,9 @@ mod tests {
         ));
         let class = |profile| match super::constant(
             &rem,
-            Conf::new(true, true, profile),
+            Conf::new(true, true, false, profile, None),
             &mut Memo::default(),
+            &BuiltinFunctions::new(),
         ) {
             Some(Constant::Error(e)) => e.error_class(),
             other => panic!("{other:?}"),
@@ -1244,10 +1609,10 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(move || {
-                let conf = Conf::new(false, true, SparkProfile::V4_2);
+                let conf = Conf::new(false, true, false, SparkProfile::V4_2, None);
                 let mut memo = Memo::default();
                 assert_eq!(
-                    super::constant(&e, conf, &mut memo),
+                    super::constant(&e, conf, &mut memo, &BuiltinFunctions::new()),
                     Some(Constant::Integral(crate::MAX_DEPTH as i64 - 1))
                 );
             })

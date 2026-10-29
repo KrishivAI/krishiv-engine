@@ -1,0 +1,27 @@
+{
+  "cases": {
+    "depends-on-command": [
+      28,
+      29,
+      30,
+      31,
+      32
+    ],
+    "query-features": [
+      6,
+      7,
+      8,
+      9,
+      33,
+      34,
+      35,
+      36,
+      44,
+      45,
+      46,
+      49
+    ]
+  },
+  "file": "having",
+  "format_version": 1
+}

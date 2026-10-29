@@ -67,6 +67,16 @@ pub struct ExprEnv {
     pub query_start_micros: i64,
     #[prost(string, tag = "4")]
     pub user: ::prost::alloc::string::String,
+    /// feature: legacy_statistical_aggregate
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+    /// give NaN instead of NULL where Spark divides by zero.
+    #[prost(bool, tag = "5")]
+    pub legacy_statistical_aggregate: bool,
+    /// The session's map-key dedup policy: a worker without the feature keeps
+    /// the first value on duplicate map keys.
+    /// feature: map_key_dedup_policy
+    #[prost(bool, optional, tag = "6")]
+    pub map_key_dedup_last_win: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
@@ -81,7 +91,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -126,7 +136,25 @@ pub mod node {
         /// feature: window_group_limit
         #[prost(message, tag = "17")]
         WindowGroupLimit(super::WindowGroupLimitNode),
+        /// feature: range
+        #[prost(message, tag = "18")]
+        Range(super::RangeNode),
     }
+}
+/// feature: range
+/// `range(start, end, step, numSlices)`: one `id BIGINT NOT NULL` column.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RangeNode {
+    #[prost(sint64, tag = "1")]
+    pub start: i64,
+    #[prost(sint64, tag = "2")]
+    pub end: i64,
+    #[prost(sint64, tag = "3")]
+    pub step: i64,
+    #[prost(uint32, optional, tag = "4")]
+    pub num_slices: ::core::option::Option<u32>,
+    #[prost(uint64, tag = "5")]
+    pub output: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Empty {}
@@ -433,6 +461,11 @@ pub struct AggregateExpr {
     pub arg_type: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, tag = "6")]
     pub name: ::prost::alloc::string::String,
+    /// A boolean input column the aggregate is restricted to
+    /// (`FILTER (WHERE ...)`); absent reads all rows.
+    /// feature: aggregate_filter
+    #[prost(uint64, optional, tag = "7")]
+    pub mask: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {
@@ -463,6 +496,17 @@ pub struct HashJoinNode {
     /// `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
     #[prost(enumeration = "JoinDistribution", tag = "9")]
     pub distribution: i32,
+    /// A left outer join that fails when a probe row matches more than once
+    /// (a correlated scalar subquery without an aggregate); only `LeftOuter`
+    /// joins set it.
+    /// feature: join_single_match
+    #[prost(bool, tag = "10")]
+    pub single_match: bool,
+    /// The build may keep each key once: only on a left semi, left anti or
+    /// existence join without a residual.
+    /// ignorable: a reader without it builds every row, with the same result.
+    #[prost(bool, tag = "11")]
+    pub distinct_build: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
@@ -506,10 +550,37 @@ pub struct UnionNode {
     #[prost(uint32, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<u32>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WriteFilesNode {
     #[prost(uint32, tag = "1")]
     pub input: u32,
+    /// feature: write_plan
+    /// What the write writes (format, store, directory, job id, limits).
+    #[prost(message, optional, tag = "2")]
+    pub write: ::core::option::Option<WritePlan>,
+}
+/// feature: write_plan
+/// A file write as plan data: the sink is built at instantiation from this
+/// with the task's partition and attempt.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WritePlan {
+    #[prost(string, tag = "1")]
+    pub format: ::prost::alloc::string::String,
+    #[prost(btree_map = "string, message", tag = "2")]
+    pub options: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        OptionValue,
+    >,
+    #[prost(string, tag = "3")]
+    pub store: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub dir: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub job_uuid: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "6")]
+    pub max_records_per_file: u64,
+    #[prost(uint64, tag = "7")]
+    pub target_file_bytes: u64,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -546,6 +617,10 @@ pub mod partitioning {
 pub struct HashPartitioning {
     #[prost(uint64, repeated, tag = "1")]
     pub keys: ::prost::alloc::vec::Vec<u64>,
+    /// feature: key_group_hash (when not UNPINNED)
+    /// The routing function. Absent in plans written before it was named.
+    #[prost(enumeration = "HashScheme", tag = "2")]
+    pub scheme: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RangePartitioning {
@@ -695,7 +770,7 @@ pub struct BoundColumn {
 pub struct Expr {
     #[prost(message, optional, tag = "1")]
     pub origin: ::core::option::Option<Origin>,
-    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10")]
     pub kind: ::core::option::Option<expr::Kind>,
 }
 /// Nested message and enum types in `Expr`.
@@ -714,7 +789,26 @@ pub mod expr {
         Cast(super::Cast),
         #[prost(message, tag = "7")]
         Alias(super::AliasExpr),
+        /// feature: struct_field
+        #[prost(message, tag = "8")]
+        Field(super::FieldExpr),
+        /// feature: lambda_functions
+        #[prost(message, tag = "9")]
+        Lambda(super::Lambda),
+        /// feature: lambda_functions
+        #[prost(message, tag = "10")]
+        LambdaVar(super::BoundColumn),
     }
+}
+/// A lambda (`x -> body`): the bound body of a higher-order function's
+/// argument, with its variables as `lambda_var` leaves.
+/// feature: lambda_functions
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Lambda {
+    #[prost(message, repeated, tag = "1")]
+    pub params: ::prost::alloc::vec::Vec<BoundColumn>,
+    #[prost(uint32, tag = "2")]
+    pub body: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AliasExpr {
@@ -723,7 +817,22 @@ pub struct AliasExpr {
     #[prost(message, optional, tag = "2")]
     pub output: ::core::option::Option<BoundColumn>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+/// A struct field: the field `name` at `ordinal` of the struct `base`.
+/// feature: struct_field
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FieldExpr {
+    #[prost(uint32, tag = "1")]
+    pub base: u32,
+    #[prost(uint32, tag = "2")]
+    pub ordinal: u32,
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "5")]
+    pub nullable: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Cast {
     #[prost(uint32, tag = "1")]
     pub expr: u32,
@@ -748,19 +857,24 @@ pub struct Function {
     pub nullable: bool,
     #[prost(bool, tag = "9")]
     pub deterministic: bool,
-    /// A canonical operator name (`==`, `and`, ...), or a registry function.
-    #[prost(oneof = "function::Id", tags = "1, 2")]
+    /// A canonical operator name (`==`, `and`, ...), a registry function, or
+    /// a session UDF.
+    #[prost(oneof = "function::Id", tags = "1, 2, 10")]
     pub id: ::core::option::Option<function::Id>,
 }
 /// Nested message and enum types in `Function`.
 pub mod function {
-    /// A canonical operator name (`==`, `and`, ...), or a registry function.
+    /// A canonical operator name (`==`, `and`, ...), a registry function, or
+    /// a session UDF.
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Id {
         #[prost(string, tag = "1")]
         Builtin(::prost::alloc::string::String),
         #[prost(message, tag = "2")]
         Registry(super::RegistryFunction),
+        /// feature: rust_udf
+        #[prost(message, tag = "10")]
+        Udf(super::UdfFunction),
     }
 }
 /// A function of the registry, by name and registry id. A worker must run
@@ -772,16 +886,36 @@ pub struct RegistryFunction {
     #[prost(uint32, tag = "2")]
     pub id: u32,
 }
+/// A session-registered native Rust UDF, by name and implementation
+/// version. A worker must hold the same version to run the plan.
+/// feature: rust_udf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UdfFunction {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub version: u64,
+}
 /// A Spark type.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
-    /// `KIND_DECIMAL` only.
+    /// `KIND_DECIMAL` and `KIND_TIME` only.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
+    /// `KIND_DECIMAL` only.
     #[prost(uint32, tag = "3")]
     pub scale: u32,
+    /// feature: nested_types
+    /// `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+    /// (`DataType.json`), which keeps nullability and field metadata.
+    #[prost(string, tag = "4")]
+    pub json: ::prost::alloc::string::String,
+    /// feature: geo_types
+    /// `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
+    #[prost(int32, tag = "5")]
+    pub srid: i32,
 }
 /// Nested message and enum types in `DataType`.
 pub mod data_type {
@@ -813,6 +947,14 @@ pub mod data_type {
         Date = 12,
         Timestamp = 13,
         TimestampNtz = 14,
+        /// feature: nested_types
+        Nested = 15,
+        /// feature: time_type
+        Time = 16,
+        /// feature: geo_types
+        Geometry = 17,
+        /// feature: geo_types
+        Geography = 18,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -836,6 +978,10 @@ pub mod data_type {
                 Self::Date => "KIND_DATE",
                 Self::Timestamp => "KIND_TIMESTAMP",
                 Self::TimestampNtz => "KIND_TIMESTAMP_NTZ",
+                Self::Nested => "KIND_NESTED",
+                Self::Time => "KIND_TIME",
+                Self::Geometry => "KIND_GEOMETRY",
+                Self::Geography => "KIND_GEOGRAPHY",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -856,6 +1002,10 @@ pub mod data_type {
                 "KIND_DATE" => Some(Self::Date),
                 "KIND_TIMESTAMP" => Some(Self::Timestamp),
                 "KIND_TIMESTAMP_NTZ" => Some(Self::TimestampNtz),
+                "KIND_NESTED" => Some(Self::Nested),
+                "KIND_TIME" => Some(Self::Time),
+                "KIND_GEOMETRY" => Some(Self::Geometry),
+                "KIND_GEOGRAPHY" => Some(Self::Geography),
                 _ => None,
             }
         }
@@ -907,7 +1057,7 @@ pub mod literal {
         DayTime(super::DayTimeLiteral),
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NullLiteral {
     #[prost(message, optional, tag = "1")]
     pub data_type: ::core::option::Option<DataType>,
@@ -1184,6 +1334,10 @@ pub enum JoinType {
     RightAnti = 7,
     /// feature: join_build_preserved
     RightOuter = 8,
+    /// Spark's `ExistenceJoin`: every probe row once, plus a non-nullable
+    /// boolean `exists` (some build row matched).
+    /// feature: existence_join
+    Existence = 9,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1201,6 +1355,7 @@ impl JoinType {
             Self::RightSemi => "JOIN_TYPE_RIGHT_SEMI",
             Self::RightAnti => "JOIN_TYPE_RIGHT_ANTI",
             Self::RightOuter => "JOIN_TYPE_RIGHT_OUTER",
+            Self::Existence => "JOIN_TYPE_EXISTENCE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1215,6 +1370,7 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_SEMI" => Some(Self::RightSemi),
             "JOIN_TYPE_RIGHT_ANTI" => Some(Self::RightAnti),
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
+            "JOIN_TYPE_EXISTENCE" => Some(Self::Existence),
             _ => None,
         }
     }
@@ -1244,6 +1400,38 @@ impl JoinDistribution {
             "JOIN_DISTRIBUTION_UNSPECIFIED" => Some(Self::Unspecified),
             "JOIN_DISTRIBUTION_BROADCAST" => Some(Self::Broadcast),
             "JOIN_DISTRIBUTION_PARTITIONED" => Some(Self::Partitioned),
+            _ => None,
+        }
+    }
+}
+/// feature: key_group_hash
+/// The function a hash exchange routes rows by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum HashScheme {
+    /// No function named (older plans): the exchange is only lowered on one
+    /// worker and never routes.
+    Unpinned = 0,
+    /// Key-group ranges of the routing hash H_kg version 1: XXH64, seed 0, of
+    /// the normalized key bytes, folded over several key columns.
+    KeyGroupV1 = 1,
+}
+impl HashScheme {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unpinned => "HASH_SCHEME_UNPINNED",
+            Self::KeyGroupV1 => "HASH_SCHEME_KEY_GROUP_V1",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "HASH_SCHEME_UNPINNED" => Some(Self::Unpinned),
+            "HASH_SCHEME_KEY_GROUP_V1" => Some(Self::KeyGroupV1),
             _ => None,
         }
     }

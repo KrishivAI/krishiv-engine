@@ -1,0 +1,13 @@
+{
+  "category": "coercion",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature implicit string casts",
+      "order": 290
+    }
+  ],
+  "summary": "full Spark type coercion (implicit string casts with ANSI off)",
+  "task": "P2-T071d"
+}

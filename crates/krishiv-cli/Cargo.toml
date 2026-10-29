@@ -24,6 +24,7 @@ krishiv-memory = { path = "../krishiv-memory", optional = true }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }
 krishiv-common = { path = "../krishiv-common" }
+serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -49,4 +50,10 @@ wasm-udf = ["krishiv/wasm-udf"]
 ui = ["krishiv/ui", "dep:krishiv-server"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishiv-memory"]
+# Live async-task diagnostics over `tokio-console` (P2-T129): off by default;
+# needs `RUSTFLAGS="--cfg tokio_unstable"` for the task names.
+tokio-console = ["krishiv/tokio-console"]
+# Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
+# inside the dependency and binary-size budgets.
+cloud = ["krishiv/cloud"]
 full = ["krishiv/full"]

@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-session/tests/error_context.rs
+expression: "render_with_context(&e, sql)"
+---
+[PARSE_SYNTAX_ERROR] Syntax error at or near 't': extra input 't'. SQLSTATE: 42601
+== SQL (line 2, position 6) ==
+FORM t
+     ^

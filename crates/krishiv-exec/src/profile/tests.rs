@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only fixture read; never runs on a compute worker"
+)]
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -17,9 +21,11 @@ use crate::physical::{ExprEnv, PhysNode};
 fn env() -> ExprEnv {
     ExprEnv {
         ansi: true,
+        legacy_statistical_aggregate: false,
         zone: Some(0),
         query_start_micros: 0,
         user: Arc::from("u"),
+        map_key_dedup_last_win: false,
     }
 }
 

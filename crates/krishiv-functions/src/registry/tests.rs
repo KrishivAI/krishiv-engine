@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_types::{DataType, DecimalType};
+use krishiv_common::error::{ErrorClass, InvalidOptionsNonMapFunction, KrishivError};
+use krishiv_types::{ArrayType, DataType, DecimalType};
 
 use super::{Aggregate, Execution, FunctionDef, Lookup, builtins};
 use crate::scalar::scalar_names;
@@ -81,15 +81,32 @@ fn every_scalar_definition_binds_and_every_binding_is_defined() {
 fn lookups_are_case_insensitive_and_versioned() {
     let r = builtins();
     assert!(matches!(r.lookup("UpPeR", SparkProfile::V3_5), Lookup::Found(d) if d.name == "upper"));
-    // `randstr` arrived in 4.0 and is not implemented.
+    // `randstr` arrived in 4.0 and is implemented.
     assert!(matches!(
         r.lookup("randstr", SparkProfile::V3_5),
         Lookup::NotFound
     ));
     assert!(matches!(
         r.lookup("RANDSTR", SparkProfile::V4_0),
-        Lookup::KnownUnsupported
+        Lookup::Found(_)
     ));
+    // So are `uniform` (4.0) and the misc functions.
+    for name in [
+        "uniform",
+        "uuid",
+        "typeof",
+        "version",
+        "current_database",
+        "current_catalog",
+        "monotonically_increasing_id",
+        "spark_partition_id",
+        "input_file_name",
+    ] {
+        assert!(
+            matches!(r.lookup(name, SparkProfile::V4_2), Lookup::Found(_)),
+            "{name}"
+        );
+    }
     assert!(matches!(
         r.lookup("no_such_fn", SparkProfile::V4_2),
         Lookup::NotFound
@@ -132,13 +149,21 @@ fn kinds_determinism_and_execution() {
         assert_eq!(d.execution, Execution::Evaluator, "{name}");
         assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
     }
-    for name in ["rand", "randn", "uuid", "shuffle"] {
-        // Not implemented here, but the optimizer's flag comes from Spark.
+    for name in ["rand", "randn", "uuid", "uniform", "randstr", "shuffle"] {
+        // The optimizer's flag comes from Spark; the implemented ones are
+        // nondeterministic scalar bindings (`shuffle` stays unimplemented:
+        // it needs an array type the engine has no representation for).
         assert_eq!(
             builtins().spark_function(name).unwrap().deterministic,
             Some(false),
             "{name}"
         );
+    }
+    for name in ["rand", "randn", "uuid", "uniform", "randstr"] {
+        let d = def(name);
+        assert!(!d.deterministic, "{name}");
+        assert_eq!(d.execution, Execution::Scalar, "{name}");
+        assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
     }
     for name in [
         "round", "pmod", "hash", "try_add", "greatest", "abs", "sha2",
@@ -273,6 +298,240 @@ fn datetime_signatures() {
     );
     assert_eq!(inputs(field("nope")).unwrap()[1], InputType::Any);
     assert_eq!(inputs(Some(Constant::Null)).unwrap()[1], InputType::Any);
+}
+
+#[test]
+fn calendar_signatures() {
+    let date = ty(DataType::Date);
+    let maybe = |t: DataType| ArgType::new(t, true);
+    let inputs = |name: &str, args: &[ArgType]| {
+        def(name)
+            .inputs
+            .expected(&CallTypes::new(args, &[]))
+            .unwrap()
+    };
+    // The accessors read a date and give an `int`, as nullable as the date.
+    for name in ["dayofweek", "dayofyear", "weekofyear", "weekday", "quarter"] {
+        assert_eq!(
+            result(name, std::slice::from_ref(&date), &[]).unwrap(),
+            ty(DataType::Integer)
+        );
+        assert_eq!(
+            result(name, &[maybe(DataType::Date)], &[]).unwrap(),
+            maybe(DataType::Integer)
+        );
+        assert_eq!(
+            inputs(name, std::slice::from_ref(&date)),
+            [InputType::Exact(DataType::Date)]
+        );
+    }
+    // The time fields read either timestamp; a date is cast to the first.
+    let any_ts = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    for name in ["hour", "minute", "second"] {
+        assert_eq!(
+            inputs(name, std::slice::from_ref(&date)),
+            std::slice::from_ref(&any_ts)
+        );
+        assert_eq!(
+            result(name, &[ty(DataType::TimestampNtz)], &[]).unwrap(),
+            ty(DataType::Integer)
+        );
+    }
+    for name in ["monthname", "dayname"] {
+        assert_eq!(
+            result(name, std::slice::from_ref(&date), &[]).unwrap(),
+            ty(DataType::String)
+        );
+        assert_eq!(
+            result(name, &[maybe(DataType::Date)], &[]).unwrap(),
+            maybe(DataType::String)
+        );
+    }
+    // `unix_date` casts nothing to a date.
+    assert_eq!(
+        inputs("unix_date", std::slice::from_ref(&date)),
+        [InputType::Strict(DataType::Date)]
+    );
+    assert_eq!(
+        result("unix_date", std::slice::from_ref(&date), &[]).unwrap(),
+        ty(DataType::Integer)
+    );
+    assert_eq!(
+        inputs("add_months", &[date.clone(), ty(DataType::Integer)]),
+        [
+            InputType::Exact(DataType::Date),
+            InputType::Exact(DataType::Integer)
+        ]
+    );
+    assert_eq!(
+        result("add_months", &[date.clone(), ty(DataType::Integer)], &[]).unwrap(),
+        date
+    );
+    assert_eq!(
+        result("last_day", std::slice::from_ref(&date), &[]).unwrap(),
+        date
+    );
+    // An unknown weekday or unit is NULL, so these are nullable whatever
+    // their arguments.
+    let text = ty(DataType::String);
+    for name in ["next_day", "trunc"] {
+        assert_eq!(
+            result(name, &[date.clone(), text.clone()], &[]).unwrap(),
+            maybe(DataType::Date)
+        );
+    }
+    assert_eq!(
+        result("date_trunc", &[text.clone(), ty(DataType::Timestamp)], &[]).unwrap(),
+        maybe(DataType::Timestamp)
+    );
+    // `date_trunc` and `months_between` keep a `TIMESTAMP_NTZ`; every other
+    // type is cast to (or refused as) `TIMESTAMP`.
+    let ntz = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    let ts = InputType::Exact(DataType::Timestamp);
+    assert_eq!(
+        inputs("date_trunc", &[text.clone(), ty(DataType::TimestampNtz)])[1],
+        ntz
+    );
+    assert_eq!(
+        inputs("date_trunc", &[text.clone(), ty(DataType::Date)])[1],
+        ts
+    );
+    let three = inputs(
+        "months_between",
+        &[ty(DataType::TimestampNtz), ty(DataType::Date)],
+    );
+    assert_eq!(
+        three,
+        [ntz.clone(), ts, InputType::Exact(DataType::Boolean)]
+    );
+    assert_eq!(
+        result(
+            "months_between",
+            &[ty(DataType::Timestamp), ty(DataType::Timestamp)],
+            &[]
+        )
+        .unwrap(),
+        ty(DataType::Double)
+    );
+    assert_eq!(
+        result(
+            "months_between",
+            &[ty(DataType::Timestamp), maybe(DataType::Timestamp)],
+            &[]
+        )
+        .unwrap(),
+        maybe(DataType::Double)
+    );
+    // `make_date` is NULL for an invalid date unless ANSI raises.
+    let ints = [
+        ty(DataType::Integer),
+        ty(DataType::Integer),
+        ty(DataType::Integer),
+    ];
+    let types = |ansi: bool| {
+        (def("make_date").result)(&CallTypes::new(&ints, &[]).with_ansi(ansi)).unwrap()
+    };
+    assert_eq!(types(true), date);
+    assert_eq!(types(false), maybe(DataType::Date));
+    assert_eq!(
+        inputs("make_date", &ints),
+        [InputType::Exact(DataType::Integer)]
+    );
+    // Zone conversions.
+    assert_eq!(
+        result(
+            "from_utc_timestamp",
+            &[ty(DataType::Timestamp), text.clone()],
+            &[]
+        )
+        .unwrap(),
+        ty(DataType::Timestamp)
+    );
+    assert_eq!(
+        inputs(
+            "to_utc_timestamp",
+            &[ty(DataType::TimestampNtz), text.clone()]
+        ),
+        [ntz, InputType::Exact(DataType::String)]
+    );
+    let wall = ty(DataType::TimestampNtz);
+    assert_eq!(
+        result(
+            "convert_timezone",
+            &[text.clone(), text.clone(), wall.clone()],
+            &[]
+        )
+        .unwrap(),
+        ty(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        inputs("convert_timezone", &[text.clone(), wall]),
+        [
+            InputType::Exact(DataType::String),
+            InputType::Exact(DataType::TimestampNtz)
+        ]
+    );
+    assert_eq!(
+        inputs(
+            "convert_timezone",
+            &[text.clone(), text, ty(DataType::Timestamp)]
+        )[2],
+        InputType::OneOf(vec![DataType::TimestampNtz, DataType::Timestamp])
+    );
+    // Availability and determinism come from Spark: `monthname` and `dayname`
+    // arrived in 4.0.
+    for name in ["monthname", "dayname"] {
+        assert!(matches!(
+            builtins().lookup(name, SparkProfile::V3_5),
+            Lookup::NotFound
+        ));
+        assert!(matches!(
+            builtins().lookup(name, SparkProfile::V4_0),
+            Lookup::Found(_)
+        ));
+    }
+    for name in [
+        "hour",
+        "minute",
+        "second",
+        "dayofweek",
+        "dayofyear",
+        "weekofyear",
+        "weekday",
+        "quarter",
+        "monthname",
+        "dayname",
+        "unix_date",
+        "add_months",
+        "last_day",
+        "next_day",
+        "trunc",
+        "date_trunc",
+        "months_between",
+        "make_date",
+        "from_utc_timestamp",
+        "to_utc_timestamp",
+        "convert_timezone",
+    ] {
+        assert!(def(name).deterministic, "{name}");
+        assert_eq!(def(name).execution, Execution::Scalar, "{name}");
+    }
+    // What stays unregistered is known to Spark, so it is not "not found".
+    for name in [
+        "make_timestamp",
+        "try_make_timestamp",
+        "make_timestamp_ltz",
+        "make_timestamp_ntz",
+        "make_interval",
+    ] {
+        assert!(
+            matches!(
+                builtins().lookup(name, SparkProfile::V4_2),
+                Lookup::KnownUnsupported
+            ),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -792,6 +1051,307 @@ fn session_and_clock_functions() {
         builtins().lookup("current_time", SparkProfile::V4_2),
         Lookup::KnownUnsupported
     ));
+    // `shuffle` needs an array type the engine has no representation for:
+    // it stays known-unsupported where Spark has it.
+    assert!(matches!(
+        builtins().lookup("shuffle", SparkProfile::V4_2),
+        Lookup::KnownUnsupported
+    ));
+}
+
+/// The misc and seeded-random signatures: arities, inputs and result types.
+#[test]
+fn misc_signatures() {
+    let (s, i, l) = (
+        ty(DataType::String),
+        ty(DataType::Integer),
+        ty(DataType::Long),
+    );
+    // The session constants and `version` take no arguments and are never
+    // NULL.
+    for name in [
+        "version",
+        "current_database",
+        "current_schema",
+        "current_catalog",
+        "input_file_name",
+        "monotonically_increasing_id",
+        "spark_partition_id",
+        "typeof",
+        "uuid",
+        "rand",
+        "random",
+        "randn",
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
+        assert_eq!(d.execution, Execution::Scalar, "{name}");
+    }
+    for name in [
+        "version",
+        "current_database",
+        "current_schema",
+        "current_catalog",
+    ] {
+        assert_eq!(result(name, &[], &[]).unwrap(), s, "{name}");
+        assert!(def(name).deterministic, "{name}");
+    }
+    // The file placeholders and partition functions are nondeterministic.
+    for name in [
+        "input_file_name",
+        "input_file_block_start",
+        "input_file_block_length",
+        "monotonically_increasing_id",
+        "spark_partition_id",
+    ] {
+        assert!(!def(name).deterministic, "{name}");
+    }
+    assert_eq!(result("input_file_name", &[], &[]).unwrap(), s);
+    assert_eq!(
+        result("input_file_block_start", &[], &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    assert_eq!(
+        result("input_file_block_length", &[], &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    assert_eq!(result("monotonically_increasing_id", &[], &[]).unwrap(), l);
+    assert_eq!(result("spark_partition_id", &[], &[]).unwrap(), i);
+    assert_eq!(result("typeof", std::slice::from_ref(&s), &[]).unwrap(), s);
+    // Never NULL, even for a nullable or untyped-NULL argument.
+    assert_eq!(result("typeof", &[null_ty()], &[]).unwrap(), s);
+    assert_eq!(
+        result("typeof", &[ArgType::new(DataType::String, true)], &[]).unwrap(),
+        s
+    );
+    assert_eq!(result("uuid", &[], &[]).unwrap(), s);
+    assert_eq!(result("rand", &[], &[]).unwrap(), ty(DataType::Double));
+    assert_eq!(
+        result(
+            "rand",
+            std::slice::from_ref(&l),
+            &[Some(Constant::Integral(0))]
+        )
+        .unwrap(),
+        ty(DataType::Double)
+    );
+    // A NULL seed reads as 0.
+    assert_eq!(
+        result("rand", &[null_ty()], &[Some(Constant::Null)]).unwrap(),
+        ty(DataType::Double)
+    );
+    // A short seed is the wrong type; a non-foldable one is refused.
+    let err = result(
+        "rand",
+        &[ty(DataType::Short)],
+        &[Some(Constant::Integral(1))],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("(\"INT\" or \"BIGINT\")"), "{err}");
+    let err = result("rand", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::SeedExpressionIsUnfoldable);
+    assert!(err.to_string().contains("must be foldable"), "{err}");
+    // `uuid` wants a plain literal.
+    let err = result("uuid", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidParameterValueLong);
+    assert!(err.to_string().contains("`UUID`"), "{err}");
+    // A non-integral literal is the wrong seed too.
+    let err = result(
+        "uuid",
+        &[ty(DataType::Double)],
+        &[Some(Constant::Fractional(1))],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidParameterValueLong);
+}
+
+/// `uniform` and `randstr`: the golden types and errors.
+#[test]
+fn uniform_and_randstr_signatures() {
+    let (i, l) = (ty(DataType::Integer), ty(DataType::Long));
+    let (ten, twenty, zero) = (
+        Some(Constant::Integral(10)),
+        Some(Constant::Integral(20)),
+        Some(Constant::Integral(0)),
+    );
+    // Integral bounds widen; the seed does not change the type.
+    assert_eq!(
+        result(
+            "uniform",
+            &[i.clone(), i.clone(), i.clone()],
+            &[ten.clone(), twenty.clone(), zero.clone()]
+        )
+        .unwrap(),
+        i
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[i.clone(), l.clone(), l.clone()],
+            &[ten.clone(), twenty.clone(), zero.clone()]
+        )
+        .unwrap(),
+        l
+    );
+    // A NULL bound is a NULL double; a NULL seed reads as 0.
+    assert_eq!(
+        result(
+            "uniform",
+            &[null_ty(), i.clone(), i.clone()],
+            &[Some(Constant::Null), twenty.clone(), zero.clone()]
+        )
+        .unwrap(),
+        ArgType::new(DataType::Double, true)
+    );
+    // Narrower integrals widen; decimals meet at the wider.
+    assert_eq!(
+        result(
+            "uniform",
+            &[ty(DataType::Byte), ty(DataType::Short)],
+            &[Some(Constant::Integral(1)), Some(Constant::Integral(2))]
+        )
+        .unwrap(),
+        ty(DataType::Short)
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[ty(dec(10, 3)), ty(dec(11, 4))],
+            &[Some(Constant::Fractional(1)), Some(Constant::Fractional(2))]
+        )
+        .unwrap(),
+        ty(dec(11, 4))
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[ty(DataType::Float), ty(DataType::Double)],
+            &[Some(Constant::Fractional(1)), Some(Constant::Fractional(2))]
+        )
+        .unwrap(),
+        ty(DataType::Double)
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[i.clone(), i.clone(), null_ty()],
+            &[ten.clone(), twenty.clone(), Some(Constant::Null)]
+        )
+        .unwrap(),
+        ArgType::new(DataType::Integer, true)
+    );
+    // A string bound is the wrong type; a column seed is not foldable.
+    let s = ty(DataType::String);
+    let err = result(
+        "uniform",
+        &[s, i.clone(), i.clone()],
+        &[None, twenty.clone(), zero.clone()],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"NUMERIC\""), "{err}");
+    let err = result(
+        "uniform",
+        &[i.clone(), i.clone(), i.clone()],
+        &[ten.clone(), twenty.clone(), None],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert!(err.to_string().contains("`seed`"), "{err}");
+    // A failing fold propagates instead of typing the call.
+    let failed = Constant::Error(KrishivError::from(krishiv_common::error::InternalError {
+        message: "boom".to_owned(),
+    }));
+    let err = result(
+        "uniform",
+        &[i.clone(), i.clone(), i.clone()],
+        &[ten.clone(), twenty, Some(failed.clone())],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+    let err = result(
+        "randstr",
+        &[i.clone(), i.clone()],
+        &[ten.clone(), Some(failed)],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+    // `randstr` is a string; a boolean length is the wrong type.
+    assert_eq!(
+        result("randstr", &[i.clone(), i.clone()], &[ten, zero]).unwrap(),
+        ty(DataType::String)
+    );
+    let err = result(
+        "randstr",
+        &[ty(DataType::Boolean), i],
+        &[Some(Constant::Boolean(true)), None],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"INT\""), "{err}");
+}
+
+/// The analyzer's `uniform` result type and the executor's bind type agree
+/// on every pair of bound kinds: both layers map their own type to the
+/// shared `uniform_result` rule, and the test pins the two mappers against
+/// each other so one side cannot drift without the other.
+#[test]
+fn uniform_result_agrees_with_the_executor_bind() {
+    use crate::scalar::{BindOptions, bind_scalar};
+    // One foldable constant per bound type, as the analyzer sees them.
+    let cases: Vec<(Option<DataType>, Option<Constant>)> = vec![
+        (Some(DataType::Byte), Some(Constant::Integral(1))),
+        (Some(DataType::Short), Some(Constant::Integral(1))),
+        (Some(DataType::Integer), Some(Constant::Integral(10))),
+        (Some(DataType::Long), Some(Constant::Integral(20))),
+        (Some(DataType::Float), Some(Constant::Fractional(1))),
+        (Some(DataType::Double), Some(Constant::Fractional(1))),
+        (Some(dec(10, 3)), Some(Constant::Fractional(1))),
+        (Some(dec(11, 4)), Some(Constant::Fractional(1))),
+        (None, Some(Constant::Null)),
+    ];
+    for (a, ca) in &cases {
+        for (b, cb) in &cases {
+            let args = [
+                ArgType {
+                    data_type: a.clone(),
+                    nullable: a.is_none(),
+                },
+                ArgType {
+                    data_type: b.clone(),
+                    nullable: b.is_none(),
+                },
+            ];
+            let reg = result("uniform", &args, &[ca.clone(), cb.clone()]).unwrap();
+            let bound = bind_scalar(
+                "uniform",
+                &[
+                    a.clone().unwrap_or(DataType::Null).to_arrow().into(),
+                    b.clone().unwrap_or(DataType::Null).to_arrow().into(),
+                ],
+                &BindOptions::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                reg.data_type.clone().map(|t| t.to_arrow()),
+                Some(bound.return_type().clone()),
+                "uniform({a:?}, {b:?})"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1283,4 +1843,727 @@ fn regex_signatures() {
     assert_eq!(r, ArgType::new(DataType::Boolean, true));
     let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Integer, true));
+}
+
+#[test]
+fn json_signatures() {
+    use krishiv_types::{MapType, StructField, StructType};
+
+    let s = ty(DataType::String);
+    let map_ss = || DataType::Map(MapType::new(DataType::String, DataType::String, true).into());
+    let string_lit = |text: &str| Some(Constant::String(text.to_owned()));
+    // `json_array_length` and `get_json_object` take strings exactly.
+    assert_eq!(
+        def("json_array_length").inputs,
+        Inputs::Expects(vec![InputType::Exact(DataType::String)])
+    );
+    assert_eq!(
+        result("json_array_length", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType::new(DataType::Integer, true)
+    );
+    assert_eq!(
+        result("get_json_object", &[s.clone(), s.clone()], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    // `json_object_keys` reads an array of non-null strings, always nullable.
+    assert_eq!(
+        result("json_object_keys", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType::new(
+            DataType::Array(ArrayType::new(DataType::String, false).into()),
+            true,
+        )
+    );
+    // `schema_of_json` needs a foldable string: a null literal and a column fail.
+    assert_eq!(
+        result("schema_of_json", &[null_ty()], &[Some(Constant::Null)])
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedNull
+    );
+    assert_eq!(
+        result("schema_of_json", std::slice::from_ref(&s), &[])
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert_eq!(
+        result(
+            "schema_of_json",
+            std::slice::from_ref(&s),
+            &[string_lit("{\"a\":1}")]
+        )
+        .unwrap(),
+        ArgType::new(DataType::String, false)
+    );
+    // `from_json` reads its schema: a bare field list wraps in a struct.
+    let struct_ab = || {
+        DataType::Struct(StructType::new(vec![
+            StructField::new("a", DataType::Integer, true),
+            StructField::new("b", DataType::Double, true),
+        ]))
+    };
+    let from = |schema: Option<Constant>| {
+        result(
+            "from_json",
+            &[s.clone(), s.clone()],
+            &[string_lit("x"), schema],
+        )
+    };
+    assert_eq!(
+        from(string_lit("a INT, b DOUBLE")).unwrap(),
+        ArgType::new(struct_ab(), true)
+    );
+    assert_eq!(
+        from(string_lit("STRUCT<a: INT, b: DOUBLE>")).unwrap(),
+        ArgType::new(struct_ab(), true)
+    );
+    assert_eq!(
+        from(string_lit("map<string, int>")).unwrap(),
+        ArgType::new(
+            DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into()),
+            true,
+        )
+    );
+    for bad in [
+        Some(Constant::Null),
+        Some(Constant::Integral(1)),
+        Some(Constant::Boolean(true)),
+        None,
+    ] {
+        assert_eq!(
+            from(bad).unwrap_err().error_class(),
+            ErrorClass::InvalidSchemaNonStringLiteral
+        );
+    }
+    assert_eq!(
+        from(string_lit("a InvalidType")).unwrap_err().error_class(),
+        ErrorClass::ParseSyntaxError
+    );
+    // A non-string document fails with the single-argument call text.
+    assert_eq!(
+        result(
+            "from_json",
+            &[ty(DataType::Integer), s.clone()],
+            &[None, string_lit("a INT")]
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // The options must be a non-null string map.
+    let with_options = |options: ArgType, constant: Option<Constant>| {
+        result(
+            "from_json",
+            &[s.clone(), s.clone(), options],
+            &[string_lit("x"), string_lit("a INT"), constant],
+        )
+    };
+    assert_eq!(
+        with_options(
+            ArgType::new(map_ss(), true),
+            Some(Constant::String("x".to_owned()))
+        )
+        .unwrap(),
+        ArgType::new(
+            DataType::Struct(StructType::new(vec![StructField::new(
+                "a",
+                DataType::Integer,
+                true
+            )])),
+            true,
+        )
+    );
+    assert_eq!(
+        with_options(ArgType::new(map_ss(), true), Some(Constant::Null))
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    assert_eq!(
+        with_options(ty(DataType::String), string_lit("x"))
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    assert_eq!(
+        with_options(
+            ArgType::new(
+                DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into()),
+                true,
+            ),
+            string_lit("x")
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::InvalidOptionsNonStringType
+    );
+    // `to_json` only takes structs, maps and arrays.
+    assert_eq!(
+        result("to_json", &[ArgType::new(struct_ab(), true)], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    assert_eq!(
+        result("to_json", &[ty(DataType::Integer)], &[])
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::DatatypeMismatchInvalidJsonSchema
+    );
+    // A folded error propagates.
+    let err: KrishivError = InvalidOptionsNonMapFunction {}.into();
+    assert_eq!(
+        result(
+            "schema_of_json",
+            std::slice::from_ref(&s),
+            &[Some(Constant::Error(err))]
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    // A folded error in the schema position propagates from `from_json`.
+    let err: KrishivError = InvalidOptionsNonMapFunction {}.into();
+    let failed = Some(Constant::Error(err));
+    assert_eq!(
+        result(
+            "from_json",
+            &[s.clone(), s.clone()],
+            &[string_lit("x"), failed]
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    // An empty or blank schema reports the direct parse error.
+    for schema in ["", "   "] {
+        assert_eq!(
+            from(string_lit(schema)).unwrap_err().error_class(),
+            ErrorClass::ParseEmptyStatement
+        );
+    }
+}
+
+#[test]
+fn map_signatures() {
+    use krishiv_types::{ArrayType, MapType, StructField, StructType};
+    let (i, s) = (ty(DataType::Integer), ty(DataType::String));
+    let map =
+        |k: DataType, v: DataType, vcn: bool| ArgType::new(MapType::new(k, v, vcn).into(), false);
+    assert_eq!(def("map").inputs, Inputs::Map);
+    assert_eq!(def("map_concat").inputs, Inputs::MapConcat);
+    assert_eq!(def("map_contains_key").inputs, Inputs::MapContainsKey);
+    // `map(k, v)`: the key and value types, never null; values may hold
+    // null when any value argument may.
+    assert_eq!(
+        result("map", &[i.clone(), s.clone(), i.clone(), s.clone()], &[]).unwrap(),
+        map(DataType::Integer, DataType::String, false)
+    );
+    assert_eq!(
+        result(
+            "map",
+            &[i.clone(), ArgType::new(DataType::String, true)],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(
+            MapType::new(DataType::Integer, DataType::String, true).into(),
+            false
+        )
+    );
+    // A key holding a map is `INVALID_MAP_KEY_TYPE`.
+    let nested: DataType = MapType::new(DataType::String, DataType::Integer, true).into();
+    let e = result("map", &[ty(nested.clone()), s.clone()], &[]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchInvalidMapKeyType
+    );
+    for name in ["map_concat", "map_from_arrays"] {
+        let key = if name == "map_concat" {
+            MapType::new(nested.clone(), DataType::String, true).into()
+        } else {
+            ArrayType::new(nested.clone(), false).into()
+        };
+        let value = if name == "map_concat" {
+            nested.clone()
+        } else {
+            ArrayType::new(DataType::String, false).into()
+        };
+        let e = result(name, &[ty(key), ty(value)], &[]).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::DatatypeMismatchInvalidMapKeyType,
+            "{name}"
+        );
+    }
+    // `map_concat(m)`: the merged map, null when any argument may be.
+    assert_eq!(
+        result(
+            "map_concat",
+            &[
+                ArgType::new(
+                    MapType::new(DataType::Integer, DataType::String, false).into(),
+                    true
+                ),
+                ArgType::new(
+                    MapType::new(DataType::Integer, DataType::String, true).into(),
+                    false
+                ),
+            ],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(
+            MapType::new(DataType::Integer, DataType::String, true).into(),
+            true
+        )
+    );
+    // `map_contains_key(map, key)`: a nullable boolean, `MAP_FUNCTION_DIFF_TYPES`
+    // for a key of another type, `NULL_TYPE` for an untyped null key.
+    assert_eq!(
+        result(
+            "map_contains_key",
+            &[map(DataType::Integer, DataType::String, false), i.clone()],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(DataType::Boolean, true)
+    );
+    let e = result(
+        "map_contains_key",
+        &[map(DataType::Integer, DataType::String, false), s.clone()],
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchMapFunctionDiffTypes
+    );
+    let e = result(
+        "map_contains_key",
+        &[map(DataType::Integer, DataType::String, false), null_ty()],
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::DatatypeMismatchNullType);
+    // `map_keys`, `map_values`, `map_entries`: the projections.
+    let m = ArgType::new(
+        MapType::new(DataType::Integer, DataType::String, true).into(),
+        true,
+    );
+    assert_eq!(
+        result("map_keys", std::slice::from_ref(&m), &[]).unwrap(),
+        ArgType::new(ArrayType::new(DataType::Integer, true).into(), true)
+    );
+    assert_eq!(
+        result("map_values", std::slice::from_ref(&m), &[]).unwrap(),
+        ArgType::new(ArrayType::new(DataType::String, true).into(), true)
+    );
+    assert_eq!(
+        result("map_entries", std::slice::from_ref(&m), &[]).unwrap(),
+        ArgType::new(
+            ArrayType::new(
+                StructType::new([
+                    StructField::new("key", DataType::Integer, false),
+                    StructField::new("value", DataType::String, true),
+                ])
+                .into(),
+                false
+            )
+            .into(),
+            true
+        )
+    );
+    let e = result("map_keys", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // `map_from_arrays(keys, values)`: the map of the element types.
+    assert_eq!(
+        result(
+            "map_from_arrays",
+            &[
+                ty(ArrayType::new(DataType::Integer, false).into()),
+                ty(ArrayType::new(DataType::String, false).into()),
+            ],
+            &[]
+        )
+        .unwrap(),
+        map(DataType::Integer, DataType::String, false)
+    );
+    // `map_from_entries`: the map of the struct fields; anything else is
+    // `UNEXPECTED_INPUT_TYPE`.
+    let pair = ArrayType::new(
+        StructType::new([
+            StructField::new("key", DataType::Integer, true),
+            StructField::new("value", DataType::String, true),
+        ])
+        .into(),
+        true,
+    )
+    .into();
+    assert_eq!(
+        result("map_from_entries", &[ty(pair)], &[]).unwrap(),
+        ArgType::new(
+            MapType::new(DataType::Integer, DataType::String, true).into(),
+            true
+        )
+    );
+    let e = result("map_from_entries", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // `str_to_map(text)`: `map<string, string>`.
+    assert_eq!(
+        result("str_to_map", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType::new(
+            MapType::new(DataType::String, DataType::String, true).into(),
+            false
+        )
+    );
+}
+
+#[test]
+fn hof_signatures() {
+    use DataType::{Array, Boolean, Integer};
+    let array = |e: DataType, contains_null: bool, nullable: bool| {
+        ArgType::new(Array(ArrayType::new(e, contains_null).into()), nullable)
+    };
+    let i = || ty(Integer);
+    let b = || ty(Boolean);
+    // `array(...)`: the common element type; untyped `NULL` is `VOID`,
+    // no arguments an empty `VOID` array.
+    assert_eq!(
+        result("array", &[i(), i()], &[]).unwrap(),
+        array(Integer, false, false)
+    );
+    assert_eq!(
+        result("array", &[ArgType::new(Integer, true), i()], &[]).unwrap(),
+        array(Integer, true, false)
+    );
+    assert_eq!(
+        result("array", &[null_ty(), null_ty()], &[]).unwrap(),
+        array(DataType::Null, true, false)
+    );
+    assert_eq!(
+        result("array", &[], &[]).unwrap(),
+        array(DataType::Null, false, false)
+    );
+    // The higher-order functions type their lambda argument as its body:
+    // `transform` maps the body, `filter` keeps the array, `exists` and
+    // `forall` fold to booleans.
+    let arr = || array(Integer, true, false);
+    assert_eq!(
+        result("transform", &[arr(), i()], &[]).unwrap(),
+        array(Integer, false, false)
+    );
+    assert_eq!(
+        result("transform", &[arr(), ArgType::new(Integer, true)], &[]).unwrap(),
+        array(Integer, true, false)
+    );
+    assert_eq!(result("filter", &[arr(), b()], &[]).unwrap(), arr());
+    assert_eq!(
+        result("exists", &[array(Integer, false, true), b()], &[]).unwrap(),
+        ArgType::new(Boolean, true)
+    );
+    // `exists`/`forall` are nullable when the array is or when the body
+    // is (Spark derives the nullability from the array and the body
+    // alone): only a non-null array with a non-null body folds to a
+    // non-null boolean.
+    assert_eq!(
+        result("forall", &[arr(), b()], &[]).unwrap(),
+        ArgType::new(Boolean, false)
+    );
+    assert_eq!(
+        result(
+            "exists",
+            &[array(Integer, false, false), ArgType::new(Boolean, true)],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(Boolean, true)
+    );
+    assert_eq!(
+        result("forall", &[array(Integer, false, false), b()], &[]).unwrap(),
+        ArgType::new(Boolean, false)
+    );
+    // The array comes first and holds an array; the predicate is boolean.
+    for name in ["transform", "filter", "exists", "forall"] {
+        let err = result(name, &[i(), i()], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{name}"
+        );
+        assert!(err.to_string().contains("\"ARRAY\""), "{name}: {err}");
+    }
+    for name in ["filter", "exists", "forall"] {
+        let err = result(name, &[arr(), i()], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{name}"
+        );
+        assert!(err.to_string().contains("\"BOOLEAN\""), "{name}: {err}");
+    }
+    // Higher-order calls run in the executor, never in a kernel binding.
+    for name in ["transform", "filter", "exists", "forall"] {
+        assert_eq!(def(name).execution, Execution::HigherOrder, "{name}");
+        assert_eq!(def(name).kind, FunctionKind::Scalar, "{name}");
+    }
+    assert_eq!(def("array").execution, Execution::Scalar);
+    // The arity check runs before typing, so a call typed without its
+    // array argument is an engine bug, never a user error.
+    for name in ["transform", "filter", "exists", "forall"] {
+        let err = result(name, &[], &[]).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::InternalError, "{name}");
+    }
+}
+
+#[test]
+fn moment_aggregates_are_registered_as_doubles() {
+    let r = builtins();
+    for (name, agg, arguments) in [
+        ("stddev", Aggregate::StddevSamp, 1),
+        ("std", Aggregate::StddevSamp, 1),
+        ("stddev_samp", Aggregate::StddevSamp, 1),
+        ("stddev_pop", Aggregate::StddevPop, 1),
+        ("variance", Aggregate::VarSamp, 1),
+        ("var_samp", Aggregate::VarSamp, 1),
+        ("var_pop", Aggregate::VarPop, 1),
+        ("skewness", Aggregate::Skewness, 1),
+        ("kurtosis", Aggregate::Kurtosis, 1),
+        ("corr", Aggregate::Corr, 2),
+        ("covar_samp", Aggregate::CovarSamp, 2),
+        ("covar_pop", Aggregate::CovarPop, 2),
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
+        assert!(d.deterministic, "{name}");
+        assert!(
+            d.arity.accepts(arguments) && !d.arity.accepts(3 - arguments),
+            "{name}"
+        );
+        // Found in every profile that has the name, and only there.
+        let since = r.spark_function(name).unwrap().since;
+        for p in SparkProfile::ALL {
+            assert_eq!(
+                matches!(r.lookup(name, p), Lookup::Found(_)),
+                p >= since,
+                "{name} {p:?}"
+            );
+        }
+        // Every argument is cast to DOUBLE: an integer, a decimal and a
+        // string become one; the result is a nullable DOUBLE whatever the
+        // arguments (no rows, one row).
+        let args: Vec<ArgType> = (0..arguments).map(|_| ty(DataType::Integer)).collect();
+        assert_eq!(
+            d.inputs.expected(&CallTypes::new(&args, &[])),
+            Some(vec![InputType::Exact(DataType::Double)]),
+            "{name}"
+        );
+        assert_eq!(
+            result(name, &args, &[]).unwrap(),
+            ArgType::new(DataType::Double, true),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn moment_aggregates_reject_the_wrong_number_of_arguments() {
+    for (name, wrong) in [
+        ("stddev", 2),
+        ("corr", 1),
+        ("covar_pop", 3),
+        ("kurtosis", 0),
+    ] {
+        assert!(!def(name).arity.accepts(wrong), "{name}({wrong})");
+    }
+}
+
+mod text;
+
+/// `parse_url` and `try_parse_url`: arities, inputs and result types.
+#[test]
+fn url_signatures() {
+    let s = ty(DataType::String);
+    let strict = InputType::Strict(DataType::String);
+    // `parse_url`/`try_parse_url` take two or three strict strings (an
+    // `int` URL is refused, not cast) and are always nullable.
+    for name in ["parse_url", "try_parse_url"] {
+        let d = def(name);
+        assert!(d.deterministic, "{name}");
+        assert!(!d.arity.accepts(1) && d.arity.accepts(2) && d.arity.accepts(3));
+        assert!(!d.arity.accepts(4));
+        assert_eq!(
+            d.inputs,
+            Inputs::Expects(vec![strict.clone(), strict.clone(), strict.clone()])
+        );
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ArgType::new(DataType::String, true)
+        );
+        assert_eq!(
+            result(name, &[s.clone(), s.clone(), s.clone()], &[]).unwrap(),
+            ArgType::new(DataType::String, true)
+        );
+    }
+    // `try_parse_url` arrived in 4.0.
+    assert!(matches!(
+        builtins().lookup("try_parse_url", SparkProfile::V3_5),
+        Lookup::NotFound
+    ));
+}
+
+/// `schema_of_csv`: Spark's checks in Spark's order (the options map,
+/// whether the CSV folds, whether it is null, whether it is a string).
+#[test]
+fn csv_signatures() {
+    let s = ty(DataType::String);
+    let d = def("schema_of_csv");
+    assert!(d.deterministic);
+    assert!(d.arity.accepts(1) && d.arity.accepts(2) && !d.arity.accepts(0));
+    assert!(!d.arity.accepts(3));
+    assert_eq!(d.inputs, Inputs::Any);
+    // A folded string resolves to a non-nullable string (the DDL).
+    let csv = |v: &str| [Some(Constant::String(v.to_owned()))];
+    assert_eq!(
+        result("schema_of_csv", std::slice::from_ref(&s), &csv("1,abc")).unwrap(),
+        ty(DataType::String)
+    );
+    // Anything but a one-argument string map is refused first.
+    let err = result("schema_of_csv", &[s.clone(), s.clone()], &csv("1")).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidOptionsNonMapFunction);
+    // A non-foldable CSV names itself.
+    let err = result("schema_of_csv", std::slice::from_ref(&s), &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert!(err.to_string().contains("`csv`"), "{err}");
+    // A null CSV is `UNEXPECTED_NULL`.
+    let err = result(
+        "schema_of_csv",
+        std::slice::from_ref(&s),
+        &[Some(Constant::Null)],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedNull
+    );
+    assert!(err.to_string().contains("must not be null"), "{err}");
+    // A folded non-string is the wrong type, not a cast.
+    let err = result(
+        "schema_of_csv",
+        &[ty(DataType::Integer)],
+        &[Some(Constant::Integral(42))],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"STRING\""), "{err}");
+    // A plain literal the folder has no constant for (a timestamp or a
+    // binary) is still folded in Spark: non-null, so the wrong type.
+    for t in [DataType::Timestamp, DataType::TimestampNtz, DataType::Date] {
+        let args = [ty(t)];
+        let err =
+            (def("schema_of_csv").result)(&CallTypes::new(&args, &[None]).with_literals(&[true]))
+                .unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType
+        );
+    }
+    // A folding failure propagates.
+    let failed = Constant::Error(KrishivError::from(
+        krishiv_common::error::CastInvalidInput {
+            expression: "'abc'".to_owned(),
+            source_type: "\"STRING\"".to_owned(),
+            target_type: "\"INT\"".to_owned(),
+        },
+    ));
+    let err = result("schema_of_csv", std::slice::from_ref(&s), &[Some(failed)]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
+}
+
+/// `schema_of_csv` never executes: the analyzer replaces every
+/// well-typed call with the DDL literal, so it has no scalar binding. A
+/// call that kept its shape (unreachable with the built-in registry: the
+/// signature rejects everything the analyzer does not resolve) fails at
+/// execution binding rather than running something unassigned.
+#[test]
+fn schema_of_csv_has_no_scalar_binding() {
+    use crate::scalar::{BindArg, BindOptions, bind_scalar};
+    assert_eq!(def("schema_of_csv").execution, Execution::Evaluator);
+    let args = [BindArg::from(arrow_schema::DataType::Utf8)];
+    let err = bind_scalar("schema_of_csv", &args, &BindOptions::new()).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+/// The cast-named functions (`float(x)`, `int(x)`, ...): kind scalar,
+/// arity exactly 1 from Spark's catalog, any input, result the target
+/// type (`decimal(10,0)` for `decimal`). The analyzer rewrites every
+/// call to a cast, so they run as `Execution::Cast` and are never
+/// executed or bound as functions.
+#[test]
+fn cast_named_functions_rewrite_to_casts() {
+    let targets = [
+        ("boolean", DataType::Boolean),
+        ("tinyint", DataType::Byte),
+        ("smallint", DataType::Short),
+        ("int", DataType::Integer),
+        ("bigint", DataType::Long),
+        ("float", DataType::Float),
+        ("double", DataType::Double),
+        ("decimal", dec(10, 0)),
+        ("string", DataType::String),
+        ("binary", DataType::Binary),
+        ("date", DataType::Date),
+        ("timestamp", DataType::Timestamp),
+    ];
+    assert_eq!(targets.len(), 12);
+    for (name, target) in targets {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
+        assert_eq!(d.execution, Execution::Cast, "{name}");
+        assert_eq!(d.inputs, Inputs::Any, "{name}");
+        assert!(
+            d.arity.accepts(1) && !d.arity.accepts(0) && !d.arity.accepts(2),
+            "{name}"
+        );
+        assert_eq!(d.arity.expected(), "1", "{name}");
+        // The catalog agrees (the registry takes arity from it).
+        let row = builtins().spark_function(name).unwrap();
+        assert_eq!(row.kind, Some(FunctionKind::Scalar), "{name}");
+        // The result is the target type; NULL only with a nullable argument.
+        assert_eq!(
+            result(name, &[ty(target.clone())], &[]).unwrap(),
+            ty(target.clone()),
+            "{name}"
+        );
+        assert_eq!(
+            result(name, &[ArgType::new(target.clone(), true)], &[]).unwrap(),
+            ArgType::new(target.clone(), true),
+            "{name}"
+        );
+        assert_eq!(
+            result(name, &[null_ty()], &[]).unwrap(),
+            ArgType::new(target.clone(), true),
+            "{name}"
+        );
+    }
+    // `timestamp_ntz` is not a function (Spark has no such name).
+    assert!(matches!(
+        builtins().lookup("timestamp_ntz", SparkProfile::V4_2),
+        Lookup::NotFound
+    ));
+    // Lookups stay ASCII case-insensitive.
+    assert!(matches!(
+        builtins().lookup("FLOAT", SparkProfile::V4_2),
+        Lookup::Found(_)
+    ));
 }

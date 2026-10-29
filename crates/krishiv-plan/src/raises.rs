@@ -68,6 +68,7 @@ fn never_raises(e: &Expr, ansi: bool) -> bool {
         ExprNode::Literal(_)
         | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => true,
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => never_raises(expr, ansi),
+        ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => never_raises(base, ansi),
         ExprNode::Cast { expr, to, mode } => {
             never_raises(expr, ansi)
                 && type_of(expr).is_some_and(|from| cast_never_raises(&from, to, *mode))
@@ -133,6 +134,8 @@ fn function_never_raises(id: &FunctionId, args: &[std::sync::Arc<Expr>], ansi: b
             "try_add" | "try_subtract" | "try_multiply" | "try_divide" | "try_mod" => numeric(),
             _ => false,
         },
+        // User code may raise (or fail its contract): never assumed pure.
+        FunctionId::Udf { .. } => false,
     }
 }
 
@@ -203,6 +206,7 @@ fn type_of(e: &Expr) -> Option<DataType> {
             | ResolvedExpr::OuterColumn(c)
             | ResolvedExpr::Alias { output: c, .. },
         ) => Some(c.data_type.clone()),
+        ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => Some(data_type.clone()),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => Some(f.data_type.clone()),
         ExprNode::Cast { to, .. } => Some(to.clone()),
         ExprNode::Literal(l) => literal_type(l),
@@ -458,9 +462,20 @@ mod tests {
             false
         ));
         assert!(!may_raise(
-            &named("startswith", vec![s.clone(), s], DataType::Boolean),
+            &named("startswith", vec![s.clone(), s.clone()], DataType::Boolean),
             false
         ));
+        // User code may raise (or fail its contract): never assumed pure.
+        let udf = call(
+            FunctionId::Udf {
+                name: "my_udf".to_owned(),
+                version: 1,
+            },
+            vec![s],
+            DataType::Boolean,
+        );
+        assert!(may_raise(&udf, false));
+        assert!(may_raise(&udf, true));
     }
 
     #[test]

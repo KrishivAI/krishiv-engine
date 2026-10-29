@@ -1,0 +1,222 @@
+{
+  "entries": [
+    {
+      "id": "try_subtract#0edc9301ffa2/ansi_off",
+      "reason": "SELECT try_subtract(2, '1') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_subtract#170516e36186/ansi_on",
+      "reason": "SELECT try_subtract(2, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#170516e36186/ansi_off",
+      "reason": "SELECT try_subtract(2, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#1722382e6981/ansi_on",
+      "reason": "SELECT try_subtract(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#1722382e6981/ansi_off",
+      "reason": "SELECT try_subtract(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#1cae3483a411/ansi_on",
+      "reason": "SELECT try_subtract(DATE'9999-12-31', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#1cae3483a411/ansi_off",
+      "reason": "SELECT try_subtract(DATE'9999-12-31', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#264f43428b1b/ansi_on",
+      "reason": "SELECT try_subtract(TIMESTAMP'1969-12-31 23:59:59.999999', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#264f43428b1b/ansi_off",
+      "reason": "SELECT try_subtract(TIMESTAMP'1969-12-31 23:59:59.999999', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#2b174bd6e11e/ansi_on",
+      "reason": "SELECT try_subtract(DATE'1582-10-10', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#2b174bd6e11e/ansi_off",
+      "reason": "SELECT try_subtract(DATE'1582-10-10', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#3582769ddd53/ansi_on",
+      "reason": "SELECT try_subtract(DATE'0001-01-01', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#3582769ddd53/ansi_off",
+      "reason": "SELECT try_subtract(DATE'0001-01-01', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#390e55785593/ansi_on",
+      "reason": "SELECT try_subtract(DATE'2024-02-29', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#390e55785593/ansi_off",
+      "reason": "SELECT try_subtract(DATE'2024-02-29', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#488502a062f0/ansi_on",
+      "reason": "SELECT try_subtract(CAST(NULL AS date), 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#488502a062f0/ansi_off",
+      "reason": "SELECT try_subtract(CAST(NULL AS date), 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#4e1124928da8/ansi_on",
+      "reason": "SELECT try_subtract(interval 2 year, interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#4e1124928da8/ansi_off",
+      "reason": "SELECT try_subtract(interval 2 year, interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#4f7fb5ffdba9/ansi_on",
+      "reason": "SELECT try_subtract(TIMESTAMP'2024-11-03 01:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#4f7fb5ffdba9/ansi_off",
+      "reason": "SELECT try_subtract(TIMESTAMP'2024-11-03 01:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#6ab14af75051/ansi_on",
+      "reason": "SELECT try_subtract(date'2021-01-02', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#6ab14af75051/ansi_off",
+      "reason": "SELECT try_subtract(date'2021-01-02', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "try_subtract#6c340281f5c5/ansi_on",
+      "reason": "SELECT try_subtract(date'2021-01-01', interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#6c340281f5c5/ansi_off",
+      "reason": "SELECT try_subtract(date'2021-01-01', interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#6e150f42bc2b/ansi_on",
+      "reason": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_subtract#6e150f42bc2b/ansi_off",
+      "reason": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_subtract#6eda5bc26985/ansi_on",
+      "reason": "SELECT try_subtract(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#6eda5bc26985/ansi_off",
+      "reason": "SELECT try_subtract(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#756b9b8d8ece/ansi_on",
+      "reason": "SELECT try_subtract(2, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#756b9b8d8ece/ansi_off",
+      "reason": "SELECT try_subtract(2, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#788118e6c58c/ansi_on",
+      "reason": "SELECT try_subtract(date'2021-01-01', CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_subtract#788118e6c58c/ansi_off",
+      "reason": "SELECT try_subtract(date'2021-01-01', CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_subtract#847188c1be3e/ansi_off",
+      "reason": "SELECT try_subtract('abc', 1) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_subtract#901361175675/ansi_off",
+      "reason": "SELECT try_subtract(2, 'abc') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_subtract#a275842dc947/ansi_on",
+      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#a275842dc947/ansi_off",
+      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#b3a2ebb279d1/ansi_on",
+      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', CAST(NULL AS interval day)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_subtract#b3a2ebb279d1/ansi_off",
+      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', CAST(NULL AS interval day)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_subtract#b47d28681499/ansi_on",
+      "reason": "SELECT try_subtract(TIMESTAMP'2024-03-10 02:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#b47d28681499/ansi_off",
+      "reason": "SELECT try_subtract(TIMESTAMP'2024-03-10 02:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#b9b03d11040b/ansi_on",
+      "reason": "SELECT try_subtract(2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_subtract#b9b03d11040b/ansi_off",
+      "reason": "SELECT try_subtract(2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_subtract#c6ab435c35e2/ansi_on",
+      "reason": "SELECT try_subtract(2, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#c6ab435c35e2/ansi_off",
+      "reason": "SELECT try_subtract(2, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#cf94932b9ee9/ansi_on",
+      "reason": "SELECT try_subtract(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_subtract#cf94932b9ee9/ansi_off",
+      "reason": "SELECT try_subtract(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_subtract#d6e583e2358c/ansi_on",
+      "reason": "SELECT try_subtract(INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_subtract#d6e583e2358c/ansi_off",
+      "reason": "SELECT try_subtract(INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_subtract#e73b9f9913d5/ansi_off",
+      "reason": "SELECT try_subtract('1', 1) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_subtract#f2cd0274bcdc/ansi_on",
+      "reason": "SELECT try_subtract(TIMESTAMP'2024-02-29 12:34:56.123456', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#f2cd0274bcdc/ansi_off",
+      "reason": "SELECT try_subtract(TIMESTAMP'2024-02-29 12:34:56.123456', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_subtract#f6e4926b7d7b/ansi_on",
+      "reason": "SELECT try_subtract(CAST(NULL AS timestamp), interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_subtract#f6e4926b7d7b/ansi_off",
+      "reason": "SELECT try_subtract(CAST(NULL AS timestamp), interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "try_subtract"
+}

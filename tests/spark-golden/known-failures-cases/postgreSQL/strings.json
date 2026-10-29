@@ -1,0 +1,18 @@
+{
+  "cases": {
+    "depends-on-command": [
+      76,
+      77
+    ],
+    "sql-commands": [
+      71,
+      72,
+      73,
+      74,
+      75,
+      123
+    ]
+  },
+  "file": "postgreSQL/strings",
+  "format_version": 1
+}

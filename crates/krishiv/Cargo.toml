@@ -15,6 +15,7 @@ workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
+krishiv-exec = { path = "../krishiv-exec", optional = true }
 krishiv-server = { path = "../krishiv-server", optional = true }
 krishiv-session = { path = "../krishiv-session" }
 krishiv-types = { path = "../krishiv-types" }
@@ -36,7 +37,13 @@ wasm-udf = []
 ui = ["dep:krishiv-server"]
 celeborn = []
 mimalloc = []
+# Cloud object stores (S3, GCS, Azure) via `krishiv-session/cloud`. Opt-in so
+# the default build stays inside the dependency and binary-size budgets.
+cloud = ["krishiv-session/cloud"]
 # The logical-plan IR (`Session::from_plan`, `DataFrame::plan`): for embedders
 # that build plans themselves; not covered by semver.
 unstable-ir = ["krishiv-session/unstable-ir"]
-full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc"]
+# Live async-task diagnostics over `tokio-console` (P2-T129): off by default;
+# needs `RUSTFLAGS="--cfg tokio_unstable"` for the task names.
+tokio-console = ["dep:krishiv-exec", "krishiv-exec/tokio-console"]
+full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc", "cloud"]

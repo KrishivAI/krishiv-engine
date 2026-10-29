@@ -5,7 +5,7 @@
 //! The hash join uses [`RowLayout`] and [`JoinIndex`] when
 //! `krishiv.exec.join.rowLayout` is on (P2-T158), and the grouped aggregate
 //! stores fixed-width keys as [`RowLayout`] rows when
-//! `krishiv.exec.agg.rowLayout` is on (P2-T159); both are off by default.
+//! `krishiv.exec.agg.rowLayout` is on (P2-T159); both are on by default.
 //! The `RowPages`, `SaltedTable` and `HashbrownTable` prototypes are
 //! measured by the `row-table-prototype` benchmark and example only.
 //! Nothing here is a stable interface.
@@ -56,6 +56,8 @@ mod pages;
 #[cfg(any(test, feature = "row-table-prototype"))]
 mod table;
 
+#[cfg(test)]
+mod flooding_tests;
 #[cfg(test)]
 mod tests;
 

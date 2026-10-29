@@ -41,22 +41,43 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod catalog;
 mod column;
 mod command;
 mod conf;
 mod dataframe;
 mod explain;
+mod explain_graph;
 pub mod functions;
 mod profile;
 mod session;
+mod udfs;
 mod variables;
+mod window;
 
+pub use access::{PathPrefixPolicy, StatementInfo};
 pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
 };
+pub use explain_graph::{
+    GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
+};
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
+pub use krishiv_plan::analyzer::{
+    AccessDecision, AccessPolicy, AllowAll, DenyAll, Principal, PrincipalKind, Privilege,
+    Securable, SecurableUse,
+};
+pub use krishiv_sql::{ExplainKind, StatementClass};
+pub use krishiv_udf_sdk::{
+    ArgField, InvokeContext, NullHandling, ReturnField, ScalarUdf, Signature, UdfArg, UdfError,
+    UdfInputType, UdfLibrary, UdfProperties,
+};
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+/// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
+/// for [`Session::register_udf`].
+pub use udfs::SessionFunctions;
+pub use window::WindowSpec;

@@ -1,0 +1,20 @@
+{
+  "cases": {
+    "depends-on-command": [
+      217,
+      218,
+      219,
+      220,
+      221,
+      222,
+      229,
+      230,
+      231,
+      232,
+      233,
+      234
+    ]
+  },
+  "file": "typeCoercion/native/binaryComparison",
+  "format_version": 1
+}

@@ -29,6 +29,7 @@ GENERATED = PYTHON_DIR / "krishiv" / "sql"
 REGISTRY_NAME = {
     "bitwise_not": "~",
     "bitwiseNOT": "~",
+    "create_map": "map",
     "mean": "avg",
     "pow": "power",
     "shiftLeft": "shiftleft",
@@ -37,6 +38,9 @@ REGISTRY_NAME = {
     "toDegrees": "degrees",
     "toRadians": "radians",
 }
+#: Optional parameters that are sent even when left out (as a NULL literal): `lag`/`lead`'s
+#: `default`, which the SQL parser fills with NULL, so the wrapper builds the SQL call.
+ALWAYS_SENT = {("lag", "default"), ("lead", "default")}
 #: Spark's `trim(chars, str)`: PySpark's `(col, trim)` is sent reversed.
 REVERSED = {"ltrim", "rtrim", "trim"}
 HAND_WRITTEN = set(F._HAND_WRITTEN)
@@ -123,6 +127,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> None:
     """The native builders record what they are given, so a call's shape can be compared."""
     monkeypatch.setattr(_native, "col", lambda name: ("col", name))
     monkeypatch.setattr(_native, "lit", lambda value: ("lit", value))
+    monkeypatch.setattr(_native, "map_literal", lambda pairs: ("map_literal", pairs))
     monkeypatch.setattr(_native, "call_function", lambda name, args: ("call", name, tuple(args)))
 
 
@@ -138,6 +143,9 @@ def _sample(name: str, p: inspect.Parameter) -> tuple[list[Any], list[tuple[str,
     annotation = str(p.annotation).removesuffix(" | None")
     if annotation in COLUMN_ANNOTATIONS:
         return [f"c_{p.name}"], [("col", f"c_{p.name}")]
+    if annotation == "dict[str, str]":
+        options = {"k_x": "v"}
+        return [options], [("map_literal", list(options.items()))]
     kind = next(k for k in annotation.split(" | ") if k != "Column")
     value = CHECKED_VALUES.get((name, p.name), LITERALS[kind])
     return [value], [("lit", value)]
@@ -155,12 +163,16 @@ def test_every_wrapper_builds_its_registry_call(name: str, recorded: None) -> No
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
         assert fn(*values)._c == ("call", REGISTRY_NAME.get(name, name), tuple(expected))
-        # Without the optional parameters: they are left out of the call, and a default that is not
+        # Without the optional parameters: they are left out of the call, except `lag`/`lead`'s
+        # `default`, which is sent as NULL (as the SQL parser fills it); a default that is not
         # None (`first`'s `ignorenulls`) is sent.
         required = [vs for (vs, _), p in zip(samples, params, strict=True) if p.default is p.empty]
         short = fn(*[v for vs in required for v in vs])._c
     sent_defaults = [p for p in params if p.default is not p.empty and p.default is not None]
-    assert len(short[2]) == sum(len(vs) for vs in required) + len(sent_defaults)
+    sent_nulls = [p for p in params if (name, p.name) in ALWAYS_SENT]
+    assert len(short[2]) == sum(len(vs) for vs in required) + len(sent_defaults) + len(sent_nulls)
+    if sent_nulls:
+        assert short[2][-len(sent_nulls) :] == tuple(("lit", None) for _ in sent_nulls)
 
 
 PYSPARK_CALLS = [
@@ -173,7 +185,7 @@ PYSPARK_CALLS = [
     (lambda: F.date_add("d", "n"), ("call", "date_add", (("col", "d"), ("col", "n")))),
     (lambda: F.first("a"), ("call", "first", (("col", "a"), ("lit", False)))),
     (lambda: F.first("a", True), ("call", "first", (("col", "a"), ("lit", True)))),
-    (lambda: F.lag("a"), ("call", "lag", (("col", "a"), ("lit", 1)))),
+    (lambda: F.lag("a"), ("call", "lag", (("col", "a"), ("lit", 1), ("lit", None)))),
     (lambda: F.lead("a", 2, 0), ("call", "lead", (("col", "a"), ("lit", 2), ("lit", 0)))),
     (lambda: F.nth_value("a", 2), ("call", "nth_value", (("col", "a"), ("lit", 2), ("lit", False)))),
     (lambda: F.first_value("a"), ("call", "first_value", (("col", "a"),))),
@@ -185,6 +197,11 @@ PYSPARK_CALLS = [
     (lambda: F.trim("s"), ("call", "trim", (("col", "s"),))),
     (lambda: F.trim("s", F.col("x")), ("call", "trim", (("col", "x"), ("col", "s")))),
     (lambda: F.btrim("s", "x"), ("call", "btrim", (("col", "s"), ("col", "x")))),
+    (lambda: F.parse_url("u", "HOST"), ("call", "parse_url", (("col", "u"), ("col", "HOST")))),
+    (
+        lambda: F.try_parse_url("u", F.lit("QUERY"), "k"),
+        ("call", "try_parse_url", (("col", "u"), ("lit", "QUERY"), ("col", "k"))),
+    ),
     (lambda: F.log("a"), ("call", "ln", (("col", "a"),))),
     (lambda: F.log(2.0, "a"), ("call", "log", (("lit", 2.0), ("col", "a")))),
     (lambda: F.mean("a"), ("call", "avg", (("col", "a"),))),
@@ -195,6 +212,61 @@ PYSPARK_CALLS = [
     (lambda: F.conv("s", 10, 2), ("call", "conv", (("col", "s"), ("lit", 10), ("lit", 2)))),
     (lambda: F.row_number(), ("call", "row_number", ())),
     (lambda: F.bitwise_not("a"), ("call", "~", (("col", "a"),))),
+    (lambda: F.add_months("d", 1), ("call", "add_months", (("col", "d"), ("lit", 1)))),
+    (lambda: F.date_trunc("YEAR", "t"), ("call", "date_trunc", (("lit", "YEAR"), ("col", "t")))),
+    (
+        lambda: F.months_between("a", "b"),
+        ("call", "months_between", (("col", "a"), ("col", "b"), ("lit", True))),
+    ),
+    (
+        lambda: F.months_between("a", "b", False),
+        ("call", "months_between", (("col", "a"), ("col", "b"), ("lit", False))),
+    ),
+    (lambda: F.next_day("d", "MO"), ("call", "next_day", (("col", "d"), ("lit", "MO")))),
+    (lambda: F.trunc("d", "YEAR"), ("call", "trunc", (("col", "d"), ("lit", "YEAR")))),
+    (
+        lambda: F.from_utc_timestamp("t", "UTC"),
+        ("call", "from_utc_timestamp", (("col", "t"), ("lit", "UTC"))),
+    ),
+    (
+        lambda: F.to_utc_timestamp("t", "UTC"),
+        ("call", "to_utc_timestamp", (("col", "t"), ("lit", "UTC"))),
+    ),
+    # A JSON string is a literal, not a column name; dictionary options are
+    # a map literal.
+    (
+        lambda: F.schema_of_json('{"a":1}'),
+        ("call", "schema_of_json", (("lit", '{"a":1}'),)),
+    ),
+    (
+        lambda: F.schema_of_json("c", {"primitivesAsString": "true"}),
+        (
+            "call",
+            "schema_of_json",
+            (("lit", "c"), ("map_literal", [("primitivesAsString", "true")])),
+        ),
+    ),
+    (
+        lambda: F.from_json("c", "a INT", {"mode": "FAILFAST"}),
+        (
+            "call",
+            "from_json",
+            (("col", "c"), ("lit", "a INT"), ("map_literal", [("mode", "FAILFAST")])),
+        ),
+    ),
+    (
+        lambda: F.to_json("c", {"ignoreNullFields": "false"}),
+        ("call", "to_json", (("col", "c"), ("map_literal", [("ignoreNullFields", "false")]))),
+    ),
+    (lambda: F.make_date("y", "m", "d"), ("call", "make_date", (("col", "y"), ("col", "m"), ("col", "d")))),
+    (
+        lambda: F.convert_timezone(F.lit("UTC"), F.lit("Asia/Hong_Kong"), "ts"),
+        ("call", "convert_timezone", (("lit", "UTC"), ("lit", "Asia/Hong_Kong"), ("col", "ts"))),
+    ),
+    (
+        lambda: F.convert_timezone(None, F.lit("Asia/Hong_Kong"), "ts"),
+        ("call", "convert_timezone", (("lit", "Asia/Hong_Kong"), ("col", "ts"))),
+    ),
 ]
 
 
@@ -225,6 +297,19 @@ def test_argument_checks(recorded: None) -> None:
         F.date_add("d", 1.5)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError, match="len"):
         F.substring("s", 1, 2.0)  # ty: ignore[invalid-argument-type]
+    # JSON options take a `dict[str, str]`; anything else in the mapping is
+    # not an option.
+    with pytest.raises(errors.PySparkTypeError, match="options"):
+        F.from_json("c", "a INT", {"mode": 1})  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.PySparkTypeError, match="options"):
+        F.to_json("c", {1: "x"})  # ty: ignore[invalid-argument-type]
+    # A Column of options passes through; any other scalar is a literal.
+    assert F.from_json("c", "a INT", F.col("o"))._c == (  # ty: ignore[invalid-argument-type]
+        "call",
+        "from_json",
+        (("col", "c"), ("lit", "a INT"), ("col", "o")),
+    )
+    assert F.to_json("c", "x")._c == ("call", "to_json", (("col", "c"), ("lit", "x")))
 
 
 def test_deprecated_names_warn_and_still_work(recorded: None) -> None:

@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "is_valid_utf8#1818de4df6e2/ansi_on",
+      "reason": "SELECT is_valid_utf8(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "is_valid_utf8#1818de4df6e2/ansi_off",
+      "reason": "SELECT is_valid_utf8(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "is_valid_utf8#471e1888f6c8/ansi_on",
+      "reason": "SELECT is_valid_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "is_valid_utf8#471e1888f6c8/ansi_off",
+      "reason": "SELECT is_valid_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "is_valid_utf8"
+}

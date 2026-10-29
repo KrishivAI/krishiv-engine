@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Join keys in one of two formats, chosen per join instance ([`Hashing`]):
 //!
-//! - **arrow-row** (the default): Spark-normalized arrow-row key rows on the
+//! - **arrow-row** (when `krishiv.exec.join.rowLayout` is off, or the keys
+//!   have no row encoding): Spark-normalized arrow-row key rows on the
 //!   shared hash blocks ([`crate::hash`]), hashed with the seeded hash, which
 //!   also picks the spill partitions;
 //! - **row layout** (`krishiv.exec.join.rowLayout`, P2-T158): fixed-width
 //!   [`RowLayout`] rows with a **seedless** stored hash `h` (P2-T157
-//!   Appendix C, P2-T171 §5.1: it is the routing hash, so it must agree
-//!   across operators and workers). Level-0 partitions are the top bits of
+//!   Appendix C: it agrees across operators and workers, but never routes
+//!   rows between processes). Level-0 partitions are the top bits of
 //!   `h`; the index and the grace sub-partitions use the per-join seeded
 //!   `g = fin(h ^ seed)` ([`finalize`]). Keys without a row encoding (nested,
 //!   dictionary) and, until their compare is tuned, string and binary
@@ -17,14 +18,16 @@
 //! row with a NULL in a key compared with `=` can never match, so the join
 //! marks it in [`Encoded::valid`] and never probes or stores it.
 //!
+//! `h` is the row layout's seedless table hash, not the routing hash
+//! `H_kg` (P2-T175): it never routes a row out of the process.
+//!
 //! The seed is per join instance: the deterministic-mode seed when set,
 //! else random, so keys with different `h` cannot be aimed at one bucket,
 //! slot run or grace sub-partition without the seed. Keys with equal `h`
 //! share `g` under every seed: full collisions of the seedless `h` are the
 //! residual risk P2-T171 §5.1 accepts (keys are still compared, so results
-//! stay correct; probe runs grow). P2-T175 fixes the routing hash and adds
-//! the adversarial-keys bound; until then `h` is the layout's own
-//! column-wise mix with seed 0.
+//! stay correct; probe runs grow only with the number of colliding keys,
+//! as `rows::flooding_tests` shows with crafted keys).
 
 use std::hash::BuildHasher;
 use std::sync::Arc;
@@ -39,9 +42,6 @@ use crate::hash::{HashSeed, KeyEncoder, MAX_LEVEL, PARTITION_BITS, spill_partiti
 use crate::rows::{EncodedKeys, RowLayout, finalize};
 
 pub(crate) use crate::hash::PARTITIONS;
-
-/// The seed of the row layout's stored hash `h`: none (see the module docs).
-const SEEDLESS: u64 = 0;
 
 /// The most level-0 radix bits of the row layout (`krishiv.exec.join.radixBits`):
 /// the top bits of `h`. Finalize builds one table per partition on the
@@ -258,7 +258,7 @@ impl KeyCodec {
                 NullBuffer::union(acc.as_ref(), c.logical_nulls().as_ref())
             });
         let rows = match (&self.layout, hashing.rows) {
-            (Some(layout), true) => KeyRows::Layout(layout.encode(columns, SEEDLESS)?),
+            (Some(layout), true) => KeyRows::Layout(layout.encode(columns)?),
             (None, true) => return Err(internal("join keys have no row layout".to_owned())),
             (_, false) => {
                 let rows = self.encoder.encode(columns)?;
@@ -340,7 +340,6 @@ mod tests {
             assert_ne!(finalize(h, ja.g_seed()), finalize(h, jb.g_seed()));
         }
         // Every run (process) computes the same `h`: no seed enters it.
-        // Pinned until P2-T175 replaces the interim function.
         assert_eq!(a.hashes()[0], 4_733_552_696_251_797_926);
     }
 

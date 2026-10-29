@@ -1,0 +1,77 @@
+READ	select -100
+READ	select +230
+READ	select -5.2
+READ	select +6.8e0
+READ	select -key, +key from testdata where key = 2
+READ	select -(key + 1), - key + 1, +(key + 5) from testdata where key = 1
+READ	select -max(key), +max(key) from testdata
+READ	select - (-10)
+READ	select + (-key) from testdata where key = 32
+READ	select - (+max(key)) from testdata
+READ	select - - 3
+READ	select - + 20
+READ	select + + 100
+READ	select - - max(key) from testdata
+READ	select + - key from testdata where key = 33
+READ	select 5 / 2
+READ	select 5 / 0
+READ	select 5 / null
+READ	select null / 5
+READ	select 5 div 2
+READ	select 5 div 0
+READ	select 5 div null
+READ	select null div 5
+READ	select cast(51 as decimal(10, 0)) div cast(2 as decimal(2, 0))
+READ	select cast(5 as decimal(1, 0)) div cast(0 as decimal(2, 0))
+READ	select cast(5 as decimal(1, 0)) div cast(null as decimal(2, 0))
+READ	select cast(null as decimal(1, 0)) div cast(5 as decimal(2, 0))
+READ	select 1 + 2
+READ	select 1 - 2
+READ	select 2 * 5
+READ	select 5 % 3
+READ	select pmod(-7, 3)
+READ	select sec(1)
+READ	select sec(null)
+READ	select sec(0)
+READ	select sec(-1)
+READ	select csc(1)
+READ	select csc(null)
+READ	select csc(0)
+READ	select csc(-1)
+READ	select cot(1)
+READ	select cot(null)
+READ	select cot(0)
+READ	select cot(-1)
+READ	select ceiling(0)
+READ	select ceiling(1)
+READ	select ceil(1234567890123456)
+READ	select ceiling(1234567890123456)
+READ	select ceil(0.01)
+READ	select ceiling(-0.10)
+READ	select floor(0)
+READ	select floor(1)
+READ	select floor(1234567890123456)
+READ	select floor(0.01)
+READ	select floor(-0.10)
+READ	select 1 > 0.00001
+READ	select mod(7, 2), mod(7, 0), mod(0, 2), mod(7, null), mod(null, 2), mod(null, null)
+READ	select BIT_LENGTH('abc')
+READ	select CHAR_LENGTH('abc')
+READ	select CHARACTER_LENGTH('abc')
+READ	select OCTET_LENGTH('abc')
+READ	select abs(-3.13), abs('-2.19')
+READ	select positive('-1.11'), positive(-1.11), negative('-1.11'), negative(-1.11)
+READ	select pmod(-7, 2), pmod(0, 2), pmod(7, 0), pmod(7, null), pmod(null, 2), pmod(null, null)
+READ	select pmod(cast(3.13 as decimal), cast(0 as decimal)), pmod(cast(2 as smallint), cast(0 as smallint))
+READ	select width_bucket(5.35, 0.024, 10.06, 5)
+READ	select width_bucket(5.35, 0.024, 10.06, 3 + 2)
+READ	select width_bucket('5.35', '0.024', '10.06', '5')
+READ	select width_bucket(5.35, 0.024, 10.06, 2.5)
+READ	select width_bucket(5.35, 0.024, 10.06, 0.5)
+READ	select width_bucket(null, 0.024, 10.06, 5)
+READ	select width_bucket(5.35, null, 10.06, 5)
+READ	select width_bucket(5.35, 0.024, null, -5)
+READ	select width_bucket(5.35, 0.024, 10.06, null)
+READ	select width_bucket(5.35, 0.024, 10.06, -5)
+READ	select width_bucket(5.35, 0.024, 10.06, 9223372036854775807L)
+READ	select width_bucket(5.35, 0.024, 10.06, 9223372036854775807L - 1)

@@ -91,6 +91,16 @@ pub fn distinct_plan(
     }
     let mut dargs: Option<&[usize]> = None;
     for (a, &d) in spec.aggregates.iter().zip(distinct) {
+        // The analyzer rewrites every `DISTINCT` aggregate with a filter
+        // (and every aggregate set with several distinct argument sets)
+        // into masked non-distinct aggregates, so a masked `DISTINCT`
+        // aggregate here is a plan built past the analyzer, whose mask
+        // column the first phase below would drop.
+        if d && a.mask.is_some() {
+            return Err(unsupported(
+                "a DISTINCT aggregate with a FILTER clause".to_owned(),
+            ));
+        }
         if d && *dargs.get_or_insert(&a.args) != a.args.as_slice() {
             return Err(unsupported(
                 "DISTINCT aggregates over different arguments".to_owned(),
@@ -157,6 +167,7 @@ pub fn union_distinct(
         ansi: true,
         spill,
         require_unit_weights: true,
+        legacy_statistical: false,
     };
     Ok(AggregateNode::new(input, HashAggregate::new(spec)?))
 }

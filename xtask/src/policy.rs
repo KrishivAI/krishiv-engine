@@ -262,14 +262,42 @@ pub fn run_spdx(root: &Path) -> Result<(), String> {
     }
 }
 
-/// `xtask source-guard`: bans the parquet `object_store` adapters in `crates/`
-/// and confines `unsafe` in the kernel crates to `unsafe_*.rs` modules.
+/// `xtask source-guard`: bans the parquet `object_store` adapters in `crates/`,
+/// confines `unsafe` in the kernel crates to `unsafe_*.rs` modules, requires
+/// a `// cluster-scope:` reason on every `Admin` statement-class arm, and bans
+/// blocking calls in `crates/krishiv-exec/src` production code (P2-T061 yield
+/// discipline; the compile-time backstop is the workspace `clippy.toml`
+/// `disallowed-methods` list denied at that crate's root).
 ///
 /// # Errors
 /// Returns each banned use with its location.
 pub fn run_source_guard(root: &Path) -> Result<(), String> {
     let mut files = Vec::new();
     collect(&root.join("crates"), "rs", &mut files);
+    // Every exec source, to resolve test-only file modules (`mod tests;`
+    // under `#[cfg(test)]`) before scanning for blocking calls.
+    let mut exec_sources = Vec::new();
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let rel = file
+            .strip_prefix(root)
+            .unwrap_or(file)
+            .display()
+            .to_string();
+        if rel.starts_with("crates/krishiv-exec/src/") {
+            exec_sources.push((rel, text));
+        }
+    }
+    let exec_test_only: std::collections::BTreeSet<String> = lint::exec_test_only_files(
+        &exec_sources
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect::<Vec<_>>(),
+    )
+    .into_iter()
+    .collect();
     let mut hits = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -294,6 +322,18 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
             hits.push(format!(
                 "{rel}:{line}: `{marker}` in a physical-plan type: plans are data, live resources are resolved at instantiation (design P2-T171, I1)"
             ));
+        }
+        for line in lint::unjustified_admin_arms(&text) {
+            hits.push(format!(
+                "{rel}:{line}: an `Admin` statement-class arm needs a `// cluster-scope: <reason>` comment (Admin is fail-closed, never a catch-all)"
+            ));
+        }
+        if rel.starts_with("crates/krishiv-exec/src/") && !exec_test_only.contains(&rel) {
+            for (line, marker) in lint::exec_blocking_calls_in(&rel, &text) {
+                hits.push(format!(
+                    "{rel}:{line}: `{marker}` blocks a compute worker: await on the I/O runtime or use TaskContext::run_blocking (yield discipline, P2-T061)"
+                ));
+            }
         }
         if !lint::unsafe_allowed_in(&rel) {
             for line in lint::unsafe_lines(&text) {

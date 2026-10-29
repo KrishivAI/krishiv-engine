@@ -10,9 +10,9 @@ bounds, and the error-condition entries of every error class seen are copied fro
 `error-conditions.json`.
 
 The inputs cover every in-scope type (boolean, integral, float/double, string, binary, decimal, date,
-timestamp, timestamp_ntz) with their aliases, case and whitespace variants, decimal bounds, a few
-out-of-scope types (recorded so later tasks can reuse the fixture) and malformed strings. Output is
-deterministic (no timestamps, stable ordering) and contains no local paths or hostnames.
+timestamp, timestamp_ntz, time, geometry, geography) with their aliases, case and whitespace variants,
+decimal bounds, a few out-of-scope types (recorded so later tasks can reuse the fixture) and malformed
+strings. Output is deterministic (no timestamps, stable ordering) and contains no local paths or hostnames.
 
 Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see bench/README.md):
 
@@ -20,6 +20,9 @@ Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see
     flock "$KRISHIV_DATA/.bench.lock" nice -n 19 \
       python3 tests/scripts/gen_type_strings.py --out tests/fixtures/spark-4.2.0/type-strings.json
     docker compose -f bench/baselines/docker-compose.yml stop spark
+
+`--spark-home DIR` runs the same Scala script with `DIR/bin/spark-shell` instead of the container, for
+example with the Spark that a `pyspark==4.2.0` install ships (`DIR` = its `pyspark` package directory).
 """
 
 from __future__ import annotations
@@ -27,7 +30,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -134,6 +139,56 @@ DDL = [
     "variant",
     "time",
     "string collate utf8_lcase",
+    # time (P2-T181): precision bounds and the multi-word forms
+    "TIME",
+    "time(0)",
+    "time(3)",
+    "TIME(6)",
+    "time(06)",
+    "time(7)",
+    "time(-1)",
+    "time()",
+    "time(1,2)",
+    "time(99999999999)",
+    "time without time zone",
+    "TIME(3) WITHOUT TIME ZONE",
+    "time with time zone",
+    "time with local time zone",
+    "time(3) with time zone",
+    "time_ntz",
+    "time without",
+    "time(3) without time",
+    # geometry and geography (P2-T181): SRIDs, ANY, malformed parameters
+    "geometry(0)",
+    "GEOMETRY(4326)",
+    "geometry(3857)",
+    "geometry( 3857 )",
+    "geometry(04326)",
+    "geometry(any)",
+    "GEOMETRY(ANY)",
+    "geometry(Any)",
+    "geometry(`any`)",
+    "geometry(anything)",
+    "geometry",
+    "geometry()",
+    "geometry(9999)",
+    "geometry(-1)",
+    "geometry(1)",
+    "geometry(99999999999)",
+    "geometry(4326,0)",
+    "geometry(srid:0)",
+    "geometry(any",
+    "geometry(any,1)",
+    "geography(any) int",
+    "geography(4326)",
+    "GEOGRAPHY(ANY)",
+    "geography(any)",
+    "geography",
+    "geography(0)",
+    "geography(3857)",
+    "geography(9999)",
+    "geography(-1)",
+    "geography(4326, spherical)",
     # malformed
     "",
     "foo",
@@ -178,6 +233,128 @@ DDL = [
     "decimal(.5,0)",
     "decimal(5,99999999999)",
     "decimal(99999999999)",
+    # nested types (P2-T001b): arrays, maps, structs, nesting, nullability, comments, quoting
+    "ARRAY<INT>",
+    "array< int >",
+    "Array<String>",
+    "array<array<int>>",
+    "array<array<array<array<int>>>>",
+    "array<decimal(10,2)>",
+    "array<void>",
+    "array<timestamp_ntz>",
+    "array<decimal(0,0)>",
+    "MAP<STRING, ARRAY<DOUBLE>>",
+    "map<int,map<int,int>>",
+    "map<map<int,int>,int>",
+    "map<array<int>,int>",
+    "map<struct<a:int>,string>",
+    "map<void,int>",
+    "map< string , int >",
+    "struct<a int>",
+    "struct<a:int,b:string>",
+    "STRUCT<a: INT, b: STRING>",
+    "struct<A:int,b:STRING>",
+    "struct<>",
+    "struct< >",
+    "STRUCT<>",
+    "struct<a:int not null>",
+    "struct<a:int NOT NULL,b:string>",
+    "struct<a:int comment 'hello'>",
+    "struct<a:int not null comment 'x y'>",
+    'struct<a:int comment "dq">',
+    "struct<a:int comment 'it\\'s'>",
+    "struct<a:int comment 'a\\\\b'>",
+    "struct<a:int comment ''>",
+    "struct<a:int comment 'tab\\there'>",
+    "struct<a:int comment 'q\"d'>",
+    "struct<`a b`:int>",
+    "struct<`a``b`:int>",
+    "struct<`a.b`:int>",
+    "struct<`1a`:int>",
+    "struct<`1`:int>",
+    "struct<_a:int>",
+    "struct<a1:int>",
+    "struct<select:int>",
+    "struct<`select`:int>",
+    "struct<from:int>",
+    "struct<a:int,a:string>",
+    "struct<é:int>",
+    "struct<`é`:int>",
+    "struct<`a:b`:int>",
+    "struct<` `:int>",
+    "struct<a:array<struct<b:map<string,array<double>>>>>",
+    "ARRAY<STRUCT<a: INT, b: MAP<STRING, ARRAY<DOUBLE>>>>",
+    "map<string,struct<a:array<map<int,struct<b:int>>>>>",
+    "struct<a:struct<b:struct<c:struct<d:int>>>>",
+    "array<struct<a:int not null>>",
+    "struct<a:decimal(10,2),b:timestamp_ntz,c:binary,d:date>",
+    "struct<a:array<int>>",
+    "struct<c0:int,c1:int,c2:int,c3:int,c4:int,c5:int,c6:int,c7:int,c8:int,c9:int,c10:int,c11:int,c12:int,c13:int,c14:int,c15:int,c16:int,c17:int,c18:int,c19:int,c20:int,c21:int,c22:int,c23:int,c24:int,c25:int,c26:int,c27:int,c28:int,c29:int>",
+    "array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<array<int>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
+    "array",
+    "array<>",
+    "array<int",
+    "array<int,int>",
+    "array(int)",
+    "array<foo>",
+    "array<int>>",
+    "map",
+    "map<int>",
+    "map<int,int,int>",
+    "map<int,>",
+    "map<,int>",
+    "struct",
+    "struct<a>",
+    "struct<a:>",
+    "struct<a:int,>",
+    "struct<,a:int>",
+    "struct<a-b:int>",
+    "struct<a:int null>",
+    "struct<a:int not>",
+    "struct<a:int comment>",
+    "struct<a:int comment 5>",
+    "struct<a:int comment 'x' not null>",
+    "array<int> not null",
+    "struct<a:int>>",
+    "struct<a:foo>",
+    "struct<a::int>",
+    "array<int not null>",
+    "struct<a:decimal(39,0)>",
+    "array<decimal(5,6)>",
+    "struct<a:int comment 'c\\u0001\\u0085\\u2028\\u00e9\\u007f\\u001f'>",
+    "struct<map:int,array:string>",
+    "array<int>=",
+    "struct<a:int,b:array<int>>>",
+    "array<array<int>>>>",
+    "array<int>,",
+    "array<int> int",
+    "struct<a:int> x",
+    "array<array<int>",
+    "array<struct<a>>",
+    "map<string,array<int>",
+    "array<int>>>",
+    "struct<a:int>,",
+    "map<>",
+    "array<array<>>",
+    "struct<a:array<>>",
+    "array<int> /* c */",
+    "struct<a int Not Null Comment 'x', b string>",
+    "array<array<foo>>",
+    "array<struct<é:int>>",
+    "struct<a:struct<b-c:int>>",
+    "array<int>>,",
+    "array<decimal(39,0)",
+    "struct<a:int comment 'x'",
+    "struct<a:int comment 'unterminated>",
+    "array<string collate utf8_lcase>",
+    "array<interval year>",
+    "array<char(3)>",
+    "struct<a:variant>",
+    "map<string,int>/* c */",
+    "struct<a:int comment r'raw\\n'>",
+    "struct<a:int comment 'x' 'y'>",
+    "struct<a:int comment 'line\\nbreak'>",
+    "struct<a:int comment '\\u0041\\101'>",
 ]
 
 DECIMALS = [(38, 38), (38, 0), (1, 0), (18, 18), (39, 0), (0, 0), (5, 6), (10, -1), (100, 0)]
@@ -185,17 +362,56 @@ DECIMALS = [(38, 38), (38, 0), (1, 0), (18, 18), (39, 0), (0, 0), (5, 6), (10, -
 LOCAL_PATH = re.compile(r"/home/|/Users/|[A-Za-z]:\\\\")
 
 
+def local_spark_shell(spark_home: Path, script: str, data: str) -> list[str]:
+    """Run the Scala script with a local `spark-shell -I`; returns its `@@` lines.
+
+    The script reads its cases from a path the container run fixes; here both
+    files live in a private temporary directory, so concurrent runs never share
+    inputs.
+    """
+    with tempfile.TemporaryDirectory(prefix="krishiv_types_") as tmp:
+        script_path = Path(tmp) / "script.scala"
+        cases_path = Path(tmp) / "cases.jsonl"
+        cases_path.write_text(data, encoding="utf-8")
+        script_path.write_text(script.replace("/tmp/krishiv_cases.jsonl", str(cases_path)), encoding="utf-8")
+        cmd = [
+            str(spark_home / "bin" / "spark-shell"),
+            "--master",
+            "local[1]",
+            "--driver-memory",
+            "2g",
+            "-I",
+            str(script_path),
+        ]
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=3600, check=True, stdin=subprocess.DEVNULL
+        ).stdout
+    lines = [line for line in out.splitlines() if line.startswith("@@")]
+    if "@@END" not in lines:
+        raise SystemExit("spark-shell script did not complete:\n" + out[-2000:])
+    return lines
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--container", default="krishiv-bench-spark")
     ap.add_argument("--out", default="tests/fixtures/spark-4.2.0/type-strings.json")
+    ap.add_argument(
+        "--spark-home",
+        help="run a local Spark distribution's spark-shell (for example a PySpark 4.2.0 install) "
+        "instead of the container",
+    )
     args = ap.parse_args()
 
     data = "".join(json.dumps({"ddl": d}) + "\n" for d in DDL)
     data += "".join(json.dumps({"precision": p, "scale": s}) + "\n" for p, s in DECIMALS)
-    lines = spark_shell(
-        args.container, (Path(__file__).parent / "typestr" / "dump_types.scala").read_text(encoding="utf-8"), data
-    )
+    script = (Path(__file__).parent / "typestr" / "dump_types.scala").read_text(encoding="utf-8")
+    if args.spark_home:
+        lines = local_spark_shell(Path(args.spark_home), script, data)
+        image = "local spark-shell"
+    else:
+        lines = spark_shell(args.container, script, data)
+        image = container_image(args.container)
     version = next(line.split(" ", 1)[1] for line in lines if line.startswith("@@VERSION "))
     ddl = [json.loads(line[4:]) for line in lines if line.startswith("@@T ")]
     decimals = [json.loads(line[4:]) for line in lines if line.startswith("@@D ")]
@@ -209,7 +425,7 @@ def main() -> None:
     doc = {
         "format_version": FORMAT_VERSION,
         "spark_version": version,
-        "image": container_image(args.container),
+        "image": image,
         "generator": GENERATOR,
         "notes": "DDL strings parsed by CatalystSqlParser.parseDataType; decimal_constructor builds "
         "DecimalType(precision, scale) directly. Errors carry Spark's condition, SQLSTATE and "

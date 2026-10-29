@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
 
 use crate::errors::to_py;
+use crate::window::PyWindowSpec;
 
 /// A column expression.
 #[pyclass(name = "Column", module = "krishiv._native", frozen, from_py_object)]
@@ -149,6 +150,11 @@ impl PyColumn {
             (false, false) => c.desc(),
         })
     }
+
+    /// `self OVER window` (PySpark's `Column.over`).
+    fn over(&self, window: &PyWindowSpec) -> Self {
+        Self::wrap(self.inner.clone().over(window.inner.clone()))
+    }
 }
 
 /// The column named `name` (`a`, `t.a`, `` `a.b` ``, `*`, `t.*`).
@@ -182,6 +188,13 @@ pub(crate) fn literal(value: &Bound<'_, PyAny>) -> PyResult<PyColumn> {
         )));
     };
     Ok(PyColumn::wrap(column))
+}
+
+/// A `MAP<STRING, STRING>` literal from its entries in order: the JSON
+/// options of one call, as the wrappers pass them.
+#[pyfunction(name = "map_literal")]
+pub(crate) fn map_literal(pairs: Vec<(String, String)>) -> PyColumn {
+    PyColumn::wrap(krishiv_session::functions::map_literal(pairs))
 }
 
 /// A call of the function `name` with `args` (resolved when queried).

@@ -29,6 +29,7 @@ krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 thiserror.workspace = true
 # The query profile's JSON document (`profile`).
 serde_json = { workspace = true, features = ["std"] }
@@ -36,6 +37,12 @@ serde_json = { workspace = true, features = ["std"] }
 object_store.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true, features = ["std"] }
+# Live async-task diagnostics (`tokio-console`, P2-T129): enabled only by the
+# `tokio-console` feature, so default builds link none of it.
+console-subscriber = { workspace = true, optional = true }
+# Installed with `try_init` (never panicking when the host owns the global
+# subscriber): registry support for the console layer above.
+tracing-subscriber = { workspace = true, optional = true, features = ["registry", "std"] }
 
 [dev-dependencies]
 insta.workspace = true
@@ -53,8 +60,22 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 loom = { workspace = true, features = ["futures"] }
 
 [features]
+# Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
+# default build stays inside the dependency and binary-size budgets.
+cloud = ["krishiv-io/cloud"]
 # Row-layout key-page prototype (P2-T157); not part of the default build.
 row-table-prototype = []
+# Live async-task diagnostics over `tokio-console` (P2-T129): task names and
+# the console subscriber. Off by default; needs `RUSTFLAGS="--cfg
+# tokio_unstable"` for the task names (they are absent without it).
+tokio-console = ["dep:console-subscriber", "dep:tracing-subscriber", "tokio/tracing"]
+# The planted non-yielding operator its diagnostics walk-through uses
+# (`testing::BusyLoop`); test-only, implies `tokio-console`.
+tokio-console-test = ["tokio-console"]
+
+[[bench]]
+name = "udf"
+harness = false
 
 [[bench]]
 name = "pipeline"
@@ -74,6 +95,10 @@ harness = false
 
 [[bench]]
 name = "hash_join"
+harness = false
+
+[[bench]]
+name = "routing_hash"
 harness = false
 
 [[bench]]

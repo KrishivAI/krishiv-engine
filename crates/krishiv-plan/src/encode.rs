@@ -70,7 +70,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 4;
+pub const ENCODING_VERSION: u16 = 7;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -537,6 +537,18 @@ impl<'k, 'a> Encoder<'k, 'a> {
         self.bytes(s.as_bytes());
     }
 
+    /// A function's identity in a key: its canonical name, never a registry
+    /// id (see `FunctionId`), and for a UDF its version, so a re-registered
+    /// UDF never shares a key with the version it replaced. Kept out of line
+    /// so the recursive expression encoder's frame stays small.
+    #[inline(never)]
+    fn function_id(&mut self, id: &crate::FunctionId) {
+        self.str(id.name());
+        if let crate::FunctionId::Udf { version, .. } = id {
+            self.u32(*version);
+        }
+    }
+
     fn bytes(&mut self, b: &[u8]) {
         self.len(b.len());
         self.put(b);
@@ -711,6 +723,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         self.u8(2);
                         self.strs(cols);
                     }
+                    JoinCondition::Natural => self.u8(3),
                 }
             }
             PlanNode::Sort { order, global, .. } => {
@@ -811,6 +824,69 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.len(rows.len());
                 rows.iter().for_each(|r| self.exprs(r));
                 self.strs(columns);
+            }
+            PlanNode::Pivot {
+                pivot_columns,
+                values,
+                aggregates,
+                ..
+            } => {
+                self.u8(26);
+                self.exprs(pivot_columns);
+                self.len(values.len());
+                for v in values {
+                    self.exprs(&v.exprs);
+                    self.u8(u8::from(v.alias.is_some()));
+                    if let Some(alias) = &v.alias {
+                        self.str(alias);
+                    }
+                }
+                self.exprs(aggregates);
+            }
+            PlanNode::Unpivot {
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+                ..
+            } => {
+                self.u8(27);
+                self.strs(value_columns);
+                self.str(name_column);
+                self.len(column_sets.len());
+                for s in column_sets {
+                    self.exprs(&s.columns);
+                    self.u8(u8::from(s.alias.is_some()));
+                    if let Some(alias) = &s.alias {
+                        self.str(alias);
+                    }
+                }
+                self.u8(u8::from(*include_nulls));
+            }
+            PlanNode::TableFunction { name, args } => {
+                self.u8(28);
+                self.str(name);
+                self.exprs(args);
+            }
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                num_slices,
+                output,
+            } => {
+                self.u8(29);
+                self.i64(*start);
+                self.i64(*end);
+                self.i64(*step);
+                match num_slices {
+                    None => self.u8(0),
+                    Some(n) => {
+                        self.u8(1);
+                        self.put(&n.to_le_bytes());
+                    }
+                }
+                self.bound(output);
             }
         }
     }
@@ -925,19 +1001,38 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(2);
                 self.literal(v);
             }
-            ExprNode::Star(Star { qualifier, plan_id }) => {
+            ExprNode::Star(Star {
+                qualifier,
+                except,
+                plan_id,
+            }) => {
                 self.u8(3);
                 self.strs(qualifier);
+                self.len(except.len());
+                except.iter().for_each(|path| self.strs(path));
                 self.plan_ref(*plan_id);
             }
             ExprNode::Function(FunctionCall {
                 name,
+                qualifier,
                 args,
+                arg_names,
                 distinct,
                 filter,
             }) => {
                 self.u8(4);
                 self.str(name);
+                self.strs(qualifier);
+                self.len(arg_names.len());
+                for n in arg_names {
+                    match n {
+                        None => self.u8(0),
+                        Some(n) => {
+                            self.u8(1);
+                            self.str(n);
+                        }
+                    }
+                }
                 self.call(args, *distinct, filter.as_ref());
             }
             ExprNode::Cast { expr, to, mode } => {
@@ -996,9 +1091,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 deterministic: _,
             })) => {
                 self.u8(10);
-                // The canonical name only: a registry id is never part of
-                // a key (see `FunctionId`).
-                self.str(id.name());
+                self.function_id(id);
                 self.u8(kind.code());
                 self.data_type(data_type);
                 self.bool(*nullable);
@@ -1008,6 +1101,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(11);
                 self.bound(output);
                 self.expr(expr);
+            }
+            ExprNode::Lambda { params, body } => {
+                self.u8(15);
+                self.len(params.len());
+                params.iter().for_each(|c| self.bound(c));
+                self.expr(body);
+            }
+            ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
+                self.u8(16);
+                self.bound(c);
             }
             ExprNode::Window(crate::WindowExpr { function, window }) => {
                 self.u8(12);
@@ -1044,6 +1147,25 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::TypedLiteralKind::TimestampLtz => 4,
                 });
                 self.str(value);
+            }
+            ExprNode::Field { base, name } => {
+                self.u8(14);
+                self.str(name);
+                self.expr(base);
+            }
+            ExprNode::Resolved(ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            }) => {
+                self.u8(15);
+                self.str(name);
+                self.len(*ordinal);
+                self.data_type(data_type);
+                self.bool(*nullable);
+                self.expr(base);
             }
         }
     }
@@ -1112,6 +1234,14 @@ impl<'k, 'a> Encoder<'k, 'a> {
             Literal::Binary(b) => {
                 self.u8(11);
                 self.bytes(b);
+            }
+            Literal::Map(pairs) => {
+                self.u8(18);
+                self.len(pairs.len());
+                for (k, v) in pairs {
+                    self.str(k);
+                    self.str(v);
+                }
             }
             Literal::Date(d) => {
                 self.u8(12);

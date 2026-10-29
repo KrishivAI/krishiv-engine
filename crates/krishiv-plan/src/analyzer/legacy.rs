@@ -169,6 +169,12 @@ fn references(plan: &Arc<LogicalPlan>, name: &str, cs: bool) -> bool {
             found = true;
             break;
         }
+        // A nested `WITH` that defines `name` shadows it in its main query.
+        if let PlanNode::WithCte { ctes, .. } = &p.node
+            && ctes.iter().any(|c| same(&c.name, name, cs))
+        {
+            continue;
+        }
         p.for_each_child(&mut |c| plans.push(Arc::clone(c)));
         p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
         while let Some(e) = exprs.pop() {

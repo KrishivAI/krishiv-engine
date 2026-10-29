@@ -1,0 +1,6 @@
+READ	SELECT 'trailing' AS first
+READ	SELECT /* embedded single line */ 'embedded' AS `second`
+READ	SELECT /* both embedded and trailing single line */ 'both' AS third
+READ	SELECT 'before multi-line' AS fourth
+READ	/* This is an example of SQL which should not execute:
+READ	/*

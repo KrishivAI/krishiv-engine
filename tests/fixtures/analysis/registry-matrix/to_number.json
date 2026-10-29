@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "to_number#2ac9fb75cd2c/ansi_on",
+      "reason": "SELECT to_number(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_number#2ac9fb75cd2c/ansi_off",
+      "reason": "SELECT to_number(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_number#7e6e35712586/ansi_on",
+      "reason": "SELECT to_number('454', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
+    },
+    {
+      "id": "to_number#7e6e35712586/ansi_off",
+      "reason": "SELECT to_number('454', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
+    },
+    {
+      "id": "to_number#8152f955c6c4/ansi_on",
+      "reason": "SELECT to_number('454', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
+    },
+    {
+      "id": "to_number#8152f955c6c4/ansi_off",
+      "reason": "SELECT to_number('454', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
+    },
+    {
+      "id": "to_number#8e822c2c1477/ansi_on",
+      "reason": "SELECT to_number(INTERVAL '1 02:03:04' DAY TO SECOND, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_number#8e822c2c1477/ansi_off",
+      "reason": "SELECT to_number(INTERVAL '1 02:03:04' DAY TO SECOND, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_number#a9a4941ee7c0/ansi_on",
+      "reason": "SELECT to_number('454', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
+    },
+    {
+      "id": "to_number#a9a4941ee7c0/ansi_off",
+      "reason": "SELECT to_number('454', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
+    },
+    {
+      "id": "to_number#f4a062de0718/ansi_on",
+      "reason": "SELECT to_number('454', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
+    },
+    {
+      "id": "to_number#f4a062de0718/ansi_off",
+      "reason": "SELECT to_number('454', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_number"
+}

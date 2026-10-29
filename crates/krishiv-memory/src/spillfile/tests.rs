@@ -106,6 +106,7 @@ impl Pool {
             quantum: 1,
             // Exact budgets: no spill-scratch floor below the limit.
             spill_scratch_reserve: 0,
+            resident_guard: true,
             ..MemoryConfig::default()
         });
         let query = root.child("query", None);
@@ -1402,6 +1403,7 @@ fn config_keys_drive_the_spill_config() {
         ("krishiv.spill.maxBytes", "10g"),
         ("krishiv.spill.compression", "ZSTD"),
         ("krishiv.spill.zstd.level", "7"),
+        ("krishiv.spill.dropBehindBytes", "0"),
     ])
     .unwrap();
     let c = SpillConfig::from_config(&config);
@@ -1409,6 +1411,8 @@ fn config_keys_drive_the_spill_config() {
     assert_eq!(c.max_bytes, 10 << 30);
     assert_eq!(c.codec, SpillCodec::Zstd);
     assert_eq!(c.zstd_level, 7);
+    assert_eq!(c.drop_behind, 0);
+    assert_eq!(SpillConfig::default().drop_behind, 8 << 20);
 
     assert_eq!(SpillCodec::from_name("none"), Some(SpillCodec::None));
     assert_eq!(SpillCodec::from_name("lz4"), Some(SpillCodec::Lz4));
@@ -1649,4 +1653,73 @@ fn ids_are_unique_across_threads() {
     let unique: std::collections::HashSet<&String> = all.iter().collect();
     assert_eq!(unique.len(), all.len());
     assert!(all.iter().all(|id| super::dir::valid_id(id)));
+}
+
+/// The resident-set guard's cut never refuses spill I/O: a reader and an
+/// ordinary (non-scratch) writer fit above the cut ceiling, below the limit.
+#[test]
+fn spill_reads_and_writes_are_outside_the_resident_guards_cut() {
+    let (_dir, _manager, scope, writer_pool) = env(SpillCodec::None);
+    let batches: Vec<Batch> = (0..4)
+        .map(|i| int_batch(i * 1000, 1000, Weights::Const(1)))
+        .collect();
+    let file = write_file(&scope, &writer_pool, &batches);
+    let one = batches[0].data().get_array_memory_size();
+
+    let pool = Pool::new(Some(one * 60));
+    // Everything below the cut ceiling is taken: ordinary growth is refused.
+    pool.root
+        .node()
+        .shared
+        .cut
+        .store(one * 20, crate::sync::Ordering::Release);
+    let mut blocker = pool.reservation();
+    blocker.try_grow(one * 40).unwrap();
+    assert!(pool.reservation().try_grow(16).is_err(), "the cut applies");
+
+    let rows: usize = file
+        .reader(pool.reservation())
+        .unwrap()
+        .map(|b| b.unwrap().num_rows())
+        .sum();
+    assert_eq!(rows, 4_000);
+    let copy = write_file(&scope, &pool, &batches);
+    assert_eq!(read_all(&copy, &pool).unwrap().len(), 4);
+    drop(blocker);
+    assert_eq!(pool.root.reserved(), 0);
+}
+
+#[test]
+fn a_lock_not_yet_published_is_never_reclaimed_and_a_dead_one_is() {
+    let dir = TestDir::new();
+    dir.create();
+    // A start in progress holds its unpublished lock: another start must not
+    // touch it (the race that let concurrent starts exhaust their ids).
+    let held = dir.0.join(".krishiv-spill-new-1-a-0-0");
+    let held_file = fs::File::create(&held).unwrap();
+    held_file.lock().unwrap();
+    // One whose process died, and one that is not ours.
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for name in [".krishiv-spill-new-2-a-0-0", ".krishiv-spill-new-NOT_AN_ID"] {
+        let f = fs::File::create(dir.0.join(name)).unwrap();
+        f.set_modified(old).unwrap();
+    }
+    // And a fresh unlocked one: its creator may be about to lock it.
+    fs::write(dir.0.join(".krishiv-spill-new-3-a-0-0"), b"").unwrap();
+
+    let manager = SpillManager::open(&dir.config(SpillCodec::Lz4)).unwrap();
+    let names = entries(&dir.0);
+    assert!(names.contains(&".krishiv-spill-new-1-a-0-0".to_owned()));
+    assert!(names.contains(&".krishiv-spill-new-NOT_AN_ID".to_owned()));
+    assert!(names.contains(&".krishiv-spill-new-3-a-0-0".to_owned()));
+    assert!(!names.contains(&".krishiv-spill-new-2-a-0-0".to_owned()));
+    // Opening leaves no unpublished lock of its own behind.
+    assert_eq!(
+        names
+            .iter()
+            .filter(|n| n.starts_with(".krishiv-spill-new-"))
+            .count(),
+        3
+    );
+    drop(manager);
 }

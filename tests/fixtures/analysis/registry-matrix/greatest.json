@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "greatest#096852702824/ansi_on",
+      "reason": "SELECT greatest(INTERVAL '1 02:03:04' DAY TO SECOND, 9, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#096852702824/ansi_off",
+      "reason": "SELECT greatest(INTERVAL '1 02:03:04' DAY TO SECOND, 9, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#153b990a709e/ansi_on",
+      "reason": "SELECT greatest(INTERVAL '1-2' YEAR TO MONTH, 9, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#153b990a709e/ansi_off",
+      "reason": "SELECT greatest(INTERVAL '1-2' YEAR TO MONTH, 9, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#27d19c21be34/ansi_on",
+      "reason": "SELECT greatest(10, 9, 2, 4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#27d19c21be34/ansi_off",
+      "reason": "SELECT greatest(10, 9, 2, 4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#3b87446f2696/ansi_on",
+      "reason": "SELECT greatest(10, 9, 2, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#3b87446f2696/ansi_off",
+      "reason": "SELECT greatest(10, 9, 2, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#4516360b05de/ansi_on",
+      "reason": "SELECT greatest(10, 9, 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#4516360b05de/ansi_off",
+      "reason": "SELECT greatest(10, 9, 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#69f9244398a6/ansi_on",
+      "reason": "SELECT greatest(10, 9, 2, 4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#69f9244398a6/ansi_off",
+      "reason": "SELECT greatest(10, 9, 2, 4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#98f8bb73a148/ansi_on",
+      "reason": "SELECT greatest(10, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#98f8bb73a148/ansi_off",
+      "reason": "SELECT greatest(10, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#ab49812b5c27/ansi_on",
+      "reason": "SELECT greatest(10, 9, INTERVAL '1-2' YEAR TO MONTH, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#ab49812b5c27/ansi_off",
+      "reason": "SELECT greatest(10, 9, INTERVAL '1-2' YEAR TO MONTH, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#ac8fdf5710d4/ansi_on",
+      "reason": "SELECT greatest(10, INTERVAL '1-2' YEAR TO MONTH, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#ac8fdf5710d4/ansi_off",
+      "reason": "SELECT greatest(10, INTERVAL '1-2' YEAR TO MONTH, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#d2ab6b7ae5ae/ansi_on",
+      "reason": "SELECT greatest(10, 9, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "greatest#d2ab6b7ae5ae/ansi_off",
+      "reason": "SELECT greatest(10, 9, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "greatest"
+}

@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "locate#01f3ec6fd259/ansi_on",
+      "reason": "SELECT locate('bar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#01f3ec6fd259/ansi_off",
+      "reason": "SELECT locate('bar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#0c58b38c3b6d/ansi_on",
+      "reason": "SELECT locate('bar', 'foobarbar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "locate#0c58b38c3b6d/ansi_off",
+      "reason": "SELECT locate('bar', 'foobarbar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "locate#2aaf54a57aca/ansi_on",
+      "reason": "SELECT locate('bar', 'foobarbar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "locate#2aaf54a57aca/ansi_off",
+      "reason": "SELECT locate('bar', 'foobarbar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "locate#5f5842f91add/ansi_on",
+      "reason": "SELECT locate(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#5f5842f91add/ansi_off",
+      "reason": "SELECT locate(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#6126bb221ce9/ansi_on",
+      "reason": "SELECT locate('bar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#6126bb221ce9/ansi_off",
+      "reason": "SELECT locate('bar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#7e29689f2553/ansi_on",
+      "reason": "SELECT locate(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#7e29689f2553/ansi_off",
+      "reason": "SELECT locate(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#908e65ca359a/ansi_on",
+      "reason": "SELECT locate(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#908e65ca359a/ansi_off",
+      "reason": "SELECT locate(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#9c369d1fb51b/ansi_on",
+      "reason": "SELECT locate('bar', INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#9c369d1fb51b/ansi_off",
+      "reason": "SELECT locate('bar', INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#d7063806fdbe/ansi_on",
+      "reason": "SELECT locate('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#d7063806fdbe/ansi_off",
+      "reason": "SELECT locate('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#ffc3f838bcdf/ansi_on",
+      "reason": "SELECT locate(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "locate#ffc3f838bcdf/ansi_off",
+      "reason": "SELECT locate(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "locate"
+}

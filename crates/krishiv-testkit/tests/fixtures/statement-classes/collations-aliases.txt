@@ -1,0 +1,32 @@
+DDL	create table t1(s string, utf8_binary string collate utf8_binary, utf8_lcase string collate utf8_lcase) using parquet
+WRITE	insert into t1 values ('Spark', 'Spark', 'SQL')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaAAaA')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaaAaA')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaaAaAaaAaaAaAaaAaaAaA')
+WRITE	insert into t1 values ('bbAbaAbA', 'bbAbAAbA', 'a')
+WRITE	insert into t1 values ('İo', 'İo', 'İo')
+WRITE	insert into t1 values ('İo', 'İo', 'İo ')
+WRITE	insert into t1 values ('İo', 'İo ', 'İo')
+WRITE	insert into t1 values ('İo', 'İo', 'i̇o')
+WRITE	insert into t1 values ('efd2', 'efd2', 'efd2')
+WRITE	insert into t1 values ('Hello, world! Nice day.', 'Hello, world! Nice day.', 'Hello, world! Nice day.')
+WRITE	insert into t1 values ('Something else. Nothing here.', 'Something else. Nothing here.', 'Something else. Nothing here.'
+WRITE	insert into t1 values ('kitten', 'kitten', 'sitTing')
+WRITE	insert into t1 values ('abc', 'abc', 'abc')
+WRITE	insert into t1 values ('abcdcba', 'abcdcba', 'aBcDCbA')
+READ	select concat_ws(' ', utf8_lcase, utf8_lcase) from t1
+READ	select `concat_ws(' ' collate UTF8_LCASE, utf8_lcase, utf8_lcase)` from (
+READ	select * from (
+READ	select subq1.* from (
+READ	with cte as (
+READ	select * from values (1) where exists (
+READ	select (
+READ	select (
+READ	select * from (
+READ	select lower(`concat_ws(' ' collate UTF8_LCASE, utf8_lcase, utf8_lcase)`) from (
+READ	select lower(`concat_ws(' ' collate UTF8_LCASE, utf8_lcase, utf8_lcase)`) from (
+SESSION	create temporary view v1 as (
+READ	select * from v1
+READ	select `concat_ws(' ' collate UTF8_LCASE, utf8_lcase, utf8_lcase)` from v1
+SESSION	drop view v1
+DDL	drop table t1

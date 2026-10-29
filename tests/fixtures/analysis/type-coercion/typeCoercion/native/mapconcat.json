@@ -1,0 +1,34 @@
+{
+  "entries": [
+    {
+      "query": "SELECT\n    map_concat(boolean_map1, boolean_map2) boolean_map,\n    map_concat(tinyint_map1, tinyint_map2) tinyint_map,\n    map_concat(smallint_map1, smallint_map2) smallint_map,\n    map_concat(int_map1, int_map2) int_map,\n    map_concat(bigint_map1, bigint_map2) bigint_map,\n    map_concat(decimal_map1, decimal_map2) decimal_map,\n    map_concat(float_map1, float_map2) float_map,\n    map_concat(double_map1, double_map2) double_map,\n    map_concat(date_map1, date_map2) date_map,\n    map_concat(timestamp_map1, timestamp_map2) timestamp_map,\n    map_concat(string_map1, string_map2) string_map,\n    map_concat(array_map1, array_map2) array_map,\n    map_concat(struct_map1, struct_map2) struct_map,\n    map_concat(string_int_map1, string_int_map2) string_int_map,\n    map_concat(int_string_map1, int_string_map2) int_string_map\nFROM various_maps",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_maps`"
+    },
+    {
+      "query": "SELECT\n    map_concat(boolean_map1, int_map2) bi_map\nFROM various_maps",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_maps`"
+    },
+    {
+      "query": "SELECT\n    map_concat(int_map1, array_map2) ms_map\nFROM various_maps",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_maps`"
+    },
+    {
+      "query": "SELECT\n    map_concat(int_map1, struct_map2) is_map\nFROM various_maps",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_maps`"
+    },
+    {
+      "query": "SELECT\n    map_concat(struct_map1, array_map2) ma_map\nFROM various_maps",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_maps`"
+    },
+    {
+      "query": "SELECT\n    map_concat(tinyint_map1, array_map1) tm_map\nFROM various_maps",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_maps`"
+    },
+    {
+      "query": "SELECT\n    map_concat(tinyint_map1, smallint_map2) ts_map,\n    map_concat(smallint_map1, int_map2) si_map,\n    map_concat(int_map1, bigint_map2) ib_map,\n    map_concat(bigint_map1, decimal_map2) bd_map,\n    map_concat(decimal_map1, float_map2) df_map,\n    map_concat(string_map1, date_map2) std_map,\n    map_concat(timestamp_map1, string_map2) tst_map,\n    map_concat(string_map1, int_map2) sti_map,\n    map_concat(int_string_map1, tinyint_map2) istt_map\nFROM various_maps",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_maps`"
+    }
+  ],
+  "file": "typeCoercion/native/mapconcat",
+  "format_version": 1
+}

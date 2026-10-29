@@ -39,8 +39,8 @@ use super::ops::col_expr;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType};
 use crate::{
-    BoundColumn, CastMode, Expr, ExprNode, FunctionCall, FunctionKind, Grouping, Literal,
-    LogicalPlan, Origin, PlanNode, ResolvedExpr,
+    BoundColumn, CastMode, Expr, ExprNode, FunctionCall, FunctionId, FunctionKind, Grouping,
+    Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr,
 };
 
 /// The most grouping expressions one `GROUP BY` takes: the grouping id is a
@@ -156,7 +156,8 @@ pub(super) fn reject_grouping_calls(exprs: &[Arc<Expr>]) -> Result<(), AnalysisE
         if !seen.insert(Arc::as_ptr(&x) as usize) {
             continue;
         }
-        if matches!(&x.node, ExprNode::Function(f) if GroupingFn::from_name(&f.name).is_some()) {
+        if matches!(&x.node, ExprNode::Function(f) if f.unqualified().is_some_and(|n| GroupingFn::from_name(n).is_some()))
+        {
             return Err(AnalysisError::new(
                 UnsupportedGroupingExpression {},
                 Origin::UNKNOWN,
@@ -289,6 +290,8 @@ impl Resolver<'_> {
         }
         let call = FunctionCall {
             name: which.name().to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
             args: kids.iter().map(|k| Arc::clone(&k.expr)).collect(),
             distinct: false,
             filter: None,
@@ -444,6 +447,7 @@ impl Resolver<'_> {
                 &items,
                 true,
                 Some(Arc::new(an)),
+                env,
             );
         }
         let Some(gid_col) = gid_col else {
@@ -575,7 +579,7 @@ impl Resolver<'_> {
             }),
         };
         let items = self.rewrite_items(items, &an, env)?;
-        self.build_aggregate(p.origin, &c, group, &items, false, Some(Arc::new(an)))
+        self.build_aggregate(p.origin, &c, group, &items, false, Some(Arc::new(an)), env)
     }
 
     /// The select `items` over the grouping sets: grouping expressions read
@@ -635,7 +639,10 @@ impl Resolver<'_> {
                 return self.retype(rebuilt, env);
             }
             ExprNode::Subquery { .. } => return Ok(Arc::clone(e)),
-            ExprNode::Function(f) if GroupingFn::from_name(&f.name).is_some() => {
+            ExprNode::Function(f)
+                if f.unqualified()
+                    .is_some_and(|n| GroupingFn::from_name(n).is_some()) =>
+            {
                 return self.grouping_value(f, an, env, memo);
             }
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
@@ -673,9 +680,24 @@ impl Resolver<'_> {
         let origin = e.origin;
         match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(f)) if !has_subquery(&e) => {
+                // Rebind by a name that resolves to the same function: a
+                // bare name finds the built-in first (the search path), so
+                // a session UDF rebinds qualified (`system.session.f`) while
+                // built-ins rebind bare, as before. Without the qualifier
+                // `SELECT session.upper(s) ... GROUP BY ROLLUP(s)` would
+                // silently run the built-in `upper` over the copy.
+                let (name, qualifier) = match &f.id {
+                    FunctionId::Udf { name, .. } => (
+                        name.clone(),
+                        vec!["system".to_owned(), "session".to_owned()],
+                    ),
+                    _ => (f.id.name().to_owned(), Vec::new()),
+                };
                 let call = Arc::new(
                     Expr::new(ExprNode::Function(FunctionCall {
-                        name: f.id.name().to_owned(),
+                        name,
+                        qualifier,
+                        arg_names: Vec::new(),
                         args: f.args.clone(),
                         distinct: f.distinct,
                         filter: f.filter.clone(),
@@ -714,7 +736,7 @@ impl Resolver<'_> {
             None => literal(Literal::Long(0)),
         };
         let positions: Vec<Option<usize>> = f.args.iter().map(|a| an.position(a, memo)).collect();
-        match GroupingFn::from_name(&f.name) {
+        match f.unqualified().and_then(GroupingFn::from_name) {
             Some(GroupingFn::GroupingId) => {
                 let exact = positions.len() == n
                     && positions.iter().enumerate().all(|(i, p)| *p == Some(i));

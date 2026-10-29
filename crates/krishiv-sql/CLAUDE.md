@@ -22,8 +22,9 @@ Paths are relative to this crate.
 - `src/parser.rs` statement parser (recursive descent); `src/parser/expr.rs` precedence climbing
 - `src/parser/types.rs` type strings (`parse_data_type`, `parse_table_schema`, `parse_ddl_type`)
 - `src/ast.rs` spanned AST; `src/error.rs` parser errors with Spark classes
-- `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`)
+- `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`; `pipe.rs`, `sample.rs`, `relation.rs`, `transform.rs` for the query-syntax tail)
 - `src/lower.rs` AST to unresolved `krishiv_plan::Plan`; `src/redact.rs` `redact_sql` to `RedactedSql`
+- `src/classify.rs` statement classifier (`classify` → `StatementClass`, `explain_kind`, `statement_queries`, `statement_targets`: the privileges a statement needs on what it writes, creates or drops); goldens `tests/fixtures/statement-classes.tsv` (`tests/classify.rs`), corpus goldens in `krishiv-testkit` `tests/statement_classes.rs`
 
 ## Extension points
 - New construct: token in `keywords.rs` or `lexer.rs`, grammar in `parser.rs` or `parser/expr.rs`, checks in `validate/`, lowering in `lower.rs`.
@@ -44,6 +45,10 @@ Paths are relative to this crate.
 - Type errors follow ANTLR's prediction: a complex type whose `<...>` fails falls back to the bare
   type when that reads on (error at the `<`; after `::` the statement is re-parsed with the bare
   type when the complex one fails later); optional type parts are taken only when complete.
+- Spark 4.2's query-syntax tail parses into the tree and lowers to `KRISHIV_UNSUPPORTED_FEATURE`: pipe operators
+  (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators), `COLLATE`, `TABLESAMPLE`,
+  `NEAREST BY`, `TABLE(...)` arguments, `IDENTIFIER(...)` (names, function names, identifier literals unless
+  `legacy_identifier_clause`), variant paths and `TRANSFORM`. Their `AstBuilder` errors are in `validate/`.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,
@@ -58,6 +63,7 @@ Paths are relative to this crate.
   and dotted names are loops; the plan is checked against `MAX_DEPTH`.
 - Query text reaches sinks only as `RedactedSql` (ADR 0038 update): option values of sensitive keys, URL
   credentials in literals and quoted identifiers, and comments (pattern redaction) are masked; nothing else.
+- `classify` is an exhaustive match without a wildcard arm: a new `Statement` variant (or a sub-kind it branches on) needs a class and a golden line (the coverage test reads `src/ast.rs`). Unplaceable statements are `Admin`, and every `Admin` arm carries `// cluster-scope: <reason>` (`cargo xtask source-guard`).
 - Error messages/classes match Spark; `insta` snapshots for errors.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.

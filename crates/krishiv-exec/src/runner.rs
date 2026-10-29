@@ -44,8 +44,8 @@ use crate::sync::{Mutex, lock};
 pub trait Scheduler: Send + Sync {
     /// Starts `plan` and returns its result stream. Dropping the stream
     /// cancels the query. The plan is data; `worker` holds what this
-    /// process resolves its references with (tables, spill scope, write
-    /// sink) for the parts of the plan that run here.
+    /// process resolves its references with (tables, spill scope, I/O
+    /// context, formats and configuration) for the parts of the plan that run here.
     ///
     /// # Errors
     /// Instantiation errors; execution errors arrive on the stream.
@@ -401,6 +401,12 @@ fn start_group(
     let (sink_id, sink) = &first.sink;
     let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
     let mut started = Vec::with_capacity(members.len());
+    // Scheduler-assigned globally unique partition ids: the drivers of
+    // every member share one id space, in pipeline order, so two drivers
+    // never compute the same partition (stateful functions own one value
+    // stream per partition). An index past `u32` is rejected rather than
+    // wrapped to `u32::MAX`, which would collide.
+    let mut next_partition: u64 = 0;
     for pipeline in members {
         let (source_id, source) = &pipeline.source;
         let mut source_ctx = ctx((*source_id, source.name()));
@@ -421,11 +427,18 @@ fn start_group(
                 .min(source.max_parallelism(&source_global))
                 .max(1)
         };
+        let base = u32::try_from(next_partition)
+            .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
+        // `drivers` fits `usize`; the end index must fit `u32` as well.
+        u32::try_from(next_partition + drivers as u64)
+            .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
+        next_partition += drivers as u64;
         started.push(MemberStart {
             pipeline,
             operator_deps,
             source_global,
             drivers,
+            base_partition: base,
         });
     }
     // One barrier per operator, over the drivers of every pipeline it is in.
@@ -455,6 +468,8 @@ struct MemberStart {
     operator_deps: Vec<Option<GlobalState>>,
     source_global: GlobalState,
     drivers: usize,
+    /// The first scheduler-assigned partition id of its drivers.
+    base_partition: u32,
 }
 
 /// A pipeline group planned but not yet running: the state its members
@@ -495,6 +510,21 @@ fn member_barriers(
         .ok_or_else(|| internal("an operator without a barrier".to_owned()))
 }
 
+/// One driver per index of `member`: the scheduler-assigned partition ids
+/// `base..base + count`. Rejects an id past `u32` instead of wrapping it.
+fn drivers(run: &Arc<PipelineRun>, base: u32, count: usize) -> Result<Vec<TaskHandle>> {
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = u32::try_from(i)
+            .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
+        let partition = base
+            .checked_add(offset)
+            .ok_or_else(|| internal("too many drivers for u32 partition ids".to_owned()))?;
+        out.push(spawn_driver(Arc::clone(run), partition));
+    }
+    Ok(out)
+}
+
 /// Starts every member of `group` together, sharing the sink's state.
 fn spawn_group(
     executor: &Arc<dyn Executor>,
@@ -522,7 +552,7 @@ fn spawn_group(
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
-        handles.extend((0..m.drivers).map(|_| spawn_driver(Arc::clone(&run))));
+        handles.extend(drivers(&run, m.base_partition, m.drivers)?);
         runs.push(run);
     }
     Ok((runs, handles))
@@ -559,7 +589,7 @@ async fn run_group_sequential(
         let mut handles = Drivers(FuturesUnordered::new());
         handles
             .0
-            .extend((0..m.drivers).map(|_| spawn_driver(Arc::clone(&run))));
+            .extend(drivers(&run, m.base_partition, m.drivers)?);
         await_drivers(query, &mut handles).await;
         record_extra_metrics(query, std::slice::from_ref(&run));
         query.check_cancelled()?;

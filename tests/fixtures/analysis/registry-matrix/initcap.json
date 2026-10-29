@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "initcap#44cff88f8f59/ansi_on",
+      "reason": "SELECT initcap(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "initcap#44cff88f8f59/ansi_off",
+      "reason": "SELECT initcap(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "initcap#be1f008f9285/ansi_on",
+      "reason": "SELECT initcap(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "initcap#be1f008f9285/ansi_off",
+      "reason": "SELECT initcap(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "initcap"
+}

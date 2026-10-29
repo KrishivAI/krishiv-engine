@@ -11,7 +11,8 @@ use crate::ast::{DataTypeKind, DataTypeSpec};
 
 impl fmt::Display for DataTypeSpec {
     /// The type as a canonical DDL string (`decimal(10,2)`,
-    /// `array<struct<a:int>>`), with any `COLLATE ...` suffix.
+    /// `array<struct<`a`:int not null comment 'c'>>`), with any
+    /// `COLLATE ...` suffix.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             DataTypeKind::Primitive { name, args } if args.is_empty() => f.write_str(name),
@@ -46,6 +47,10 @@ impl fmt::Display for DataTypeSpec {
                     write!(f, "{sep}`{name}`:{}", field.data_type)?;
                     if field.not_null {
                         f.write_str(" not null")?;
+                    }
+                    if let Some(comment) = &field.comment {
+                        let escaped = comment.replace('\\', "\\\\").replace('\'', "\\'");
+                        write!(f, " comment '{escaped}'")?;
                     }
                 }
                 f.write_str(">")

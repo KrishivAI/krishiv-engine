@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "datetime": [
+      36,
+      45,
+      52
+    ],
+    "nested-interval-types": [
+      46
+    ]
+  },
+  "file": "nonansi/literals",
+  "format_version": 1
+}

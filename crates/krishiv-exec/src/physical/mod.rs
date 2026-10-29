@@ -13,10 +13,12 @@
 //! 2. **Instantiation** ([`instantiate`]) builds the executable graph of
 //!    operators from a plan on the worker that runs it, with the
 //!    resources of that worker ([`WorkerContext`]): table providers and
-//!    their scan factories, the spill scope, the write sink. Expressions
-//!    are compiled for the worker's kernels; runtime-filter cells and
-//!    subquery value cells are created here, one set per instantiation, so
-//!    a plan can be instantiated any number of times.
+//!    their scan factories, the spill scope, the I/O context, formats and
+//!    configuration a write builds its sink from. Expressions
+//!    are compiled for the worker's kernels; runtime filters, subquery
+//!    results and broadcast builds are published and read through the
+//!    worker's [`ValueService`](crate::values::ValueService), one per
+//!    instantiation, so a plan can be instantiated any number of times.
 //!
 //! A [`Scheduler`](crate::Scheduler) takes a [`PhysicalPlan`]; the
 //! in-process [`QueryRunner`](crate::QueryRunner) instantiates it and runs
@@ -27,10 +29,11 @@
 //!   node holding a service handle, a lock, an atomic or a cell does not
 //!   compile.
 //! - Ids are assigned by the planner and are plan data: [`ScanId`],
-//!   [`FilterId`], [`SubqueryId`]. A runtime filter is described twice:
-//!   the scan it filters lists it ([`ScanRuntimeFilter`]: column and key
-//!   type), and the join that produces it lists it ([`JoinFilterPlan`]: key
-//!   and options); instantiation connects the two through one cell per id.
+//!   [`FilterId`], [`SubqueryId`], [`ExchangeId`]; [`ValueId`] names the
+//!   values among them. A runtime filter is described twice: the scan it
+//!   filters lists it ([`ScanRuntimeFilter`]: column and key type), and
+//!   the join that produces it lists it ([`JoinFilterPlan`]: key and
+//!   options); instantiation connects the two through the value service.
 //! - A subquery's value is read by the expressions of the node that lists
 //!   it ([`SubqueryPlan`]) as the column of attribute [`SubqueryId::attr`].
 //! - Data moves between partitions only at [`PhysNode::Exchange`] nodes,
@@ -42,28 +45,38 @@
 
 pub(crate) mod data;
 mod instantiate;
+pub mod splits;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow_schema::{DataType, SchemaRef};
+use arrow_array::Array;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use krishiv_common::secret::OptionValue;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
+use krishiv_kernels::hash::routing;
 use krishiv_plan::{AttrId, Expr, Scan};
 
 use data::plan_data;
 pub use data::{PlanData, assert_plan_data};
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
-pub use instantiate::{SpillScopes, WorkerContext, instantiate};
+pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub(crate) use instantiate::{
     Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, group_limit_op,
     hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+};
+pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
+pub use splits::{
+    ScanSplits, SplitFileRef, assign_batch_splits, assign_file_splits, deal_ranges, files_of,
+    partitions_of, plan_file_partitions,
 };
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};
 use crate::error::Result;
 use crate::join::JoinType;
-use crate::operators::{FileWriteSink, RowStageSettings, SortKey};
+use crate::operators::{RowStageSettings, SortKey};
 use crate::planner::ExplainNode;
 use crate::window::{GroupLimitPlan, WindowPlan};
 
@@ -90,20 +103,60 @@ impl SubqueryId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExchangeId(pub u64);
 
+/// A value computed while a plan runs and read by other operators of the
+/// plan: a runtime filter, a subquery's result or a broadcast exchange's
+/// build (design P2-T171, I3). Its producers publish partials of it, one
+/// per producer partition, and its consumers read it once every producer
+/// partition published ([`crate::values`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ValueId {
+    /// The runtime filter a join's build publishes.
+    Filter(FilterId),
+    /// A subquery's result.
+    Subquery(SubqueryId),
+    /// The rows of a broadcast exchange.
+    Broadcast(ExchangeId),
+}
+
+impl fmt::Display for ValueId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Filter(id) => write!(f, "runtime filter {id}"),
+            Self::Subquery(id) => write!(f, "subquery #{}", id.0),
+            Self::Broadcast(id) => write!(f, "broadcast exchange #{}", id.0),
+        }
+    }
+}
+
+/// The version of a value: the epoch its producers computed it at. A
+/// batch query has one, [`Version::BATCH`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Version {
+    /// The epoch.
+    pub epoch: u64,
+}
+
+impl Version {
+    /// The only version of a batch query's values (epoch 0).
+    pub const BATCH: Self = Self { epoch: 0 };
+}
+
 /// How an [`PhysNode::Exchange`] places its input's rows into partitions.
 /// Columns are indices into the exchange's input (and output: an exchange
 /// keeps its input's columns).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Partitioning {
     /// By the routing hash `h` of the key columns: a row goes to the
-    /// partition its top bits name (design P2-T171 §5.1, T157 Appendix
-    /// C). `h` is seedless, so equal keys meet in one partition in every
-    /// process; partition counts are powers of two, so a partition nests
-    /// in a key group and a radix partition of a breaker is a union of
-    /// partitions.
+    /// partition that owns its key group (design P2-T171 §5.1 and §7.2,
+    /// T157 Appendix C). `h` is seedless, so equal keys meet in one
+    /// partition in every process; a partition owns a contiguous range of
+    /// key groups, so for `2^k` partitions it is the top `k` bits of `h`,
+    /// and a radix partition of a breaker is a union of partitions.
     Hash {
         /// The key columns, in hash order.
         keys: Vec<usize>,
+        /// The routing function.
+        scheme: HashScheme,
     },
     /// Every row in one partition (a gather). Partitions are read in
     /// partition order, so a range-partitioned sorted input stays sorted.
@@ -121,6 +174,46 @@ pub enum Partitioning {
         /// The sort keys.
         keys: Vec<SortKey>,
     },
+}
+
+/// The function a [`Partitioning::Hash`] exchange routes rows by. It is
+/// part of the plan, so every worker that runs a fragment of a query routes
+/// a key to the same partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HashScheme {
+    /// No function named: a plan written before the routing hash was
+    /// fixed. Its exchanges are only ever lowered on one worker, where no
+    /// row is routed; such a plan cannot be split across workers.
+    Unpinned,
+    /// Key-group ranges of the routing hash `H_kg` version 1
+    /// (`krishiv_kernels::hash::routing`): XXH64, seed 0, of the normalized
+    /// key bytes, folded over several key columns. Every exchange the
+    /// planner places uses it.
+    KeyGroupV1,
+}
+
+impl HashScheme {
+    /// The partition of `n` that each row of `keys` (the key columns, in
+    /// hash order) goes to, written to `out` (cleared first).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for [`Unpinned`](Self::Unpinned), which names no
+    /// function to route by; `KRISHIV_UNSUPPORTED_FEATURE` for a key type
+    /// the routing hash does not cover.
+    pub fn partitions(self, keys: &[&dyn Array], n: u32, out: &mut Vec<u32>) -> Result<()> {
+        match self {
+            Self::Unpinned => Err(crate::error::internal(
+                "an exchange without a routing function cannot route rows".to_owned(),
+            )),
+            Self::KeyGroupV1 => {
+                let mut h = Vec::new();
+                routing::hash_columns(keys, &mut h)?;
+                out.clear();
+                out.extend(h.iter().map(|&h| routing::partition_of(h, n)));
+                Ok(())
+            }
+        }
+    }
 }
 
 /// An exchange: `input`'s rows placed into partitions by `partitioning`.
@@ -150,6 +243,9 @@ pub enum JoinDistribution {
 pub struct ExprEnv {
     /// `spark.sql.ansi.enabled`.
     pub ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+    /// give NaN instead of NULL where Spark divides by zero.
+    pub legacy_statistical_aggregate: bool,
     /// The session time zone as a fixed offset in seconds, when it is one.
     pub zone: Option<i32>,
     /// The query's clock (microseconds since the epoch, UTC), read once at
@@ -157,6 +253,10 @@ pub struct ExprEnv {
     pub query_start_micros: i64,
     /// The session user (`current_user()`).
     pub user: Arc<str>,
+    /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`: duplicate map keys keep
+    /// the value inserted last. A plan that sets it needs the
+    /// `map_key_dedup_policy` codec feature.
+    pub map_key_dedup_last_win: bool,
 }
 
 /// A node of a physical plan. Children come first in each variant;
@@ -168,6 +268,8 @@ pub enum PhysNode {
     Scan(ScanNode),
     /// One row without columns (`SELECT` without `FROM`).
     OneRow,
+    /// A range of `id BIGINT NOT NULL` values.
+    Range(RangeNode),
     /// The rows of `input` for which `predicate` is true.
     Filter {
         /// The input.
@@ -280,11 +382,21 @@ pub enum PhysNode {
         /// The inputs.
         inputs: Vec<PhysNode>,
     },
-    /// Writes `input`'s rows through the worker's write sink
-    /// ([`WorkerContext::with_write_sink`]); one row per file written.
+    /// Writes `input`'s rows as files described by `write`; one row per
+    /// file written (`path`, `size`, `rows`). Instantiation builds the
+    /// file sink from `(write, task partition, task attempt)` with the
+    /// worker's own I/O context, so the same plan bytes run on every
+    /// worker. The task number in file names is the partition index.
+    /// `None` is a plan written before the `write_plan` feature: it
+    /// encodes exactly as before (no `write` field) and lists no feature,
+    /// and instantiation refuses it.
     WriteFiles {
         /// The rows to write.
         input: Box<PhysNode>,
+        /// What to write: format, options (secret references only),
+        /// store, directory, job id and file limits. Plain data; absent
+        /// in plans that predate the `write_plan` feature.
+        write: Option<WritePlan>,
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
@@ -305,6 +417,23 @@ pub struct ScanNode {
     pub runtime_filters: Vec<ScanRuntimeFilter>,
     /// The runtime filters' row-stage settings.
     pub row_stage: RowStageSettings,
+}
+
+/// A range source: `range(start, end, step, numSlices)` (Spark's `Range`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeNode {
+    /// First value (inclusive).
+    pub start: i64,
+    /// End (exclusive).
+    pub end: i64,
+    /// Step (never zero).
+    pub step: i64,
+    /// The partition count, when `numSlices` was written. `None` means the
+    /// task's default parallelism decides at execution; the fragment never
+    /// stores a count it did not get from `numSlices`.
+    pub num_slices: Option<u32>,
+    /// The output attribute.
+    pub output: AttrId,
 }
 
 /// A filter pushed into a scan, over the table schema.
@@ -433,10 +562,34 @@ pub struct HashJoinPlan {
     pub null_safe: Vec<bool>,
     /// The non-equality conditions.
     pub residual: Option<Residual>,
+    /// A left outer join that fails when a probe row matches more than
+    /// once (a correlated scalar subquery without an aggregate). Only
+    /// `LeftOuter` joins set it.
+    pub single_match: bool,
+    /// The build's rows are never output and the join reads nothing of
+    /// them but their keys (a left semi, left anti or existence join
+    /// without a residual condition), so the build may keep each key once
+    /// (design P2-T166 §3.2). An executor that ignores it stores every row
+    /// and returns the same result; this one does so for now.
+    pub distinct_build: bool,
     /// The runtime filters the build publishes.
     pub runtime_filters: Vec<JoinFilterPlan>,
     /// Broadcast or partitioned.
     pub distribution: JoinDistribution,
+}
+
+impl HashJoinPlan {
+    /// Whether [`distinct_build`](Self::distinct_build) may be set: the
+    /// join outputs no build rows and reads no build column but the keys
+    /// (a left semi, left anti or existence join without a residual).
+    #[must_use]
+    pub fn distinct_build_allowed(&self) -> bool {
+        self.residual.is_none()
+            && matches!(
+                self.join_type,
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Existence
+            )
+    }
 }
 
 /// A nested-loop join over every pair of rows.
@@ -452,11 +605,69 @@ pub struct NestedLoopPlan {
     pub residual: Option<Residual>,
 }
 
+/// What a [`PhysNode::WriteFiles`] writes: the file format and its options
+/// (secret references only, never inline secrets or URLs with
+/// credentials), the store and directory, the job UUID naming its files,
+/// and the file limits. Plain data: the same bytes on every worker, and
+/// the sink is built at instantiation from `(self, task partition, task
+/// attempt)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WritePlan {
+    /// The format name (for example `parquet`).
+    pub format: String,
+    /// The format options, as given (references only on the wire).
+    pub options: BTreeMap<String, OptionValue>,
+    /// The store id, as text.
+    pub store: String,
+    /// The target directory, as text.
+    pub dir: String,
+    /// The job UUID naming the write's files.
+    pub job_uuid: String,
+    /// `maxRecordsPerFile`; 0 means unlimited.
+    pub max_records_per_file: u64,
+    /// Roll over to a new file once this many bytes were produced; 0 means
+    /// never.
+    pub target_file_bytes: u64,
+}
+
+impl WritePlan {
+    /// The schema of a write's result rows (`path`, `size`, `rows`): the
+    /// commit message. It matches the file sink's result schema exactly.
+    #[must_use]
+    pub fn result_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("path", krishiv_types::DataType::String.to_arrow(), false),
+            Field::new("size", DataType::Int64, false),
+            Field::new("rows", DataType::Int64, false),
+        ]))
+    }
+
+    /// The `EXPLAIN` detail (`<format> to <store>/<dir>`).
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!("{} to {}/{}", self.format, self.store, self.dir)
+    }
+}
+
 plan_data!(tuple ScanId(id));
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
+plan_data!(
+    enum ValueId {
+        Filter(id),
+        Subquery(id),
+        Broadcast(id),
+    }
+);
+plan_data!(struct Version { epoch });
+plan_data!(
+    enum HashScheme {
+        Unpinned,
+        KeyGroupV1,
+    }
+);
 plan_data!(enum Partitioning {
-    Hash { keys },
+    Hash { keys, scheme },
     Single,
     Broadcast,
     RoundRobin,
@@ -469,10 +680,18 @@ plan_data!(
         Partitioned,
     }
 );
-plan_data!(struct ExprEnv { ansi, zone, query_start_micros, user });
+plan_data!(struct ExprEnv {
+    ansi,
+    legacy_statistical_aggregate,
+    zone,
+    query_start_micros,
+    user,
+    map_key_dedup_last_win
+});
 plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
+    Range(range),
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
@@ -486,10 +705,20 @@ plan_data!(enum PhysNode {
     HashJoin(join),
     NestedLoopJoin(join),
     Union { inputs },
-    WriteFiles { input },
+    WriteFiles { input, write },
     Exchange(exchange),
 });
+plan_data!(struct WritePlan {
+    format,
+    options,
+    store,
+    dir,
+    job_uuid,
+    max_records_per_file,
+    target_file_bytes
+});
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
+plan_data!(struct RangeNode { start, end, step, num_slices, output });
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
 plan_data!(struct JoinFilterPlan { id, key, options });
@@ -504,8 +733,8 @@ plan_data!(struct SubqueryPlan { id, kind, data_type, plan });
 plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
-    probe, build, join_type, probe_keys, build_keys, null_safe, residual, runtime_filters,
-    distribution
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
+    distinct_build, runtime_filters, distribution
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, schema, explain, warnings, env });
@@ -515,7 +744,7 @@ impl PhysNode {
     /// first.
     pub fn children(&self) -> Vec<&PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow => Vec::new(),
+            Self::Scan(_) | Self::OneRow | Self::Range(_) => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -536,7 +765,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
-            | Self::WriteFiles { input } => vec![input.as_ref()],
+            | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -547,7 +776,7 @@ impl PhysNode {
     /// [`Self::children`], mutable.
     pub(crate) fn children_mut(&mut self) -> Vec<&mut PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow => Vec::new(),
+            Self::Scan(_) | Self::OneRow | Self::Range(_) => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -568,7 +797,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
-            | Self::WriteFiles { input } => vec![input.as_mut()],
+            | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -627,34 +856,26 @@ impl PhysicalPlan {
         &self.warnings
     }
 
-    /// The plan writing this plan's rows through `sink` (`df.write`): its
-    /// result is one row per file written (`path`, `size`, `rows`). The
-    /// worker it runs on writes through the sink its [`WorkerContext`]
-    /// holds ([`WorkerContext::with_write_sink`]), which must write this
-    /// plan's schema. The caller starts the write before
-    /// (`DirectoryWrite::begin`, whose write options built `sink` over
-    /// [`Self::schema`]) and commits it with [`FileWriteSink::files`] once
-    /// the plan has run.
-    ///
-    /// # Errors
-    /// `INTERNAL_ERROR` if `sink` writes another schema.
-    pub fn into_write(self, sink: &FileWriteSink) -> Result<Self> {
-        if sink.input_schema().fields() != self.schema.fields() {
-            return Err(crate::error::internal(
-                "a write sink of another schema than its plan".to_owned(),
-            ));
-        }
-        let explain = ExplainNode::new("WriteFiles", sink.describe(), vec![self.explain]);
+    /// The plan writing this plan's rows as the files `write` describes
+    /// (`df.write`): its result is one row per file written (`path`,
+    /// `size`, `rows`), the commit message. The worker it runs on builds
+    /// the file sink at instantiation from `(write, task partition, task
+    /// attempt)` with its own I/O context. The caller starts the write
+    /// before (`DirectoryWrite::begin`) and commits it from the plan's
+    /// result rows once the plan has run.
+    pub fn into_write(self, write: WritePlan) -> Self {
+        let explain = ExplainNode::new("WriteFiles", write.describe(), vec![self.explain]);
         let root = Arc::unwrap_or_clone(self.root);
-        Ok(Self {
-            schema: crate::operator::Source::schema(sink),
+        Self {
+            schema: WritePlan::result_schema(),
             root: Arc::new(PhysNode::WriteFiles {
                 input: Box::new(root),
+                write: Some(write),
             }),
             explain,
             warnings: self.warnings,
             env: self.env,
-        })
+        }
     }
 
     /// The same plan with `warnings` added.

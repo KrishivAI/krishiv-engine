@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "sql-commands": [
+      12,
+      36
+    ]
+  },
+  "file": "postgreSQL/select",
+  "format_version": 1
+}

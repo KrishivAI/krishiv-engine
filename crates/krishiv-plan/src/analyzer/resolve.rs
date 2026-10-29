@@ -4,10 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use krishiv_common::error::FailedToParseTooComplex;
+use krishiv_common::error::{FailedToParseTooComplex, TableOrViewNotFound};
 use krishiv_common::stack::on_big_stack;
 
-use super::bind::{Bindings, addr, same, unsupported};
+use super::bind::{Bindings, BoundTable, addr, same, unsupported};
+use super::catalog::quoted;
 use super::exprs::{Bound, Cx};
 use super::ops::col_expr;
 use super::{AnalysisContext, AnalysisError, SecurableUse};
@@ -26,7 +27,7 @@ use crate::{
 /// levels on the caller's stack; deeper levels run on fresh 64 MiB
 /// segments. The test thread stays at 2 MiB, so deep plans are still proven
 /// to resolve on a small stack.
-const RESOLVE_STEP: usize = 16;
+pub(super) const RESOLVE_STEP: usize = 16;
 
 /// An attribute in scope: the column, its qualifier and, for a table
 /// column, the securable it belongs to and its catalog name.
@@ -130,7 +131,14 @@ pub(super) struct Resolver<'a> {
     /// input shares subtrees, so equal input keys give equal plans.
     canon: HashMap<usize, Arc<LogicalPlan>>,
     pub(super) columns: Vec<BTreeSet<String>>,
+    /// The lambda scopes pushed by the higher-order calls whose bodies
+    /// bind now, innermost last (see `hof`).
+    pub(super) lambdas: Vec<super::hof::LambdaFrame>,
     depth: usize,
+    /// Expression-binding recursion through higher-order calls (see
+    /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
+    /// stack.
+    pub(super) expr_depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
@@ -159,9 +167,11 @@ pub(super) fn resolve(
         canon: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
+        expr_depth: 0,
         op_outer: None,
         root_env: None,
         folds: std::cell::RefCell::default(),
+        lambdas: Vec::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -207,10 +217,19 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
                 if let ExprNode::Resolved(
                     ResolvedExpr::Column(c)
                     | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::LambdaVar(c)
                     | ResolvedExpr::Alias { output: c, .. },
                 ) = &e.node
                 {
                     bump(c);
+                }
+                if let ExprNode::Lambda { params, .. } = &e.node {
+                    // Unresolved lambdas carry placeholder identities (see
+                    // `Expr::lambda`); only bound variables reserve ids.
+                    params
+                        .iter()
+                        .filter(|c| c.id.0 != u64::MAX)
+                        .for_each(&mut bump);
                 }
             }
         }
@@ -624,6 +643,27 @@ impl Resolver<'_> {
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
+            PlanNode::Pivot {
+                input,
+                pivot_columns,
+                values,
+                aggregates,
+            } => self.pivot(p, input, pivot_columns, values, aggregates, env),
+            PlanNode::Unpivot {
+                input,
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+            } => self.unpivot(
+                p,
+                input,
+                value_columns,
+                name_column,
+                column_sets,
+                *include_nulls,
+                env,
+            ),
             PlanNode::Window {
                 input,
                 exprs,
@@ -635,6 +675,7 @@ impl Resolver<'_> {
                 name,
                 params,
             } => self.hint(p, input, name, params, env),
+            PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
             PlanNode::Read(ReadSource::Files { .. })
@@ -644,6 +685,7 @@ impl Resolver<'_> {
             | PlanNode::Shift { .. }
             | PlanNode::ReplicateRows { .. }
             | PlanNode::Expand { .. }
+            | PlanNode::Range { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
         }
     }
@@ -743,6 +785,36 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                num_slices,
+                output,
+            } => {
+                // A built `Range` (the DataFrame API, Spark Connect) carries
+                // an id of its builder's choosing, which two ranges of one
+                // plan share; the leaf gets this analysis's own fresh id.
+                let col = BoundColumn {
+                    id: self.fresh(),
+                    ..output.clone()
+                };
+                let node = PlanNode::Range {
+                    start: *start,
+                    end: *end,
+                    step: *step,
+                    num_slices: *num_slices,
+                    output: col.clone(),
+                };
+                let qual: Arc<[String]> = Arc::from(Vec::new());
+                let out = vec![Attr {
+                    col,
+                    qual,
+                    source: None,
+                }];
+                let leaf = Arc::new(LogicalPlan::new(node).with_origin(o));
+                Ok(self.wrap(leaf, o.plan_id, out, &[]))
+            }
             // Handled in `node`, which never forwards them.
             PlanNode::Read(ReadSource::Table { .. })
             | PlanNode::OneRowRelation
@@ -759,7 +831,10 @@ impl Resolver<'_> {
             | PlanNode::Hint { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
+            | PlanNode::Pivot { .. }
+            | PlanNode::Unpivot { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
@@ -818,8 +893,10 @@ impl Resolver<'_> {
     /// Only definitions the input needs (transitively) are resolved:
     /// Spark does not analyze a CTE the query never references, so an
     /// unused definition's column errors (like `AMBIGUOUS_REFERENCE`)
-    /// never fail the query. Table existence still fails even when unused,
-    /// but that comes from Bind, which visits every definition.
+    /// never fail the query. Table existence still fails even when unused:
+    /// every non-shadowed table read of an unused definition is checked
+    /// against what Bind loaded, so a missing relation raises
+    /// `TABLE_OR_VIEW_NOT_FOUND` at its read, as Spark does.
     #[inline(never)]
     fn with_cte(
         &mut self,
@@ -830,15 +907,16 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
         let needed = Self::needed_ctes(input, ctes, &env.ctes, self.ctx.conf.case_sensitive);
-        if !needed.iter().any(|b| *b) {
-            return self.rel(input, env);
-        }
         let mut visible = env.ctes.clone();
         let mut scope = env.ctes_id;
         let mut defs = Vec::new();
         let mut rels = Vec::new();
         for (c, keep) in ctes.iter().zip(needed.iter()) {
             if !keep {
+                // An unused definition is never resolved, but its tables
+                // are: a missing relation fails the query even though no
+                // column error of the definition does.
+                self.check_unused_cte(c)?;
                 continue;
             }
             let e = self.env(visible.clone(), scope, env.outer.clone());
@@ -851,6 +929,9 @@ impl Resolver<'_> {
             scope = self.ctes_id();
             rels.push(r);
         }
+        if defs.is_empty() {
+            return self.rel(input, env);
+        }
         let e = self.env(visible, scope, env.outer.clone());
         let i = self.rel(input, &e)?;
         let node = PlanNode::WithCte {
@@ -862,6 +943,54 @@ impl Resolver<'_> {
         let mut r = self.make(o, node, i.out.to_vec(), &kids);
         r.carriers = Arc::clone(&i.carriers);
         Ok(r)
+    }
+
+    /// The tables of an unused CTE definition, checked as Spark checks
+    /// them: every non-shadowed table read (Bind already resolved the
+    /// shadowing, so a read it did not record is a CTE read) must name a
+    /// table Bind found, else `TABLE_OR_VIEW_NOT_FOUND` at the read.
+    /// Column errors are never raised here: the definition is not
+    /// resolved, only walked for its reads (subquery plans and nested
+    /// `WITH` bodies included).
+    fn check_unused_cte(&self, c: &Cte) -> Result<(), AnalysisError> {
+        use crate::walk::{Node, visit_distinct};
+        use std::ops::ControlFlow;
+        let mut missing: Option<AnalysisError> = None;
+        // A `PlanNode::Sql` has no relation children: its reads live in the
+        // lowered plan Bind stored, so walk those too.
+        let mut roots: Vec<&LogicalPlan> = vec![&c.plan];
+        while let Some(root) = roots.pop() {
+            let _ = visit_distinct(Node::Plan(root), |node| {
+                let Node::Plan(p) = node else {
+                    return ControlFlow::Continue(());
+                };
+                if let PlanNode::Sql { .. } = &p.node
+                    && let Some(lowered) = self.b.sql.get(&addr(p))
+                {
+                    roots.push(lowered);
+                }
+                if let PlanNode::Read(ReadSource::Table { name, .. }) = &p.node
+                    && let Some(BoundTable::Missing) = self.b.tables.get(name)
+                {
+                    missing = Some(AnalysisError::new(
+                        TableOrViewNotFound {
+                            relation_name: quoted(name),
+                            search_path: self.b.search_path.clone(),
+                        },
+                        p.origin,
+                    ));
+                    return ControlFlow::Break(());
+                }
+                ControlFlow::Continue(())
+            });
+            if missing.is_some() {
+                break;
+            }
+        }
+        if let Some(e) = missing {
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Which definitions of `ctes` the input needs, transitively: a

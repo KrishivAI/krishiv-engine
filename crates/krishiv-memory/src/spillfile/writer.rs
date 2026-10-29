@@ -12,6 +12,7 @@ use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::SpillError;
+use super::cache;
 use super::compact;
 use super::dir::{ScopeInner, create_new_file};
 use super::format::{
@@ -30,10 +31,11 @@ const BUF_BYTES: usize = 64 << 10;
 /// Batches go to `<n>.spill.tmp`; [`finish`](Self::finish) writes the footer
 /// and renames it to `<n>.spill`. A `.spill` file is therefore always
 /// complete, and a writer that is dropped, fails or is cancelled leaves
-/// nothing behind. Nothing is `fsync`ed, on purpose: spill files are scratch
-/// data that is only meaningful to the process that wrote them. After a
-/// crash they are deleted at the next start, never read, so durability would
-/// cost latency for no benefit. Errors that surface only at `close` are not
+/// nothing behind. Durability is not a goal: spill files are scratch data
+/// that is only meaningful to the process that wrote them, and after a crash
+/// they are deleted at the next start, never read. The `fdatasync` at
+/// `finish` (with drop-behind on) is for memory, not durability: it makes
+/// the file's pages clean so they can be dropped from the page cache. Errors that surface only at `close` are not
 /// observable on a local file system, which is why a network one is refused.
 ///
 /// # Accounting
@@ -55,7 +57,9 @@ const BUF_BYTES: usize = 64 << 10;
 /// file is discarded, not truncated.
 ///
 /// The I/O is blocking: call it from `spawn_blocking`. Each writer holds one
-/// file descriptor until it finishes or drops.
+/// file descriptor until it finishes or drops. That includes waiting for the
+/// disk: the drop-behind (`krishiv.spill.dropBehindBytes`, see the module
+/// docs) syncs the file at `finish`.
 #[derive(Debug)]
 pub struct SpillWriter {
     scope: Arc<ScopeInner>,
@@ -70,6 +74,10 @@ pub struct SpillWriter {
     rows: u64,
     /// The largest frame plus its decoded bound ([`SpillFile::max_read_reservation`]).
     max_read: usize,
+    /// Drop-behind window (`krishiv.spill.dropBehindBytes`; 0: off).
+    window: u64,
+    /// Bytes whose writeback was started.
+    started: u64,
     committed: bool,
     failed: bool,
 }
@@ -88,6 +96,7 @@ impl SpillWriter {
         fields.push(Arc::new(Field::new(WEIGHT_COLUMN, DataType::Int64, false)));
         let weighted_schema =
             Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+        let window = scope.manager().drop_behind;
         let mut w = Self {
             scope,
             tmp,
@@ -95,11 +104,15 @@ impl SpillWriter {
             file: Some(file),
             schema,
             weighted_schema,
-            reservation,
+            // A spill frees memory: the resident-set guard never refuses
+            // its working memory.
+            reservation: reservation.unguarded(),
             charged: 0,
             batches: 0,
             rows: 0,
             max_read: 0,
+            window,
+            started: 0,
             committed: false,
             failed: false,
         };
@@ -268,6 +281,38 @@ impl SpillWriter {
         })?;
         self.batches += 1;
         self.rows += batch.num_rows() as u64;
+        self.drop_behind(false)
+    }
+
+    /// Keeps written spill pages from piling up in the page cache. Dirty
+    /// pages count against a memory cgroup's limit and cannot be reclaimed
+    /// until they are written back, so a spilling query could otherwise
+    /// drive its cgroup into the OOM killer with memory it no longer needs.
+    ///
+    /// Each time a window of bytes (`krishiv.spill.dropBehindBytes`) has
+    /// been written, the file so far is advised `DONTNEED`: that starts
+    /// writeback of what is dirty and drops what earlier calls had started
+    /// writing back (clean by now). At `finish` the file is synced and
+    /// dropped. Spill files are mostly smaller than a window, so for most
+    /// files only the `finish` step runs. Only complete frames are covered
+    /// (their headers are patched in place before), so no byte is written
+    /// after its range was dropped. The calls are advisory: a failure is
+    /// logged and the write goes on.
+    fn drop_behind(&mut self, finish: bool) -> Result<(), SpillError> {
+        let end = self.charged;
+        if self.window == 0 || (!finish && end.saturating_sub(self.started) < self.window) {
+            return Ok(());
+        }
+        if let Some(out) = self.file.as_mut() {
+            out.flush()
+                .map_err(|e| SpillError::io("write to", &self.tmp, e))?;
+            let file = out.get_ref();
+            if finish {
+                advisory(&self.tmp, cache::sync(file));
+            }
+            advisory(&self.tmp, cache::drop_range(file, 0, end));
+            self.started = end;
+        }
         Ok(())
     }
 
@@ -278,6 +323,7 @@ impl SpillWriter {
             sink.write_all(&batches.to_le_bytes())?;
             Ok(sink.write_all(&rows.to_le_bytes())?)
         })?;
+        self.drop_behind(true)?;
         // Flush and close before renaming so no descriptor outlives the writer.
         if let Some(file) = self.file.take() {
             let file = file
@@ -358,6 +404,25 @@ impl Drop for SpillWriter {
     fn drop(&mut self) {
         if !self.committed {
             self.abort();
+        }
+    }
+}
+
+/// Set once a failed page-cache call was logged as a warning.
+static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Logs a failed page-cache call (a warning once per process, then at debug
+/// level); the spill goes on.
+fn advisory(tmp: &Path, result: std::io::Result<()>) {
+    if let Err(e) = result {
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                path = %tmp.display(),
+                error = %e,
+                "spill drop-behind failed; spill pages stay in the page cache"
+            );
+        } else {
+            tracing::debug!(path = %tmp.display(), error = %e, "spill drop-behind failed");
         }
     }
 }
@@ -475,5 +540,21 @@ impl Write for Sink<'_> {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod drop_behind_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_page_cache_call_is_logged_and_never_an_error() {
+        let tmp = Path::new("/nonexistent/x.spill.tmp");
+        advisory(tmp, Ok(()));
+        advisory(tmp, Err(io::Error::from_raw_os_error(9)));
+        assert!(WARNED.load(std::sync::atomic::Ordering::Relaxed));
+        // Later failures are logged at debug level only.
+        advisory(tmp, Err(io::Error::from_raw_os_error(9)));
+        assert!(WARNED.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

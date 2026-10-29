@@ -57,6 +57,7 @@ Query {
                                         ),
                                         options: [],
                                     },
+                                    sample: None,
                                     alias: None,
                                     span: 14..31,
                                 },
@@ -93,6 +94,7 @@ Query {
                                         ),
                                         options: [],
                                     },
+                                    sample: None,
                                     alias: Some(
                                         TableAlias {
                                             name: Some(
@@ -274,6 +276,7 @@ Query {
                                             },
                                         ],
                                     },
+                                    sample: None,
                                     alias: Some(
                                         TableAlias {
                                             name: Some(
@@ -902,6 +905,7 @@ Query {
                                     filter: None,
                                     null_treatment: None,
                                     over: None,
+                                    dynamic_name: None,
                                     span: 37..63,
                                 },
                             ),
@@ -961,6 +965,7 @@ Query {
                                     filter: None,
                                     null_treatment: None,
                                     over: None,
+                                    dynamic_name: None,
                                     span: 65..84,
                                 },
                             ),
@@ -1063,6 +1068,7 @@ Query {
                                             },
                                         ),
                                     ),
+                                    dynamic_name: None,
                                     span: 7..33,
                                 },
                             ),
@@ -1151,6 +1157,7 @@ Query {
                                             },
                                         ),
                                     ),
+                                    dynamic_name: None,
                                     span: 35..74,
                                 },
                             ),
@@ -1238,6 +1245,7 @@ Query {
                                             filter: None,
                                             null_treatment: None,
                                             over: None,
+                                            dynamic_name: None,
                                             span: 14..23,
                                         },
                                     ),
@@ -1346,6 +1354,7 @@ Query {
                                     temporal: None,
                                     options: [],
                                 },
+                                sample: None,
                                 alias: None,
                                 span: 5..6,
                             },
@@ -1582,6 +1591,7 @@ Query {
                                         temporal: None,
                                         options: [],
                                     },
+                                    sample: None,
                                     alias: Some(
                                         TableAlias {
                                             name: Some(

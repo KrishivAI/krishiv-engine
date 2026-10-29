@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "cast-matrix": [
+      8,
+      10
+    ],
+    "depends-on-command": [
+      13
+    ]
+  },
+  "file": "sql-compatibility-functions",
+  "format_version": 1
+}

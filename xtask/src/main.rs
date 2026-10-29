@@ -12,15 +12,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use xtask::budgets::{self, Budgets};
+use xtask::codeql_proxy;
 use xtask::coverage;
 use xtask::dev;
 use xtask::docs::{self, Doc};
+use xtask::format_neutral;
 use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::precheck;
+use xtask::profile;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | precheck [--base REF] [--fast] [--full] [--memory-cap SIZE] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--known-failures F]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--known-failures F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -31,8 +34,10 @@ fn main() -> ExitCode {
         .as_slice()
     {
         ["layering"] => run_layering(),
+        ["tokio-console-check"] => run_console_check(),
         ["golden", flags @ ..] => run_golden(flags),
         ["precheck", flags @ ..] => precheck::run_precheck(&workspace_root(), flags),
+        ["codeql-proxy", flags @ ..] => codeql_proxy::run(&workspace_root(), flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
         ["wheel-sizes", "--compare", file, flags @ ..] => {
@@ -45,6 +50,7 @@ fn main() -> ExitCode {
         ["stack", action] => dev::run_stack(&workspace_root(), action, false),
         ["stack", action, "--kafka"] => dev::run_stack(&workspace_root(), action, true),
         ["coverage", flags @ ..] => coverage::run_coverage(&workspace_root(), flags),
+        ["profile", flags @ ..] => profile::run_profile(&workspace_root(), flags),
         ["coverage-summary", flags @ ..] => coverage::run_summary(&workspace_root(), flags),
         ["diff-coverage", flags @ ..] => coverage::run_diff_coverage(&workspace_root(), flags),
         ["pr-size", flags @ ..] => {
@@ -62,6 +68,8 @@ fn main() -> ExitCode {
         ["spdx", root] => policy::run_spdx(Path::new(root)),
         ["source-guard"] => policy::run_source_guard(&workspace_root()),
         ["source-guard", root] => policy::run_source_guard(Path::new(root)),
+        ["check-format-neutral"] => format_neutral::run_check(&workspace_root()),
+        ["check-format-neutral", root] => format_neutral::run_check(Path::new(root)),
         [cmd] | [cmd, _] if Doc::from_command(cmd).is_some() => run_docs(&args),
         _ => Err(USAGE.to_owned()),
     };
@@ -116,6 +124,12 @@ fn run_docs(args: &[String]) -> Result<(), String> {
     docs::emit(&doc.markdown(), path, &mut std::io::stdout().lock())
 }
 
+/// `cargo xtask tokio-console-check`: the default build contains no
+/// `console-subscriber` and no tokio `tracing` feature (P2-T129).
+fn run_console_check() -> Result<(), String> {
+    xtask::console::run_console_check(&workspace_root())
+}
+
 fn run_layering() -> Result<(), String> {
     let root = workspace_root();
     let map_text = std::fs::read_to_string(root.join("xtask/layers.toml"))
@@ -160,6 +174,12 @@ fn cargo_cmd() -> Command {
 fn run_budgets(flags: &[&str]) -> Result<(), String> {
     let mode = budgets::parse_flags(flags).ok_or_else(|| USAGE.to_owned())?;
     let root = workspace_root();
+    if let budgets::Mode::Precheck { base, repo } = &mode {
+        return run_budgets_precheck(repo.as_deref().unwrap_or(&root), base);
+    }
+    if let budgets::Mode::CacheMain { repo } = &mode {
+        return run_budgets_cache_main(repo.as_deref().unwrap_or(&root));
+    }
     let baseline_path = root.join("budgets.json");
     let mut baseline_file = baseline_path.clone();
     let now = match &mode {
@@ -198,9 +218,20 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
             }
             now
         }
+        // Handled by the early returns above; the arm keeps the match
+        // exhaustive so a future mode is noticed here.
+        budgets::Mode::Precheck { .. } | budgets::Mode::CacheMain { .. } => {
+            return Err("internal error: unreachable budgets mode".to_owned());
+        }
     };
     let base = read_budgets(&baseline_file)?;
-    let cmp = budgets::compare(&base, &now);
+    report_budget_comparison(&budgets::compare(&base, &now))
+}
+
+/// Prints the comparison table and applies the label approvals. CI's
+/// `--compare` and the local `--precheck` share this, so both gates apply
+/// the same rule to the same [`budgets::compare`] output.
+fn report_budget_comparison(cmp: &budgets::Comparison) -> Result<(), String> {
     let summary = format!("## Budgets\n\n{}", cmp.markdown);
     println!("{summary}");
     append_step_summary(&summary);
@@ -214,6 +245,82 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         append_step_summary(note);
     }
     Ok(())
+}
+
+/// `budgets --precheck --base REF [--repo DIR]`: the precheck budgets step.
+/// Measures `DIR` and compares it with the cached measurement of the
+/// merge-base with `REF`, through [`report_budget_comparison`] (the same rule
+/// CI applies). With no cached measurement yet it skips instead of failing:
+/// CI checks the delta. `budgets.json` is never read here.
+fn run_budgets_precheck(root: &Path, base: &str) -> Result<(), String> {
+    let sha = budgets::merge_base(root, base)?;
+    let baseline = budgets::main_baseline_path(&cargo_target_dir(root)?, &sha)
+        .ok_or_else(|| format!("unsafe main commit id {sha:?}"))?;
+    if !baseline.exists() {
+        println!("{}", budgets::NO_MAIN_BASELINE);
+        eprintln!(
+            "hint: on a main checkout, run `cargo xtask budgets --cache-main` to measure it once"
+        );
+        return Ok(());
+    }
+    let main = read_budgets(&baseline)?;
+    let (now, _) = measure_budgets(root, false)?;
+    report_budget_comparison(&budgets::compare(&main, &now))
+}
+
+/// `budgets --cache-main [--repo DIR]`: measures `DIR` and caches it as the
+/// main measurement of `HEAD`, for later `--precheck` runs. Run on a main
+/// checkout; the cache is keyed per commit under the target directory, so
+/// each main commit is measured once.
+fn run_budgets_cache_main(root: &Path) -> Result<(), String> {
+    let sha = budgets::head_sha(root)?;
+    if !budgets::working_tree_clean(root)? {
+        return Err(format!(
+            "cannot cache the main measurement of {sha}: the working tree has uncommitted changes; commit or stash them before `--cache-main`"
+        ));
+    }
+    let path = budgets::main_baseline_path(&cargo_target_dir(root)?, &sha)
+        .ok_or_else(|| format!("unsafe commit id {sha:?}"))?;
+    let (now, _) = measure_budgets(root, false)?;
+    let json = serde_json::to_string_pretty(&now).map_err(|e| e.to_string())? + "\n";
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&path, &json).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    println!(
+        "cached the main measurement for {sha} in {}",
+        path.display()
+    );
+    Ok(())
+}
+
+/// The cargo target directory for `root` (honours `CARGO_TARGET_DIR`).
+fn cargo_target_dir(root: &Path) -> Result<PathBuf, String> {
+    let out = cargo_cmd()
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--color",
+            "never",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("failed to run cargo metadata: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let meta: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
+        .map_err(|e| format!("bad cargo metadata: {e}"))?;
+    Ok(meta
+        .get("target_directory")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| root.join("target"), PathBuf::from))
 }
 
 /// `wheel-sizes DIR [--budgets FILE] [--write | --measure-only OUT]`: compares

@@ -56,6 +56,7 @@ use super::args::{Inputs, Prim, Str, internal, is_string};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 mod java;
+pub(super) use java::translate;
 
 /// The most backtracking steps one match attempt may take (the
 /// `fancy_regex` default, set explicitly so an upgrade cannot change it).
@@ -73,8 +74,18 @@ pub(super) const NAMES: &[&str] = &[
 ];
 
 /// Binds the regular-expression function `name`.
+///
+/// `rlike` is Spark's `RLike` operator (the infix `RLIKE` and the `rlike`
+/// function form): the analyzer types it as `Builtin::RLike`, so it is not
+/// a registry function and stays out of [`NAMES`]. The executor binds it
+/// here to the `regexp_like` kernel, reporting Spark's `rlike` name in
+/// pattern errors.
 pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
-    let listed = listed(NAMES, name)?;
+    let listed = if name == "rlike" {
+        "rlike"
+    } else {
+        listed(NAMES, name)?
+    };
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let strings = |n: usize| types.len() == n && types.iter().all(is_string);
     let indexed = (types.len() == 2 && types.iter().all(is_string))
@@ -82,9 +93,10 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             && types[..2].iter().all(is_string)
             && matches!(types[2], DataType::Int8 | DataType::Int16 | DataType::Int32));
     let binding = match (listed, types.len()) {
-        ("regexp" | "regexp_like", 2) if strings(2) => {
+        ("regexp" | "regexp_like" | "rlike", 2) if strings(2) => {
             let function: &'static str = match listed {
                 "regexp" => "`regexp`",
+                "rlike" => "`rlike`",
                 _ => "`regexp_like`",
             };
             Binding::new(DataType::Boolean, move |x: &Inputs<'_>| find(x, function))
@@ -513,6 +525,30 @@ fn split_pieces(
         return Ok(split_empty(s, limit));
     }
     split_pattern(compiled, s, limit)
+}
+
+/// A Java regex delimiter split for `str_to_map`: the pattern compiles
+/// once, then splits every row's text with Spark's limit semantics (as
+/// [`split_pieces`]). An invalid pattern is
+/// `INVALID_PARAMETER_VALUE.PATTERN`, as for `split`.
+pub(super) struct Splitter {
+    pattern: String,
+    compiled: Compiled,
+}
+
+impl Splitter {
+    /// Compiles the Java regex `pattern` for [`Self::split`].
+    pub(super) fn new(pattern: &str) -> Result<Self, KrishivError> {
+        Ok(Self {
+            pattern: pattern.to_owned(),
+            compiled: Compiled::new(pattern, "`str_to_map`")?,
+        })
+    }
+
+    /// Splits `s` with Spark's limit semantics.
+    pub(super) fn split(&self, s: &str, limit: i32) -> Result<Vec<String>, KrishivError> {
+        split_pieces(s, &self.pattern, &self.compiled, limit)
+    }
 }
 
 /// Spark `split(str, pattern[, limit])` over a column: one row per input,

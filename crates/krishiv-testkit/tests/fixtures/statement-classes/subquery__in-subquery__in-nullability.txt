@@ -1,0 +1,9 @@
+SESSION	create temp view t0 as select 1 as a_nonnullable
+SESSION	create temp view t1 as select cast(null as int) as b_nullable
+SESSION	create temp view t2 as select 2 as c
+READ	select * from t0 where a_nonnullable in (select b_nullable from t1)
+READ	select * from t0 where (a_nonnullable in (select b_nullable from t1)) <=> true
+READ	select * from t0 where a_nonnullable not in (select b_nullable from t1)
+READ	select * from t0 where (a_nonnullable not in (select b_nullable from t1)) <=> true
+READ	select * from t0 left join t2 on (a_nonnullable IN (select b_nullable from t1)) is null
+READ	select * from t0 left join t2 on (a_nonnullable IN (select b_nullable from t1)) <=> true
