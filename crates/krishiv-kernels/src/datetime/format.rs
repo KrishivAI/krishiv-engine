@@ -537,18 +537,14 @@ mod tests {
         );
         let out = seconds_to_timestamps(&exact, "to_timestamp").unwrap();
         assert_eq!(out.value(0), 1_500_000);
-        // ... while a nonzero seventh fractional digit is not.
+        // ... and a seventh fractional digit is dropped toward zero.
         let inexact: ArrayRef = Arc::new(
-            Decimal128Array::from(vec![Some(15_000_001)])
+            Decimal128Array::from(vec![Some(15_000_001), Some(-15_000_009)])
                 .with_precision_and_scale(8, 7)
                 .unwrap(),
         );
-        let e = seconds_to_timestamps(&inexact, "to_timestamp").unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            krishiv_common::error::ErrorClass::DatetimeOverflow
-        );
-        assert_eq!(e.row(), Some(0));
+        let out = seconds_to_timestamps(&inexact, "to_timestamp").unwrap();
+        assert_eq!((out.value(0), out.value(1)), (1_500_000, -1_500_000));
         let big: ArrayRef = Arc::new(Int64Array::from(vec![Some(i64::MAX)]));
         let e = seconds_to_timestamps(&big, "to_timestamp").unwrap_err();
         assert_eq!(
