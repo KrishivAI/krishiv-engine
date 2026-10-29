@@ -61,6 +61,24 @@ impl DiffArgs {
         self.git(&["diff", "-U0", "--no-color", &self.range()])
     }
 
+    /// `git diff --name-only` of the range, one repository-relative path per entry.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn changed_paths(&self) -> Result<Vec<String>, String> {
+        Ok(self
+            .git(&["diff", "--name-only", &self.range()])?
+            .lines()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// The repository the range is taken in.
+    #[must_use]
+    pub fn repo(&self) -> &Path {
+        &self.repo
+    }
+
     fn range(&self) -> String {
         format!("{}...{}", self.base, self.head)
     }
