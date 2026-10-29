@@ -16,6 +16,10 @@
         "st"
       ],
       "order": 490
+    },
+    {
+      "detail": "UNSUPPORTED_TIME_TYPE",
+      "order": 530
     }
   ],
   "summary": "Spark 4.x TIME type and literals; GEOMETRY/GEOGRAPHY types and ST functions",

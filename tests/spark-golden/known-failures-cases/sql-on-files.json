@@ -1,16 +1,14 @@
 {
   "cases": {
-    "depends-on-command": [
-      4,
-      9,
-      14,
-      19
-    ],
     "files": [
       2,
+      4,
       7,
+      9,
       12,
-      17
+      14,
+      17,
+      19
     ],
     "object-stores": [
       22

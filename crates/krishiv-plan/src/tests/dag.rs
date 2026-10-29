@@ -113,6 +113,78 @@ fn expression_rewrites_visit_each_shared_node_once() {
     });
 }
 
+/// `p = p.join(p)` `n` times where each side is a separate copy of the
+/// previous level: the same plan as [`self_joins`] as a tree, built small
+/// (`n` levels of two copies would be 2^n nodes, so only a few levels).
+fn copied_joins(n: usize) -> LogicalPlan {
+    use crate::{JoinCondition, JoinKind};
+    if n == 0 {
+        return LogicalPlan::table(["t"]);
+    }
+    LogicalPlan::new(PlanNode::Join {
+        left: Arc::new(copied_joins(n - 1)),
+        right: Arc::new(copied_joins(n - 1)),
+        kind: JoinKind::Inner,
+        condition: JoinCondition::None,
+    })
+}
+
+#[test]
+fn normalized_hashes_of_shared_dags_are_linear_and_equal_to_copies() {
+    use crate::{Plan, normalized_plan_hash, normalized_subtree_hash};
+    timed("hash", || {
+        let shared = Plan::try_new(self_joins(30)).unwrap();
+        let again = Plan::try_new(self_joins(30)).unwrap();
+        assert_eq!(normalized_plan_hash(&shared), normalized_plan_hash(&again));
+        assert_ne!(
+            normalized_plan_hash(&shared),
+            normalized_plan_hash(&Plan::try_new(self_joins(29)).unwrap())
+        );
+        // Every distinct relation, as `RelationCache::substitute` hashes them.
+        let mut node = Arc::clone(shared.root());
+        for _ in 0..30 {
+            let PlanNode::Join { left, .. } = &node.node else {
+                panic!("{node:?}")
+            };
+            let next = Arc::clone(left);
+            assert_ne!(normalized_subtree_hash(&node), 0);
+            node = next;
+        }
+    });
+    // Sharing is invisible to the hash: a plan whose two sides are separate
+    // copies hashes equal to the one that shares them.
+    for n in 0..=8 {
+        assert_eq!(
+            normalized_subtree_hash(&self_joins(n)),
+            normalized_subtree_hash(&copied_joins(n)),
+            "{n} levels"
+        );
+    }
+}
+
+#[test]
+fn normalized_hashes_of_shared_expressions_are_linear() {
+    use crate::normalized_subtree_hash;
+    timed("expr hash", || {
+        let plan = LogicalPlan::new(PlanNode::Filter {
+            input: Arc::new(LogicalPlan::table(["t"])),
+            predicate: and_chain(Expr::column(["a"])),
+        });
+        let other = LogicalPlan::new(PlanNode::Filter {
+            input: Arc::new(LogicalPlan::table(["t"])),
+            predicate: and_chain(Expr::column(["b"])),
+        });
+        assert_eq!(
+            normalized_subtree_hash(&plan),
+            normalized_subtree_hash(&plan)
+        );
+        assert_ne!(
+            normalized_subtree_hash(&plan),
+            normalized_subtree_hash(&other)
+        );
+    });
+}
+
 #[test]
 fn equality_of_separately_built_dags_is_linear() {
     timed("eq", || {

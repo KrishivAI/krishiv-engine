@@ -30,7 +30,7 @@ use krishiv_testkit::golden::sql_parse::{ParseOnlyEngine, in_dql_scope};
 use krishiv_testkit::golden::{DEFAULT_TAG, GoldenSet, Jdk, report};
 
 const USAGE: &str = "usage: golden-report [--tag TAG] [--jdk 17|21] [--manifest FILE] [--out FILE] \
-[--engine reject-all|sql-parse|session] [--cases FILE] [--ratchet check|update] [--known-failures FILE]";
+[--engine reject-all|sql-parse|session] [--cases FILE] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures FILE]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ratchet {
@@ -41,13 +41,14 @@ enum Ratchet {
 
 fn ratchet(
     mode: Ratchet,
+    reclassify: Option<&str>,
     path: &Path,
     set: &GoldenSet,
     result: &RunResult,
 ) -> Result<String, String> {
     match mode {
         Ratchet::Check => KnownFailures::check_file(path, result),
-        Ratchet::Update => KnownFailures::update_file(path, result, set),
+        Ratchet::Update => KnownFailures::update_file(path, result, set, reclassify),
         Ratchet::Off => Ok(String::new()),
     }
 }
@@ -61,11 +62,13 @@ fn run_cli() -> Result<(), String> {
     let mut engine_name = "reject-all".to_owned();
     let mut cases_out = None;
     let mut mode = Ratchet::Off;
+    let mut reclassify: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let value = args.next().ok_or_else(|| USAGE.to_owned())?;
         match flag.as_str() {
             "--tag" => tag = value,
+            "--reclassify" => reclassify = Some(value),
             "--manifest" => manifest_path = PathBuf::from(value),
             "--known-failures" => known_path = PathBuf::from(value),
             "--jdk" => {
@@ -93,6 +96,9 @@ fn run_cli() -> Result<(), String> {
     }
     if mode != Ratchet::Off && engine_name != "session" {
         return Err("--ratchet needs --engine session".to_owned());
+    }
+    if reclassify.is_some() && mode != Ratchet::Update {
+        return Err("--reclassify needs --ratchet update".to_owned());
     }
     let manifest = ExclusionManifest::load(&manifest_path).map_err(|e| e.to_string())?;
     let dir = GoldenSet::tag_dir(&tag);
@@ -130,7 +136,7 @@ fn run_cli() -> Result<(), String> {
         writeln!(stdout, "report written to {}", path.display()).map_err(|e| e.to_string())?;
     }
     if mode != Ratchet::Off {
-        let msg = ratchet(mode, &known_path, &set, &result)?;
+        let msg = ratchet(mode, reclassify.as_deref(), &known_path, &set, &result)?;
         writeln!(stdout, "{msg}").map_err(|e| e.to_string())?;
     }
     Ok(())

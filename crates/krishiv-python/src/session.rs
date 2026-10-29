@@ -108,6 +108,35 @@ impl PySession {
         is_arrow_table(name)
     }
 
+    /// Drops every cached relation (Spark's `CLEAR CACHE` and
+    /// `spark.catalog.clearCache`).
+    fn clear_cache(&self) {
+        self.inner.clear_cache();
+    }
+
+    /// Drops the cached relations reading the table `name` (Spark's
+    /// `UNCACHE TABLE`).
+    fn uncache_table(&self, name: &str) {
+        self.inner.uncache_table(name);
+    }
+
+    /// Drops the cached relations reading the table `name` (Spark's
+    /// `REFRESH TABLE`).
+    fn refresh_table(&self, name: &str) {
+        self.inner.refresh_table(name);
+    }
+
+    /// Drops the cached relations reading files by path (Spark's
+    /// `REFRESH path`).
+    fn refresh_files(&self) {
+        self.inner.refresh_files();
+    }
+
+    /// Bytes the relation cache holds now.
+    fn cache_reserved(&self) -> usize {
+        self.inner.cache_reserved()
+    }
+
     fn conf_is_modifiable(&self, key: &str) -> bool {
         self.inner.conf().is_modifiable(key)
     }

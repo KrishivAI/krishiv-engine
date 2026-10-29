@@ -8,6 +8,10 @@
         "json"
       ],
       "order": 440
+    },
+    {
+      "file": "^json-functions$",
+      "order": 660
     }
   ],
   "summary": "JSON functions",
