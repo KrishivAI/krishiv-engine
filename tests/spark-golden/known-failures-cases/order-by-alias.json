@@ -1,8 +1,10 @@
 {
   "cases": {
     "depends-on-command": [
-      11,
       12
+    ],
+    "subqueries": [
+      11
     ]
   },
   "file": "order-by-alias",

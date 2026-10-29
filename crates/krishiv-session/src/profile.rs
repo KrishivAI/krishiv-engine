@@ -289,7 +289,7 @@ impl DataFrame {
         keep: bool,
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
         let a = self.analysis().await?;
-        let (_, physical) = self.session.physical(&a.analyzed, &a.env).await?;
+        let (physical, _) = self.physical_cached(&a).await?;
         let (mut stream, query) = self.session.run_profiled(&physical, &a.env).await?;
         let mut out = Vec::new();
         while let Some(batch) = stream.next().await {

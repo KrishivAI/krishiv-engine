@@ -2,12 +2,13 @@
 //! The golden-file report: three separate numbers, per-file denominators and the exclusion
 //! manifest, as JSON ([`REPORT_FORMAT_VERSION`]) and as a short text summary.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use serde_json::{Value, json};
 
 use super::manifest::ExclusionManifest;
-use super::run::{FileResult, RunResult, Tally};
+use super::run::{ClassTally, FileResult, RunResult, Tally};
 
 /// Report JSON format version.
 pub const REPORT_FORMAT_VERSION: u64 = 1;
@@ -38,6 +39,39 @@ pub fn totals(run: &RunResult) -> (Tally, Tally, Tally) {
         r.add(f.result);
     }
     (p, n, r)
+}
+
+/// A parse-phase class counts as met when this share of its statements match. The report prints the
+/// result against this target; no check fails on it.
+pub const CLASS_GATE_PERCENT: u64 = 95;
+
+/// The negative number per expected Spark error class, summed over the files.
+#[must_use]
+pub fn negative_by_class(run: &RunResult) -> BTreeMap<String, ClassTally> {
+    let mut out: BTreeMap<String, ClassTally> = BTreeMap::new();
+    for f in &run.files {
+        for (class, c) in &f.classes {
+            let e = out.entry(class.clone()).or_default();
+            e.parse_phase |= c.parse_phase;
+            e.tally.add(c.tally);
+        }
+    }
+    out
+}
+
+/// The negative gates of the parser: `(PARSE_SYNTAX_ERROR matched, its total, parse-phase classes
+/// at or above [`CLASS_GATE_PERCENT`], parse-phase classes)`.
+#[must_use]
+pub fn parse_phase_gates(classes: &BTreeMap<String, ClassTally>) -> (Tally, u64, u64) {
+    let syntax = classes
+        .get("PARSE_SYNTAX_ERROR")
+        .map_or_else(Tally::default, |c| c.tally);
+    let parse_classes: Vec<&ClassTally> = classes.values().filter(|c| c.parse_phase).collect();
+    let met = parse_classes
+        .iter()
+        .filter(|c| c.tally.passed * 100 >= CLASS_GATE_PERCENT * c.tally.total)
+        .count() as u64;
+    (syntax, met, parse_classes.len() as u64)
 }
 
 /// Build the report JSON for `run`, published together with `manifest`.
@@ -80,6 +114,15 @@ pub fn to_json(run: &RunResult, tag: &str, manifest: &ExclusionManifest) -> Valu
             "negative": tally(negative),
             "result": tally(result),
         },
+        "negative_by_class": negative_by_class(run)
+            .into_iter()
+            .map(|(class, c)| {
+                (
+                    class,
+                    json!({"passed": c.tally.passed, "total": c.tally.total, "parse_phase": c.parse_phase}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>(),
         "files": run.files.iter().map(file_json).collect::<Vec<_>>(),
         "without_expected_output": run.without_expected,
         "failed_files": run.failed_files.iter().map(|f| json!({"file": f.name, "error": f.error})).collect::<Vec<_>>(),
@@ -145,6 +188,36 @@ pub fn summary(run: &RunResult) -> String {
     ] {
         let _ = writeln!(s, "  {label:<24}{} / {}", t.passed, t.total);
     }
+    let classes = negative_by_class(run);
+    let (syntax, met, parse_classes) = parse_phase_gates(&classes);
+    let _ = writeln!(
+        s,
+        "  PARSE_SYNTAX_ERROR      {} / {}  (target: all; reported, not enforced)",
+        syntax.passed, syntax.total
+    );
+    let _ = writeln!(
+        s,
+        "  parse-phase classes     {met} / {parse_classes} at >= {CLASS_GATE_PERCENT}%  (target: >= {CLASS_GATE_PERCENT}% of the classes; reported, not enforced)"
+    );
+    let mut worst: Vec<(&String, &ClassTally)> = classes
+        .iter()
+        .filter(|(_, c)| c.tally.passed < c.tally.total)
+        .collect();
+    worst.sort_by_key(|(name, c)| {
+        (
+            std::cmp::Reverse(c.tally.total - c.tally.passed),
+            (*name).clone(),
+        )
+    });
+    for (name, c) in worst.into_iter().take(10) {
+        let _ = writeln!(
+            s,
+            "    unmatched {name}: {} of {}{}",
+            c.tally.total - c.tally.passed,
+            c.tally.total,
+            if c.parse_phase { " (parse phase)" } else { "" }
+        );
+    }
     s
 }
 
@@ -180,6 +253,16 @@ mod tests {
                     total: 2,
                 },
                 unclassified_errors: 1,
+                classes: BTreeMap::from([(
+                    "PARSE_SYNTAX_ERROR".to_owned(),
+                    ClassTally {
+                        tally: Tally {
+                            passed: 0,
+                            total: 1,
+                        },
+                        parse_phase: true,
+                    },
+                )]),
                 runs: 2,
                 cases: Vec::new(),
                 timeouts: Vec::new(),
@@ -199,6 +282,101 @@ mod tests {
         };
         insta::assert_snapshot!(to_json_string(&to_json(&run, "v4.2.0", &manifest))?);
         Ok(())
+    }
+
+    fn class(passed: u64, total: u64, parse_phase: bool) -> ClassTally {
+        ClassTally {
+            tally: Tally { passed, total },
+            parse_phase,
+        }
+    }
+
+    /// A class raised in both phases is a parse-phase class in either file order.
+    #[test]
+    fn a_class_raised_in_both_phases_is_parse_phase_whatever_the_file_order() {
+        let file = |parse_phase| FileResult {
+            classes: BTreeMap::from([("DUPLICATE_KEY".to_owned(), class(1, 1, parse_phase))]),
+            ..FileResult::default()
+        };
+        for files in [vec![file(true), file(false)], vec![file(false), file(true)]] {
+            let by = negative_by_class(&RunResult {
+                files,
+                ..RunResult::default()
+            });
+            assert!(by["DUPLICATE_KEY"].parse_phase);
+            assert_eq!(
+                by["DUPLICATE_KEY"].tally,
+                Tally {
+                    passed: 2,
+                    total: 2
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn negative_by_class_sums_files_and_gates_the_parse_phase() {
+        let run = RunResult {
+            files: vec![
+                FileResult {
+                    classes: BTreeMap::from([
+                        ("PARSE_SYNTAX_ERROR".to_owned(), class(2, 2, true)),
+                        ("UNRESOLVED_COLUMN".to_owned(), class(1, 3, false)),
+                        ("INVALID_LIMIT".to_owned(), class(19, 20, true)),
+                    ]),
+                    ..FileResult::default()
+                },
+                FileResult {
+                    classes: BTreeMap::from([
+                        ("PARSE_SYNTAX_ERROR".to_owned(), class(1, 2, true)),
+                        ("INVALID_LIMIT".to_owned(), class(0, 1, true)),
+                    ]),
+                    ..FileResult::default()
+                },
+            ],
+            ..RunResult::default()
+        };
+        let by = negative_by_class(&run);
+        assert_eq!(
+            by["PARSE_SYNTAX_ERROR"].tally,
+            Tally {
+                passed: 3,
+                total: 4
+            }
+        );
+        assert_eq!(
+            by["INVALID_LIMIT"].tally,
+            Tally {
+                passed: 19,
+                total: 21
+            }
+        );
+        assert!(!by["UNRESOLVED_COLUMN"].parse_phase);
+        // PARSE_SYNTAX_ERROR 3/4; parse-phase classes: syntax 75% (no), limit 90% (no): 0 of 2.
+        let (syntax, met, classes) = parse_phase_gates(&by);
+        assert_eq!(
+            syntax,
+            Tally {
+                passed: 3,
+                total: 4
+            }
+        );
+        assert_eq!((met, classes), (0, 2));
+        let text = summary(&run);
+        assert!(text.contains("PARSE_SYNTAX_ERROR      3 / 4"));
+        assert!(text.contains("parse-phase classes     0 / 2 at >= 95%"));
+        assert!(text.contains("unmatched UNRESOLVED_COLUMN: 2 of 3"));
+        assert!(text.contains("unmatched PARSE_SYNTAX_ERROR: 1 of 4 (parse phase)"));
+        let json = to_json(&run, "v4.2.0", &ExclusionManifest::default());
+        assert_eq!(
+            json["negative_by_class"]["INVALID_LIMIT"],
+            serde_json::json!({"passed": 19, "total": 21, "parse_phase": true})
+        );
+        // A run with no parse-phase class has nothing to gate.
+        assert_eq!(
+            parse_phase_gates(&BTreeMap::new()),
+            (Tally::default(), 0, 0)
+        );
     }
 
     #[test]

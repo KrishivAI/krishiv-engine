@@ -850,11 +850,16 @@ impl Resolver<'_> {
                             done.insert((key, step), bound);
                         }
                         stack.push(Step::Exit(Arc::clone(&x), ctx));
-                        let lambda = addr(&*f.args[1]);
+                        let lambdas: Vec<usize> = h
+                            .lambdas()
+                            .iter()
+                            .filter(|&&i| i < f.args.len())
+                            .map(|&i| addr(&*f.args[i]))
+                            .collect();
                         stack.extend(
                             kids.into_iter()
                                 .rev()
-                                .filter(|(c, _)| addr(&**c) != lambda)
+                                .filter(|(c, _)| !lambdas.contains(&addr(&**c)))
                                 .map(|(c, k)| Step::Enter(c, k)),
                         );
                         continue;
@@ -1638,6 +1643,19 @@ impl Resolver<'_> {
                             owned.push(filter.clone());
                         }
                         (&owned[..], 3)
+                    } else if is_builtin_entry(&entry) && entry.id.name() == "split" && n == 2 {
+                        // `split(str, pattern)` is `split(str, pattern, -1)`.
+                        owned = kids[..n].to_vec();
+                        owned.push(default_argument(
+                            Literal::Integer(-1),
+                            DataType::Integer,
+                            false,
+                            e.origin,
+                        ));
+                        if let Some(filter) = kids.get(n) {
+                            owned.push(filter.clone());
+                        }
+                        (&owned[..], 3)
                     } else if is_builtin_entry(&entry) && entry.id.name() == "named_struct" && n > 0
                     {
                         owned = kids.clone();
@@ -1942,9 +1960,11 @@ impl Resolver<'_> {
             .map(|(k, to)| self.implicit_cast_as(k, to, try_casts))
             .collect();
         let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
+        let bound_sql = |i: usize| call_kids.get(i).map(|k| pretty(&k.expr, zone));
         let call = CallTypes::new(&types, &constants)
             .with_literals(&literals)
             .with_sql(&sql)
+            .with_bound_sql(&bound_sql)
             .with_ansi(ansi)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive);
@@ -4070,14 +4090,23 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             }
         }
         ExprNode::Star(_) => "*".to_owned(),
-        // Spark's `lambdafunction(body, arg1, ...)`: the variables render
-        // as `namedlambdavariable()` when hidden (see `hof`).
+        // Spark's `lambdafunction(body, arg1, ...)`: bound variables render
+        // as `namedlambdavariable()` (Spark's `NamedLambdaVariable.sql`
+        // ignores the written name); an unbound lambda keeps its written
+        // names, as error quotes of not-yet-bound calls show them.
         ExprNode::Lambda { params, .. } => {
             let mut args = vec![k[0].to_owned()];
-            args.extend(params.iter().map(|p| p.name.clone()));
+            let bound = params.iter().any(|p| p.id != AttrId(u64::MAX));
+            args.extend(params.iter().map(|p| {
+                if bound {
+                    "namedlambdavariable()".to_owned()
+                } else {
+                    p.name.clone()
+                }
+            }));
             format!("lambdafunction({})", args.join(", "))
         }
-        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => c.name.clone(),
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => "namedlambdavariable()".to_owned(),
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall {
             name,
@@ -4134,14 +4163,26 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
                 FunctionId::Udf { .. } => None,
             };
             let n = f.args.len().min(k.len());
-            let text = call(
-                f.id.name(),
-                op,
-                f.distinct,
-                &k[..n],
-                None,
-                Some(&f.data_type),
-            );
+            // `aggregate`/`reduce` of three arguments show the identity
+            // `finish` Spark's constructor fills in, once the merge is bound
+            // (see `hof`): the call then reads as the four-argument form.
+            let identity = matches!(f.id.name(), "aggregate" | "reduce")
+                && f.args.len() == 3
+                && k.len() >= 3
+                && matches!(&f.args[2].node, ExprNode::Lambda { params, .. } if params.iter().any(|p| p.id != AttrId(u64::MAX)));
+            let owned;
+            let kids: &[&str] = if identity {
+                owned = vec![
+                    k[0],
+                    k[1],
+                    k[2],
+                    "lambdafunction(namedlambdavariable(), namedlambdavariable())",
+                ];
+                &owned
+            } else {
+                &k[..n]
+            };
+            let text = call(f.id.name(), op, f.distinct, kids, None, Some(&f.data_type));
             match k.get(n) {
                 Some(filter) => format!("{text} FILTER (WHERE {filter})"),
                 None => text,
@@ -4816,8 +4857,9 @@ mod tests {
         assert_eq!(literal.to_string(), "MAP('mode', 'FAILFAST')");
     }
 
-    /// `lambdafunction(body, arg1, ...)`: a resolved lambda variable
-    /// prints as its name, like Spark's `NamedLambdaVariable`.
+    /// `lambdafunction(body, arg1, ...)`: a bound lambda variable prints
+    /// as `namedlambdavariable()`, like Spark's `NamedLambdaVariable`;
+    /// an unbound lambda keeps its written names.
     #[test]
     fn lambdas_print_as_sparks_lambdafunction() {
         let var = BoundColumn {
@@ -4829,12 +4871,19 @@ mod tests {
         let body = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
             var.clone(),
         ))));
-        assert_eq!(pretty(&body, None), "y");
+        assert_eq!(pretty(&body, None), "namedlambdavariable()");
         let lam = Expr::new(ExprNode::Lambda {
             params: vec![var],
             body,
         });
-        assert_eq!(pretty(&lam, None), "lambdafunction(y, y)");
+        assert_eq!(
+            pretty(&lam, None),
+            "lambdafunction(namedlambdavariable(), namedlambdavariable())"
+        );
+        // Placeholders keep their written names (error quotes of calls
+        // whose lambdas never bound).
+        let unbound = Expr::lambda(vec!["y".to_owned()], Expr::column(["y"]));
+        assert_eq!(pretty(&unbound, None), "lambdafunction(y, y)");
     }
 
     /// `*` prints as itself (the arm beside the lambda printers).

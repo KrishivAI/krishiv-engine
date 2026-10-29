@@ -22,6 +22,7 @@ pub use krishiv::ScalarUdf
 pub use krishiv::Session
 pub use krishiv::SessionBuilder
 pub use krishiv::Signature
+pub use krishiv::StorageLevel
 pub use krishiv::TextOptions
 pub use krishiv::UdfArg
 pub use krishiv::UdfError

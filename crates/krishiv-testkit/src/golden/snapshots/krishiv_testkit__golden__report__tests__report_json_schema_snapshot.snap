@@ -55,6 +55,13 @@ expression: "to_json_string(&to_json(&run, \"v4.2.0\", &manifest))?"
   "jdk_variant_files": [
     "v"
   ],
+  "negative_by_class": {
+    "PARSE_SYNTAX_ERROR": {
+      "parse_phase": true,
+      "passed": 0,
+      "total": 1
+    }
+  },
   "spark_tag": "v4.2.0",
   "totals": {
     "files_excluded": 1,

@@ -30,6 +30,7 @@ from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
 from krishiv.sql.types import StructType, _struct_from_columns
+from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
     from krishiv.sql.readwriter import DataFrameWriter
@@ -128,6 +129,7 @@ class DataFrame:
     def __init__(self, native: _native.DataFrame, session: SparkSession) -> None:
         self._df = native
         self._session = session
+        self._storage_level = StorageLevel(False, False, False, False)
 
     @property
     def sparkSession(self) -> SparkSession:
@@ -224,6 +226,97 @@ class DataFrame:
 
     def alias(self, alias: str) -> DataFrame:
         return self._new(self._df.alias(alias))
+
+    def cache(self) -> DataFrame:
+        """Caches the data in memory (``MEMORY_AND_DISK``): the next action materializes the
+        plan into the session's relation cache, and later actions with the same result read
+        the snapshot instead of recomputing it.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            This DataFrame, marked as cached (as in PySpark, the call acts on the frame itself).
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], schema=["age", "name"])
+        >>> df.cache()
+        DataFrame[age: bigint, name: string]
+        >>> df.count()
+        2
+        """
+        self._df = self._df.cache()
+        self._storage_level = StorageLevel.MEMORY_AND_DISK
+        return self
+
+    def persist(self, storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) -> DataFrame:
+        """Caches the data at ``storageLevel``: every level maps to memory for now (disk
+        levels spill there later).
+
+        Parameters
+        ----------
+        storageLevel : :class:`krishiv.storagelevel.StorageLevel`
+            The storage level (default ``MEMORY_AND_DISK``).
+
+        Returns
+        -------
+        :class:`DataFrame`
+            This DataFrame, marked as persisted.
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], schema=["age", "name"])
+        >>> df.persist(StorageLevel.DISK_ONLY_2)
+        DataFrame[age: bigint, name: string]
+        >>> df.count()
+        2
+        """
+        if not isinstance(storageLevel, StorageLevel):
+            raise not_expected_type("storageLevel", "StorageLevel", storageLevel)
+        self._df = self._df.persist(
+            storageLevel.useDisk,
+            storageLevel.useMemory,
+            storageLevel.useOffHeap,
+            storageLevel.deserialized,
+            storageLevel.replication,
+        )
+        self._storage_level = storageLevel
+        return self
+
+    def unpersist(self, blocking: bool = False) -> DataFrame:
+        """Drops this frame's cached snapshot, if any, returning the pool memory to baseline.
+
+        Parameters
+        ----------
+        blocking : bool, optional
+            Accepted for compatibility; the entry is always dropped before this returns.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            This DataFrame, uncached.
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], schema=["age", "name"])
+        >>> df.cache()
+        DataFrame[age: bigint, name: string]
+        >>> df.unpersist()
+        DataFrame[age: bigint, name: string]
+        """
+        self._df = self._df.unpersist(blocking)
+        self._storage_level = StorageLevel(False, False, False, False)
+        return self
+
+    @property
+    def storageLevel(self) -> StorageLevel:
+        """This frame's storage level (all false when uncached)."""
+        return self._storage_level
+
+    @property
+    def is_cached(self) -> bool:
+        """Whether this frame's plan is cached now."""
+        return self._df.is_cached()
 
     def groupBy(self, *cols: ColumnsOrNames) -> GroupedData:
         return GroupedData(self._df.group_by([_named(c) for c in _flatten(cols)]), self)

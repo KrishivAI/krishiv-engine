@@ -28,6 +28,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
+    &CACHE_MAX_BYTES,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -80,6 +81,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
     ("spark.network.timeout", &NETWORK_TIMEOUT),
+    ("krishiv.cache.maxBytes", &CACHE_MAX_BYTES),
     ("krishiv.exec.batchSize", &EXEC_BATCH_SIZE),
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
@@ -485,6 +487,21 @@ pub static MEMORY_ABORT_RELEASE_TIMEOUT: ConfigEntry = ConfigEntry {
           memory; aborted queries release at their next batch boundary. While their memory \
           covers the request, no other query is aborted. The request fails after this time.",
     scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Byte cap of the session relation cache.
+pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.cache.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(512 * MIB)),
+    doc: "Most bytes cached relations (`DataFrame.cache`, `persist`) may hold in memory, per \
+          session, as Arrow batches under the `relation_cache` memory pool. Materialization is \
+          lazy (on first use) and all-or-nothing: when caching a relation would exceed the cap, \
+          the query runs uncached instead of failing. `0` disables caching: queries always run \
+          uncached.",
+    scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
 };
