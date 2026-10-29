@@ -13,12 +13,20 @@
 //! ([`Sink::position`]); their batches reach the channel ordered by
 //! `(fan-in member, ordinal)`. The driver holding the smallest such key
 //! sends straight to the channel; the others hold their batches back, in
-//! memory reserved through their consumer (taken, never awaited) and at
-//! most [`ORDER_BATCHES`] each ([`SHORT_BATCHES`] once a reservation is
-//! refused), and wait once over the limit. When the
+//! memory reserved through their consumer (taken, never awaited), at most
+//! [`ORDER_BATCHES`] each and at most their share of a quarter of the
+//! query's memory limit (so the operators of the driver whose turn it is
+//! keep room to work), and wait once over either limit or as soon as a
+//! reservation is refused (one batch over, the one in hand). When the
 //! smallest key moves on (a driver reports a new morsel, or ends), the
 //! batches it passed are sent in key order. The driver with the smallest
 //! key is never held back, so the order cannot deadlock.
+//!
+//! A driver that has not claimed its first morsel holds the smallest key
+//! of its member (it may still claim any of them): every batch of the
+//! member waits until each of its drivers has started. Once the caller
+//! drops the stream, held batches are dropped and their memory returned at
+//! once.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::pin::Pin;
@@ -183,14 +191,9 @@ impl Channel {
 /// and waits once it does not.
 pub(crate) const ORDER_BATCHES: usize = 4096;
 
-/// Most batches a driver holds back once its memory ran short: it keeps
-/// running ahead a little (waiting at the first refusal serialised large
-/// scans) and then waits for its turn.
-pub(crate) const SHORT_BATCHES: usize = 256;
-
-/// A held-back batch: the driver holding it, the batch and the bytes it
-/// reserved.
-type Held = (u32, Batch, usize);
+/// A held-back batch: the driver holding it, the batch, the bytes it is
+/// charged and whether they are reserved.
+type Held = (u32, Batch, usize, bool);
 
 /// The ordered drivers of the result (module docs).
 #[derive(Debug, Default)]
@@ -208,11 +211,14 @@ struct Track {
     /// The ordinal of the morsel it reads; `None` before its first.
     position: Option<u64>,
     ended: bool,
-    /// Batches it holds back, and the memory they hold.
+    /// Batches it holds back, the bytes they are charged, and the memory
+    /// reserved for them.
     held: usize,
+    bytes: usize,
     memory: Option<Reservation>,
-    /// Its memory ran short: it holds at most [`SHORT_BATCHES`] until
-    /// nothing it holds is left.
+    /// The most bytes it may hold back (module docs).
+    cap: usize,
+    /// A reservation was refused: it waits until nothing it holds is left.
     short: bool,
     waker: Option<Waker>,
 }
@@ -225,7 +231,7 @@ impl Track {
 
     /// Whether it must wait before sinking more.
     fn over(&self) -> bool {
-        self.held >= ORDER_BATCHES || (self.short && self.held >= SHORT_BATCHES)
+        self.held >= ORDER_BATCHES || self.bytes >= self.cap || (self.short && self.held > 0)
     }
 }
 
@@ -241,20 +247,26 @@ impl Order {
     }
 
     /// Sends every held batch whose key is at most the smallest live key,
-    /// in key order; returns the wakers of drivers that may go on.
+    /// in key order; returns the wakers of drivers that may go on. Once the
+    /// caller dropped the stream, every held batch is dropped instead.
     fn release(&mut self, channel: &Channel) -> Vec<Waker> {
-        let min = self.min();
+        let min = if channel.receiver_gone() {
+            None
+        } else {
+            self.min()
+        };
         let mut wakers = Vec::new();
         while let Some(entry) = self.pending.first_entry() {
             if min.is_some_and(|m| *entry.key() > m) {
                 break;
             }
-            for (partition, batch, bytes) in entry.remove() {
+            for (partition, batch, bytes, reserved) in entry.remove() {
                 // A receiver that is gone takes nothing: the batch is dropped.
                 let _ = channel.send_released(batch);
                 if let Some(t) = self.drivers.get_mut(&partition) {
                     t.held = t.held.saturating_sub(1);
-                    if let Some(m) = t.memory.as_mut() {
+                    t.bytes = t.bytes.saturating_sub(bytes);
+                    if reserved && let Some(m) = t.memory.as_mut() {
                         m.shrink(bytes.min(m.size()));
                     }
                     if t.held == 0 {
@@ -423,7 +435,9 @@ impl Sink for ResultSink {
                     position: None,
                     ended: false,
                     held: 0,
+                    bytes: 0,
                     memory: None,
+                    cap: usize::MAX,
                     short: false,
                     waker: None,
                 },
@@ -434,9 +448,18 @@ impl Sink for ResultSink {
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let partition = ctx.partition();
         let mut order = lock(&result_global(global)?.order);
+        // Each ordered driver may hold back its share of a quarter of the
+        // query's limit (module docs).
+        let drivers = order.drivers.len().max(1);
+        let cap = ctx
+            .query()
+            .pool()
+            .effective_limit()
+            .map_or(usize::MAX, |l| (l / 4 / drivers).max(1));
         let ordered = match order.drivers.get_mut(&partition) {
             Some(t) => {
                 t.memory = Some(ctx.consumer().reservation());
+                t.cap = cap;
                 true
             }
             None => false,
@@ -480,19 +503,23 @@ impl Sink for ResultSink {
             return Ok(self.sent(full));
         }
         if self.channel.receiver_gone() {
+            // Drop what every driver holds, and return its memory, now.
+            let wakers = order.release(&self.channel);
+            drop(order);
+            wakers.into_iter().for_each(Waker::wake);
             return Ok(SinkStatus::Finished);
         }
         let bytes = held_bytes(&input);
         let reserved = t.memory.as_mut().is_some_and(|m| m.try_grow(bytes).is_ok());
         t.short |= !reserved;
         t.held += 1;
+        t.bytes += bytes;
         let wait = t.over();
-        let bytes = if reserved { bytes } else { 0 };
         order
             .pending
             .entry(key)
             .or_default()
-            .push_back((partition, input, bytes));
+            .push_back((partition, input, bytes, reserved));
         drop(order);
         Ok(if wait {
             SinkStatus::Blocked(Box::pin(self.turn(Arc::clone(global), partition)))
@@ -679,9 +706,10 @@ mod tests {
         ok(sink.combine(l1, &g));
     }
 
-    /// Without memory for its held batches a driver holds at most
-    /// `SHORT_BATCHES`, then waits until they are sent; a dropped receiver
-    /// ends every wait.
+    /// A refused reservation makes the driver wait at once (one batch
+    /// over, the one in hand), until what it holds is sent; a dropped
+    /// receiver ends every wait, drops the held batches and returns their
+    /// memory.
     #[test]
     fn short_memory_and_a_dropped_receiver() {
         let (sink, g, ctx) = setup(Some(1), 2);
@@ -690,10 +718,6 @@ mod tests {
         let mut l1 = ok(sink.local_state(&ctx[1], &g));
         sink.position(&mut l0, &g, 0);
         sink.position(&mut l1, &g, 1);
-        for i in 0..SHORT_BATCHES - 1 {
-            let s = ok(sink.sink(batch(100 + i as i64), &mut l1, &g));
-            assert_eq!(status(&s), "more");
-        }
         let SinkStatus::Blocked(mut turn) = ok(sink.sink(batch(2), &mut l1, &g)) else {
             unreachable!("not blocked");
         };
@@ -703,6 +727,36 @@ mod tests {
         assert!(turn.as_mut().poll(&mut cx).is_ready());
         assert_eq!(status(&ok(sink.sink(batch(3), &mut l1, &g))), "finished");
         assert_eq!(status(&ok(sink.sink(batch(1), &mut l0, &g))), "finished");
+        let order = lock(&ok(result_global(&g)).order);
+        assert!(order.pending.is_empty());
+        assert!(order.drivers.values().all(|t| t.held == 0 && t.bytes == 0));
+    }
+
+    /// A driver ahead holds at most its share of a quarter of the query's
+    /// memory limit, then waits for its turn.
+    #[test]
+    fn a_driver_ahead_holds_at_most_its_share_of_the_limit() {
+        let (sink, g, ctx) = setup(Some(1 << 20), 2);
+        sink.expect_ordered(&g, 0, 0..2);
+        let mut l0 = ok(sink.local_state(&ctx[0], &g));
+        let mut l1 = ok(sink.local_state(&ctx[1], &g));
+        sink.position(&mut l0, &g, 0);
+        sink.position(&mut l1, &g, 1);
+        // 96 KiB each: the share is 128 KiB (1 MiB / 4 / 2 drivers).
+        let big = |v: i64| {
+            let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+            Batch::new(ok(RecordBatch::try_new(
+                schema,
+                vec![Arc::new(Int64Array::from(vec![v; 12 * 1024]))],
+            )))
+        };
+        let first = ok(sink.sink(big(1), &mut l1, &g));
+        assert_eq!(status(&first), "more");
+        let second = ok(sink.sink(big(2), &mut l1, &g));
+        assert_eq!(status(&second), "blocked");
+        ok(sink.combine(l0, &g));
+        assert_eq!(received(&sink).len(), 2);
+        ok(sink.combine(l1, &g));
     }
 
     /// A view column is charged its views and its long values' bytes, not

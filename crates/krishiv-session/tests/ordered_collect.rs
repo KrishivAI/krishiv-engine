@@ -113,3 +113,70 @@ fn a_multi_split_parquet_scan_returns_split_by_split() {
         repeat_under_load(&s, &sql, &want);
     }
 }
+
+/// An empty file among the splits (a partition with no rows) does not
+/// hold the order back.
+#[test]
+fn an_empty_split_keeps_the_order() {
+    let dir = tempfile::tempdir().unwrap();
+    for f in 0..6_i64 {
+        let path = dir.path().join(format!("part-{f}.parquet"));
+        let file = std::fs::File::create(path).unwrap();
+        let batch = if f == 2 {
+            ids(0..0)
+        } else {
+            ids(f * 5_000..(f + 1) * 5_000)
+        };
+        let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+    }
+    let path = dir.path().to_str().unwrap().to_owned();
+    let sql = format!("SELECT id FROM parquet.`{path}`");
+    let want = collect_in_order(&session(1), &sql);
+    assert_eq!(want.len(), 25_000);
+    repeat_under_load(&session(8), &sql, &want);
+}
+
+/// A `UNION ALL` whose middle branch joins (an operator that flushes after
+/// its input, so the branches run concurrently): the ordered branches
+/// still come back first child first, each in slice order; the join's
+/// rows may land anywhere.
+#[test]
+fn a_concurrent_union_keeps_its_ordered_children_in_order() {
+    let sql = "SELECT id FROM range(0, 64, 1, 8) \
+               UNION ALL SELECT a.id FROM range(1000, 1100) a JOIN range(1000, 1100) b ON a.id = b.id \
+               UNION ALL SELECT id FROM range(64, 128, 1, 8)";
+    let s = session(8);
+    for _ in 0..40 {
+        let got = collect_in_order(&s, sql);
+        assert_eq!(got.len(), 228);
+        let ranges: Vec<i64> = got.into_iter().filter(|&v| v < 1000).collect();
+        assert_eq!(ranges, (0..128).collect::<Vec<i64>>());
+    }
+}
+
+/// An error in the first partition fails the query while later drivers
+/// hold batches back, and dropping the stream mid-way ends the query: no
+/// driver waits for a turn that never comes.
+#[test]
+fn errors_and_a_dropped_stream_end_an_ordered_query() {
+    use futures::StreamExt as _;
+    let s = session(8);
+    let df = block_on(s.sql(
+        "SELECT CASE WHEN id = 0 THEN raise_error('boom') ELSE CAST(id AS STRING) END \
+         FROM range(0, 400000, 1, 8)",
+    ))
+    .unwrap();
+    let e = block_on(df.collect()).unwrap_err();
+    assert!(e.to_string().contains("boom"), "{e}");
+    for _ in 0..10 {
+        let df = block_on(s.sql("SELECT id FROM range(0, 4000000, 1, 8)")).unwrap();
+        let mut stream = block_on(df.execute_stream()).unwrap();
+        let first = block_on(stream.next()).unwrap().unwrap();
+        assert_eq!(first.column(0).as_primitive::<Int64Type>().value(0), 0);
+        drop(stream);
+    }
+    // The session still answers.
+    assert_eq!(collect_in_order(&s, "SELECT id FROM range(3)"), [0, 1, 2]);
+}
