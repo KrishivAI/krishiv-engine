@@ -245,3 +245,16 @@ fn two_dataframe_ranges_join_with_distinct_attributes() {
     got.sort_unstable();
     assert_eq!(got, vec![2, 3]);
 }
+
+/// `LIMIT` over a multi-slice range returns the first rows in slice order,
+/// as Spark's limit takes partitions in order, however the drivers race.
+#[test]
+fn limit_over_range_takes_the_first_rows() {
+    let session = session();
+    for _ in 0..50 {
+        assert_eq!(
+            collect_sorted(&session, "SELECT * FROM (SELECT * FROM range(10) LIMIT 5)"),
+            vec![0, 1, 2, 3, 4]
+        );
+    }
+}
