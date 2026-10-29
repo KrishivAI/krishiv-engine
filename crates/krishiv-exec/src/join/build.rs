@@ -72,6 +72,10 @@ impl Drop for BuildGlobal {
 #[derive(Debug, Default)]
 struct Collect {
     parts: Vec<Part>,
+    /// Build rows with a NULL `=` key (right anti, right outer) and their
+    /// memory.
+    nulls: Vec<Batch>,
+    null_memory: Vec<Reservation>,
     stored: u64,
     file_bytes: u64,
     /// Per partition: the distinct-key sketch of the rows sunk, row layout
@@ -89,6 +93,10 @@ pub(crate) struct Built {
     pub(crate) tables: Vec<Option<JoinTable>>,
     /// Level-0 partitions with build rows on disk (bit per partition).
     pub(crate) spilled: u64,
+    /// A right anti or right outer join's build rows with a NULL `=` key:
+    /// they match nothing, so they are kept outside every index and
+    /// emitted as unmatched (one arena per stored chunk).
+    pub(crate) nulls: Vec<RowArena>,
     /// The spilled partitions' work, shared by the probe drivers' flush.
     pub(crate) grace: Mutex<Grace>,
     /// Notified whenever a driver's claim on `grace` ends.
@@ -99,6 +107,10 @@ pub(crate) struct Built {
 struct BuildLocal {
     hashing: Hashing,
     parts: Vec<Part>,
+    /// This driver's build rows with a NULL `=` key that the join returns
+    /// (right anti, right outer), and their memory.
+    nulls: Vec<Batch>,
+    null_memory: Reservation,
     spilled: Arc<AtomicU64>,
     signal: Arc<SpillSignal>,
     stored: u64,
@@ -359,15 +371,19 @@ impl BuildSink {
 }
 
 /// What indexing a partition's in-memory rows reserves: `(index, copy)`,
-/// its [`JoinTable`] index and its transient concatenation copy (none for a
-/// single chunk); `None` if no rows are in memory.
-fn build_need(part: &Part, row_layout: bool) -> Option<(usize, usize)> {
+/// its [`JoinTable`] index (and match bitmap when `marks`) and its
+/// transient concatenation copy (none for a single chunk); `None` if no
+/// rows are in memory.
+fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
     // Finalize sizes row-layout indexes from estimates: reserve their growth.
-    let index =
-        JoinTable::index_bytes_estimated(part.mem_rows(), key_bytes(&part.chunks), row_layout);
+    let rows = part.mem_rows();
+    let mut index = JoinTable::index_bytes_estimated(rows, key_bytes(&part.chunks), row_layout);
+    if marks {
+        index = index.saturating_add(JoinTable::marks_bytes(rows));
+    }
     let copy = if part.chunks.len() > 1 {
         part.bytes()
     } else {
@@ -443,6 +459,7 @@ impl BuildGlobal {
         let _ = g.built.set(Built {
             tables: Vec::new(),
             spilled: 0,
+            nulls: Vec::new(),
             grace: Mutex::new(grace),
             grace_changed: Event::default(),
             _memory: Vec::new(),
@@ -487,6 +504,8 @@ impl Sink for BuildSink {
             parts: (0..state(global)?.hashing.fanout0())
                 .map(|_| Part::with_memory(memory.reservation()))
                 .collect(),
+            nulls: Vec::new(),
+            null_memory: memory.reservation(),
             spilled: Arc::clone(&state(global)?.spilled),
             signal: Arc::clone(memory.signal()),
             stored: 0,
@@ -535,9 +554,36 @@ impl Sink for BuildSink {
         };
         let mut by_part = vec![Vec::new(); g.hashing.fanout0()];
         let hashes = keys.hashes();
-        for i in (0..n).filter(|&i| keys.is_valid(i)) {
-            by_part[g.hashing.partition(hashes[i], 0)].push(i);
+        // A NULL `=` key matches nothing: the row is dropped, unless the
+        // join returns unmatched build rows; then it is kept apart from the
+        // partitions (no index may find it: in the row layout a NULL `=`
+        // key is not told apart from a value).
+        let keep_null = s.join_type.keeps_null_build_keys();
+        let mut null_rows = Vec::new();
+        for i in 0..n {
+            if keys.is_valid(i) {
+                by_part[g.hashing.partition(hashes[i], 0)].push(i);
+            } else if keep_null {
+                null_rows.push(i);
+            }
         }
+        let null_chunk = if null_rows.is_empty() {
+            None
+        } else {
+            let chunk = arena_chunk(
+                s,
+                &g.hashing,
+                &keys,
+                payload.as_ref(),
+                input.weights(),
+                &null_rows,
+            )?;
+            let bytes = chunk.data().get_array_memory_size();
+            if l.null_memory.try_grow(bytes).is_err() {
+                return Ok(SinkStatus::NeedMemory { bytes });
+            }
+            Some((chunk, bytes))
+        };
         let mut chunks = Vec::new();
         let mut stored = 0;
         for (p, rows) in by_part.iter().enumerate().filter(|(_, r)| !r.is_empty()) {
@@ -555,7 +601,16 @@ impl Sink for BuildSink {
             ));
         }
         if let Err(bytes) = reserve_chunks(&mut l.parts, &chunks) {
-            return Ok(SinkStatus::NeedMemory { bytes });
+            // All or nothing: the retry sinks the whole batch again.
+            let null_bytes = null_chunk.as_ref().map_or(0, |(_, b)| *b);
+            l.null_memory.shrink(null_bytes);
+            return Ok(SinkStatus::NeedMemory {
+                bytes: bytes + null_bytes,
+            });
+        }
+        if let Some((chunk, _)) = null_chunk {
+            stored += chunk.num_rows() as u64;
+            l.nulls.push(chunk);
         }
         // Only once the batch is stored: a `NeedMemory` retry sinks the same
         // batch again, which must not count its keys twice.
@@ -590,6 +645,8 @@ impl Sink for BuildSink {
         for (dst, src) in c.parts.iter_mut().zip(l.parts) {
             dst.absorb(src);
         }
+        c.nulls.extend(l.nulls);
+        c.null_memory.push(l.null_memory);
         c.stored += l.stored;
         c.file_bytes += l.file_bytes;
         match (c.sketches.as_mut(), l.sketches) {
@@ -652,7 +709,8 @@ impl Sink for BuildSink {
                     let (indexes, copy) = {
                         let c = lock(&g.collect);
                         let rows = g.hashing.rows();
-                        let needs = c.parts.iter().filter_map(|p| build_need(p, rows));
+                        let marks = s.join_type.builds_preserved();
+                        let needs = c.parts.iter().filter_map(|p| build_need(p, rows, marks));
                         needs.fold((0usize, 0usize), |(i, m), (index, copy)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
@@ -674,7 +732,8 @@ impl Sink for BuildSink {
                     .zip(estimates)
                     .enumerate()
                     .filter_map(|(i, (p, keys))| {
-                        Some((i, build_need(p, g.hashing.rows())?, p, keys))
+                        let marks = s.join_type.builds_preserved();
+                        Some((i, build_need(p, g.hashing.rows(), marks)?, p, keys))
                     })
                     .map(|(i, need, p, keys)| Job {
                         part: i,
@@ -748,7 +807,14 @@ impl Sink for BuildSink {
                                         layout,
                                         hashing.g_seed(),
                                         keys,
-                                    );
+                                    )
+                                    .and_then(|t| {
+                                        if shared.join_type.builds_preserved() {
+                                            t.with_marks()
+                                        } else {
+                                            Ok(t)
+                                        }
+                                    });
                                     let n = &shared.counters;
                                     n.add(Counter::ConcatNs, nanos(t1 - t0));
                                     n.add(Counter::IndexNs, nanos(t1.elapsed()));
@@ -804,7 +870,15 @@ impl Sink for BuildSink {
             c.sketches = None;
             c.sketch_memory.clear();
             let mut memory = vec![index, filter_memory];
+            // One arena per chunk: no concatenation copy.
+            let schema = s.arena_schema(&g.hashing);
+            let nulls = std::mem::take(&mut c.nulls)
+                .iter()
+                .map(|chunk| RowArena::concat(schema, std::slice::from_ref(chunk)))
+                .collect::<Result<Vec<_>>>()?;
+            memory.append(&mut c.null_memory);
             let mut grace = Grace::new(g.hashing.fanout0());
+            grace.keep_unprobed = s.join_type.keeps_null_build_keys();
             for (p, part) in c.parts.iter_mut().enumerate() {
                 memory.append(&mut part.memory);
                 if spilled & (1 << p) != 0 {
@@ -821,6 +895,7 @@ impl Sink for BuildSink {
                 .set(Built {
                     tables: all,
                     spilled,
+                    nulls,
                     grace: Mutex::new(grace),
                     grace_changed: Event::default(),
                     _memory: memory,

@@ -126,6 +126,23 @@ impl Case {
             format!("{k1}|{}|{}", r.k2.unwrap_or("∅"), r.v)
         };
         let mut out = Vec::new();
+        let matches =
+            |p: &Row, b: &Row| self.key_eq(p, b) && (!self.filter || VLess::eval(p.v, b.v));
+        // The joins that return build rows by their matches.
+        for b in build {
+            let matched: Vec<&Row> = probe.iter().filter(|p| matches(p, b)).collect();
+            match self.join_type {
+                JoinType::RightSemi if !matched.is_empty() => out.push(fmt(b)),
+                JoinType::RightAnti if matched.is_empty() => out.push(fmt(b)),
+                JoinType::RightOuter => {
+                    out.extend(matched.iter().map(|p| format!("{}|{}", fmt(p), fmt(b))));
+                    if matched.is_empty() {
+                        out.push(format!("∅|∅|∅|{}", fmt(b)));
+                    }
+                }
+                _ => {}
+            }
+        }
         for p in probe {
             let matches: Vec<&Row> = build
                 .iter()
@@ -200,12 +217,15 @@ fn case(join_type: JoinType, keys: usize, null_safe: bool, filter: bool) -> Case
     }
 }
 
-const TYPES: [JoinType; 5] = [
+const TYPES: [JoinType; 8] = [
     JoinType::Inner,
     JoinType::LeftOuter,
     JoinType::LeftSemi,
     JoinType::LeftAnti,
     JoinType::NullAwareAnti,
+    JoinType::RightSemi,
+    JoinType::RightAnti,
+    JoinType::RightOuter,
 ];
 
 /// NULL keys, duplicates on both sides, empty and all-NULL inputs, for
@@ -309,7 +329,7 @@ fn row(keys: i64, nulls: u32) -> impl Strategy<Value = Row> {
 
 fn any_case() -> impl Strategy<Value = Case> {
     (
-        0usize..5,
+        0usize..TYPES.len(),
         1usize..3,
         prop::collection::vec(any::<bool>(), 2),
         any::<bool>(),

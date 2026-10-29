@@ -201,21 +201,28 @@ pub enum JoinType {
     /// TRUE), else FALSE. See the module docs.
     Existence,
     /// Build rows with at least one match, each once: a left semi join
-    /// that builds its left input. Planned data only for now: no operator
-    /// runs it yet.
+    /// that builds its left input. Outputs the build columns.
     RightSemi,
-    /// Build rows with no match: a left anti join that builds its left
-    /// input. Planned data only for now.
+    /// Build rows with no match, NULL `=` keys included: a left anti join
+    /// that builds its left input. Outputs the build columns.
     RightAnti,
-    /// Matching pairs, and each unmatched build row with NULL probe
-    /// columns: a left outer join that builds its preserved input. Planned
-    /// data only for now.
+    /// Matching pairs, and each unmatched build row (NULL `=` keys
+    /// included) with NULL probe columns: a left outer join that builds its
+    /// preserved input. Outputs the probe columns (nullable), then the
+    /// build columns.
     RightOuter,
 }
 
 impl JoinType {
+    /// Whether the probe emits matched pairs with their build columns.
     fn emits_build(self) -> bool {
-        matches!(self, Self::Inner | Self::LeftOuter)
+        matches!(self, Self::Inner | Self::LeftOuter | Self::RightOuter)
+    }
+
+    /// Whether the build keeps rows whose `=` key is NULL: they match
+    /// nothing, and the join returns its unmatched build rows.
+    fn keeps_null_build_keys(self) -> bool {
+        matches!(self, Self::RightAnti | Self::RightOuter)
     }
 
     /// Whether the join returns rows of its build side by their matches
@@ -501,11 +508,6 @@ impl Shared {
                 "single match on a join that is not left outer".to_owned(),
             ));
         }
-        if join_type.builds_preserved() {
-            return Err(unsupported(
-                "hash joins that return rows of their build side by their matches",
-            ));
-        }
         if join_type == JoinType::NullAwareAnti
             && (n != 1 || filter.is_some() || null_safe.contains(&true))
         {
@@ -532,7 +534,8 @@ impl Shared {
             types.push(pf.data_type().clone());
         }
         let keys = keys::KeyCodec::new(&types, null_safe)?;
-        let needs_payload = join_type.emits_build() || filter.is_some();
+        let needs_payload =
+            join_type.emits_build() || join_type.builds_preserved() || filter.is_some();
         let (payload, build_fields) = if needs_payload {
             let fields = build_schema
                 .fields()
@@ -553,24 +556,30 @@ impl Shared {
         } else {
             (None, Vec::new())
         };
-        let joined = |nullable: bool| {
+        // Probe then build columns, either side made nullable.
+        let joined = |null_probe: bool, null_build: bool| {
+            let probe = probe_schema.fields().iter().map(|f| {
+                f.as_ref()
+                    .clone()
+                    .with_nullable(f.is_nullable() || null_probe)
+            });
             let build = build_fields
                 .iter()
-                .map(|f| f.clone().with_nullable(f.is_nullable() || nullable));
-            let fields: Vec<Field> = probe_schema
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().clone())
-                .chain(build)
-                .collect();
-            Arc::new(Schema::new(fields))
+                .map(|f| f.clone().with_nullable(f.is_nullable() || null_build));
+            Arc::new(Schema::new(probe.chain(build).collect::<Vec<Field>>()))
         };
-        let filter_schema = joined(false);
+        let filter_schema = joined(false, false);
         let schema = match join_type {
-            JoinType::Inner => joined(false),
-            JoinType::LeftOuter => joined(true),
+            JoinType::Inner => joined(false, false),
+            JoinType::LeftOuter => joined(false, true),
+            JoinType::RightOuter => joined(true, false),
             JoinType::Existence => existence_schema(&probe_schema),
-            _ => Arc::clone(&probe_schema),
+            JoinType::RightSemi | JoinType::RightAnti => {
+                Arc::new(Schema::new(build_fields.clone()))
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::NullAwareAnti => {
+                Arc::clone(&probe_schema)
+            }
         };
         // Build columns as payload rows: only when every build column is
         // fixed-width and decodes to the type the output declares (a
@@ -800,8 +809,12 @@ impl HashJoin {
         }
         let shared = Arc::get_mut(&mut self.0)
             .ok_or_else(|| internal("runtime filters added to a shared join".to_owned()))?;
-        if !filters.is_empty() && !matches!(shared.join_type, JoinType::Inner | JoinType::LeftSemi)
-        {
+        // Inner, left semi and the right joins drop the probe rows no build
+        // key matches (a right join returns build rows by their matches,
+        // and a probe row that matches nothing marks nothing).
+        let drops_unmatched = matches!(shared.join_type, JoinType::Inner | JoinType::LeftSemi)
+            || shared.join_type.builds_preserved();
+        if !filters.is_empty() && !drops_unmatched {
             return Err(internal(format!(
                 "a {:?} join cannot filter its probe side",
                 shared.join_type
@@ -898,28 +911,29 @@ mod tests {
         }
     }
 
-    /// The joins that build their preserved side are plan data only: no
-    /// hash join runs them yet, and none is planned.
+    /// The joins that build their preserved side return build columns:
+    /// right semi and anti the build columns alone, right outer the probe
+    /// columns (made nullable) then the build columns.
     #[test]
-    fn joins_that_build_their_preserved_side_are_refused() {
+    fn joins_that_build_their_preserved_side_return_build_columns() {
+        let fields = |t: JoinType| {
+            let j = HashJoin::try_new(spec(t, 1, false)).unwrap_or_else(|e| panic!("{t:?}: {e}"));
+            j.schema()
+                .fields()
+                .iter()
+                .map(|f| (f.name().clone(), f.is_nullable()))
+                .collect::<Vec<_>>()
+        };
+        let build = vec![("a".to_owned(), true), ("b".to_owned(), true)];
+        assert_eq!(fields(JoinType::RightSemi), build);
+        assert_eq!(fields(JoinType::RightAnti), build);
+        assert_eq!(fields(JoinType::RightOuter).len(), 4);
         for t in [
             JoinType::RightSemi,
             JoinType::RightAnti,
             JoinType::RightOuter,
         ] {
             assert!(t.builds_preserved());
-            let e = HashJoin::try_new(spec(t, 1, false))
-                .err()
-                .unwrap_or_else(|| panic!("{t:?} was accepted"));
-            assert_eq!(
-                e.error_class(),
-                krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
-                "{t:?}"
-            );
-            assert!(
-                e.to_string().contains("return rows of their build side"),
-                "{e}"
-            );
         }
         for t in [
             JoinType::Inner,

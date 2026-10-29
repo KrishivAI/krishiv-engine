@@ -14,8 +14,16 @@
 //! re-encode. Each distinct key points to its newest row; older rows with
 //! the same key are chained through [`JoinTable::next`], so duplicate keys
 //! never lengthen a probe sequence.
+//!
+//! A join that returns its build rows by their matches (right semi, right
+//! anti, right outer; design P2-T166) gives the table a match bitmap
+//! ([`JoinTable::with_marks`]): probe drivers set a row's bit when a pair
+//! with it matches, and once every probe driver's input ended (the flush
+//! barrier orders those writes before the reads) the rows are emitted by
+//! their bits.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt64Type;
@@ -354,6 +362,9 @@ pub(crate) struct JoinTable {
     arena: RowArena,
     index: Index,
     next: Vec<u32>,
+    /// One bit per row: a pair with the row matched (empty unless
+    /// [`with_marks`](Self::with_marks)).
+    marks: Vec<AtomicU64>,
 }
 
 impl JoinTable {
@@ -422,7 +433,82 @@ impl JoinTable {
             }
             Index::Rows { index, .. } => index.memory_size(),
         };
-        index + self.next.capacity() * size_of::<u32>()
+        index + self.next.capacity() * size_of::<u32>() + self.marks.capacity() * size_of::<u64>()
+    }
+
+    /// Bytes of the match bitmap of a table of `rows` rows
+    /// ([`with_marks`](Self::with_marks)).
+    pub(crate) fn marks_bytes(rows: usize) -> usize {
+        rows.div_ceil(64) * size_of::<u64>()
+    }
+
+    /// This table with a match bitmap, every bit clear.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if the bitmap cannot be allocated.
+    pub(crate) fn with_marks(mut self) -> Result<Self> {
+        let words = self.arena.len().div_ceil(64);
+        let mut marks = Vec::new();
+        marks
+            .try_reserve_exact(words)
+            .map_err(|e| internal(e.to_string()))?;
+        marks.resize_with(words, || AtomicU64::new(0));
+        self.marks = marks;
+        Ok(self)
+    }
+
+    /// Whether a pair with `row` matched (`false` without a bitmap).
+    #[inline]
+    pub(crate) fn is_marked(&self, row: u32) -> bool {
+        self.marks
+            .get(row as usize / 64)
+            .is_some_and(|w| w.load(Ordering::Relaxed) & (1 << (row % 64)) != 0)
+    }
+
+    /// Records that a pair with `row` matched. Probe drivers mark
+    /// concurrently; a bit already set is not written again, so rows many
+    /// probes match keep their cache line shared.
+    #[inline]
+    pub(crate) fn mark(&self, row: u32) {
+        if let Some(w) = self.marks.get(row as usize / 64) {
+            let bit = 1 << (row % 64);
+            if w.load(Ordering::Relaxed) & bit == 0 {
+                w.fetch_or(bit, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Marks `head` and every older row with its key (no residual
+    /// condition: every row of the chain matches). A chain whose head is
+    /// marked was marked whole already.
+    pub(crate) fn mark_chain(&self, head: u32) {
+        if head == NONE || self.is_marked(head) {
+            return;
+        }
+        let mut r = head;
+        while r != NONE {
+            self.mark(r);
+            r = self.next.get(r as usize).copied().unwrap_or(NONE);
+        }
+    }
+
+    /// Up to `limit` rows in `*from..end` whose mark is `marked`, appended
+    /// to `out`; `*from` moves past the rows looked at.
+    pub(crate) fn rows_marked(
+        &self,
+        marked: bool,
+        from: &mut u32,
+        end: u32,
+        limit: usize,
+        out: &mut Vec<u32>,
+    ) {
+        let n = u32::try_from(self.arena.len()).unwrap_or(u32::MAX).min(end);
+        while *from < n && out.len() < limit {
+            if self.is_marked(*from) == marked {
+                out.push(*from);
+            }
+            *from += 1;
+        }
     }
 
     /// [`build`](Self::build) with the row-layout index forced (tests).
@@ -471,7 +557,12 @@ impl JoinTable {
             },
             (None, None) => return Err(internal("join key rows without a layout".to_owned())),
         };
-        Ok(Self { arena, index, next })
+        Ok(Self {
+            arena,
+            index,
+            next,
+            marks: Vec::new(),
+        })
     }
 
     /// For each probe row `rows[j]` of `keys` (encoded in this table's key

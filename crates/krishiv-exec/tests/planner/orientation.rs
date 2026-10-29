@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Which input a hash join prefers to build (design P2-T166): a semi, anti
-//! or left outer join whose right input is much larger than its left
-//! prefers to build the left one. Those joins do not run yet, so the plan
-//! keeps the right build and `EXPLAIN` shows the preference.
+//! Which input a hash join builds (design P2-T166): a semi, anti or left
+//! outer join whose right input is much larger than its left builds the
+//! left one, as a right semi, right anti or right outer join, and `EXPLAIN`
+//! shows the statistics that chose it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,33 +60,36 @@ fn joins(env: &Env, sql: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_much_larger_right_input_is_shown_as_the_side_not_to_build() {
+fn a_much_larger_right_input_builds_the_left_one() {
     let env = env();
-    let cases = [
+    // The right input's size counts the columns the join reads from it.
+    let stats = |mib: &str| {
+        format!(
+            "builds left (left: 10 rows / 0.0 MiB, statistics; right: 100000000 rows / {mib} MiB, statistics)"
+        )
+    };
+    // The large side probes, and the small side's keys filter its scan.
+    let rf = "RuntimeFilter #1: a#3 -> spark_catalog.default.big.a (bloom)";
+    for (sql, join, mib) in [
         (
             "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
-            "HashJoin LeftSemi, [a#0] = [a#3], RuntimeFilter #1: a#0 -> spark_catalog.default.t.a, \
-             prefers RightSemi (probe: 10 rows / 0.0 MiB, statistics; build: 100000000 rows / 1144.4 MiB, statistics)",
+            "RightSemi",
+            "1144.4",
         ),
         (
             "SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
-            "HashJoin LeftAnti, [a#0] = [a#3], \
-             prefers RightAnti (probe: 10 rows / 0.0 MiB, statistics; build: 100000000 rows / 1144.4 MiB, statistics)",
+            "RightAnti",
+            "1144.4",
         ),
-    ];
-    for (sql, want) in cases {
+        (
+            "SELECT t.a, big.b FROM t LEFT JOIN big ON t.a = big.a",
+            "RightOuter",
+            "1907.3",
+        ),
+    ] {
+        let want = format!("HashJoin {join}, [a#3] = [a#0], {rf}, {}", stats(mib));
         assert_eq!(joins(&env, sql), [want], "{sql}");
     }
-    let outer = joins(
-        &env,
-        "SELECT t.a, big.b FROM t LEFT JOIN big ON t.a = big.a",
-    );
-    assert_eq!(outer.len(), 1);
-    assert!(outer[0].starts_with("HashJoin LeftOuter"), "{outer:?}");
-    assert!(
-        outer[0].contains(", prefers RightOuter (probe: 10 rows"),
-        "{outer:?}"
-    );
 }
 
 #[test]
@@ -134,16 +137,18 @@ fn a_default_estimate_needs_a_larger_ratio() {
     let sql = "SELECT a FROM bare WHERE EXISTS (SELECT 1 FROM big WHERE big.a = bare.a)";
     let js = joins(&env, sql);
     assert!(
-        js.iter().any(|j| j.contains(
-            "prefers RightSemi (probe: 1000000 rows / 11.4 MiB, default; build: 100000000"
-        )),
+        js.iter().any(|j| j.starts_with("HashJoin RightSemi")
+            && j.ends_with(
+                "builds left (left: 1000000 rows / 11.4 MiB, default; \
+                 right: 100000000 rows / 1144.4 MiB, statistics)"
+            )),
         "{js:?}"
     );
     let sql = "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM mid WHERE mid.a = t.a)";
     assert!(
         joins(&env, sql)
             .iter()
-            .any(|j| j.contains("prefers RightSemi")),
+            .any(|j| j.starts_with("HashJoin RightSemi")),
         "{sql}"
     );
 }
@@ -158,7 +163,11 @@ fn a_cte_reference_is_a_default_estimate() {
     let js = joins(&env, sql);
     assert_eq!(js.len(), 1, "{js:?}");
     assert!(
-        js[0].ends_with("prefers RightSemi (probe: 10 rows / 0.0 MiB, statistics; build: 1000000 rows / 11.4 MiB, default)"),
+        js[0].starts_with("HashJoin RightSemi")
+            && js[0].ends_with(
+                "builds left (left: 10 rows / 0.0 MiB, statistics; \
+                 right: 1000000 rows / 11.4 MiB, default)"
+            ),
         "{js:?}"
     );
 }
