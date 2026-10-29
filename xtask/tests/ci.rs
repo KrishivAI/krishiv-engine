@@ -19,6 +19,21 @@ fn diff_over_the_cap_in_non_fixture_lines_fails() {
 }
 
 #[test]
+fn the_cap_is_ten_thousand_counted_lines() {
+    assert_eq!(MAX_CHANGED_LINES, 10_000);
+    assert!(
+        measure_numstat(&numstat("a.rs", 10_000))
+            .unwrap()
+            .within_cap()
+    );
+    assert!(
+        !measure_numstat(&numstat("a.rs", 10_001))
+            .unwrap()
+            .within_cap()
+    );
+}
+
+#[test]
 fn cap_boundary_is_inclusive() {
     let at = measure_numstat(&numstat("a.rs", MAX_CHANGED_LINES)).unwrap();
     assert!(at.within_cap());
