@@ -1,8 +1,10 @@
 {
   "cases": {
-    "depends-on-command": [
+    "cast-matrix": [
       10,
-      11,
+      11
+    ],
+    "window": [
       13,
       14,
       15,

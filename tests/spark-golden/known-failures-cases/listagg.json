@@ -1,6 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
+    "fn-aggregate": [
       2,
       3,
       4,

@@ -1,14 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
-      11,
-      12,
-      23,
-      24,
-      82,
-      83,
-      93,
-      94,
+    "cast-matrix": [
       148,
       149,
       159,
@@ -37,6 +29,16 @@
       291,
       302,
       303
+    ],
+    "datetime": [
+      11,
+      12,
+      23,
+      24,
+      82,
+      83,
+      93,
+      94
     ]
   },
   "file": "typeCoercion/native/promoteStrings",

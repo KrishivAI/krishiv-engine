@@ -13,6 +13,10 @@
         "math"
       ],
       "order": 390
+    },
+    {
+      "detail": "decode with search|INVALID_PARAMETER_VALUE.CHARSET|MALFORMED_CHARACTER_CODING|Arrow type BinaryView",
+      "order": 570
     }
   ],
   "summary": "string and math-tail functions not in P2a (hex, conv, bin, width_bucket, ...)",

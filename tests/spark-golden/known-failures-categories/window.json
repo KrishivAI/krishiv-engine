@@ -6,6 +6,15 @@
     {
       "detail": "The feature (window functions|WINDOW clauses)",
       "order": 300
+    },
+    {
+      "detail": "window frames with value bounds|the window aggregate|AnyValue \\{",
+      "order": 540
+    },
+    {
+      "detail": "in physical plans",
+      "file": "^window",
+      "order": 545
     }
   ],
   "summary": "window functions and WINDOW clauses",

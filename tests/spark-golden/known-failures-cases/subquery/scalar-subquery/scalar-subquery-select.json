@@ -9,12 +9,26 @@
       8,
       9,
       10,
-      11,
       12,
       13,
       14,
       15,
-      16,
+      16
+    ],
+    "fn-aggregate": [
+      11
+    ],
+    "query-features": [
+      44,
+      45,
+      48
+    ],
+    "sql-commands": [
+      0,
+      1,
+      2
+    ],
+    "subqueries": [
       19,
       20,
       21,
@@ -27,19 +41,9 @@
       33,
       34,
       37,
+      40,
       42,
-      43,
-      44,
-      45,
-      48
-    ],
-    "sql-commands": [
-      0,
-      1,
-      2
-    ],
-    "subqueries": [
-      40
+      43
     ]
   },
   "file": "subquery/scalar-subquery/scalar-subquery-select",
