@@ -25,7 +25,7 @@ step() {
     echo "pre-commit: $label: ok"
     rm -f "$log"
   else
-    cat "$log"
+    cat "$log" >&2
     rm -f "$log"
     echo "pre-commit: $label: FAILED" >&2
     exit 1
