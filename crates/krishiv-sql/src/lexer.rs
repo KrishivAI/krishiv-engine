@@ -494,9 +494,9 @@ impl Lexer<'_> {
 
 /// Decodes a [`TokenKind::String`] or [`TokenKind::DoubleQuoted`] token the
 /// way Spark's `unescapeSQLString` does (`escapes` false keeps backslashes,
-/// as with `spark.sql.parser.escapedStringLiterals`; `consecutive` drops
-/// doubled quotes, as with
-/// `spark.sql.legacy.consecutiveStringLiterals.enabled`).
+/// as with `spark.sql.parser.escapedStringLiterals`, where the body is taken
+/// verbatim; `consecutive` drops doubled quotes instead of collapsing them,
+/// as with `spark.sql.legacy.consecutiveStringLiterals.enabled`).
 pub(crate) fn unescape_string(raw: &str, escapes: bool, consecutive: bool) -> String {
     if let Some(body) = raw
         .strip_prefix(['r', 'R'])
@@ -511,23 +511,7 @@ pub(crate) fn unescape_string(raw: &str, escapes: bool, consecutive: bool) -> St
         .chars()
         .collect();
     if !escapes {
-        // Doubled quotes still follow `consecutive` (dropped when it is on,
-        // collapsed to one quote when it is off); backslashes stay literal,
-        // as with `spark.sql.parser.escapedStringLiterals`.
-        let mut out = String::with_capacity(body.len());
-        let mut i = 0;
-        while let Some(&c) = body.get(i) {
-            if c == quote && body.get(i + 1) == Some(&quote) {
-                if !consecutive {
-                    out.push(quote);
-                }
-                i += 2;
-            } else {
-                out.push(c);
-                i += 1;
-            }
-        }
-        return out;
+        return body.iter().collect();
     }
     let mut out: Vec<u16> = Vec::with_capacity(body.len());
     let mut buf = [0_u16; 2];

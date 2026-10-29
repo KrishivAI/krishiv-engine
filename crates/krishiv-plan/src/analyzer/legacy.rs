@@ -9,16 +9,17 @@
 //!   every `WithCte` this way, so the normal (corrected) resolution of the
 //!   result is the legacy answer. Table reads that stay unresolved (a name no
 //!   enclosing level defines) fail later with `TABLE_OR_VIEW_NOT_FOUND`.
+//!   Only the root plan is inlined: SQL text lowered later through
+//!   [`super::SqlFrontend`] resolves as `CORRECTED`.
 //! * `EXCEPTION`: [`nested_conflict`] reports a nested definition shadowing
 //!   an outer one, as Spark's `assertNoNameConflictsInCTE` does; resolution
 //!   itself is the corrected one.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use krishiv_common::error::{
-    AmbiguousAliasInNestedCte, FailedToParseTooComplex, KrishivError, RecursiveCteInLegacyMode,
-};
+use krishiv_common::error::{AmbiguousAliasInNestedCte, FailedToParseTooComplex, KrishivError};
 
 use super::bind::same;
 use super::catalog::quoted;
@@ -129,62 +130,70 @@ fn find<'a>(defs: &'a Defs, name: &str, cs: bool) -> Option<&'a Arc<LogicalPlan>
         .map(|(_, p)| p)
 }
 
+/// Results of one rewrite pass, keyed by node address: the inlined plan is a
+/// DAG (a definition read k times is one `Arc` in k places), so a walk
+/// without a memo is exponential in the nesting. Each entry holds its key's
+/// `Arc`, which keeps the address from being reused.
+#[derive(Default)]
+struct Memo {
+    plans: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    exprs: HashMap<*const Expr, (Arc<Expr>, Arc<Expr>)>,
+}
+
+impl Memo {
+    fn plan(&self, p: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
+        self.plans
+            .get(&Arc::as_ptr(p))
+            .map(|(_, out)| Arc::clone(out))
+    }
+
+    fn put_plan(&mut self, from: &Arc<LogicalPlan>, to: &Arc<LogicalPlan>) {
+        self.plans
+            .insert(Arc::as_ptr(from), (Arc::clone(from), Arc::clone(to)));
+    }
+
+    fn expr(&self, e: &Arc<Expr>) -> Option<Arc<Expr>> {
+        self.exprs
+            .get(&Arc::as_ptr(e))
+            .map(|(_, out)| Arc::clone(out))
+    }
+
+    fn put_expr(&mut self, from: &Arc<Expr>, to: &Arc<Expr>) {
+        self.exprs
+            .insert(Arc::as_ptr(from), (Arc::clone(from), Arc::clone(to)));
+    }
+}
+
 /// Every `WithCte` inlined per [`super::CtePrecedencePolicy::Legacy`]: one
 /// [`traverse_once`] pass eliminates the definitions reachable without
 /// crossing another definition, exposing the nested ones for the next pass.
+/// A definition whose body reads its own name is not an error here (Spark
+/// raises `RECURSIVE_CTE_IN_LEGACY_MODE` only for `WITH RECURSIVE`): the name
+/// resolves to an outer definition substituted later, or to a table.
 ///
 /// # Errors
-/// `RECURSIVE_CTE_IN_LEGACY_MODE` when a definition's body (after previous
-/// siblings are inlined) still reads its own name; `FAILED_TO_PARSE_TOO_COMPLEX`
-/// when inlining nests deeper than [`crate::MAX_DEPTH`].
+/// `FAILED_TO_PARSE_TOO_COMPLEX` when inlining nests deeper than
+/// [`crate::MAX_DEPTH`].
 pub(crate) fn eliminate(
     plan: &Arc<LogicalPlan>,
     policy: CtePolicy,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut plan = Arc::clone(plan);
+    let mut settled = false;
     for _ in 0..=crate::MAX_DEPTH {
-        let (next, changed) = traverse_once(&plan, policy, 0)?;
+        let (next, changed) = traverse_once(&plan, policy, 0, &mut Memo::default())?;
         plan = next;
         if !changed {
+            settled = true;
             break;
         }
     }
-    eliminate_in_exprs(&plan, policy, 0)
-}
-
-/// Whether `plan` reads the single-part table `name` (a self-reference of
-/// a CTE body after previous siblings are inlined).
-fn references(plan: &Arc<LogicalPlan>, name: &str, cs: bool) -> bool {
-    let mut found = false;
-    let mut plans = vec![Arc::clone(plan)];
-    let mut exprs = Vec::new();
-    while let Some(p) = plans.pop() {
-        if found {
-            break;
-        }
-        if let PlanNode::Read(ReadSource::Table { name: n, .. }) = &p.node
-            && let [one] = &n[..]
-            && same(one, name, cs)
-        {
-            found = true;
-            break;
-        }
-        // A nested `WITH` that defines `name` shadows it in its main query.
-        if let PlanNode::WithCte { ctes, .. } = &p.node
-            && ctes.iter().any(|c| same(&c.name, name, cs))
-        {
-            continue;
-        }
-        p.for_each_child(&mut |c| plans.push(Arc::clone(c)));
-        p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
-        while let Some(e) = exprs.pop() {
-            if let ExprNode::Subquery { plan, .. } = &e.node {
-                plans.push(Arc::clone(plan));
-            }
-            e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
-        }
+    if !settled {
+        return Err(FailedToParseTooComplex {}.into());
     }
-    found
+    let out = eliminate_in_exprs(&plan, policy, 0, &mut Memo::default())?;
+    crate::check_depth(&out)?;
+    Ok(out)
 }
 
 /// One legacy pass: bottom-up over plan children (definitions and subquery
@@ -195,6 +204,7 @@ fn traverse_once(
     plan: &Arc<LogicalPlan>,
     policy: CtePolicy,
     depth: usize,
+    memo: &mut Memo,
 ) -> Result<(Arc<LogicalPlan>, bool), KrishivError> {
     if depth > crate::MAX_DEPTH {
         return Err(FailedToParseTooComplex {}.into());
@@ -202,17 +212,14 @@ fn traverse_once(
     let cs = policy.case_sensitive;
     match &plan.node {
         PlanNode::WithCte { input, ctes } => {
-            let (input, _) = traverse_once(input, policy, depth + 1)?;
+            let (input, _) = traverse_once(input, policy, depth + 1, memo)?;
             let mut defs: Defs = Vec::with_capacity(ctes.len());
             for c in ctes {
-                let body = substitute(&c.plan, &defs, cs, depth + 1)?;
-                if references(&body, &c.name, cs) {
-                    return Err(RecursiveCteInLegacyMode {}.into());
-                }
+                let body = substitute(&c.plan, &defs, cs, depth + 1, &mut Memo::default())?;
                 crate::check_depth(&body)?;
                 defs.push((c.name.clone(), body));
             }
-            let out = substitute(&input, &defs, cs, depth + 1)?;
+            let out = substitute(&input, &defs, cs, depth + 1, &mut Memo::default())?;
             crate::check_depth(&out)?;
             Ok((out, true))
         }
@@ -220,7 +227,7 @@ fn traverse_once(
             let mut changed = false;
             let mut err: Option<KrishivError> = None;
             let plan = sure(Arc::clone(plan).map_children(|c| {
-                match traverse_once(&c, policy, depth + 1) {
+                match traverse_once(&c, policy, depth + 1, memo) {
                     Ok((next, hit)) => {
                         changed |= hit;
                         Ok::<_, Infallible>(next)
@@ -251,40 +258,46 @@ fn substitute_read(name: &[String], defs: &Defs, cs: bool) -> Option<Arc<Logical
 /// A definition body or main query with `defs` inlined: references reachable
 /// without crossing another definition are replaced, newest definition
 /// first. Nested definitions' bodies are never entered; nested main queries
-/// are, so an outer definition wins over a nested shadowing one.
+/// are, so an outer definition wins over a nested shadowing one. `memo` is
+/// for this `defs` only.
 fn substitute(
     plan: &Arc<LogicalPlan>,
     defs: &Defs,
     cs: bool,
     depth: usize,
+    memo: &mut Memo,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
+    if let Some(hit) = memo.plan(plan) {
+        return Ok(hit);
+    }
     if depth > crate::MAX_DEPTH {
         return Err(FailedToParseTooComplex {}.into());
     }
+    let plan_in = plan;
     let plan = match &plan.node {
         PlanNode::Read(ReadSource::Table { name, .. }) => {
-            return Ok(substitute_read(name, defs, cs).unwrap_or_else(|| Arc::clone(plan)));
+            let out = substitute_read(name, defs, cs).unwrap_or_else(|| Arc::clone(plan));
+            memo.put_plan(plan_in, &out);
+            return Ok(out);
         }
         PlanNode::WithCte { input, ctes } => {
-            let next = substitute(input, defs, cs, depth + 1)?;
+            let next = substitute(input, defs, cs, depth + 1, memo)?;
             if Arc::ptr_eq(&next, input) {
                 Arc::clone(plan)
             } else {
-                let out = Arc::new(LogicalPlan {
+                Arc::new(LogicalPlan {
                     node: PlanNode::WithCte {
                         input: next,
                         ctes: ctes.clone(),
                     },
                     origin: plan.origin,
-                });
-                crate::check_depth(&out)?;
-                out
+                })
             }
         }
         _ => {
             let mut err: Option<KrishivError> = None;
             let out = sure(Arc::clone(plan).map_children(|c| {
-                match substitute(&c, defs, cs, depth + 1) {
+                match substitute(&c, defs, cs, depth + 1, memo) {
                     Ok(next) => Ok::<_, Infallible>(next),
                     Err(e) => {
                         err = Some(e);
@@ -295,13 +308,12 @@ fn substitute(
             if let Some(e) = err {
                 return Err(e);
             }
-            crate::check_depth(&out)?;
             out
         }
     };
     let mut err: Option<KrishivError> = None;
     let out = sure(Arc::clone(&plan).map_expressions(|ex| {
-        match substitute_expr(&ex, defs, cs, depth + 1) {
+        match substitute_expr(&ex, defs, cs, depth + 1, memo) {
             Ok(next) => Ok::<_, Infallible>(next),
             Err(fail) => {
                 err = Some(fail);
@@ -312,6 +324,7 @@ fn substitute(
     if let Some(e) = err {
         return Err(e);
     }
+    memo.put_plan(plan_in, &out);
     Ok(out)
 }
 
@@ -323,12 +336,16 @@ fn substitute_expr(
     defs: &Defs,
     cs: bool,
     depth: usize,
+    memo: &mut Memo,
 ) -> Result<Arc<Expr>, KrishivError> {
+    if let Some(hit) = memo.expr(e) {
+        return Ok(hit);
+    }
     if depth > crate::MAX_DEPTH {
         return Err(FailedToParseTooComplex {}.into());
     }
-    if let ExprNode::Subquery { kind, plan } = &e.node {
-        let subbed = substitute(plan, defs, cs, depth + 1)?;
+    let out = if let ExprNode::Subquery { kind, plan } = &e.node {
+        let subbed = substitute(plan, defs, cs, depth + 1, memo)?;
         let (once, _) = traverse_once(
             &subbed,
             CtePolicy {
@@ -336,32 +353,36 @@ fn substitute_expr(
                 case_sensitive: cs,
             },
             depth + 1,
+            &mut Memo::default(),
         )?;
         if Arc::ptr_eq(&once, plan) {
-            return Ok(Arc::clone(e));
+            Arc::clone(e)
+        } else {
+            Arc::new(Expr {
+                node: ExprNode::Subquery {
+                    kind: kind.clone(),
+                    plan: once,
+                },
+                origin: e.origin,
+            })
         }
-        return Ok(Arc::new(Expr {
-            node: ExprNode::Subquery {
-                kind: kind.clone(),
-                plan: once,
-            },
-            origin: e.origin,
-        }));
-    }
-    let mut err: Option<KrishivError> = None;
-    let out =
-        sure(
-            Arc::clone(e).map_children(|c| match substitute_expr(&c, defs, cs, depth + 1) {
+    } else {
+        let mut err: Option<KrishivError> = None;
+        let out = sure(Arc::clone(e).map_children(|c| {
+            match substitute_expr(&c, defs, cs, depth + 1, memo) {
                 Ok(next) => Ok::<_, Infallible>(next),
                 Err(e) => {
                     err = Some(e);
                     Ok::<_, Infallible>(Arc::clone(&c))
                 }
-            }),
-        );
-    if let Some(e) = err {
-        return Err(e);
-    }
+            }
+        }));
+        if let Some(e) = err {
+            return Err(e);
+        }
+        out
+    };
+    memo.put_expr(e, &out);
     Ok(out)
 }
 
@@ -372,27 +393,30 @@ fn eliminate_in_exprs(
     plan: &Arc<LogicalPlan>,
     policy: CtePolicy,
     depth: usize,
+    memo: &mut Memo,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
+    if let Some(hit) = memo.plan(plan) {
+        return Ok(hit);
+    }
     if depth > crate::MAX_DEPTH {
         return Err(FailedToParseTooComplex {}.into());
     }
     let mut err: Option<KrishivError> = None;
-    let plan =
-        sure(
-            Arc::clone(plan).map_children(|c| match eliminate_in_exprs(&c, policy, depth + 1) {
-                Ok(next) => Ok::<_, Infallible>(next),
-                Err(e) => {
-                    err = Some(e);
-                    Ok::<_, Infallible>(Arc::clone(&c))
-                }
-            }),
-        );
+    let rebuilt = sure(Arc::clone(plan).map_children(|c| {
+        match eliminate_in_exprs(&c, policy, depth + 1, memo) {
+            Ok(next) => Ok::<_, Infallible>(next),
+            Err(e) => {
+                err = Some(e);
+                Ok::<_, Infallible>(Arc::clone(&c))
+            }
+        }
+    }));
     if let Some(e) = err {
         return Err(e);
     }
     let mut err: Option<KrishivError> = None;
-    let out = sure(Arc::clone(&plan).map_expressions(|ex| {
-        match eliminate_expr(&ex, policy, depth + 1) {
+    let out = sure(Arc::clone(&rebuilt).map_expressions(|ex| {
+        match eliminate_expr(&ex, policy, depth + 1, memo) {
             Ok(next) => Ok::<_, Infallible>(next),
             Err(fail) => {
                 err = Some(fail);
@@ -403,6 +427,7 @@ fn eliminate_in_exprs(
     if let Some(e) = err {
         return Err(e);
     }
+    memo.put_plan(plan, &out);
     Ok(out)
 }
 
@@ -411,35 +436,43 @@ fn eliminate_expr(
     e: &Arc<Expr>,
     policy: CtePolicy,
     depth: usize,
+    memo: &mut Memo,
 ) -> Result<Arc<Expr>, KrishivError> {
+    if let Some(hit) = memo.expr(e) {
+        return Ok(hit);
+    }
     if depth > crate::MAX_DEPTH {
         return Err(FailedToParseTooComplex {}.into());
     }
-    if let ExprNode::Subquery { kind, plan } = &e.node {
+    let out = if let ExprNode::Subquery { kind, plan } = &e.node {
         let once = eliminate(plan, policy)?;
         if Arc::ptr_eq(&once, plan) {
-            return Ok(Arc::clone(e));
+            Arc::clone(e)
+        } else {
+            Arc::new(Expr {
+                node: ExprNode::Subquery {
+                    kind: kind.clone(),
+                    plan: once,
+                },
+                origin: e.origin,
+            })
         }
-        return Ok(Arc::new(Expr {
-            node: ExprNode::Subquery {
-                kind: kind.clone(),
-                plan: once,
-            },
-            origin: e.origin,
-        }));
-    }
-    let mut err: Option<KrishivError> = None;
-    let out = sure(
-        Arc::clone(e).map_children(|c| match eliminate_expr(&c, policy, depth + 1) {
-            Ok(next) => Ok::<_, Infallible>(next),
-            Err(e) => {
-                err = Some(e);
-                Ok::<_, Infallible>(Arc::clone(&c))
+    } else {
+        let mut err: Option<KrishivError> = None;
+        let out = sure(Arc::clone(e).map_children(|c| {
+            match eliminate_expr(&c, policy, depth + 1, memo) {
+                Ok(next) => Ok::<_, Infallible>(next),
+                Err(e) => {
+                    err = Some(e);
+                    Ok::<_, Infallible>(Arc::clone(&c))
+                }
             }
-        }),
-    );
-    if let Some(e) = err {
-        return Err(e);
-    }
+        }));
+        if let Some(e) = err {
+            return Err(e);
+        }
+        out
+    };
+    memo.put_expr(e, &out);
     Ok(out)
 }

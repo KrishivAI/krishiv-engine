@@ -3392,8 +3392,8 @@ fn legacy_flag_confs_follow_session_confs() {
         CtePrecedencePolicy::from_value(" LEGACY "),
         Some(CtePrecedencePolicy::Legacy)
     );
-    // A non-`true` `allowParameterlessCount` value is off (the registry
-    // rejects non-bools at SET time; `from_conf` reads validated configs).
+    // A non-`true` `allowParameterlessCount` value reads as off (these
+    // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
     assert_eq!(ResolutionConf::KEYS.len(), 14);
@@ -3454,10 +3454,7 @@ fn parameterless_count_honours_the_legacy_flag() {
     };
     let a = run(filtered(), &legacy).unwrap();
     assert_eq!(a.output[0].data_type, DataType::Long);
-    // The unresolved `FILTER` rides along as a child (shown as an argument
-    // in the pretty name); what matters is it resolves with the flag and
-    // fails without it.
-    assert!(a.output[0].name.starts_with("count("));
+    assert_eq!(a.output[0].name, "count() FILTER (WHERE (a = 1))");
     assert!(class(&run(filtered(), &ctx())).starts_with("WRONG_NUM_ARGS"));
     let over = || {
         LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Window(crate::WindowExpr {
@@ -3600,12 +3597,11 @@ fn legacy_cte_inlining_prefers_outer_definitions() {
     assert_eq!(single_reads(&gone), ["t1"]);
 }
 
-/// A self-referencing definition under `LEGACY` is Spark's
-/// `RECURSIVE_CTE_IN_LEGACY_MODE`, not an unbounded inlining.
-/// A nested `WITH` defining the outer definition's own name shadows it in
-/// its main query, so the outer body does not read itself.
+/// Only `WITH RECURSIVE` is `RECURSIVE_CTE_IN_LEGACY_MODE` in Spark; a body
+/// that names its own definition reads an outer definition substituted later,
+/// or else the table of that name.
 #[test]
-fn legacy_cte_nested_definition_of_the_same_name_is_not_recursion() {
+fn legacy_cte_self_reference_reads_the_outer_name_or_the_table() {
     use crate::analyzer::CtePrecedencePolicy;
     use crate::analyzer::legacy::{CtePolicy, eliminate};
     let policy = CtePolicy {
@@ -3621,43 +3617,58 @@ fn legacy_cte_nested_definition_of_the_same_name_is_not_recursion() {
             }],
         })
     };
-    let inner = with(
-        "t",
-        LogicalPlan::table(["u"]),
-        LogicalPlan::table(["t"]).project(vec![star()]),
-    );
-    let outer = with("t", inner, LogicalPlan::table(["t"]).project(vec![star()]));
-    assert!(eliminate(&Arc::new(outer), policy).is_ok());
-}
-
-#[test]
-fn legacy_cte_self_reference_is_a_recursion_error() {
-    use crate::analyzer::CtePrecedencePolicy;
-    use crate::analyzer::legacy::{CtePolicy, eliminate};
-    let policy = CtePolicy {
-        precedence: CtePrecedencePolicy::Legacy,
-        case_sensitive: false,
-    };
-    let with = |name: &str, plan: LogicalPlan, input: LogicalPlan| {
-        LogicalPlan::new(PlanNode::WithCte {
-            input: Arc::new(input),
-            ctes: vec![Cte {
-                name: name.to_owned(),
-                plan: Arc::new(plan),
-            }],
-        })
-    };
-    let outer = with(
+    // WITH t AS (SELECT * FROM t) SELECT * FROM t: the table `t`.
+    let alone = with(
         "t",
         LogicalPlan::table(["t"]),
         LogicalPlan::table(["t"]).project(vec![star()]),
     );
-    let err = eliminate(&Arc::new(outer.clone()), policy).unwrap_err();
-    assert_eq!(err.error_class().name(), "RECURSIVE_CTE_IN_LEGACY_MODE");
-    // Through the analyzer the same shape fails with that class.
-    let mut legacy = ctx();
-    legacy.conf.cte_precedence = CtePrecedencePolicy::Legacy;
-    assert_eq!(class(&run(outer, &legacy)), "RECURSIVE_CTE_IN_LEGACY_MODE");
+    let gone = eliminate(&Arc::new(alone), policy).unwrap();
+    assert_eq!(single_reads(&gone), ["t"]);
+    // WITH t AS (SELECT * FROM u) SELECT * FROM (WITH t AS (SELECT * FROM t)
+    // SELECT * FROM t): the inner body's `t` is the outer definition.
+    let inner = with(
+        "t",
+        LogicalPlan::table(["t"]),
+        LogicalPlan::table(["t"]).project(vec![star()]),
+    );
+    let outer = with("t", LogicalPlan::table(["u"]), inner.project(vec![star()]));
+    let gone = eliminate(&Arc::new(outer), policy).unwrap();
+    assert_eq!(single_reads(&gone), ["u"]);
+}
+
+/// A definition read k times is one shared node: inlining a chain that
+/// doubles at every level stays linear in distinct nodes.
+#[test]
+fn legacy_cte_inlining_of_a_doubling_chain_is_linear() {
+    use crate::analyzer::CtePrecedencePolicy;
+    use crate::analyzer::legacy::{CtePolicy, eliminate};
+    let policy = CtePolicy {
+        precedence: CtePrecedencePolicy::Legacy,
+        case_sensitive: false,
+    };
+    const LEVELS: usize = 30;
+    let mut ctes = vec![Cte {
+        name: "t0".to_owned(),
+        plan: Arc::new(LogicalPlan::table(["base"])),
+    }];
+    for k in 1..=LEVELS {
+        let prev = format!("t{}", k - 1);
+        ctes.push(Cte {
+            name: format!("t{k}"),
+            plan: Arc::new(LogicalPlan::table([prev.clone()]).join(
+                LogicalPlan::table([prev]),
+                JoinKind::Inner,
+                JoinCondition::None,
+            )),
+        });
+    }
+    let plan = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table([format!("t{LEVELS}")])),
+        ctes,
+    });
+    let gone = eliminate(&Arc::new(plan), policy).unwrap();
+    assert_eq!(single_reads(&gone), ["base"]);
 }
 
 /// Every single-part table read of an unresolved plan, in order, and whether

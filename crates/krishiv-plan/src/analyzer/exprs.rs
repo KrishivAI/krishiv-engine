@@ -2052,9 +2052,26 @@ impl Resolver<'_> {
             nullable: ty.nullable,
             deterministic: entry.deterministic,
         };
+        // Shown as written: no argument, the `FILTER` after the call.
+        let shown = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    args: Vec::new(),
+                    ..call.clone()
+                },
+            )))
+            .with_origin(e.origin),
+        );
         let expr = Arc::new(
             Expr::new(ExprNode::Resolved(ResolvedExpr::Function(call))).with_origin(e.origin),
         );
+        // The `FILTER`'s markers ride along, as for any other call.
+        let mut lateral: Vec<AttrId> = Vec::new();
+        for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+            if !lateral.contains(id) {
+                lateral.push(*id);
+            }
+        }
         Ok(Bound {
             expr,
             ty,
@@ -2063,11 +2080,11 @@ impl Resolver<'_> {
             } else {
                 agg
             },
-            win: None,
-            outer: None,
-            lateral: Vec::new(),
+            win: kids.iter().find_map(|k| k.win),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral,
             // Shown as written (`count()`), not as bound (`count(NULL)`).
-            shown: Some(Arc::clone(e)),
+            shown: Some(shown),
         })
     }
 

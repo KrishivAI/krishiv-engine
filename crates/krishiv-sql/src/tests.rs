@@ -603,16 +603,11 @@ fn consecutive_string_literals_drop_doubled_quotes() {
 }
 
 #[test]
-fn doubled_quotes_apply_without_escapes() {
-    // With `escapedStringLiterals=false` backslashes stay literal, but the
-    // doubled-quote rule still follows `consecutive`: collapsed to one quote
-    // by default, dropped with the legacy flag.
-    assert_eq!(unescape_string("'it''s'", false, false), "it's");
-    assert_eq!(unescape_string("'it''s'", false, true), "its");
-    assert_eq!(unescape_string("'S''par''k'", false, false), "S'par'k");
-    assert_eq!(unescape_string("'S''par''k'", false, true), "Spark");
+fn escaped_string_literals_keep_the_body_verbatim() {
+    // With `escapedStringLiterals` the body is taken as written, doubled
+    // quotes included.
+    assert_eq!(unescape_string("'it''s'", false, false), "it''s");
     assert_eq!(unescape_string(r"'a\nb'", false, false), r"a\nb");
-    assert_eq!(unescape_string(r"'a\nb'", false, true), r"a\nb");
 }
 
 #[test]
