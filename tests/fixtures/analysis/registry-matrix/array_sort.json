@@ -1,0 +1,254 @@
+{
+  "entries": [
+    {
+      "id": "array_sort#00efb545fedd/ansi_on",
+      "reason": "SELECT array_sort(NULL, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#00efb545fedd/ansi_off",
+      "reason": "SELECT array_sort(NULL, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#01a3a798fe12/ansi_on",
+      "reason": "SELECT array_sort(CAST(NULL AS array<string>), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#01a3a798fe12/ansi_off",
+      "reason": "SELECT array_sort(CAST(NULL AS array<string>), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#055f7280b2e0/ansi_on",
+      "reason": "SELECT array_sort(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#055f7280b2e0/ansi_off",
+      "reason": "SELECT array_sort(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#3a9987fef757/ansi_on",
+      "reason": "SELECT array_sort(CAST(NULL AS array<int>), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#3a9987fef757/ansi_off",
+      "reason": "SELECT array_sort(CAST(NULL AS array<int>), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#3ab233ab7838/ansi_on",
+      "reason": "SELECT array_sort(CAST(array(NULL) AS array<int>), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#3ab233ab7838/ansi_off",
+      "reason": "SELECT array_sort(CAST(array(NULL) AS array<int>), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#407770e4209c/ansi_on",
+      "reason": "SELECT array_sort(CAST(1.5 AS FLOAT), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#407770e4209c/ansi_off",
+      "reason": "SELECT array_sort(CAST(1.5 AS FLOAT), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#485ee3625401/ansi_on",
+      "reason": "SELECT array_sort(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#485ee3625401/ansi_off",
+      "reason": "SELECT array_sort(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#5869e795311a/ansi_on",
+      "reason": "SELECT array_sort(map('a', 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#5869e795311a/ansi_off",
+      "reason": "SELECT array_sort(map('a', 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#58bde78785bb/ansi_on",
+      "reason": "SELECT array_sort(CAST(1 AS SMALLINT), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#58bde78785bb/ansi_off",
+      "reason": "SELECT array_sort(CAST(1 AS SMALLINT), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6a0c3d3652d4/ansi_on",
+      "reason": "SELECT array_sort(CAST(1.5 AS DECIMAL(10,2)), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6a0c3d3652d4/ansi_off",
+      "reason": "SELECT array_sort(CAST(1.5 AS DECIMAL(10,2)), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6b1ae64ae1ab/ansi_on",
+      "reason": "SELECT array_sort(INTERVAL '1-2' YEAR TO MONTH, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6b1ae64ae1ab/ansi_off",
+      "reason": "SELECT array_sort(INTERVAL '1-2' YEAR TO MONTH, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6bc2e19f4bba/ansi_on",
+      "reason": "SELECT array_sort(true, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6bc2e19f4bba/ansi_off",
+      "reason": "SELECT array_sort(true, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6eb9130c1c06/ansi_on",
+      "reason": "SELECT array_sort('1', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#6eb9130c1c06/ansi_off",
+      "reason": "SELECT array_sort('1', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#747ce9be43c7/ansi_on",
+      "reason": "SELECT array_sort(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#747ce9be43c7/ansi_off",
+      "reason": "SELECT array_sort(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#7c65724a7658/ansi_on",
+      "reason": "SELECT array_sort(array(1, 2), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#7c65724a7658/ansi_off",
+      "reason": "SELECT array_sort(array(1, 2), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#928f4b091b0a/ansi_on",
+      "reason": "SELECT array_sort('abc', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#928f4b091b0a/ansi_off",
+      "reason": "SELECT array_sort('abc', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#998352057a6e/ansi_on",
+      "reason": "SELECT array_sort(CAST(1 AS TINYINT), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#998352057a6e/ansi_off",
+      "reason": "SELECT array_sort(CAST(1 AS TINYINT), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#9c40cd20ed03/ansi_on",
+      "reason": "SELECT array_sort(1, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#9c40cd20ed03/ansi_off",
+      "reason": "SELECT array_sort(1, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#9dd87308cb2a/ansi_on",
+      "reason": "SELECT array_sort(DATE'2024-02-29', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#9dd87308cb2a/ansi_off",
+      "reason": "SELECT array_sort(DATE'2024-02-29', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#9e7e88aa186e/ansi_on",
+      "reason": "SELECT array_sort(1.5D, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#9e7e88aa186e/ansi_off",
+      "reason": "SELECT array_sort(1.5D, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#a6ccb3bf10c7/ansi_on",
+      "reason": "SELECT array_sort(TIMESTAMP'2024-02-29 12:34:56.123456', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#a6ccb3bf10c7/ansi_off",
+      "reason": "SELECT array_sort(TIMESTAMP'2024-02-29 12:34:56.123456', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#a722ea2f2b06/ansi_on",
+      "reason": "SELECT array_sort(array(5, 6, 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#a722ea2f2b06/ansi_off",
+      "reason": "SELECT array_sort(array(5, 6, 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#aecfd3f6d6bd/ansi_on",
+      "reason": "SELECT array_sort(CAST(array(NULL) AS array<string>), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#aecfd3f6d6bd/ansi_off",
+      "reason": "SELECT array_sort(CAST(array(NULL) AS array<string>), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#d5093ae95bfe/ansi_on",
+      "reason": "SELECT array_sort(CAST(1.5 AS DECIMAL(38,18)), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#d5093ae95bfe/ansi_off",
+      "reason": "SELECT array_sort(CAST(1.5 AS DECIMAL(38,18)), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#dc37aa479aec/ansi_on",
+      "reason": "SELECT array_sort(named_struct('a', 1, 'b', 'x'), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#dc37aa479aec/ansi_off",
+      "reason": "SELECT array_sort(named_struct('a', 1, 'b', 'x'), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#dcc5eee45d8a/ansi_on",
+      "reason": "SELECT array_sort(array('bc', 'ab', 'dc'), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#dcc5eee45d8a/ansi_off",
+      "reason": "SELECT array_sort(array('bc', 'ab', 'dc'), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#de8fc39f4710/ansi_on",
+      "reason": "SELECT array_sort(INTERVAL '1 02:03:04' DAY TO SECOND, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#de8fc39f4710/ansi_off",
+      "reason": "SELECT array_sort(INTERVAL '1 02:03:04' DAY TO SECOND, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#e895ee3505e2/ansi_on",
+      "reason": "SELECT array_sort(X'01', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#e895ee3505e2/ansi_off",
+      "reason": "SELECT array_sort(X'01', (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#f25158e78020/ansi_on",
+      "reason": "SELECT array_sort(1L, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#f25158e78020/ansi_off",
+      "reason": "SELECT array_sort(1L, (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_sort#f352ecc5297d/ansi_on",
+      "reason": "SELECT array_sort(CAST(array() AS array<int>), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#f352ecc5297d/ansi_off",
+      "reason": "SELECT array_sort(CAST(array() AS array<int>), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#fb2e37342e48/ansi_on",
+      "reason": "SELECT array_sort(CAST(array() AS array<string>), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    },
+    {
+      "id": "array_sort#fb2e37342e48/ansi_off",
+      "reason": "SELECT array_sort(CAST(array() AS array<string>), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end) | parse: PARSE_SYNTAX_ERROR"
+    }
+  ],
+  "format_version": 1,
+  "function": "array_sort"
+}

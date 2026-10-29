@@ -133,6 +133,7 @@ pub struct CallTypes<'a> {
     constants: &'a [Option<Constant>],
     literals: &'a [bool],
     sql: Option<&'a dyn Fn(usize) -> Option<String>>,
+    bound_sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     ansi: bool,
     decimal_loss: bool,
     case_sensitive: bool,
@@ -161,6 +162,7 @@ impl<'a> CallTypes<'a> {
             constants,
             literals: &[],
             sql: None,
+            bound_sql: None,
             ansi: true,
             decimal_loss: true,
             case_sensitive: false,
@@ -231,6 +233,22 @@ impl<'a> CallTypes<'a> {
     #[must_use]
     pub fn sql(&self, i: usize) -> Option<String> {
         self.sql.and_then(|f| f(i))
+    }
+
+    /// With `bound_sql(i)` rendering the bound argument `i`: lambdas read
+    /// with Spark's `namedlambdavariable()` variables, as quotes of the
+    /// lambda itself and output names show them. Rendered only when a rule
+    /// asks; falls back to [`Self::sql`] when unset.
+    #[must_use]
+    pub const fn with_bound_sql(mut self, bound_sql: &'a dyn Fn(usize) -> Option<String>) -> Self {
+        self.bound_sql = Some(bound_sql);
+        self
+    }
+
+    /// The bound SQL text of argument `i`, when known.
+    #[must_use]
+    pub fn bound_sql(&self, i: usize) -> Option<String> {
+        self.bound_sql.and_then(|f| f(i)).or_else(|| self.sql(i))
     }
 
     /// The argument types.
