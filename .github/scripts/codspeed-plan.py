@@ -37,21 +37,15 @@ def bench_targets() -> set[str]:
     return names
 
 
-def plan(
-    shards: dict[str, list[str]], existing: set[str]
-) -> tuple[list[dict], list[str]]:
+def plan(shards: dict[str, list[str]], existing: set[str]) -> tuple[list[dict], list[str]]:
     errors = []
     listed = Counter(name for names in shards.values() for name in names)
     repeated = sorted(n for n, c in listed.items() if c > 1)
     unknown = sorted(set(listed) - existing)
     if repeated:
-        errors.append(
-            f"benchmark targets in more than one shard: {', '.join(repeated)}"
-        )
+        errors.append(f"benchmark targets in more than one shard: {', '.join(repeated)}")
     if unknown:
-        errors.append(
-            f"benchmark targets in a shard but not a bench target: {', '.join(unknown)}"
-        )
+        errors.append(f"benchmark targets in a shard but not a bench target: {', '.join(unknown)}")
     empty = sorted(shard for shard, names in shards.items() if not names)
     if empty:
         # `cargo codspeed build --workspace` without `--bench` runs every

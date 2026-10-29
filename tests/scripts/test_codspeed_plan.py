@@ -8,7 +8,8 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).parents[2] / ".github" / "scripts" / "codspeed-plan.py"
 _spec = importlib.util.spec_from_file_location("codspeed_plan", SCRIPT)
-assert _spec is not None and _spec.loader is not None
+assert _spec is not None
+assert _spec.loader is not None
 planner = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(planner)
 
