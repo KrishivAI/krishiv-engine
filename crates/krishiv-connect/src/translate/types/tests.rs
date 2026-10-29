@@ -197,3 +197,58 @@ fn nested_types_map_as_pyspark_sends_them() {
         ErrorClass::FailedToParseTooComplex
     );
 }
+
+/// As Spark's `DataTypeProtoConverter`: no precision is `time(6)`, SRID -1
+/// is `ANY`, and Spark's bounds apply.
+#[test]
+fn time_and_spatial_kinds() {
+    use krishiv_types::Srid;
+    let time = |precision| {
+        proto_type(Kind::Time(dt::Time {
+            precision,
+            ..dt::Time::default()
+        }))
+    };
+    assert_eq!(data_type(&time(None)), Ok(DataType::Time { precision: 6 }));
+    assert_eq!(
+        data_type(&time(Some(0))),
+        Ok(DataType::Time { precision: 0 })
+    );
+    for bad in [7, -1] {
+        let e = data_type(&time(Some(bad))).expect_err("out of range");
+        assert_eq!(e.error_class(), ErrorClass::UnsupportedTimePrecision);
+        assert_eq!(e.message_parameters()[0].1, bad.to_string());
+    }
+    let geometry = |srid| {
+        proto_type(Kind::Geometry(dt::Geometry {
+            srid,
+            ..dt::Geometry::default()
+        }))
+    };
+    let geography = |srid| {
+        proto_type(Kind::Geography(dt::Geography {
+            srid,
+            ..dt::Geography::default()
+        }))
+    };
+    assert_eq!(
+        data_type(&geometry(-1)),
+        Ok(DataType::Geometry { srid: Srid::Any })
+    );
+    assert_eq!(
+        data_type(&geometry(3857)),
+        Ok(DataType::Geometry {
+            srid: Srid::Fixed(3857)
+        })
+    );
+    assert_eq!(
+        data_type(&geography(4326)),
+        Ok(DataType::Geography {
+            srid: Srid::Fixed(4326)
+        })
+    );
+    for t in [geometry(9999), geography(0)] {
+        let e = data_type(&t).expect_err("invalid SRID");
+        assert_eq!(e.error_class(), ErrorClass::StInvalidSridValue);
+    }
+}

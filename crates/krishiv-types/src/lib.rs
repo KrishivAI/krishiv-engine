@@ -13,11 +13,12 @@ pub mod batch;
 mod data_type;
 mod ddl;
 pub mod error;
+pub mod geo;
 mod json;
 mod nested;
 pub mod variant;
 
-pub use data_type::{DataType, DecimalStorage, DecimalType};
+pub use data_type::{DataType, DecimalStorage, DecimalType, Srid};
 pub use ddl::parse_data_type;
 pub use json::parse_metadata;
 pub use nested::{ArrayType, MapType, Metadata, StructField, StructType, equals_ignore_case};

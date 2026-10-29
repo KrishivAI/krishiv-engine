@@ -4513,6 +4513,121 @@ fn order_by_passes_sort_key_errors_through() {
     );
 }
 
+/// `TIME`, `GEOMETRY` and `GEOGRAPHY` have no evaluation yet: a plan that
+/// holds one anywhere (a cast, a typed `NULL`, a scanned column) is refused
+/// with `KRISHIV_UNSUPPORTED_FEATURE` naming the type (`UNSUPPORTED_TIME_TYPE`
+/// for `TIME`), at the expression.
+#[test]
+fn types_without_evaluation_are_refused() {
+    use krishiv_types::Srid;
+    let refused = |plan: LogicalPlan, ctx: &AnalysisContext| {
+        let e = run(plan, ctx).err().unwrap();
+        assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        e.error.message_parameters()[0].1.clone()
+    };
+    let one_row = || LogicalPlan::new(PlanNode::OneRowRelation);
+    let time = DataType::Time { precision: 3 };
+    let cast = Expr::from(Literal::Null(None)).cast(time.clone());
+    let origin = Origin::plan(PlanId(9));
+    let e = run(one_row().project(vec![cast.with_origin(origin)]), &ctx())
+        .err()
+        .unwrap();
+    assert_eq!(e.origin, origin);
+    // `TIME` is its own class: Spark rejects it while
+    // `spark.sql.timeType.enabled` is false (the default).
+    assert_eq!(e.error.error_class(), ErrorClass::UnsupportedTimeType);
+    let typed_null = Expr::from(Literal::Null(Some(DataType::Geometry { srid: Srid::Any })));
+    assert_eq!(
+        refused(one_row().project(vec![typed_null]), &ctx()),
+        "the GEOMETRY data type"
+    );
+    // Nested below a cast to another type, it is still found.
+    let nested = Expr::from(Literal::Null(None))
+        .cast(time)
+        .cast(DataType::String);
+    let e = run(one_row().project(vec![nested]), &ctx()).err().unwrap();
+    assert_eq!(e.error.error_class(), ErrorClass::UnsupportedTimeType);
+    // A scanned column, even when the query does not select it.
+    let geo = TableColumn {
+        name: "g".to_owned(),
+        data_type: DataType::Geography {
+            srid: Srid::Fixed(4326),
+        },
+        nullable: true,
+    };
+    let x = TableColumn {
+        name: "x".to_owned(),
+        data_type: DataType::Integer,
+        nullable: true,
+    };
+    let cat =
+        MemoryCatalog::new("spark_catalog").with_table(&["default"], "geo", vec![x, geo], None);
+    let geo_ctx = context(cat, ResolutionConf::default());
+    assert_eq!(
+        refused(LogicalPlan::table(["geo"]).project(vec![c("x")]), &geo_ctx),
+        "the GEOGRAPHY data type"
+    );
+    // The same shapes over evaluable types resolve.
+    let fine = Expr::from(Literal::Null(None)).cast(DataType::Date);
+    let analyzed = run(one_row().project(vec![fine]), &ctx()).unwrap();
+    assert_eq!(analyzed.output[0].data_type, DataType::Date);
+}
+
+/// The refusal looks inside nested types: a `TIME` array element, map value
+/// or struct field is `UNSUPPORTED_TIME_TYPE` too (Spark rejects the type
+/// where it parses it), and a spatial field is the unevaluable-type error.
+#[test]
+fn time_and_geometry_inside_nested_types_are_refused() {
+    use krishiv_types::{ArrayType, MapType, Srid, StructField, StructType};
+    let ctx = ctx();
+    let time = DataType::time(3).unwrap();
+    let geometry = DataType::Geometry {
+        srid: Srid::Fixed(0),
+    };
+    let cast_null = |to: DataType| {
+        let e = Expr::from(Literal::Null(None)).cast(to);
+        run(LogicalPlan::table(["t"]).project(vec![e]), &ctx)
+            .err()
+            .unwrap()
+    };
+    for nested in [
+        DataType::Array(ArrayType::new(time.clone(), true).into()),
+        DataType::Map(MapType::new(DataType::String, time.clone(), true).into()),
+        DataType::Struct(StructType::new([StructField::new("a", time, true)])),
+    ] {
+        assert_eq!(
+            cast_null(nested).error.error_class(),
+            ErrorClass::UnsupportedTimeType
+        );
+    }
+    let in_struct = DataType::Struct(StructType::new([StructField::new("a", geometry, true)]));
+    let typed_null = Expr::new(ExprNode::Literal(Literal::Null(Some(in_struct))));
+    let e = run(LogicalPlan::table(["t"]).project(vec![typed_null]), &ctx)
+        .err()
+        .unwrap();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(e.error.message_parameters()[0].1, "the GEOMETRY data type");
+}
+
+/// Spark 4.2 rejects the `TIME` type with `UNSUPPORTED_TIME_TYPE` while
+/// `spark.sql.timeType.enabled` is false (its default), before any cast is
+/// checked: the same class for a cast of a column and a typed `NULL`.
+#[test]
+fn casting_to_time_is_unsupported_time_type() {
+    let ctx = ctx();
+    let time = DataType::time(6).unwrap();
+    for e in [
+        c("a").cast(time.clone()),
+        Expr::new(ExprNode::Literal(Literal::Null(Some(time)))),
+    ] {
+        let r = run(LogicalPlan::table(["t"]).project(vec![e]), &ctx);
+        assert_eq!(
+            summary(&r),
+            serde_json::json!(["UNSUPPORTED_TIME_TYPE", {}])
+        );
+    }
+}
+
 /// Spark's strength reduction for an integral expression compared with a
 /// decimal literal (`DecimalPrecisionTypeCoercion.integralAndDecimalLiteral`
 /// in Spark 4.2): the comparison narrows the literal to the `BIGINT` bound

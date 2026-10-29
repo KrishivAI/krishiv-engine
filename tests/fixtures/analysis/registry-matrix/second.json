@@ -17,14 +17,6 @@
       "reason": "SELECT second(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "second#71beb4c062a2/ansi_on",
-      "reason": "SELECT second(CAST(NULL AS time(6))) | parse: KRISHIV_UNSUPPORTED_FEATURE: the time data type (\"TIME\") where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "second#71beb4c062a2/ansi_off",
-      "reason": "SELECT second(CAST(NULL AS time(6))) | parse: KRISHIV_UNSUPPORTED_FEATURE: the time data type (\"TIME\") where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
       "id": "second#ade2ed5d7b44/ansi_on",
       "reason": "SELECT second(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

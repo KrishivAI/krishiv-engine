@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_types::{DataType, DecimalType, parse_data_type};
+use krishiv_types::{DataType, DecimalType, Srid, parse_data_type};
 use serde_json::Value;
 
 /// Spark types that parse in Spark but are out of scope here; Krishiv
@@ -20,7 +20,6 @@ const OUT_OF_SCOPE: &[&str] = &[
     "interval year to month",
     "interval day to second",
     "variant",
-    "time",
     "string collate utf8_lcase",
     // Spark treats this as plain `string` but prints the collation; all
     // collations are out of scope for now.
@@ -49,6 +48,8 @@ const UNCLASSIFIED_IN_SPARK: &[(&str, ErrorClass)] = &[
         ErrorClass::DecimalPrecisionExceedsMaxPrecision,
     ),
     ("decimal(5,99999999999)", ErrorClass::LegacyErrorTemp1228),
+    ("time(99999999999)", ErrorClass::UnsupportedTimePrecision),
+    ("geometry(99999999999)", ErrorClass::StInvalidSridValue),
 ];
 
 fn fixture() -> Value {
@@ -83,6 +84,24 @@ fn assert_renders(t: &DataType, case: &Value) {
     let reparses = case.get("simple_string_reparses").and_then(Value::as_bool);
     let reparsed = parse_data_type(text(case, "simple_string"));
     assert_eq!(Some(reparsed.as_ref() == Ok(t)), reparses, "{case}");
+    // Spark's JSON names a spatial type by its reference system.
+    let json = match t {
+        DataType::Geometry { srid } => Some(format!("\"geometry({})\"", crs(*srid, false))),
+        DataType::Geography { srid } => {
+            Some(format!("\"geography({}, SPHERICAL)\"", crs(*srid, true)))
+        }
+        _ => None,
+    };
+    if let Some(json) = json {
+        assert_eq!(json, text(case, "json"), "{case}");
+    }
+}
+
+fn crs(srid: Srid, geographic: bool) -> &'static str {
+    match srid {
+        Srid::Any => "SRID:ANY",
+        Srid::Fixed(s) => Srid::crs(s, geographic).unwrap_or("unsupported"),
+    }
 }
 
 /// Our error matches Spark's class, SQLSTATE and message parameters.
@@ -164,6 +183,15 @@ fn ddl_strings_match_spark() {
         "date",
         "timestamp",
         "timestamp_ntz",
+        "time(0)",
+        "time(3)",
+        "time(6)",
+        "geometry(0)",
+        "geometry(3857)",
+        "geometry(4326)",
+        "geometry(any)",
+        "geography(4326)",
+        "geography(any)",
         "array<int>",
         "array<array<array<array<int>>>>",
         "map<string,array<double>>",
