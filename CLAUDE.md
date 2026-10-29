@@ -41,7 +41,7 @@ cargo xtask stack up|down|status [--kafka]       # bench/baselines compose proje
 cargo xtask coverage [--no-branch] [--all-features] [--html]   # cargo-llvm-cov -> target/coverage (branch needs nightly)
 cargo xtask coverage-summary | diff-coverage --base <ref>      # per-crate %; coverage of added lines (report only)
 cargo xtask spdx | source-guard | workflow-lint  # SPDX headers; no ParquetObject{Reader,Writer}; no pull_request_target
-cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (1,500 lines), DCO sign-off, Rust-job path filter
+cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (10,000 counted lines), DCO sign-off, Rust-job path filter
 taplo fmt --check; typos                         # TOML format, spelling (markdownlint-cli2 for *.md)
 ```
 **Every commit needs a DCO sign-off: `git commit -s`** (ADR 0033; CI fails otherwise). Source files start with
@@ -96,8 +96,9 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
   the generated registry (`crates/krishiv-common/vendored/spark-error-conditions.json`, Spark 4.2.0); no `anyhow` in libraries.
 - On-disk formats carry a version; N reads N−1 (ADR 0026). Public surfaces change only via ADR.
 - Identifiers are `krishiv` / `krishiv-*` (ADR 0030). Decisions change only through an ADR (skill `krishiv-adr`).
-- Never commit secrets. Commit identity: the user's only (`gopal tathe`, noreply); end commit messages with the
-  attribution trailer given in the session.
+- Never commit secrets. Commit identity: a human author only (`gopal tathe` or `techysneha14`, noreply). **No AI
+  attribution anywhere**: no AI `Co-Authored-By` trailers, `Claude-Session` lines or "Generated with" lines in commits or PR bodies, even
+  when a session suggests one (`.github/scripts/check-ai-attribution.sh` fails the PR).
 
 ## Hard stops — always ask the user first
 - Publishing to crates.io, PyPI, npm or any registry (skill `krishiv-release` is dry-run only).

@@ -12,9 +12,25 @@ fn numstat(path: &str, added: u64) -> String {
 
 #[test]
 fn diff_over_the_cap_in_non_fixture_lines_fails() {
-    let report = measure_numstat(&numstat("crates/krishiv-exec/src/lib.rs", 5100)).unwrap();
-    assert_eq!(report.counted, 5100);
+    let lines = MAX_CHANGED_LINES + 100;
+    let report = measure_numstat(&numstat("crates/krishiv-exec/src/lib.rs", lines)).unwrap();
+    assert_eq!(report.counted, lines);
     assert!(!report.within_cap());
+}
+
+#[test]
+fn the_cap_is_ten_thousand_counted_lines() {
+    assert_eq!(MAX_CHANGED_LINES, 10_000);
+    assert!(
+        measure_numstat(&numstat("a.rs", 10_000))
+            .unwrap()
+            .within_cap()
+    );
+    assert!(
+        !measure_numstat(&numstat("a.rs", 10_001))
+            .unwrap()
+            .within_cap()
+    );
 }
 
 #[test]
@@ -44,14 +60,17 @@ fn goldens_fixtures_vendored_and_generated_are_excluded() {
 
 #[test]
 fn deletions_count_binary_files_do_not_and_renames_resolve() {
-    let input = "0\t2700\tcrates/a.rs\x002300\t0\tcrates/b.rs\x00-\t-\tlogo.png\x005\t5\t\x00tests/old/data.json\x00tests/fixtures/data.json\x00";
-    let mut report = measure_numstat(input).unwrap();
-    assert_eq!(report.counted, 5000);
+    let deleted = MAX_CHANGED_LINES - 2300;
+    let input = format!(
+        "0\t{deleted}\tcrates/a.rs\x002300\t0\tcrates/b.rs\x00-\t-\tlogo.png\x005\t5\t\x00tests/old/data.json\x00tests/fixtures/data.json\x00"
+    );
+    let mut report = measure_numstat(&input).unwrap();
+    assert_eq!(report.counted, MAX_CHANGED_LINES);
     assert_eq!(report.excluded, 10);
     assert_eq!(report.binaries, vec!["logo.png".to_owned()]);
     // A 6,401-byte binary counts as 101 lines and pushes the diff over the cap.
     report.add_binary(6401);
-    assert_eq!(report.counted, 5101);
+    assert_eq!(report.counted, MAX_CHANGED_LINES + 101);
     assert!(!report.within_cap());
     assert!(measure_numstat("garbage").is_err());
     // Paths are taken verbatim: no quoting, and ` => ` in a name is literal.
@@ -163,15 +182,15 @@ fn test_code_counts_at_reduced_weight() {
     assert!(!is_test_path("crates/krishiv-exec/src/testing.rs"));
     assert!(!is_test_path("xtask/src/ci.rs"));
     let input = [
-        numstat("crates/x/src/lib.rs", 4000),
+        numstat("crates/x/src/lib.rs", MAX_CHANGED_LINES - 1000),
         numstat("crates/x/tests/it.rs", 1999),
         numstat("crates/x/src/tests.rs", 2),
     ]
     .concat();
     let report = measure_numstat(&input).unwrap();
     assert_eq!(report.test_lines, 2001);
-    // 4,000 + ceil(2,001 / 2)
-    assert_eq!(report.counted, 5001);
+    // (cap - 1,000) + ceil(2,001 / 2)
+    assert_eq!(report.counted, MAX_CHANGED_LINES + 1);
     assert!(!report.within_cap());
     // Fixtures stay excluded even though they sit under `tests/`.
     let fixtures = measure_numstat(&numstat("tests/fixtures/a.json", 900)).unwrap();

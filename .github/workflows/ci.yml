@@ -12,9 +12,16 @@ on:
   # merge queue, so it is skipped on a push.
   push:
     branches: [main]
+  # The merge queue runs the build, the workspace tests, clippy and the cheap
+  # lints only (about 12 minutes). The long checks that the pull request already
+  # ran (`miri-kernels`, `fuzz-build`, the `wheels` matrix) run on the pull
+  # request, and again on main here every night, so a break that only appears
+  # when several pull requests combine is caught within a day.
+  schedule:
+    - cron: "20 3 * * *"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -355,7 +362,8 @@ jobs:
   # committed fuzz/Cargo.lock pins the graph.
   fuzz-build:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    # Not in the merge queue (it ran on the pull request; the nightly run covers main).
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -459,9 +467,11 @@ jobs:
   # check; the path gate is inside: it only does work when the PR touches what
   # Miri compiles: those crates, their path dependency krishiv-common, the
   # root Cargo.toml/Cargo.lock, rust-toolchain.toml or this workflow (and
-  # always in the merge queue).
+  # always on the nightly run of main).
   miri-kernels:
-    if: github.event_name != 'push'
+    # Not in the merge queue (about 33 minutes; it ran on the pull request, and the nightly
+    # run covers main). The check still reports there: a skipped job satisfies it.
+    if: github.event_name != 'push' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -560,7 +570,8 @@ jobs:
   # requires `wheels-ok` below, not the matrix legs.
   wheels:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    # Not in the merge queue (it ran on the pull request): `wheels-ok` passes when it is skipped.
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     # `id-token: write` lets the coverage leg upload to Codecov via OIDC (no secret).
     permissions:
@@ -724,3 +735,55 @@ jobs:
               *) exit 1 ;;
             esac
           done
+
+  # The nightly run is the only place Miri, the fuzz-target build and the wheel matrix see combined
+  # main, so a failure must not go unnoticed: open (or update) one issue, `nightly CI failed`.
+  nightly-failure-notice:
+    needs:
+      - changes
+      - text-lint
+      - python-quality
+      - fmt
+      - clippy
+      - test
+      - deny
+      - machete
+      - hack
+      - layering
+      - connect-protos
+      - plan-protos
+      - fuzz-build
+      - msrv
+      - docs
+      - release-dry-run
+      - miri-kernels
+      - wheels
+      - wheels-targets
+      - wheels-ok
+    if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Open or update the nightly failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          title="nightly CI failed"
+          body="The scheduled CI run on main failed at ${SHA}: ${RUN_URL}"
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
