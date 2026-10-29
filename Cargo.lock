@@ -2011,6 +2011,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "codspeed-criterion-compat",
+ "jiff",
  "krishiv-common",
  "libm",
  "md-5 0.11.0",

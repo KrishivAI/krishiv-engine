@@ -2442,14 +2442,28 @@ fn typed_literals_resolve_with_the_session_zone() {
     .unwrap();
     let e = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", region).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    // A region id in the value needs the time-zone database.
-    let e = project(
+    // A region id in the value resolves against the bundled database:
+    // 10:00 in Los Angeles (UTC-08:00 in January) is 18:00 UTC.
+    let a = project(
         TypedLiteralKind::Timestamp,
         "2024-01-01 10:00:00 America/Los_Angeles",
         utc,
     )
-    .unwrap_err();
-    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    .unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    let crate::PlanNode::Project { exprs, .. } = &a.plan.root().node else {
+        panic!("a literal projects");
+    };
+    let Some(expr) = exprs.first() else {
+        panic!("a literal projects one column");
+    };
+    let ExprNode::Resolved(crate::ResolvedExpr::Alias { expr, .. }) = &expr.node else {
+        panic!("a literal projects as an alias");
+    };
+    assert!(matches!(
+        expr.node,
+        ExprNode::Literal(Literal::Timestamp(1_704_132_000_000_000))
+    ));
 }
 
 /// A conditional with `FILTER` names the filter once: the shown call takes

@@ -9,8 +9,10 @@
 //! `date_trunc`, `months_between`, `make_date`, ...).
 //!
 //! Time zones come in as [`TimeZoneRules`] (the session zone resolved by the
-//! caller, [`FixedOffset`] for `UTC` and `+hh:mm`); this module never sees a
-//! zone name. `current_date` and `current_timestamp` take the query's start
+//! caller, [`FixedOffset`] for `UTC` and `+hh:mm`, [`ZoneRef`] for region
+//! ids resolved against the bundled database by [`resolve_zone`]); this
+//! module never parses a zone name except through [`resolve_zone`].
+//! `current_date` and `current_timestamp` take the query's start
 //! instant, so a kernel stays a pure function and one query reads one clock.
 //! Dates are proleptic Gregorian, as in Spark 3+.
 
@@ -24,13 +26,20 @@ use arrow_array::{
 use arrow_buffer::NullBuffer;
 use arrow_schema::DataType;
 
-mod calendar;
+pub(crate) mod calendar;
+pub(crate) mod format;
+pub(crate) mod zone;
 
 pub use crate::cast::{FixedOffset, TimeZoneRules};
 pub use calendar::{
     TruncUnit, Zones, convert_timezone, day_name, from_utc_timestamp, last_day, make_date,
     month_name, months_between, next_day, to_utc_timestamp, trunc_date, trunc_timestamp, unix_date,
 };
+pub use format::{
+    ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,
+    parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
+};
+pub use zone::{ZoneRef, resolve_zone};
 
 use crate::cast::datetime::{
     MICROS_PER_DAY, civil_from_days, days_from_civil, local_to_utc, utc_to_local,

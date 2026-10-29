@@ -502,11 +502,11 @@ fn zone_conversions_with_fixed_offset_zones() {
     let f = bind("from_utc_timestamp", &[&both, &zones]);
     let out = f.invoke(&[col(&both), col(&zones)], 2).unwrap();
     assert_eq!(stamp_values(&out), [Some(0), Some(-12_600_000_000)]);
-    // A zone column with a region id fails when its row is read.
+    // A zone column with a region id resolves when its row is read.
     let regions = strs(&[None, Some("Asia/Seoul")]);
     let f = bind("from_utc_timestamp", &[&both, &regions]);
-    let e = f.invoke(&[col(&both), col(&regions)], 2).unwrap_err();
-    assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature);
+    let out = f.invoke(&[col(&both), col(&regions)], 2).unwrap();
+    assert_eq!(stamp_values(&out), [None, Some(9 * 3_600_000_000)]);
     // ... and a repeated zone is resolved once (the answer is the same).
     let repeated = strs(&[Some("+01:00"), Some("+01:00"), Some("+02:00")]);
     let three = ltz(&[Some(0), Some(0), Some(0)]);
@@ -578,28 +578,41 @@ fn convert_timezone_takes_two_or_three_arguments() {
 }
 
 #[test]
-fn convert_timezone_refuses_unresolvable_literal_zones_when_bound() {
+fn convert_timezone_resolves_literal_zones_when_bound() {
     let wall = DataType::Timestamp(TimeUnit::Microsecond, None);
     let zone = |z: &str| BindArg::Literal(strs(&[Some(z)]));
-    let refused = |args: Vec<BindArg>| {
-        bind_scalar("convert_timezone", &args, &BindOptions::new()).unwrap_err()
-    };
-    // The target of the two-argument form, and either zone of the three.
-    let e = refused(vec![zone("Europe/Brussels"), wall.clone().into()]);
-    assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature);
-    let e = refused(vec![
-        zone("UTC"),
-        zone("America/Los_Angeles"),
-        wall.clone().into(),
-    ]);
-    assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature);
-    let e = refused(vec![
-        zone("Europe/Moscow"),
-        zone("UTC"),
-        wall.clone().into(),
-    ]);
-    assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature);
-    let e = refused(vec![zone("UTC"), zone(""), wall.into()]);
+    // Region ids bind: the conversion reads the bundled database.
+    let f = bind_scalar(
+        "convert_timezone",
+        &[
+            zone("Europe/Brussels"),
+            zone("America/Los_Angeles"),
+            wall.clone().into(),
+        ],
+        &BindOptions::new(),
+    )
+    .unwrap();
+    let walls = ntz(&[Some(0)]);
+    let out = f
+        .invoke(
+            &[
+                lit(&strs(&[Some("Europe/Brussels")])),
+                lit(&strs(&[Some("America/Los_Angeles")])),
+                col(&walls),
+            ],
+            1,
+        )
+        .unwrap();
+    // Midnight in Brussels (UTC+01:00 in January) is 15:00 the day before
+    // in Los Angeles (UTC-08:00).
+    assert_eq!(stamp_values(&out), [Some(-9 * 3_600_000_000)]);
+    // Text no zone id can have is INVALID_TIMEZONE.
+    let e = bind_scalar(
+        "convert_timezone",
+        &[zone("UTC"), zone(""), wall.into()],
+        &BindOptions::new(),
+    )
+    .unwrap_err();
     assert_eq!(class(&e), ErrorClass::InvalidTimezone);
 }
 
@@ -708,13 +721,8 @@ fn zone_text_is_resolved_or_refused() {
         "UTC+05:30",
         "GMT-3",
         "+5",
-    ] {
-        assert!(bind_zone(ok).is_ok(), "{ok}");
-    }
-    // Region ids, short ids and offsets spelled another way need the tz
-    // database or a fuller offset parser: unsupported, never a wrong answer.
-    // (`+19:00` is out of range, so it is below with the invalid zones.)
-    for region in [
+        // Region ids, short ids and offsets spelled another way resolve
+        // against the bundled database.
         "Asia/Seoul",
         "America/Los_Angeles",
         "CET",
@@ -724,8 +732,7 @@ fn zone_text_is_resolved_or_refused() {
         "UTC+05:30:15",
         "Etc/GMT+5",
     ] {
-        let e = bind_zone(region).unwrap_err();
-        assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature, "{region}");
+        assert!(bind_zone(ok).is_ok(), "{ok}");
     }
     // Text no zone id can have: INVALID_TIMEZONE with the text as given.
     // (`abc` and `true` are recorded in the function matrix as

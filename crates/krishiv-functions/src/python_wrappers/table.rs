@@ -135,6 +135,7 @@ pub(super) fn rows() -> Vec<Row> {
         "current_date",
         "current_schema",
         "current_timestamp",
+        "current_timezone",
         "current_user",
         "dense_rank",
         "e",
@@ -528,6 +529,34 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "to_utc_timestamp",
             "timestamp: ColumnOrName, tz: Column | str",
+        ),
+        Row::new("date_format", "date: ColumnOrName, format: str"),
+        Row::new("to_date", "col: ColumnOrName, format: str = None"),
+        Row::new("try_to_date", "col: ColumnOrName, format: str = None"),
+        Row::new("to_timestamp", "col: ColumnOrName, format: str = None"),
+        Row::new(
+            "try_to_timestamp",
+            "col: ColumnOrName, format: ColumnOrName = None",
+        ),
+        Row::new(
+            "to_timestamp_ltz",
+            "timestamp: ColumnOrName, format: ColumnOrName = None",
+        ),
+        Row::new(
+            "to_timestamp_ntz",
+            "timestamp: ColumnOrName, format: ColumnOrName = None",
+        ),
+        Row::new(
+            "unix_timestamp",
+            "timestamp: ColumnOrName = None, format: str = \"yyyy-MM-dd HH:mm:ss\"",
+        ),
+        Row::new(
+            "to_unix_timestamp",
+            "timestamp: ColumnOrName, format: ColumnOrName = None",
+        ),
+        Row::new(
+            "from_unixtime",
+            "timestamp: ColumnOrName, format: str = \"yyyy-MM-dd HH:mm:ss\"",
         ),
     ]);
     // Spark's `trim(chars, str)`: PySpark's `(col, trim)` reaches the engine reversed.

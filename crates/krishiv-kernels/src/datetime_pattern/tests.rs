@@ -58,15 +58,30 @@ fn dates_and_local_values() {
 }
 
 #[test]
-fn region_zones_need_the_tz_database() {
+fn region_zones_resolve_against_the_bundled_database() {
     let p = DateTimePattern::new("yyyy VV", Purpose::Parse).unwrap();
-    let e = p
-        .parse_timestamp("2020 America/Los_Angeles", &FixedOffset(0))
-        .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(p.parse_local("2020 Foo/Bar", true).is_err());
+    // Midnight in Los Angeles (UTC-08:00 in January) is 08:00 UTC.
+    assert_eq!(
+        p.parse_timestamp("2020 America/Los_Angeles", &FixedOffset(0))
+            .unwrap(),
+        Some(18_262 * 86_400_000_000 + 8 * 3_600_000_000)
+    );
+    assert_eq!(
+        p.parse_local("2020 America/Los_Angeles", true).unwrap(),
+        Some(18_262 * 86_400_000_000)
+    );
+    assert_eq!(
+        p.parse_date("2020 America/Los_Angeles").unwrap(),
+        Some(18_262)
+    );
+    // Unknown ids read as no timestamp, as in Spark's lenient readers.
+    assert_eq!(
+        p.parse_timestamp("2020 Foo/Bar", &FixedOffset(0)).unwrap(),
+        None
+    );
+    assert_eq!(p.parse_local("2020 Foo/Bar", true).unwrap(), None);
+    assert_eq!(p.parse_date("2020 Foo/Bar").unwrap(), None);
     assert_eq!(p.parse_local("2020 Foo/Bar", false).unwrap(), None);
-    assert!(p.parse_date("2020 Foo/Bar").is_err());
     let f = DateTimePattern::new("z", Purpose::Format).unwrap();
     let la = Zone {
         id: "America/Los_Angeles",

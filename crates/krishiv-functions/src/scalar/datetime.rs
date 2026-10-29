@@ -13,19 +13,25 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal128Type, Int32Type, TimestampMicrosecondType};
+use arrow_array::types::{
+    Date32Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+};
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Date32Array, StringArray, TimestampMicrosecondArray,
+    Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, TimeUnit};
-use krishiv_common::error::{InvalidTimezone, KrishivError, UnableToAcquireMemory};
+use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_kernels::OverflowMode;
-use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
+use krishiv_kernels::cast::{CastMode, CastOptions, cast};
 use krishiv_kernels::datetime::{
-    DatePart, Zones, convert_timezone, current_date, date_add, date_add_months, date_diff,
-    date_sub, day_name, extract_date, extract_timestamp, from_utc_timestamp, last_day, make_date,
-    month_name, months_between, next_day, to_utc_timestamp, trunc_date, trunc_timestamp, unix_date,
+    DatePart, ParsePolicy, ZoneRef, Zones, convert_timezone, current_date, date_add,
+    date_add_months, date_diff, date_sub, day_name, extract_date, extract_timestamp,
+    format_timestamps, from_utc_timestamp, last_day, make_date, month_name, months_between,
+    next_day, parse_date_one, parse_dates, parse_ntz, parse_ntz_one, parse_timestamp_one,
+    parse_timestamps, seconds_to_timestamps, to_utc_timestamp, trunc_date, trunc_timestamp,
+    unix_date,
 };
+use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 
 use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -69,6 +75,17 @@ pub(super) const NAMES: &[&str] = &[
     "current_timestamp",
     "now",
     "localtimestamp",
+    "date_format",
+    "to_date",
+    "try_to_date",
+    "to_timestamp",
+    "try_to_timestamp",
+    "to_timestamp_ltz",
+    "to_timestamp_ntz",
+    "unix_timestamp",
+    "to_unix_timestamp",
+    "from_unixtime",
+    "current_timezone",
 ];
 
 /// The Arrow type of `timestamp` results.
@@ -116,127 +133,16 @@ fn instants(
     timestamps_as(x, i, ntz, &timestamp(), opts)
 }
 
-/// Whether `text` could be a zone id that is not an offset `FixedOffset`
-/// reads: a plausible region id (`Asia/Seoul`), a short id (`CET`), or an
-/// offset spelled another way (`+0530`, seconds). Anything else (`xx`,
-/// `foo`, `utc`, `abc`, `true`, `etc/utc`) is text no zone id can have, and
-/// is `INVALID_TIMEZONE`: Spark's own `INVALID_TIMEZONE` text requires
-/// region ids to have the form `area/city` (recorded in
-/// `tests/fixtures/spark-4.2.0/function-matrix`).
-fn is_zone_id(text: &str) -> bool {
-    let rest = ["UTC", "GMT", "UT"]
-        .iter()
-        .find_map(|p| text.strip_prefix(p))
-        .unwrap_or(text);
-    if let Some(signed) = rest.strip_prefix(['+', '-']) {
-        return offset_parts(signed).is_some();
-    }
-    is_region_id(text) || SHORT_ZONE_IDS.contains(&text)
-}
-
-/// Short zone ids without an `area/city` form that Java's `ZoneId.of`
-/// accepts: its `SHORT_IDS` aliases plus the single-component TZDB regions
-/// (`CET`, `EET`, `WET`, `MET`).
-const SHORT_ZONE_IDS: &[&str] = &[
-    "ACT", "AET", "AGT", "ART", "AST", "BET", "BST", "CAT", "CNT", "CST", "CTT", "EAT", "ECT",
-    "IET", "IST", "JST", "MIT", "NET", "NST", "PLT", "PNT", "PRT", "PST", "SST", "VST", "EST",
-    "MST", "HST", "CET", "EET", "WET", "MET",
-];
-
-/// Whether `text` looks like a region id Java's `ZoneId.of` accepts: an
-/// `area/city` form of non-empty parts in zone-name characters whose area
-/// starts with an uppercase letter (every TZDB area does, so `etc/utc` is
-/// not one).
-fn is_region_id(text: &str) -> bool {
-    if !text.contains('/') {
-        return false;
-    }
-    let mut parts = text.split('/');
-    if !parts
-        .next()
-        .is_some_and(|first| first.starts_with(|c: char| c.is_ascii_uppercase()))
-    {
-        return false;
-    }
-    text.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+' | '.'))
-        && text.split('/').all(|part| !part.is_empty())
-}
-
-/// The `(hours, minutes, seconds)` of a sign-stripped offset `text` where it
-/// parses as an in-range offset (`+HHMM`, `+HHMMSS`, `+H[:MM[:SS]]`), `None`
-/// otherwise. Malformed offsets (`+ab`) and out-of-range ones (`+19:00`,
-/// which Spark's `INVALID_TIMEZONE` text limits to +-18:00) are not zones at
-/// all; in-range ones `FixedOffset::parse` does not read need a fuller
-/// offset parser.
-fn offset_parts(text: &str) -> Option<(u32, u32, u32)> {
-    let (hours, minutes, seconds) = if text.contains(':') {
-        let mut fields = text.split(':');
-        let (h, m, s) = (fields.next()?, fields.next(), fields.next());
-        if fields.next().is_some() {
-            return None;
-        }
-        if !(1..=2).contains(&h.len())
-            || !h.bytes().all(|b| b.is_ascii_digit())
-            || m.is_some_and(|m| {
-                !(1..=2).contains(&m.len()) || !m.bytes().all(|b| b.is_ascii_digit())
-            })
-            || s.is_some_and(|s| {
-                !(1..=2).contains(&s.len()) || !s.bytes().all(|b| b.is_ascii_digit())
-            })
-        {
-            return None;
-        }
-        (
-            h.parse().ok()?,
-            m.map(str::parse).transpose().ok()??,
-            s.map(str::parse).transpose().ok()??,
-        )
-    } else {
-        let digits = text.as_bytes();
-        if !digits.iter().all(u8::is_ascii_digit) {
-            return None;
-        }
-        match digits.len() {
-            4 => (text[..2].parse().ok()?, text[2..].parse().ok()?, 0),
-            6 => (
-                text[..2].parse().ok()?,
-                text[2..4].parse().ok()?,
-                text[4..].parse().ok()?,
-            ),
-            _ => return None,
-        }
-    };
-    (minutes < 60 && seconds < 60 && (hours < 18 || (hours == 18 && minutes == 0 && seconds == 0)))
-        .then_some((hours, minutes, seconds))
-}
-
-/// The zone the text names. Only offsets `FixedOffset::parse` reads
-/// resolve: a plausible region id (`Asia/Seoul`, a short id such as `CET`)
-/// or an offset spelled another way (`+0530`, seconds) needs the time-zone
-/// database or a fuller offset parser, and is `KRISHIV_UNSUPPORTED_FEATURE`;
-/// text no zone id can have (`xx`, `abc`, `etc/utc`) is `INVALID_TIMEZONE`.
-fn resolve_zone(text: &str) -> Result<FixedOffset, KrishivError> {
-    if text == text.trim()
-        && let Some(zone) = FixedOffset::parse(text)
-    {
-        return Ok(zone);
-    }
-    if is_zone_id(text) {
-        return Err(unsupported(format!(
-            "the time zone {text} (region ids need the time-zone database)"
-        )));
-    }
-    Err(InvalidTimezone {
-        time_zone: text.to_owned(),
-    }
-    .into())
+/// The zone a text argument names, resolved against the bundled
+/// time-zone database: unknown ids are `INVALID_TIMEZONE`.
+fn resolve_zone(text: &str) -> Result<ZoneRef, KrishivError> {
+    krishiv_kernels::datetime::resolve_zone(text)
 }
 
 /// A zone argument: a literal is resolved when the call is bound (`None` is
 /// a NULL zone), a column at each invocation.
 enum ZoneArg {
-    Literal(Option<FixedOffset>),
+    Literal(Option<ZoneRef>),
     Column,
 }
 
@@ -268,17 +174,17 @@ fn reserve<T>(len: usize) -> Result<Vec<T>, KrishivError> {
 
 /// The zone of each row of a zone column; a NULL is `None`. Runs of equal
 /// names resolve once.
-fn column_zones(names: &StringArray) -> Result<Vec<Option<FixedOffset>>, KrishivError> {
+fn column_zones(names: &StringArray) -> Result<Vec<Option<ZoneRef>>, KrishivError> {
     let mut out = reserve(names.len())?;
-    let mut last: Option<(&str, FixedOffset)> = None;
+    let mut last: Option<(&str, ZoneRef)> = None;
     for name in names.iter() {
         out.push(match name {
             None => None,
             Some(n) => match last {
-                Some((seen, zone)) if seen == n => Some(zone),
+                Some((seen, ref zone)) if seen == n => Some(zone.clone()),
                 _ => {
                     let zone = resolve_zone(n)?;
-                    last = Some((n, zone));
+                    last = Some((n, zone.clone()));
                     Some(zone)
                 }
             },
@@ -345,6 +251,308 @@ fn extract(
     }
     let zone = matches!(source, DataType::Timestamp(_, Some(_))).then(|| opts.time_zone.as_ref());
     Ok(extract_timestamp(part, &x.timestamps(i)?, zone)?)
+}
+
+// ---------------------------------------------------------------------
+// Pattern-driven functions (`date_format`, `to_date`, `to_timestamp`,
+// `unix_timestamp`, `to_unix_timestamp`, `from_unixtime`).
+// ---------------------------------------------------------------------
+
+/// How many distinct column patterns one invocation compiles at most: the
+/// cache clears when full, which changes nothing observable.
+const PATTERN_CACHE_CAP: usize = 8;
+
+/// A format argument: a literal compiles once per bind (`Null` is a NULL
+/// literal), a column per distinct value at each invocation.
+enum PatternArg {
+    Null,
+    Literal(DateTimePattern),
+    Column,
+}
+
+fn pattern_arg(args: &[BindArg], i: usize, purpose: Purpose) -> Result<PatternArg, KrishivError> {
+    let arg = args
+        .get(i)
+        .ok_or_else(|| internal(format!("missing pattern argument {i}")))?;
+    let BindArg::Literal(a) = arg else {
+        return Ok(PatternArg::Column);
+    };
+    let text = to_utf8(a.as_ref())?;
+    if text.is_null(0) {
+        return Ok(PatternArg::Null);
+    }
+    DateTimePattern::new(text.value(0), purpose).map(PatternArg::Literal)
+}
+
+/// The compiled column patterns of one invocation, keyed by pattern text.
+struct PatternCache {
+    purpose: Purpose,
+    map: std::collections::HashMap<String, DateTimePattern>,
+}
+
+impl PatternCache {
+    fn new(purpose: Purpose) -> Self {
+        Self {
+            purpose,
+            map: std::collections::HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, text: &str) -> Result<&DateTimePattern, KrishivError> {
+        if !self.map.contains_key(text) {
+            if self.map.len() >= PATTERN_CACHE_CAP {
+                self.map.clear();
+            }
+            let compiled = DateTimePattern::new(text, self.purpose)?;
+            self.map.insert(text.to_owned(), compiled);
+        }
+        self.map
+            .get(text)
+            .ok_or_else(|| internal("a pattern cache lost its pattern".to_owned()))
+    }
+}
+
+/// The session zone for formatting: its id and rules.
+fn session_zone(opts: &BindOptions) -> Zone<'_> {
+    Zone {
+        id: &opts.time_zone_name,
+        rules: opts.time_zone.as_ref(),
+    }
+}
+
+/// The cast mode of a one-argument `to_*` call: `try_*` is `Try`, ANSI is
+/// `Ansi`, else `Legacy` (NULL for malformed input).
+fn cast_mode(opts: &BindOptions, is_try: bool) -> CastMode {
+    if is_try {
+        CastMode::Try
+    } else if opts.ansi {
+        CastMode::Ansi
+    } else {
+        CastMode::Legacy
+    }
+}
+
+/// The parse policy of a pattern call: `try_*` never raises for
+/// unparseable input, otherwise ANSI decides.
+fn parse_policy(opts: &BindOptions, is_try: bool, func: &'static str) -> ParsePolicy {
+    ParsePolicy {
+        fail_on_error: !is_try && opts.ansi,
+        func,
+    }
+}
+
+/// One-argument `to_date`/`to_timestamp` over a non-string, non-numeric
+/// value: Spark's replacement is a cast, so this reuses the cast kernel
+/// (there is no second cast path here).
+fn cast_one_arg(
+    x: &Inputs<'_>,
+    to: &DataType,
+    opts: &BindOptions,
+    mode: CastMode,
+) -> Result<ArrayRef, KrishivError> {
+    let input = x.plain_column(0)?;
+    let options = CastOptions {
+        mode,
+        time_zone: opts.time_zone.as_ref(),
+    };
+    Ok(cast(input.as_ref(), to, &options)?)
+}
+
+// ---------------------------------------------------------------------
+// Small predicates over bound Arrow types.
+// ---------------------------------------------------------------------
+
+/// Whether `t` is a `DATE` or a microsecond timestamp of either kind.
+fn is_date_or_timestamp(t: &DataType) -> bool {
+    matches!(t, DataType::Date32) || is_timestamp(t)
+}
+
+/// Whether `t` is a date, a timestamp or a string carrier.
+fn is_date_or_timestamp_or_string(t: &DataType) -> bool {
+    is_date_or_timestamp(t) || is_string(t)
+}
+
+/// Whether `t` is a numeric carrier `to_timestamp` reads as seconds.
+fn is_numeric_arrow(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(..)
+    )
+}
+
+/// Whether `t` is an integral carrier `from_unixtime` reads.
+fn is_longish(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    )
+}
+
+/// The default pattern (`yyyy-MM-dd HH:mm:ss`) for the calls that omit
+/// one: it always compiles.
+fn default_pattern(purpose: Purpose) -> Result<PatternArg, KrishivError> {
+    DateTimePattern::new("yyyy-MM-dd HH:mm:ss", purpose).map(PatternArg::Literal)
+}
+
+/// Any date, timestamp or string value as an instant in the session zone
+/// (Spark's implicit cast to `TIMESTAMP`).
+fn cast_to_instants(
+    x: &Inputs<'_>,
+    o: &BindOptions,
+    mode: CastMode,
+) -> Result<TimestampMicrosecondArray, KrishivError> {
+    let out = cast_one_arg(x, &timestamp(), o, mode)?;
+    out.as_primitive_opt::<TimestampMicrosecondType>()
+        .cloned()
+        .ok_or_else(|| internal("a timestamp cast to another carrier".to_owned()))
+}
+
+/// ANDs the validity of `a` with non-NULL pattern rows: a NULL pattern is
+/// NULL, as Spark's `nullIntolerant` binary functions answer.
+fn apply_fmt_nulls<T: arrow_array::ArrowPrimitiveType>(
+    a: &mut arrow_array::PrimitiveArray<T>,
+    fmts: &StringArray,
+) where
+    arrow_array::PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+{
+    if fmts.null_count() == 0 {
+        return;
+    }
+    let kept: Vec<Option<T::Native>> = a
+        .iter()
+        .zip(fmts.iter())
+        .map(|(v, f)| v.filter(|_| f.is_some()))
+        .collect();
+    *a = arrow_array::PrimitiveArray::<T>::from(kept);
+}
+
+/// Tags a pattern error with its row.
+fn row_error(row: usize, e: KrishivError) -> KrishivError {
+    krishiv_kernels::KernelError::with_row(Some(row), e).into()
+}
+
+/// `to_date` over a column pattern: per-row compile through the bounded
+/// cache, a NULL pattern row is NULL.
+fn parse_dates_column(
+    strings: &StringArray,
+    fmts: &StringArray,
+    o: &BindOptions,
+    policy: ParsePolicy,
+    operation: &str,
+) -> Result<ArrayRef, KrishivError> {
+    let mut cache = PatternCache::new(Purpose::Parse);
+    let mut out = reserve::<Option<i32>>(strings.len())?;
+    for i in 0..strings.len() {
+        if strings.is_null(i) || fmts.is_null(i) {
+            out.push(None);
+            continue;
+        }
+        let p = cache.get(fmts.value(i)).map_err(|e| row_error(i, e))?;
+        out.push(parse_date_one(
+            p,
+            strings.value(i),
+            o.time_zone.as_ref(),
+            policy,
+            operation,
+            i,
+        )?);
+    }
+    Ok(Arc::new(Date32Array::from(out)) as ArrayRef)
+}
+
+/// `to_timestamp` over a column pattern, as above, in the session zone.
+fn parse_timestamps_column(
+    strings: &StringArray,
+    fmts: &StringArray,
+    o: &BindOptions,
+    policy: ParsePolicy,
+    operation: &str,
+) -> Result<TimestampMicrosecondArray, KrishivError> {
+    let mut cache = PatternCache::new(Purpose::Parse);
+    let mut out = reserve::<Option<i64>>(strings.len())?;
+    for i in 0..strings.len() {
+        if strings.is_null(i) || fmts.is_null(i) {
+            out.push(None);
+            continue;
+        }
+        let p = cache.get(fmts.value(i)).map_err(|e| row_error(i, e))?;
+        out.push(parse_timestamp_one(
+            p,
+            strings.value(i),
+            o.time_zone.as_ref(),
+            policy,
+            operation,
+            i,
+        )?);
+    }
+    Ok(TimestampMicrosecondArray::from(out))
+}
+
+/// `to_timestamp_ntz` over a column pattern, as above.
+fn parse_ntz_column(
+    strings: &StringArray,
+    fmts: &StringArray,
+    policy: ParsePolicy,
+    operation: &str,
+) -> Result<ArrayRef, KrishivError> {
+    let mut cache = PatternCache::new(Purpose::Parse);
+    let mut out = reserve::<Option<i64>>(strings.len())?;
+    for i in 0..strings.len() {
+        if strings.is_null(i) || fmts.is_null(i) {
+            out.push(None);
+            continue;
+        }
+        let p = cache.get(fmts.value(i)).map_err(|e| row_error(i, e))?;
+        out.push(parse_ntz_one(p, strings.value(i), policy, operation, i)?);
+    }
+    Ok(Arc::new(TimestampMicrosecondArray::from(out)) as ArrayRef)
+}
+
+/// Renders a bound argument for the unresolved-replacement error below:
+/// literals read as Spark renders them (strings bare, numbers plain), anything
+/// else as its type. Approximate where Spark prints SQL text: no golden or
+/// matrix case compares the message.
+fn bind_arg_text(arg: &BindArg) -> String {
+    let lit = |a: &ArrayRef| {
+        if a.len() != 1 || a.is_null(0) {
+            return None;
+        }
+        Some(match a.data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                to_utf8(a.as_ref()).ok()?.value(0).to_owned()
+            }
+            DataType::Int8 => a.as_primitive::<Int8Type>().value(0).to_string(),
+            DataType::Int16 => a.as_primitive::<Int16Type>().value(0).to_string(),
+            DataType::Int32 => a.as_primitive::<Int32Type>().value(0).to_string(),
+            DataType::Int64 => a.as_primitive::<Int64Type>().value(0).to_string(),
+            _ => return None,
+        })
+    };
+    match arg {
+        BindArg::Literal(a) => lit(a).unwrap_or_else(|| a.data_type().to_string()),
+        BindArg::Column { ty, .. } => ty.to_string(),
+    }
+}
+
+/// An integral `from_unixtime` argument as seconds.
+fn longs_column(x: &Inputs<'_>, i: usize) -> Result<Int64Array, KrishivError> {
+    use arrow_array::types::{Int8Type, Int16Type, Int32Type, Int64Type};
+    let c = x.column(i)?;
+    Ok(match c.data_type() {
+        DataType::Int8 => c.as_primitive::<Int8Type>().unary(i64::from),
+        DataType::Int16 => c.as_primitive::<Int16Type>().unary(i64::from),
+        DataType::Int32 => c.as_primitive::<Int32Type>().unary(i64::from),
+        DataType::Int64 => c.as_primitive::<Int64Type>().clone(),
+        t => {
+            return Err(internal(format!("a from_unixtime argument of type {t}")));
+        }
+    })
 }
 
 /// Binds the datetime function `name`.
@@ -656,6 +864,385 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     )
                 },
             )
+        }
+        ("date_format", [t, s]) if is_string(s) && is_date_or_timestamp_or_string(t) => {
+            let pat = match pattern_arg(args, 1, Purpose::Format) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            let mode = cast_mode(opts, false);
+            Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+                // Dates, timestamps and strings all format as the instant
+                // the session zone gives them (Spark's implicit cast to
+                // `TIMESTAMP`); a NULL literal pattern is NULL for every
+                // row.
+                let instants = cast_to_instants(x, &o, mode)?;
+                let zone = session_zone(&o);
+                match &pat {
+                    PatternArg::Null => Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef),
+                    PatternArg::Literal(p) => {
+                        Ok(Arc::new(format_timestamps(p, &instants, zone)?) as ArrayRef)
+                    }
+                    PatternArg::Column => {
+                        let fmts = x.strings(1)?;
+                        let mut cache = PatternCache::new(Purpose::Format);
+                        let mut out = reserve::<Option<String>>(x.rows())?;
+                        for i in 0..x.rows() {
+                            if instants.is_null(i) || fmts.is_null(i) {
+                                out.push(None);
+                                continue;
+                            }
+                            let p = cache
+                                .get(fmts.value(i))
+                                .map_err(|e| krishiv_kernels::KernelError::with_row(Some(i), e))?;
+                            out.push(Some(p.format_timestamp(instants.value(i), zone).map_err(
+                                |e| krishiv_kernels::KernelError::with_row(Some(i), e),
+                            )?));
+                        }
+                        Ok(
+                            Arc::new(StringArray::from_iter(out.iter().map(|s| s.as_deref())))
+                                as ArrayRef,
+                        )
+                    }
+                }
+            })
+        }
+        ("to_date" | "try_to_date", [t]) if is_date_or_timestamp_or_string(t) => {
+            let is_try = listed == "try_to_date";
+            let mode = cast_mode(opts, is_try);
+            // One argument is Spark's `CAST`: the default grammar in the
+            // session zone.
+            Binding::new(DataType::Date32, move |x: &Inputs<'_>| {
+                cast_one_arg(x, &DataType::Date32, &o, mode)
+            })
+        }
+        ("to_date" | "try_to_date", [t, s])
+            if is_string(s) && is_date_or_timestamp_or_string(t) =>
+        {
+            let is_try = listed == "try_to_date";
+            let first = t.clone();
+            if !is_string(&first) {
+                // Dates and timestamps ignore the pattern (Spark never
+                // evaluates it for them); a NULL pattern is still NULL.
+                let mode = cast_mode(opts, is_try);
+                return Some((
+                    listed,
+                    Ok(Binding::new(DataType::Date32, move |x: &Inputs<'_>| {
+                        let out = cast_one_arg(x, &DataType::Date32, &o, mode)?;
+                        let mut dates = out
+                            .as_primitive_opt::<Date32Type>()
+                            .cloned()
+                            .ok_or_else(|| internal("a date cast to another carrier".to_owned()))?;
+                        apply_fmt_nulls(&mut dates, &x.strings(1)?);
+                        Ok(Arc::new(dates) as ArrayRef)
+                    })),
+                ));
+            }
+            let pat = match pattern_arg(args, 1, Purpose::Parse) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            let policy = parse_policy(opts, is_try, "try_to_date");
+            Binding::new(DataType::Date32, move |x: &Inputs<'_>| {
+                let strings = x.strings(0)?;
+                match &pat {
+                    PatternArg::Null => Ok(Arc::new(Date32Array::new_null(x.rows())) as ArrayRef),
+                    PatternArg::Literal(p) => Ok(Arc::new(parse_dates(
+                        p,
+                        &strings,
+                        o.time_zone.as_ref(),
+                        policy,
+                        "to_date",
+                    )?) as ArrayRef),
+                    PatternArg::Column => {
+                        let fmts = x.strings(1)?;
+                        parse_dates_column(&strings, &fmts, &o, policy, "to_date")
+                    }
+                }
+            })
+        }
+        ("to_timestamp" | "try_to_timestamp" | "to_timestamp_ltz", [t]) => {
+            let is_try = listed == "try_to_timestamp";
+            let mode = cast_mode(opts, is_try);
+            if is_numeric_arrow(t) {
+                // Integrals are seconds since the epoch, as Spark's
+                // `longToTimestamp` reads them.
+                return Some((
+                    listed,
+                    Ok(Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                        let out = seconds_to_timestamps(&x.plain_column(0)?, "to_timestamp")?
+                            .with_timezone("UTC");
+                        Ok(Arc::new(out) as ArrayRef)
+                    })),
+                ));
+            }
+            if !is_date_or_timestamp_or_string(t) {
+                return Some((listed, Err(bad_types(listed, args))));
+            }
+            Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                cast_one_arg(x, &timestamp(), &o, mode)
+            })
+        }
+        ("to_timestamp" | "try_to_timestamp" | "to_timestamp_ltz", [_, s]) if is_string(s) => {
+            let is_try = listed == "try_to_timestamp";
+            let first = args[0].data_type();
+            if !is_string(&first) {
+                // Dates and timestamps ignore the pattern; a NULL pattern
+                // is still NULL.
+                if is_numeric_arrow(&first) {
+                    // A numeric with a pattern is Spark's unresolved
+                    // `gettimestamp` replacement: an internal error for
+                    // every non-NULL row, NULL rows stay NULL.
+                    let message = format!(
+                        "Cannot resolve the runtime replaceable expression \"{listed}({}, {})\". The replacement is unresolved: \"gettimestamp({}, {})\".",
+                        bind_arg_text(&args[0]),
+                        bind_arg_text(&args[1]),
+                        bind_arg_text(&args[0]),
+                        bind_arg_text(&args[1]),
+                    );
+                    return Some((
+                        listed,
+                        Ok(Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                            let (values, fmts) = (x.plain_column(0)?, x.strings(1)?);
+                            let evaluable =
+                                (0..x.rows()).any(|i| !values.is_null(i) && !fmts.is_null(i));
+                            if evaluable {
+                                return Err(internal(message.clone()));
+                            }
+                            Ok(Arc::new(null_instants(x.rows())) as ArrayRef)
+                        })),
+                    ));
+                }
+                if !is_date_or_timestamp(&first) {
+                    return Some((listed, Err(bad_types(listed, args))));
+                }
+                let mode = cast_mode(opts, is_try);
+                return Some((
+                    listed,
+                    Ok(Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                        let out = cast_one_arg(x, &timestamp(), &o, mode)?;
+                        let stamps = out
+                            .as_primitive_opt::<TimestampMicrosecondType>()
+                            .cloned()
+                            .ok_or_else(|| {
+                                internal("a timestamp cast to another carrier".to_owned())
+                            })?;
+                        let mut out = stamps;
+                        apply_fmt_nulls(&mut out, &x.strings(1)?);
+                        Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
+                    })),
+                ));
+            }
+            let pat = match pattern_arg(args, 1, Purpose::Parse) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            let policy = parse_policy(opts, is_try, "try_to_timestamp");
+            Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                let strings = x.strings(0)?;
+                let out: ArrayRef = match &pat {
+                    PatternArg::Null => Arc::new(null_instants(x.rows())),
+                    PatternArg::Literal(p) => Arc::new(
+                        parse_timestamps(
+                            p,
+                            &strings,
+                            o.time_zone.as_ref(),
+                            policy,
+                            "to_timestamp",
+                        )?
+                        .with_timezone("UTC"),
+                    ),
+                    PatternArg::Column => Arc::new(
+                        parse_timestamps_column(
+                            &strings,
+                            &x.strings(1)?,
+                            &o,
+                            policy,
+                            "to_timestamp",
+                        )?
+                        .with_timezone("UTC"),
+                    ),
+                };
+                Ok(out)
+            })
+        }
+        ("to_timestamp_ntz", [t]) if is_date_or_timestamp_or_string(t) => {
+            let is_try = false;
+            let mode = cast_mode(opts, is_try);
+            Binding::new(ntz_type(), move |x: &Inputs<'_>| {
+                cast_one_arg(x, &ntz_type(), &o, mode)
+            })
+        }
+        ("to_timestamp_ntz", [t, s]) if is_string(s) && is_date_or_timestamp_or_string(t) => {
+            let first = t.clone();
+            if !is_string(&first) {
+                let mode = cast_mode(opts, false);
+                return Some((
+                    listed,
+                    Ok(Binding::new(ntz_type(), move |x: &Inputs<'_>| {
+                        let out = cast_one_arg(x, &ntz_type(), &o, mode)?;
+                        let stamps = out
+                            .as_primitive_opt::<TimestampMicrosecondType>()
+                            .cloned()
+                            .ok_or_else(|| {
+                                internal("a timestamp cast to another carrier".to_owned())
+                            })?;
+                        let mut out = stamps;
+                        apply_fmt_nulls(&mut out, &x.strings(1)?);
+                        Ok(Arc::new(out) as ArrayRef)
+                    })),
+                ));
+            }
+            let pat = match pattern_arg(args, 1, Purpose::Parse) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            let policy = parse_policy(opts, false, "try_to_timestamp");
+            Binding::new(ntz_type(), move |x: &Inputs<'_>| {
+                let strings = x.strings(0)?;
+                match &pat {
+                    PatternArg::Null => Ok(Arc::new(null_wall_clocks(x.rows())) as ArrayRef),
+                    PatternArg::Literal(p) => {
+                        Ok(
+                            Arc::new(parse_ntz(p, &strings, policy, "to_timestamp_ntz")?)
+                                as ArrayRef,
+                        )
+                    }
+                    PatternArg::Column => {
+                        parse_ntz_column(&strings, &x.strings(1)?, policy, "to_timestamp_ntz")
+                    }
+                }
+            })
+        }
+        ("unix_timestamp", []) => {
+            let now = opts.query_start_micros;
+            Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+                Ok(Arc::new(Int64Array::from(vec![now / 1_000_000; x.rows()])) as ArrayRef)
+            })
+        }
+        ("unix_timestamp" | "to_unix_timestamp", [t] | [t, _])
+            if is_date_or_timestamp_or_string(t) =>
+        {
+            let has_fmt = types.len() == 2;
+            let first = t.clone();
+            // Dates and timestamps ignore the pattern; strings without one
+            // use `yyyy-MM-dd HH:mm:ss`.
+            let pat = if !is_string(&first) {
+                PatternArg::Null
+            } else if has_fmt {
+                match pattern_arg(args, 1, Purpose::Parse) {
+                    Ok(p) => p,
+                    Err(e) => return Some((listed, Err(e))),
+                }
+            } else {
+                match default_pattern(Purpose::Parse) {
+                    Ok(p) => p,
+                    Err(e) => return Some((listed, Err(e))),
+                }
+            };
+            let policy = parse_policy(opts, false, "try_to_timestamp");
+            Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+                let stamps = if is_string(&first) {
+                    let strings = x.strings(0)?;
+                    match &pat {
+                        PatternArg::Literal(p) => parse_timestamps(
+                            p,
+                            &strings,
+                            o.time_zone.as_ref(),
+                            policy,
+                            "unix_timestamp",
+                        )?,
+                        PatternArg::Column => parse_timestamps_column(
+                            &strings,
+                            &x.strings(1)?,
+                            &o,
+                            policy,
+                            "unix_timestamp",
+                        )?,
+                        // A NULL literal pattern is NULL for every row.
+                        PatternArg::Null => TimestampMicrosecondArray::new_null(x.rows()),
+                    }
+                } else {
+                    // The instant the session zone gives the value (Spark's
+                    // replacement), with a NULL pattern still NULL.
+                    let out = cast_one_arg(x, &timestamp(), &o, cast_mode(&o, false))?;
+                    let stamps = out
+                        .as_primitive_opt::<TimestampMicrosecondType>()
+                        .cloned()
+                        .ok_or_else(|| {
+                            internal("a timestamp cast to another carrier".to_owned())
+                        })?;
+                    let mut out = stamps.with_timezone("UTC");
+                    if has_fmt {
+                        apply_fmt_nulls(&mut out, &x.strings(1)?);
+                    }
+                    out
+                };
+                // Seconds, truncated toward zero as Java divides them.
+                let seconds = stamps.unary::<_, Int64Type>(|m| m / 1_000_000);
+                Ok(Arc::new(seconds) as ArrayRef)
+            })
+        }
+        ("from_unixtime", [n] | [n, _]) if is_longish(n) => {
+            let has_fmt = types.len() == 2;
+            let pat = if has_fmt {
+                match pattern_arg(args, 1, Purpose::Format) {
+                    Ok(p) => p,
+                    Err(e) => return Some((listed, Err(e))),
+                }
+            } else {
+                match default_pattern(Purpose::Format) {
+                    Ok(p) => p,
+                    Err(e) => return Some((listed, Err(e))),
+                }
+            };
+            Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+                let secs = longs_column(x, 0)?;
+                // Seconds to micros, wrapping as Java's `long` multiply
+                // does; the wall clock then renders in the session zone.
+                let stamps: TimestampMicrosecondArray = secs
+                    .iter()
+                    .map(|s| s.map(|v| v.wrapping_mul(1_000_000)))
+                    .collect();
+                let zone = session_zone(&o);
+                match &pat {
+                    // A NULL literal pattern is NULL for every row.
+                    PatternArg::Null => Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef),
+                    PatternArg::Literal(p) => {
+                        Ok(Arc::new(format_timestamps(p, &stamps, zone)?) as ArrayRef)
+                    }
+                    PatternArg::Column => {
+                        let fmts = x.strings(1)?;
+                        let mut cache = PatternCache::new(Purpose::Format);
+                        let mut out = reserve::<Option<String>>(x.rows())?;
+                        for i in 0..x.rows() {
+                            if stamps.is_null(i) || fmts.is_null(i) {
+                                out.push(None);
+                                continue;
+                            }
+                            let p = cache
+                                .get(fmts.value(i))
+                                .map_err(|e| krishiv_kernels::KernelError::with_row(Some(i), e))?;
+                            out.push(Some(p.format_timestamp(stamps.value(i), zone).map_err(
+                                |e| krishiv_kernels::KernelError::with_row(Some(i), e),
+                            )?));
+                        }
+                        Ok(
+                            Arc::new(StringArray::from_iter(out.iter().map(|s| s.as_deref())))
+                                as ArrayRef,
+                        )
+                    }
+                }
+            })
+        }
+        ("current_timezone", []) => {
+            let name = Arc::clone(&opts.time_zone_name);
+            Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+                Ok(Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+                    name.as_ref(),
+                    x.rows(),
+                ))) as ArrayRef)
+            })
         }
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };

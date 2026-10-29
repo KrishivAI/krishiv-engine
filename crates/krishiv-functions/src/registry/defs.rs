@@ -462,6 +462,207 @@ fn timestamp_ntz_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::TimestampNtz, c)
 }
 
+/// Whether `t` is a numeric type (Spark's `NumericType`).
+fn is_numeric_type(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Byte
+            | DataType::Short
+            | DataType::Integer
+            | DataType::Long
+            | DataType::Float
+            | DataType::Double
+            | DataType::Decimal(_)
+    )
+}
+
+/// A date, timestamp or string (what `to_date` and `to_timestamp_ntz`
+/// read): anything else takes the first member it may be cast to, as
+/// Spark's `TypeCollection` does (a number becomes a string).
+fn date_like() -> InputType {
+    InputType::OneOf(vec![
+        DataType::String,
+        DataType::Date,
+        DataType::Timestamp,
+        DataType::TimestampNtz,
+    ])
+}
+
+/// A date, timestamp or string, and nothing else (Spark's
+/// `ExpectsInputTypes` over the collection: `date_format`,
+/// `unix_timestamp` and `from_unixtime`'s pattern take no numbers).
+fn strict_date_like() -> InputType {
+    InputType::StrictOneOf(vec![
+        DataType::String,
+        DataType::Date,
+        DataType::Timestamp,
+        DataType::TimestampNtz,
+    ])
+}
+
+/// `to_date`/`try_to_date` (and `to_timestamp_ntz`): one or two arguments;
+/// the pattern is a string.
+fn to_date_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let mut out = vec![date_like()];
+    if c.args().len() > 1 {
+        out.push(exact(DataType::String));
+    }
+    out
+}
+
+/// `to_timestamp`/`try_to_timestamp`/`to_timestamp_ltz`: a numeric stays
+/// numeric (Spark's `NumericType` member: integrals are seconds since the
+/// epoch); anything else takes the string/date/timestamp collection.
+fn to_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let first = match c.data_type(0) {
+        Some(t) if is_numeric_type(t) => InputType::Numeric { intervals: false },
+        _ => date_like(),
+    };
+    let mut out = vec![first];
+    if c.args().len() > 1 {
+        out.push(exact(DataType::String));
+    }
+    out
+}
+
+/// `unix_timestamp`/`to_unix_timestamp`: no arguments (now), or a
+/// date-like value with an optional pattern. Neither takes a number
+/// (Spark analyses `to_unix_timestamp(1, fmt)` as
+/// `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`); the pattern is exactly a
+/// string.
+fn unix_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let mut out = Vec::new();
+    if !c.args().is_empty() {
+        out.push(strict_date_like());
+    }
+    if c.args().len() > 1 {
+        out.push(InputType::Strict(DataType::String));
+    }
+    out
+}
+
+/// `from_unixtime(seconds[, fmt])`: seconds widen to `BIGINT`.
+fn from_unixtime_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let mut out = vec![exact(DataType::Long)];
+    if c.args().len() > 1 {
+        out.push(exact(DataType::String));
+    }
+    out
+}
+
+/// Whether Spark's one-argument `to_*` replacement (`CAST`) may yield
+/// NULL from a non-NULL value of `from` cast to `to`: strings (booleans
+/// and binaries reach it as strings) and floating-point values may, as
+/// `Cast.forceNullable` says (mirrored from the analyzer's coercion; the
+/// function matrix pins it against Spark 4.2 runs).
+fn temporal_cast_nullable(from: &DataType, to: &DataType) -> bool {
+    if from == to {
+        return false;
+    }
+    match from {
+        DataType::String
+        | DataType::Boolean
+        | DataType::Binary
+        | DataType::Float
+        | DataType::Double => true,
+        DataType::Date => !matches!(to, DataType::Timestamp),
+        DataType::TimestampNtz => matches!(to, DataType::Date),
+        _ => false,
+    }
+}
+
+/// The nullability of a one-argument `to_*` call over `from`: the
+/// argument's, or Spark's `CAST` replacement wherever it may yield NULL.
+fn one_arg_temporal_nullable(c: &CallTypes<'_>, to: &DataType) -> bool {
+    c.any_nullable()
+        || match c.data_type(0) {
+            // Booleans and binaries reach the cast as strings.
+            Some(DataType::Boolean | DataType::Binary) => {
+                temporal_cast_nullable(&DataType::String, to)
+            }
+            Some(from) => temporal_cast_nullable(from, to),
+            // An untyped `NULL` is NULL.
+            None => true,
+        }
+}
+
+/// `to_date`: one argument is Spark's `CAST` (nullable where the cast may
+/// yield NULL); two are `failOnError`-nullable.
+fn to_date_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let nullable = if c.args().len() > 1 {
+        !c.ansi() || c.any_nullable()
+    } else {
+        one_arg_temporal_nullable(c, &DataType::Date)
+    };
+    Ok(ArgType::new(DataType::Date, nullable))
+}
+
+/// `try_to_date`: one argument is Spark's `TRY_CAST`; two are always
+/// nullable.
+fn try_to_date_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let nullable = if c.args().len() > 1 {
+        true
+    } else {
+        one_arg_temporal_nullable(c, &DataType::Date)
+    };
+    Ok(ArgType::new(DataType::Date, nullable))
+}
+
+/// `to_timestamp`/`to_timestamp_ltz`, as [`to_date_result`].
+fn to_timestamp_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let nullable = if c.args().len() > 1 {
+        !c.ansi() || c.any_nullable()
+    } else {
+        one_arg_temporal_nullable(c, &DataType::Timestamp)
+    };
+    Ok(ArgType::new(DataType::Timestamp, nullable))
+}
+
+/// `try_to_timestamp`, as [`try_to_date_result`].
+fn try_to_timestamp_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let nullable = if c.args().len() > 1 {
+        true
+    } else {
+        one_arg_temporal_nullable(c, &DataType::Timestamp)
+    };
+    Ok(ArgType::new(DataType::Timestamp, nullable))
+}
+
+/// `to_timestamp_ntz`, as [`to_date_result`].
+fn to_timestamp_ntz_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let nullable = if c.args().len() > 1 {
+        !c.ansi() || c.any_nullable()
+    } else {
+        one_arg_temporal_nullable(c, &DataType::TimestampNtz)
+    };
+    Ok(ArgType::new(DataType::TimestampNtz, nullable))
+}
+
+/// `unix_timestamp`/`to_unix_timestamp`: NULL with ANSI off whatever the
+/// arguments, else NULL when an argument may be (Spark's `ToTimestamp`
+/// nullability, which `UnixTime` inherits).
+fn unix_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, !c.ansi() || c.any_nullable()))
+}
+
+/// `date_format`: NULL when an argument may be, or when the value's
+/// implicit cast to `TIMESTAMP` may yield NULL.
+fn date_format_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let nullable = c.any_nullable()
+        || match c.data_type(0) {
+            Some(DataType::Boolean | DataType::Binary) => {
+                temporal_cast_nullable(&DataType::String, &DataType::Timestamp)
+            }
+            Some(from) => temporal_cast_nullable(from, &DataType::Timestamp),
+            None => true,
+        };
+    Ok(ArgType::new(DataType::String, nullable))
+}
+
+fn current_timezone_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::String, false))
+}
+
 fn datetime() -> Vec<Spec> {
     let days = InputType::OneOf(vec![DataType::Integer, DataType::Short, DataType::Byte]);
     let day_inputs = Inputs::Expects(vec![exact(DataType::Date), days]);
@@ -545,6 +746,51 @@ fn datetime() -> Vec<Spec> {
         &["extract", "date_part"],
         &Inputs::Built(InputBuilder(extract_inputs)),
         extract_result,
+    ));
+    out.extend(scalar(
+        &["date_format"],
+        &Inputs::Expects(vec![strict_date_like(), exact(DataType::String)]),
+        date_format_result,
+    ));
+    out.extend(scalar(
+        &["to_date"],
+        &Inputs::Built(InputBuilder(to_date_inputs)),
+        to_date_result,
+    ));
+    out.extend(scalar(
+        &["try_to_date"],
+        &Inputs::Built(InputBuilder(to_date_inputs)),
+        try_to_date_result,
+    ));
+    out.extend(scalar(
+        &["to_timestamp", "to_timestamp_ltz"],
+        &Inputs::Built(InputBuilder(to_timestamp_inputs)),
+        to_timestamp_result,
+    ));
+    out.extend(scalar(
+        &["try_to_timestamp"],
+        &Inputs::Built(InputBuilder(to_timestamp_inputs)),
+        try_to_timestamp_result,
+    ));
+    out.extend(scalar(
+        &["to_timestamp_ntz"],
+        &Inputs::Built(InputBuilder(to_date_inputs)),
+        to_timestamp_ntz_result,
+    ));
+    out.extend(scalar(
+        &["unix_timestamp", "to_unix_timestamp"],
+        &Inputs::Built(InputBuilder(unix_inputs)),
+        unix_result,
+    ));
+    out.extend(scalar(
+        &["from_unixtime"],
+        &Inputs::Built(InputBuilder(from_unixtime_inputs)),
+        always_null,
+    ));
+    out.extend(scalar(
+        &["current_timezone"],
+        &Inputs::Any,
+        current_timezone_result,
     ));
     out.extend(scalar(
         &["current_date", "curdate"],
