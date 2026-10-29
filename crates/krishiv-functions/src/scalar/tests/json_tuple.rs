@@ -199,7 +199,7 @@ fn invalid_json_anywhere_yields_all_nulls() {
         "{'a': 1}",
         "{\"a\": 1} trailing",
         "{\"a\": 1} {\"b\": 2}",
-        "{\"a\": tru}",
+        "{\"a\": trux}",
         "{\"a\": 01}",
         "{\"a\": +1}",
         "{\"a\": .5}",
