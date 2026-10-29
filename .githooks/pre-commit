@@ -4,29 +4,48 @@
 # Enable once per clone:  git config core.hooksPath .githooks
 # Docs-only commits (no staged *.rs / Cargo.* / deny.toml / rust-toolchain.toml)
 # skip clippy and deny automatically; SKIP_CLIPPY=1 forces the skip.
+# Each step prints one line on success and its full output only on failure;
+# PRECOMMIT_VERBOSE=1 streams everything.
 set -eu
 
 staged=$(git diff --cached --name-only --diff-filter=ACMRD)
 rust_changed=$(printf '%s\n' "$staged" | command grep -E '(\.rs$|(^|/)Cargo\.(toml|lock)$|^deny\.toml$|^rust-toolchain\.toml$|^\.cargo/)' || true)
 
-echo "pre-commit: large-file check"
-root=$(git rev-parse --show-toplevel)
-bash "$root/.github/scripts/check-large-files.sh" --staged
+# step LABEL COMMAND...: run COMMAND, keep its output unless it fails.
+step() {
+  label=$1
+  shift
+  if [ "${PRECOMMIT_VERBOSE:-0}" = "1" ]; then
+    echo "pre-commit: $label"
+    "$@"
+    return
+  fi
+  log=$(mktemp)
+  if "$@" >"$log" 2>&1; then
+    echo "pre-commit: $label: ok"
+    rm -f "$log"
+  else
+    cat "$log" >&2
+    rm -f "$log"
+    echo "pre-commit: $label: FAILED" >&2
+    exit 1
+  fi
+}
 
-echo "pre-commit: cargo fmt --check"
-cargo fmt --all -- --check
+root=$(git rev-parse --show-toplevel)
+step "large-file check" bash "$root/.github/scripts/check-large-files.sh" --staged
+step "cargo fmt --check" cargo fmt --all -- --check
 
 if [ -z "$rust_changed" ] || [ "${SKIP_CLIPPY:-0}" = "1" ]; then
   echo "pre-commit: no Rust/Cargo changes staged (or SKIP_CLIPPY=1); skipping clippy and deny"
   exit 0
 fi
 
-echo "pre-commit: cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets --locked -- -D warnings
+step "cargo clippy --workspace --all-targets -- -D warnings" \
+  cargo clippy --workspace --all-targets --locked -- -D warnings
 
 if command -v cargo-deny >/dev/null 2>&1; then
-  echo "pre-commit: cargo deny check"
-  cargo deny check
+  step "cargo deny check" cargo deny check
 else
   echo "pre-commit: cargo-deny not installed; skipping (CI still runs it)" >&2
 fi

@@ -1,0 +1,26 @@
+{
+  "entries": [
+    {
+      "id": "transform_keys#8fc12c322c6b/ansi_off",
+      "reason": "SELECT transform_keys(map('a', 1), (k, v) -> k + 1) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "transform_keys#9874c52f44d8/ansi_on",
+      "reason": "SELECT transform_keys(INTERVAL '1 02:03:04' DAY TO SECOND, (k, v) -> k + 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "transform_keys#9874c52f44d8/ansi_off",
+      "reason": "SELECT transform_keys(INTERVAL '1 02:03:04' DAY TO SECOND, (k, v) -> k + 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "transform_keys#addb5c55e3b2/ansi_on",
+      "reason": "SELECT transform_keys(INTERVAL '1-2' YEAR TO MONTH, (k, v) -> k + 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "transform_keys#addb5c55e3b2/ansi_off",
+      "reason": "SELECT transform_keys(INTERVAL '1-2' YEAR TO MONTH, (k, v) -> k + 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "transform_keys"
+}

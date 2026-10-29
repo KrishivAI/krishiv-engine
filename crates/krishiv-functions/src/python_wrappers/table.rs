@@ -7,6 +7,10 @@
 
 use super::Row;
 
+/// The reason the lambda functions have no wrapper: the Python `Column`
+/// API cannot build lambdas yet.
+const NO_LAMBDA: &str = "takes a lambda; the Python `Column` API cannot build lambdas yet";
+
 /// Registry names that need no wrapper, with the reason.
 pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("&", "operator: `Column.bitwiseAND`"),
@@ -101,21 +105,20 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "pow",
         "an alias of `power`; the exported `pow` is a row that sends `power`",
     ),
+    ("transform", NO_LAMBDA),
+    ("filter", NO_LAMBDA),
+    ("exists", NO_LAMBDA),
+    ("forall", NO_LAMBDA),
+    ("aggregate", NO_LAMBDA),
+    ("reduce", NO_LAMBDA),
+    ("zip_with", NO_LAMBDA),
+    ("map_filter", NO_LAMBDA),
+    ("map_zip_with", NO_LAMBDA),
+    ("transform_keys", NO_LAMBDA),
+    ("transform_values", NO_LAMBDA),
     (
-        "transform",
-        "takes a lambda; the Python `Column` API cannot build lambdas yet",
-    ),
-    (
-        "filter",
-        "takes a lambda; the Python `Column` API cannot build lambdas yet",
-    ),
-    (
-        "exists",
-        "takes a lambda; the Python `Column` API cannot build lambdas yet",
-    ),
-    (
-        "forall",
-        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+        "array_sort",
+        "takes an optional lambda; the Python `Column` API cannot build lambdas yet",
     ),
 ];
 
@@ -439,6 +442,11 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "regexp_extract",
             "str: ColumnOrName, pattern: str, idx: int",
+        ),
+        Row::new("size", "col: ColumnOrName"),
+        Row::new(
+            "split",
+            "str: ColumnOrName, pattern: str | Column, limit: int | Column = -1",
         ),
         Row::new(
             "regexp_instr",
