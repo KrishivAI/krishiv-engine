@@ -42,8 +42,8 @@ from .errors import describe_error
 from .paths import data_root
 
 DEFAULT_SEED_ROWS = 2000
-DEFAULT_MAX_RUNS = 1500
-DEFAULT_MAX_SECONDS = 1200.0
+DEFAULT_MAX_RUNS = 3000
+DEFAULT_MAX_SECONDS = 1500.0
 DEFAULT_RUN_TIMEOUT = 30.0  # seconds per engine run of one candidate
 TIMEOUT_FACTOR = 5.0  # a candidate may run this many times as long as the slice's reproducing run
 TIMEOUT_FLOOR = 3.0
