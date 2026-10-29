@@ -107,6 +107,18 @@ def main(argv=None) -> None:
     ab.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
     ab.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
     ab.add_argument("--runner", help=RUNNER_HELP)
+    ed = sub.add_parser(
+        "explain-diff",
+        help="Krishiv's executed plan beside DuckDB's EXPLAIN ANALYZE: join order, unpushed filters, row blow-ups",
+    )
+    ed.add_argument("--suite", default="tpcds", choices=["tpch", "tpcds", "clickbench"])
+    ed.add_argument("--sf", type=float, default=10)
+    ed.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
+    ed.add_argument("--queries", required=True, help="comma list, e.g. q22,q39")
+    ed.add_argument("--threads", type=int, default=8, help="threads for both engines")
+    ed.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
+    ed.add_argument("--out", default=None, help="report directory (default $KRISHIV_DATA/results/explain-diff)")
+    ed.add_argument("--runner", help=RUNNER_HELP)
     xb = sub.add_parser(
         "ab",
         help="build-vs-build A/B: two runner binaries, or one binary with two --conf sets, interleaved ABBA",
@@ -197,6 +209,19 @@ def main(argv=None) -> None:
             a.timeout,
             a.suite,
             a.runner,
+        )
+    elif a.cmd == "explain-diff":
+        from .explain_diff import run_explain_diff
+
+        run_explain_diff(
+            a.suite,
+            a.sf,
+            a.queries.split(","),
+            a.dataset or ABBA_DATASET[a.suite],
+            a.threads,
+            a.memory_limit,
+            a.runner,
+            Path(a.out) if a.out else None,
         )
     elif a.cmd == "ab":
         from .ab import parse_conf, run_ab

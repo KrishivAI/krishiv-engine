@@ -148,6 +148,29 @@ Reported: median per engine, ratio of medians with a bootstrap 95% CI, the geome
 `/proc/loadavg` is recorded around every query; a run whose maximum exceeds 4 is marked indicative. The run holds
 `$KRISHIV_DATA/.bench.lock` (`flock`). Output: `$KRISHIV_DATA/results/<ts>_abba_tpch_sf<N>.json` plus the Markdown table on stdout.
 
+## Plan comparison (`explain-diff`)
+
+```bash
+uv run krishiv-bench explain-diff --suite tpcds --sf 10 --queries q22,q39 --threads 12 --memory-limit 24g
+```
+
+Runs each query once on Krishiv (the runner's `PLAN` command: the `krishiv.query-profile` v1 document, actual rows and
+operator time per plan node) and once under DuckDB's `EXPLAIN (ANALYZE, FORMAT json)`, under the bench lock, and writes
+`$KRISHIV_DATA/results/explain-diff/<ts>_<suite>_sf<N>_<queries>.md` (plus the raw profiles as `.json`). Per query it
+lists flags, a join table, a scan table, the operators with the most time and both plan trees. The flags are:
+
+* **join order**: joins are named by the base tables under them; an intermediate only one engine forms is a different
+  join order; matched joins with very different rows applied different predicates; a much larger build side than
+  DuckDB's is a build-side choice to look at;
+* **scan**: a scan returning many more rows than DuckDB's scan of the same table (with or without a Filter above it)
+  did not get a filter or runtime filter into the scan; a table scanned more often than DuckDB scans it;
+* **row blow-up**: the operator where Krishiv's rows grow far beyond DuckDB's largest intermediate (an `Expand`, an
+  exploding join);
+* **repeated subtree**: the same subplan computed more than once (a CTE or subquery not reused).
+
+Operator seconds are summed over threads in both engines; the Krishiv run has detailed metrics on, so use `abba` for
+timings. DuckDB's estimated cardinalities appear in its tree; Krishiv's profile has no per-operator estimates yet.
+
 ## Build vs build, interleaved ABBA (`ab`)
 Compares two Krishiv builds (for example `main` against a PR branch), or two configs of one build, with the `abba` protocol.
 `--runner PATH` (on `run`, `abba`, `reproduce`) picks the runner binary and wins over `$KRISHIV_BENCH_RUNNER`.
