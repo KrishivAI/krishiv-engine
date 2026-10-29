@@ -14,7 +14,8 @@
 //! `(fan-in member, ordinal)`. The driver holding the smallest such key
 //! sends straight to the channel; the others hold their batches back, in
 //! memory reserved through their consumer (taken, never awaited) and at
-//! most [`ORDER_BATCHES`] each, and wait once over either limit. When the
+//! most [`ORDER_BATCHES`] each, and wait once over either limit (memory
+//! is the one that binds). When the
 //! smallest key moves on (a driver reports a new morsel, or ends), the
 //! batches it passed are sent in key order. The driver with the smallest
 //! key is never held back, so the order cannot deadlock.
@@ -150,7 +151,11 @@ impl Channel {
 }
 
 /// Most batches one driver holds back waiting for its turn (module docs).
-pub(crate) const ORDER_BATCHES: usize = 64;
+/// The memory they reserve is the bound that matters: a driver ahead of
+/// the order runs ahead while its pool has room (a small cap serialised
+/// the drivers of a large scan, whose morsels are thousands of batches),
+/// and waits once it does not.
+pub(crate) const ORDER_BATCHES: usize = 4096;
 
 /// A held-back batch: the driver holding it, the batch and the bytes it
 /// reserved.
