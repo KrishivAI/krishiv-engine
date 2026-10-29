@@ -157,8 +157,39 @@ def main(argv=None) -> None:
     rp.add_argument("--rows", default="10m", help="memcap: sales rows of the results to report")
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
+    mn = sub.add_parser(
+        "minimize", help="shrink a query that differs from the reference engine to a minimal query and data slice"
+    )
+    mn.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    mn.add_argument("--query", required=True, help="query id, e.g. q07")
+    mn.add_argument("--sf", type=float, default=1)
+    mn.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
+    mn.add_argument("--reference", default="duckdb", choices=["duckdb", "spark-connect"])
+    mn.add_argument("--spark-remote", default="sc://127.0.0.1:15012", help="Spark Connect server (the oracle)")
+    mn.add_argument("--seed-rows", type=int, default=2000, help="rows per table in the first slice")
+    mn.add_argument("--max-runs", type=int, default=400, help="engine comparisons before the shrink stops")
+    mn.add_argument("--full-data", action="store_true", help="shrink the query only, on the full data")
+    mn.add_argument("--out", help="case directory (default $KRISHIV_DATA/minimized/<suite>_<query>)")
+    mn.add_argument("--runner", help=RUNNER_HELP)
     a = ap.parse_args(argv)
     _set_runner(getattr(a, "runner", None))
+    if a.cmd == "minimize":
+        from .minimize import run_minimize
+
+        run_minimize(
+            a.suite,
+            a.query,
+            a.sf,
+            a.dataset,
+            a.reference,
+            a.runner,
+            a.seed_rows,
+            a.max_runs,
+            a.full_data,
+            a.out,
+            spark_remote=a.spark_remote,
+        )
+        return
     if a.cmd in ("reproduce", "ab") and h2o.is_h2o(a.suite):
         _, a.dataset, a.sf = h2o_target(ap, a)
     if a.cmd == "reproduce" and a.suite == "memcap":
