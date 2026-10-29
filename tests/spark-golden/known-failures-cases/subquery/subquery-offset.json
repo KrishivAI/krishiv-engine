@@ -15,14 +15,8 @@
       19
     ],
     "sql-commands": [
-      0,
-      1,
-      2,
       3,
-      4,
-      5,
-      20,
-      21
+      5
     ]
   },
   "file": "subquery/subquery-offset",

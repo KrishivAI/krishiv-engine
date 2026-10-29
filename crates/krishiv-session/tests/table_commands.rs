@@ -300,3 +300,225 @@ fn a_session_without_a_warehouse_uses_its_own_directory() {
     assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM t"), ["3"]);
     let _ = ErrorClass::DivideByZero;
 }
+
+#[test]
+fn a_failed_create_leaves_no_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    // The warehouse is below a regular file, so the table directory cannot be created.
+    let blocker = dir.path().join("file");
+    std::fs::write(&blocker, "x").unwrap();
+    let s = session(&blocker.join("wh"));
+    assert_eq!(class(&s, "CREATE TABLE t (a INT)"), "INTERNAL_ERROR");
+    assert_eq!(class(&s, "SELECT * FROM t"), "TABLE_OR_VIEW_NOT_FOUND");
+    // A table of the same name can be created once the warehouse is usable.
+    s.conf()
+        .set(
+            "spark.sql.warehouse.dir",
+            dir.path().join("ok").to_str().unwrap(),
+        )
+        .unwrap();
+    run(&s, "CREATE TABLE t (a INT)");
+}
+
+#[test]
+fn a_failed_insert_writes_no_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT)");
+    // The cast overflows while the rows are written.
+    let e = err(&s, "INSERT INTO t SELECT CAST(2147483648 AS BIGINT)");
+    assert!(
+        matches!(
+            e.error_class().name(),
+            "CAST_OVERFLOW" | "CAST_OVERFLOW_IN_TABLE_INSERT"
+        ),
+        "{e}"
+    );
+    let files: Vec<_> = std::fs::read_dir(dir.path().join("t"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        files
+            .iter()
+            .all(|f| f.starts_with('_') || f.starts_with('.')),
+        "{files:?}"
+    );
+    assert_eq!(col0(&s, "SELECT CAST(count(*) AS STRING) FROM t"), ["0"]);
+}
+
+#[test]
+fn a_query_run_before_an_insert_still_sees_what_it_analysed_and_a_new_one_sees_the_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT)");
+    run(&s, "INSERT INTO t VALUES (1)");
+    let before = block_on(s.sql("SELECT CAST(count(*) AS STRING) FROM t")).unwrap();
+    run(&s, "INSERT INTO t VALUES (2)");
+    // A DataFrame is a plan: it lists the table's files when it runs, so it sees both rows.
+    let batches = block_on(before.collect()).unwrap();
+    let c = batches[0].column(0);
+    let text = match c.data_type() {
+        ArrowType::Utf8View => c.as_string_view().value(0).to_owned(),
+        _ => c.as_string::<i32>().value(0).to_owned(),
+    };
+    assert_eq!(text, "2");
+    run(&s, "DROP TABLE t");
+    run(&s, "CREATE TABLE t (a INT, b INT)");
+    assert_eq!(col0(&s, "SELECT CAST(count(*) AS STRING) FROM t"), ["0"]);
+}
+
+#[test]
+fn insert_overwrite_is_atomic_for_a_concurrent_reader() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT)");
+    run(&s, "INSERT INTO t VALUES (1), (2), (3)");
+    let reader = {
+        let s = s.clone();
+        std::thread::spawn(move || {
+            let mut seen = std::collections::BTreeSet::new();
+            for _ in 0..40 {
+                if let Ok(batches) = block_on(async {
+                    s.sql("SELECT CAST(count(*) AS STRING) FROM t")
+                        .await?
+                        .collect()
+                        .await
+                }) {
+                    let c = batches[0].column(0);
+                    let v = match c.data_type() {
+                        ArrowType::Utf8View => c.as_string_view().value(0).to_owned(),
+                        _ => c.as_string::<i32>().value(0).to_owned(),
+                    };
+                    seen.insert(v);
+                }
+            }
+            seen
+        })
+    };
+    for _ in 0..10 {
+        run(&s, "INSERT OVERWRITE t VALUES (7), (8), (9), (10), (11)");
+        run(&s, "INSERT OVERWRITE t VALUES (1), (2), (3)");
+    }
+    let seen = reader.join().unwrap();
+    // Old rows or new rows, never a mix (and never a table without its files).
+    assert!(
+        seen.is_subset(&["3".to_owned(), "5".to_owned()].into()),
+        "{seen:?}"
+    );
+    assert!(!seen.is_empty());
+}
+
+#[test]
+fn provider_names_and_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE p (a INT) USING PARQUET");
+    s.conf().set("spark.sql.sources.default", "csv").unwrap();
+    run(&s, "CREATE TABLE q (a INT)");
+    run(&s, "INSERT INTO q VALUES (4)");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM q"), ["4"]);
+    run(&s, "CREATE TABLE j (a INT) USING json");
+    assert_eq!(
+        class(&s, "INSERT INTO j VALUES (1)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE i (a INT) USING iceberg"),
+        "DATA_SOURCE_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE e (a INT) USING parquet LOCATION ''"),
+        "INVALID_EMPTY_LOCATION"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "CREATE TABLE b (a INT) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        class(&s, "CREATE TEMPORARY TABLE tt (a INT) USING parquet"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE nocols USING parquet"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}
+
+#[test]
+fn existing_locations_and_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    std::fs::create_dir(dir.path().join("taken")).unwrap();
+    assert_eq!(
+        class(&s, "CREATE TABLE taken (a INT)"),
+        "LOCATION_ALREADY_EXISTS"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE c.d.e.f (a INT)"),
+        "REQUIRES_SINGLE_PART_NAMESPACE"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE other_catalog.default.t (a INT)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    run(&s, "CREATE TABLE spark_catalog.default.q (a INT)");
+    run(&s, "INSERT INTO spark_catalog.default.q VALUES (1)");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM q"), ["1"]);
+    assert_eq!(
+        class(&s, "TRUNCATE TABLE q PARTITION (a = 1)"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    let loc = dir.path().join("ext2");
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE ex (a INT) USING parquet LOCATION '{}'",
+            loc.display()
+        ),
+    );
+    assert_eq!(
+        class(&s, "TRUNCATE TABLE ex"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}
+
+#[test]
+fn insert_column_lists_by_name_and_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT, b STRING)");
+    run(&s, "INSERT INTO t (b) VALUES ('only b')");
+    assert_eq!(
+        col0(&s, "SELECT concat_ws('|', CAST(a AS STRING), b) FROM t"),
+        ["only b"]
+    );
+    assert_eq!(
+        class(&s, "INSERT INTO t (a, b) VALUES (1)"),
+        "INSERT_COLUMN_ARITY_MISMATCH.NOT_ENOUGH_DATA_COLUMNS"
+    );
+    assert_eq!(
+        class(&s, "INSERT INTO t (a) VALUES (1, 2)"),
+        "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS"
+    );
+    assert_eq!(
+        class(&s, "INSERT INTO t BY NAME SELECT 1 AS zzz"),
+        "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS"
+    );
+    assert_eq!(
+        class(&s, "INSERT INTO t REPLACE WHERE a = 1 VALUES (1, 'x')"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "FROM (SELECT 1 AS a, 'x' AS b) s INSERT INTO t SELECT a, b INSERT INTO t SELECT a, b"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    // A string literal cannot be stored into an INT column under ANSI store assignment; a wider integer can.
+    run(&s, "INSERT INTO t VALUES (CAST(5 AS BIGINT), 7)");
+}
