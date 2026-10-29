@@ -380,6 +380,7 @@ def test_duckdb_null_order_matches_spark(tmp_path: Path, monkeypatch: pytest.Mon
     finally:
         duck.teardown()
     assert duck.config()["default_null_order"] == SPARK_NULL_ORDER
-    assert "default_null_order" not in DuckDBEngine(threads=1).config()
+    assert DuckDBEngine(threads=1).config()["default_null_order"] == SPARK_NULL_ORDER  # the default
+    assert "default_null_order" not in DuckDBEngine(threads=1, null_order=None).config()
     with pytest.raises(ValueError, match="null_order"):
         DuckDBEngine(null_order="sideways")

@@ -10,8 +10,10 @@
 //!   null order; DuckDB's is NULLS LAST), and a ratio over
 //!   `sum(sum(x)) OVER (PARTITION BY k)` groups the NULL key as one partition.
 //! * ClickBench q29: in a Spark SQL string literal `'\1'` is the one-character
-//!   string `1` and `'\.'` is `.`; the regex `.` does not match `\r` (Java's
-//!   line terminators) unless `(?s)` is set; `$1` is the group reference.
+//!   string `1` and `'\.'` is `.`; `$1` is the group reference. The regex
+//!   `.` stops at every Java line terminator (`\n`, `\r`, U+0085, U+2028,
+//!   U+2029), and `$` also matches before one final terminator (`\r\n`
+//!   counts as one), which the replacement keeps.
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -24,7 +26,8 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 
 /// `w(cls, item, price)`: two `arts` items (one sold twice), one `books` item
-/// and two items whose class is NULL. `u(s)`: URLs, one with a `\r`.
+/// and two items whose class is NULL. `u(s)`: URLs, some with Java line
+/// terminators (`\r`, `\n`, `\r\n`, U+0085, U+2028) inside or at the end.
 fn session() -> Session {
     let s = Session::new().unwrap();
     let schema = Arc::new(Schema::new(vec![
@@ -62,6 +65,13 @@ fn session() -> Session {
             "plain",
             "http://nopath.com",
             "http://cr.net/a\rb",
+            "http://a.com/b\n",
+            "http://a.com/b\nc",
+            "http://a.com/b\r\n",
+            "http://a.com/b\u{85}",
+            "http://a.com/b\u{85}c",
+            "http://a.com/b\u{2028}",
+            "http://a.com/b\u{2028}c",
         ]))],
     )
     .unwrap();
@@ -149,22 +159,36 @@ fn clickbench_q29_shape_backslash_one_is_the_literal_one() {
             &["plain", "plain"],
             &["http://nopath.com", "http://nopath.com"],
             &["http://cr.net/a\rb", "http://cr.net/a\rb"],
+            &["http://a.com/b\n", "1\n"],
+            &["http://a.com/b\nc", "http://a.com/b\nc"],
+            &["http://a.com/b\r\n", "1\r\n"],
+            &["http://a.com/b\u{85}", "1\u{85}"],
+            &["http://a.com/b\u{85}c", "http://a.com/b\u{85}c"],
+            &["http://a.com/b\u{2028}", "1\u{2028}"],
+            &["http://a.com/b\u{2028}c", "http://a.com/b\u{2028}c"],
         ],
     );
 }
 
 #[test]
-fn clickbench_q29_shape_dollar_group_with_dotall() {
+fn clickbench_q29_shape_dollar_group() {
     let s = session();
     expect(
         &s,
-        r"SELECT s, regexp_replace(s, '(?s)^https?://(?:www\\.)?([^/]+)/.*$', '$1') FROM u",
+        r"SELECT s, regexp_replace(s, '^https?://(?:www\\.)?([^/]+)/.*$', '$1') FROM u",
         &[
             &["https://www.example.com/a/b", "example.com"],
             &["http://wwwxfoo.org/x", "wwwxfoo.org"],
             &["plain", "plain"],
             &["http://nopath.com", "http://nopath.com"],
-            &["http://cr.net/a\rb", "cr.net"],
+            &["http://cr.net/a\rb", "http://cr.net/a\rb"],
+            &["http://a.com/b\n", "a.com\n"],
+            &["http://a.com/b\nc", "http://a.com/b\nc"],
+            &["http://a.com/b\r\n", "a.com\r\n"],
+            &["http://a.com/b\u{85}", "a.com\u{85}"],
+            &["http://a.com/b\u{85}c", "http://a.com/b\u{85}c"],
+            &["http://a.com/b\u{2028}", "a.com\u{2028}"],
+            &["http://a.com/b\u{2028}c", "http://a.com/b\u{2028}c"],
         ],
     );
 }

@@ -92,3 +92,22 @@ def test_implicit_alias_is_not_taken_from_expression_words():
     assert c._implicit_alias('t.col "My Col"') == ("mycol", "t.col")
     # A doubtful item gets no name, so a key naming it is not derived (whole-row comparison).
     assert c.derive_sort_keys("SELECT INTERVAL 1 day FROM t ORDER BY day") is None
+
+
+def test_implicit_alias_is_not_taken_after_an_operator_word_or_from_a_unit():
+    assert c._implicit_alias("a or b") is None
+    assert c._implicit_alias("not flag") is None
+    assert c._implicit_alias("a like b") is None
+    assert c._implicit_alias("a rlike b") is None
+    assert c._implicit_alias("x in y") is None
+    assert c._implicit_alias("d + interval '30' day") is None
+    assert c._implicit_alias("interval '1' hours") is None
+    assert c._implicit_alias("count(*) cnt") == ("cnt", "count(*)")
+
+
+def test_order_by_names_an_output_alias_before_an_expression():
+    # Spark: ORDER BY x is the output column x (column 0), not the base column x selected as z.
+    assert c.derive_sort_keys("SELECT y x, x z FROM t ORDER BY x") == [0]
+    assert c.derive_sort_keys("SELECT y AS x, x AS z FROM t ORDER BY x DESC, z") == [0, 1]
+    assert c.derive_sort_keys("SELECT a x, b x FROM t ORDER BY x") is None  # ambiguous output name
+    assert c.derive_sort_keys("SELECT a + 1 AS s FROM t ORDER BY a + 1") == [0]  # no such name: the expression

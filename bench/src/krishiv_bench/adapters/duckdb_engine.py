@@ -24,14 +24,16 @@ class DuckDBEngine(Engine):
     Resource probes use /proc/self (VmHWM reset via clear_refs) outside the timed region: the number is
     the whole harness process (Python + pyarrow baseline recorded separately). Spill: null (not exposed).
 
-    ``null_order`` sets DuckDB's ``default_null_order`` (None keeps DuckDB's own, NULLS LAST): a reference for a
-    Spark-dialect engine uses ``SPARK_NULL_ORDER``, Spark's NULLS FIRST ascending and NULLS LAST descending, so an
-    ``ORDER BY`` without an explicit null order sorts the same way in both.
+    ``null_order`` sets DuckDB's ``default_null_order``. It defaults to ``SPARK_NULL_ORDER``, Spark's NULLS FIRST
+    ascending and NULLS LAST descending: DuckDB is the reference for Spark-semantics engines, so an ``ORDER BY``
+    without an explicit null order must sort the same way in both. None keeps DuckDB's own (NULLS LAST).
     """
 
     name = "duckdb"
 
-    def __init__(self, threads: int | None = None, memory_limit: str | None = "12GB", null_order: str | None = None):
+    def __init__(
+        self, threads: int | None = None, memory_limit: str | None = "12GB", null_order: str | None = SPARK_NULL_ORDER
+    ):
         if null_order is not None and null_order not in NULL_ORDERS:
             raise ValueError(f"null_order must be one of {sorted(NULL_ORDERS)}, got {null_order!r}")
         self.threads = threads or os.cpu_count()

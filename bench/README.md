@@ -291,8 +291,8 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   a modified copy: `STRLEN(x)` becomes `length(x)`; date-string bounds on `EventDate` become day numbers and `extract(minute FROM EventTime)` /
   `DATE_TRUNC('minute', EventTime)` become integer arithmetic (the raw Parquet columns are a day count and epoch seconds, read without a view); and
   q11, q18, q19, q22, q23, q25, q31-q33, q39-q41 get tie-break sort keys (`TIE_BREAK`) so `LIMIT` / `OFFSET` results are deterministic across engines;
-  and q29's `REGEXP_REPLACE` is written per dialect (`REGEX_Q29`): Spark-dialect engines (Krishiv, Spark, Sail) read `'\1'` as the string `1`
-  and `'\.'` as `.`, so they get `'$1'` and `'\\.'`, and every engine gets `(?s)` because Java's `.` stops at `\r` where RE2's does not.
+  and q29's `REGEXP_REPLACE` is written per dialect (`REGEX_Q29`) so every engine computes Spark's answer: Spark-dialect engines (Krishiv, Spark, Sail) get
+  `'$1'` and `'\\.'` (Spark reads `'\1'` as the string `1`), RE2 engines a pattern with Java's line-terminator semantics for `.` and `$` spelled out.
 
 The harness pins `duckdb==2.0.0` (`pyproject.toml`). TPC-H `dbgen` output differs between DuckDB versions (text columns in every
 table), and `tpch_answers()` matches only the `dbgen` output of the same version. Datasets are versioned by generator:

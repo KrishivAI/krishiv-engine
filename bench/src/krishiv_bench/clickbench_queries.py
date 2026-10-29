@@ -16,10 +16,11 @@ transformations of that text, listed in ``bench/README.md``:
    arithmetic on ``EventTime``.
 3. Queries whose ``LIMIT`` result is not fully ordered upstream get tie-break sort keys (``TIE_BREAK``) so that all
    engines return the same rows.
-4. q29's ``REGEXP_REPLACE`` is written in each engine's string-literal and regex dialect (``REGEX_Q29``), so every
-   engine extracts the same domain: in Spark SQL the upstream ``'\\1'`` is the one-character string ``1`` (Spark has
-   no backslash group reference; the group is ``$1``) and ``'\\.'`` is ``.``, and Java's ``.`` stops at ``\\r`` and
-   other line terminators where RE2's stops only at ``\\n``. ``(?s)`` makes ``.`` match every character in both.
+4. q29's ``REGEXP_REPLACE`` is written in each engine's dialect (``REGEX_Q29``) so that every engine computes Spark's
+   answer. Spark-dialect engines get the Spark text: the upstream ``'\\1'`` is the one-character string ``1`` in Spark
+   SQL (the group reference is ``$1``) and ``'\\.'`` is ``.``. Java's ``.`` stops at every line terminator (``\\n``,
+   ``\\r``, U+0085, U+2028, U+2029) and its ``$`` also matches before one final terminator; RE2 engines get a pattern
+   with those semantics spelled out (the final terminator is captured and put back).
 """
 
 from __future__ import annotations
@@ -73,8 +74,11 @@ SPARK_DIALECT: frozenset[str] = frozenset({"krishiv", "spark-connect", "spark-lo
 # q29's domain extraction: the upstream (DuckDB, RE2) text, and its rewrite per dialect.
 REGEX_Q29_UPSTREAM = r"REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/.*$', '\1')"
 REGEX_Q29: dict[str, str] = {
-    "re2": r"REGEXP_REPLACE(Referer, '(?s)^https?://(?:www\.)?([^/]+)/.*$', '\1')",
-    "spark": r"REGEXP_REPLACE(Referer, '(?s)^https?://(?:www\\.)?([^/]+)/.*$', '$1')",
+    "spark": r"REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '$1')",
+    "re2": (
+        r"REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/[^\n\r\x{85}\x{2028}\x{2029}]*"
+        r"(\r\n|[\n\r\x{85}\x{2028}\x{2029}])?$', '\1\2')"
+    ),
 }
 
 Fetch = Callable[[str], bytes]

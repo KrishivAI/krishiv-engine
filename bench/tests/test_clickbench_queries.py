@@ -230,10 +230,10 @@ Q29 = (
 def test_q29_regex_is_written_in_each_engine_dialect():
     # Spark SQL reads '\1' as the string "1" and '\.' as "."; its group reference is $1 (Spark 4.2.0 oracle).
     spark = cq.adapt(Q29, "q29", engine="krishiv")
-    assert spark.startswith(r"SELECT REGEXP_REPLACE(Referer, '(?s)^https?://(?:www\\.)?([^/]+)/.*$', '$1') AS k")
+    assert spark.startswith(r"SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '$1') AS k")
     assert cq.adapt(Q29, "q29", engine="sail") == spark
     re2 = cq.adapt(Q29, "q29", engine="duckdb")
-    assert re2.startswith(r"SELECT REGEXP_REPLACE(Referer, '(?s)^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k")
+    assert re2.startswith(f"SELECT {cq.REGEX_Q29['re2']} AS k")
     assert cq.adapt(Q29, "q29", engine="polars") == re2
     assert "AVG(length(Referer))" in spark  # the generic rules still apply
     assert "AVG(length(Referer))" in re2
@@ -254,4 +254,34 @@ def test_load_passes_the_engine_to_the_q29_rewrite(data_dir):
     k = cq.load("krishiv", lambda url: data, pins, COMMIT)
     d = cq.load("duckdb", lambda url: data, pins, COMMIT)
     assert "'$1'" in k["q29"]
-    assert "'\\1'" in d["q29"]
+    assert cq.REGEX_Q29["re2"] in d["q29"]
+
+
+# Spark 4.2.0 (oracle) on these values for the q29 Spark text: Java's `.` stops at every line terminator, and `$`
+# also matches before one final terminator, which the replacement keeps.
+Q29_SPARK_ANSWERS = [
+    ("https://www.example.com/a/b", "example.com"),
+    ("http://wwwxfoo.org/x", "wwwxfoo.org"),
+    ("plain", "plain"),
+    ("http://nopath.com", "http://nopath.com"),
+    ("http://cr.net/a\rb", "http://cr.net/a\rb"),
+    ("http://a.com/b\n", "a.com\n"),
+    ("http://a.com/b\nc", "http://a.com/b\nc"),
+    ("http://a.com/b\r\n", "a.com\r\n"),
+    ("http://a.com/b\u0085", "a.com\u0085"),
+    ("http://a.com/b\u0085c", "http://a.com/b\u0085c"),
+    ("http://a.com/b\u2028", "a.com\u2028"),
+    ("http://a.com/b\u2028c", "http://a.com/b\u2028c"),
+    ("http://a.com/b\n\n", "http://a.com/b\n\n"),
+    ("http://a.com/b\u2029", "a.com\u2029"),
+]
+
+
+def test_q29_re2_pattern_gives_spark_answers_in_duckdb():
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute("CREATE TABLE hits (i INT, Referer VARCHAR)")
+    con.executemany("INSERT INTO hits VALUES (?, ?)", [(i, v) for i, (v, _) in enumerate(Q29_SPARK_ANSWERS)])
+    got = [r[0] for r in con.execute(f"SELECT {cq.REGEX_Q29['re2']} FROM hits ORDER BY i").fetchall()]
+    assert got == [want for _, want in Q29_SPARK_ANSWERS]
