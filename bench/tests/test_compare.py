@@ -103,6 +103,8 @@ def test_implicit_alias_is_not_taken_after_an_operator_word_or_from_a_unit():
     assert c._implicit_alias("d + interval '30' day") is None
     assert c._implicit_alias("interval '1' hours") is None
     assert c._implicit_alias("count(*) cnt") == ("cnt", "count(*)")
+    assert c._implicit_alias("s COLLATE UTF8_LCASE") is None
+    assert c.derive_sort_keys("SELECT s COLLATE UTF8_LCASE, id FROM t ORDER BY s COLLATE UTF8_LCASE") == [0]
 
 
 def test_order_by_names_an_output_alias_before_an_expression():

@@ -340,10 +340,11 @@ _NOT_ALIAS = frozenset(
     {"all", "and", "asc", "between", "desc", "distinct", "else", "end", "false", "from", "in", "is", "like", "not"}
     | {"null", "or", "then", "true", "when"}
 )
-# Words after which the next word is an operand, never an alias (``a OR b``, ``NOT flag``, ``a LIKE b``).
+# Words after which the next word is an operand, never an alias (``a OR b``, ``NOT flag``, ``a LIKE b``,
+# ``s COLLATE UTF8_LCASE``).
 _OPERATOR_WORDS = frozenset(
     {"and", "or", "not", "like", "ilike", "rlike", "regexp", "is", "in", "between", "from", "when", "then", "else"}
-    | {"case", "distinct", "interval", "div", "escape"}
+    | {"case", "distinct", "interval", "div", "escape", "collate"}
 )
 # Interval units: ``d + INTERVAL '30' DAY`` ends in a unit, not an alias.
 _INTERVAL_UNITS = frozenset(

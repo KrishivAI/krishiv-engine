@@ -325,8 +325,7 @@ def test_one_query_runs_duckdb_on_its_own_text(engine: KrishivEngine):
     duck = Recording([(1, "x"), (2, "y")])
     done = abba._one_query(q("select 1"), engine, duck, 1, 5, q("select 1 -- duckdb text"))
     assert done["status"] == "ok"
-    assert seen  # the correctness run and every timed run
-    assert set(seen) == {"select 1 -- duckdb text"}
+    assert seen == ["select 1 -- duckdb text"] * 3  # the correctness run and both timed runs (reps=1)
 
 
 def test_run_abba_pairs_duckdb_texts_and_spark_null_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
