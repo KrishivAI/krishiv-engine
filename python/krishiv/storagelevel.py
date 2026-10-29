@@ -36,8 +36,10 @@ class StorageLevel:
 
     def __str__(self) -> str:
         return (
-            ("Disk " if self.useDisk else "Memory " if self.useMemory else "OffHeap " if self.useOffHeap else "")
-            + ("Serialized " if not self.deserialized else "Deserialized ")
+            ("Disk " if self.useDisk else "")
+            + ("Memory " if self.useMemory else "")
+            + ("OffHeap " if self.useOffHeap else "")
+            + ("Deserialized " if self.deserialized else "Serialized ")
             + f"{self.replication}x Replicated"
         )
 

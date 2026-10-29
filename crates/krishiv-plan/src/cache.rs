@@ -44,6 +44,9 @@ pub struct CacheKey {
     pub principal: String,
     /// The access-policy version.
     pub policy: PolicyVersion,
+    /// The resolution configuration (ANSI mode, session time zone, ...): the
+    /// same logical plan returns different values or errors under another.
+    pub conf: crate::analyzer::ResolutionConf,
 }
 
 impl CacheKey {
@@ -55,6 +58,7 @@ impl CacheKey {
             pins: analyzed.pins.clone(),
             principal: analyzed.context.principal.clone(),
             policy: analyzed.context.policy,
+            conf: analyzed.context.conf,
         }
     }
 }

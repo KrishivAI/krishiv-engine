@@ -78,13 +78,21 @@ struct CacheState {
     used: usize,
 }
 
+/// What a fill was started under: [`RelationCache::insert`] refuses the
+/// snapshot if an invalidation ran after `generation` or it exceeds `cap`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FillLimits {
+    /// The cache generation before the fill's query was analyzed.
+    pub(crate) generation: u64,
+    /// The fill query's own `krishiv.cache.maxBytes`.
+    pub(crate) cap: usize,
+}
+
 /// The session relation cache: snapshots under the `relation_cache` pool.
 #[derive(Debug)]
 pub(crate) struct RelationCache {
     pool: Arc<dyn MemoryPool>,
     consumer: ConsumerId,
-    /// The byte cap from the latest query's configuration.
-    cap: AtomicU64,
     hidden: AtomicU64,
     /// Bumped by every invalidation, so a fill that started before one is
     /// not stored after it (it may hold rows the invalidation meant to drop).
@@ -93,34 +101,26 @@ pub(crate) struct RelationCache {
 }
 
 impl RelationCache {
-    /// An empty cache under `memory`, capped as `config` says.
-    pub(crate) fn new(memory: &Arc<dyn MemoryPool>, config: &Config) -> Self {
+    /// An empty cache under `memory`.
+    pub(crate) fn new(memory: &Arc<dyn MemoryPool>) -> Self {
         let pool = memory.child("relation_cache", None);
         let consumer = pool.register("relation_cache", None);
-        let cache = Self {
+        Self {
             pool,
             consumer,
-            cap: AtomicU64::new(u64::MAX),
             hidden: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             state: Mutex::new(CacheState::default()),
-        };
-        cache.configure(config);
-        cache
+        }
     }
 
-    /// Reads the `krishiv.cache.maxBytes` cap from a query's configuration.
-    pub(crate) fn configure(&self, config: &Config) {
+    /// The `krishiv.cache.maxBytes` cap of a query's configuration snapshot.
+    pub(crate) fn cap_of(config: &Config) -> usize {
         let cap = config
             .get(&CACHE_MAX_BYTES)
             .and_then(ConfigValue::as_size)
             .unwrap_or(u64::MAX);
-        self.cap.store(cap, Ordering::Release);
-    }
-
-    /// The byte cap of the latest configuration.
-    pub(crate) fn cap(&self) -> usize {
-        usize::try_from(self.cap.load(Ordering::Acquire)).unwrap_or(usize::MAX)
+        usize::try_from(cap).unwrap_or(usize::MAX)
     }
 
     /// The invalidation generation: a fill captures it when it starts and
@@ -161,7 +161,8 @@ impl RelationCache {
 
     /// Stores the snapshot (`schema`, `batches`) under `key` and returns the
     /// hidden table name its scans read. When the snapshot would exceed the
-    /// cap (a cap of 0 disables caching), an invalidation ran since the fill
+    /// `cap` (the fill query's own `krishiv.cache.maxBytes`; 0 disables
+    /// caching), an invalidation ran since the fill
     /// started (`generation`), or two of its columns share a name (a scan finds its columns by
     /// name, so it could not tell them apart), stores nothing and returns
     /// `None`: the query runs uncached, it never fails. Replaces any entry
@@ -173,8 +174,9 @@ impl RelationCache {
         batches: Vec<RecordBatch>,
         reads_files: bool,
         tables: Vec<String>,
-        generation: u64,
+        limits: FillLimits,
     ) -> Option<String> {
+        let FillLimits { generation, cap } = limits;
         let mut names = std::collections::HashSet::new();
         if !schema.fields().iter().all(|f| names.insert(f.name())) {
             return None;
@@ -184,7 +186,6 @@ impl RelationCache {
         // A cap of 0 disables caching, the empty result included. The
         // generation is read under the state lock, which every invalidation
         // also holds while it bumps it.
-        let cap = self.cap();
         if cap == 0 || generation != self.generation() {
             return None;
         }
@@ -312,9 +313,20 @@ impl RelationCache {
     /// snapshots the plan now scans, by hidden name, so the query keeps them
     /// even if the cache is cleared before it is planned.
     pub(crate) fn substitute(&self, analyzed: &AnalyzedPlan) -> Option<Substituted> {
+        // Nothing cached: skip hashing every node of the plan.
+        if self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entries
+            .is_empty()
+        {
+            return None;
+        }
         let pins = analyzed.pins.clone();
         let principal = analyzed.context.principal.clone();
         let policy = analyzed.context.policy;
+        let conf = analyzed.context.conf;
         let root = Arc::clone(analyzed.plan.root());
         let mut tables: Vec<(String, Arc<MemoryTable>)> = Vec::new();
         let out: Arc<LogicalPlan> = Arc::clone(&root)
@@ -324,6 +336,7 @@ impl RelationCache {
                     pins: pins.clone(),
                     principal: principal.clone(),
                     policy,
+                    conf,
                 };
                 let found = {
                     let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);

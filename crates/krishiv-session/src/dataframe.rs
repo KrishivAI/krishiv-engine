@@ -156,8 +156,10 @@ pub(crate) enum CacheFill {
         fallback: SchemaRef,
         reads_files: bool,
         tables: Vec<String>,
-        /// The cache's invalidation generation when the fill started.
+        /// The cache's invalidation generation before the query was analyzed.
         generation: u64,
+        /// The query's own `krishiv.cache.maxBytes`.
+        cap: usize,
     },
 }
 
@@ -172,6 +174,7 @@ impl CacheFill {
                 reads_files,
                 tables,
                 generation,
+                cap,
             } => Box::pin(FillStream {
                 inner: stream,
                 cache: Arc::clone(cache),
@@ -182,7 +185,7 @@ impl CacheFill {
                 tables,
                 batches: Vec::new(),
                 bytes: 0,
-                cap: cache.cap(),
+                cap,
                 generation,
                 filled: false,
             }),
@@ -215,7 +218,7 @@ struct FillStream {
     batches: Vec<RecordBatch>,
     /// Bytes of `batches`.
     bytes: usize,
-    /// The cache cap when the fill started.
+    /// The fill query's cache cap.
     cap: usize,
     generation: u64,
     filled: bool,
@@ -273,7 +276,10 @@ impl futures::Stream for FillStream {
                         batches,
                         this.reads_files,
                         std::mem::take(&mut this.tables),
-                        this.generation,
+                        crate::cache::FillLimits {
+                            generation: this.generation,
+                            cap: this.cap,
+                        },
                     );
                 }
                 Poll::Ready(None)
@@ -1081,8 +1087,9 @@ impl DataFrame {
     }
 
     /// The analysis to run with: the cached one while the configuration and
-    /// the temporary tables are unchanged and no files are read (by path or
-    /// through a file view), else a fresh one, which lists them again.
+    /// the temporary tables are unchanged, no cache invalidation ran since and
+    /// no files are read (by path or through a file view), else a fresh one,
+    /// which lists them again.
     pub(crate) async fn analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
         let cached = self
             .analysis
@@ -1096,6 +1103,7 @@ impl DataFrame {
             && a.env.conf_version == env.conf_version
             && a.env.catalog_epoch == env.catalog_epoch
             && a.env.variables_version == env.variables_version
+            && a.env.cache_generation == env.cache_generation
         {
             return Ok(a);
         }
@@ -1203,7 +1211,6 @@ impl DataFrame {
         a: &Arc<Analysis>,
     ) -> Result<(krishiv_exec::planner::PhysicalPlan, CacheFill), KrishivError> {
         let key = CacheKey::of(&a.analyzed);
-        let generation = self.session.state.cache.generation();
         let hit = self.session.state.cache.lookup(&key).is_some();
         let substituted = self.session.state.cache.substitute(&a.analyzed);
         let owned;
@@ -1236,7 +1243,8 @@ impl DataFrame {
                 key,
                 fallback: Arc::new(Schema::new(fields)),
                 reads_files: a.analyzed.reads_files,
-                generation,
+                generation: a.env.cache_generation,
+                cap: a.env.cache_cap,
                 tables: {
                     let mut tables = crate::cache::read_tables(a.analyzed.plan.root());
                     tables.extend(crate::cache::unresolved_tables(&self.plan));

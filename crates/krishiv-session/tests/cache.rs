@@ -45,23 +45,59 @@ fn ids(batches: &[RecordBatch]) -> Vec<i32> {
     out
 }
 
+/// The schema and the sorted rows of `batches`, each row rendered from its
+/// columns' values: the oracle for "the cache returned what the query returns".
+fn rendered(batches: &[RecordBatch]) -> (Vec<String>, Vec<String>) {
+    let fields = batches
+        .first()
+        .map(|b| {
+            b.schema()
+                .fields()
+                .iter()
+                .map(|f| format!("{}:{:?}:{}", f.name(), f.data_type(), f.is_nullable()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut rows: Vec<String> = batches
+        .iter()
+        .flat_map(|b| {
+            (0..b.num_rows()).map(move |i| {
+                b.columns()
+                    .iter()
+                    .map(|c| format!("{:?}", c.slice(i, 1)))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+        })
+        .collect();
+    rows.sort();
+    (fields, rows)
+}
+
+/// A query-clock column is the proof that later actions read the
+/// snapshot: recomputing from the source would read a new query clock.
+#[test]
+fn later_actions_return_the_values_of_the_first_run() {
+    let s = int_session(vec![1, 2, 3]);
+    block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
+    let df = block_on(s.sql("SELECT id, current_timestamp() AS ts FROM t"))
+        .unwrap()
+        .cache();
+    let first = rendered(&block_on(df.collect()).unwrap());
+    assert!(block_on(df.is_cached()).unwrap());
+    assert_eq!(rendered(&block_on(df.collect()).unwrap()), first);
+    // Without the entry the query runs again and reads a new clock.
+    block_on(df.unpersist()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert_ne!(rendered(&block_on(df.collect()).unwrap()), first);
+}
+
 #[test]
 fn cached_collect_serves_the_snapshot_not_the_source() {
     let s = int_session(vec![1, 2]);
     let df = s.table("t").cache();
     assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
     assert!(block_on(df.is_cached()).unwrap());
-    // The second action reads the snapshot, not the source: the memory scan
-    // produced the two cached rows.
-    let (rows, metrics) = block_on(df.collect_with_metrics()).unwrap();
-    assert_eq!(ids(&rows), vec![1, 2]);
-    let scanned: u64 = metrics
-        .operators
-        .values()
-        .filter(|e| e.name == "MemoryScan")
-        .map(|e| e.metrics.rows_out)
-        .sum();
-    assert_eq!(scanned, 2);
     // Replacing the table drops what was cached from the old one, as
     // replacing a temporary view does in Spark: a new frame reads the new
     // rows, and the cached frame refills on its next action.
@@ -240,7 +276,6 @@ fn clear_cache_and_uncache_table() {
 fn every_plan_shape_caches_and_reads_back_the_same_rows() {
     let s = int_session(vec![1, 2, 3, 4]);
     register(&s, "u", vec![3, 4, 5]);
-    let rows = |batches: &[RecordBatch]| batches.iter().map(RecordBatch::num_rows).sum::<usize>();
     for sql in [
         "SELECT id, id + 1 AS next, CAST(id AS BIGINT) AS wide FROM t",
         "SELECT * FROM t WHERE id > 1 AND id NOT IN (SELECT id FROM u)",
@@ -280,7 +315,7 @@ fn every_plan_shape_caches_and_reads_back_the_same_rows() {
         let df = block_on(s.sql(sql)).unwrap().cache();
         for _ in 0..2 {
             let got = block_on(df.collect()).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
-            assert_eq!(rows(&got), rows(&uncached), "{sql}");
+            assert_eq!(rendered(&got), rendered(&uncached), "{sql}");
         }
         assert!(block_on(df.is_cached()).unwrap(), "{sql}");
         block_on(df.unpersist()).unwrap();
@@ -505,4 +540,21 @@ fn a_cached_frame_can_be_written_from_its_snapshot() {
     let path = dir.path().join("out");
     block_on(df.write().format("csv").save(path.to_str().unwrap())).unwrap();
     assert!(path.exists());
+}
+
+/// The same logical plan under another resolution configuration (ANSI mode)
+/// is another cache entry: the first run's snapshot is not served to it.
+#[test]
+fn a_configuration_change_does_not_serve_the_old_snapshot() {
+    let s = int_session(vec![1, 2]);
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    let df = block_on(s.sql("SELECT id FROM t")).unwrap().cache();
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
+    assert!(block_on(df.is_cached()).unwrap());
+    block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
+    assert!(!block_on(df.is_cached()).unwrap());
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
+    assert!(block_on(df.is_cached()).unwrap());
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert!(block_on(df.is_cached()).unwrap());
 }

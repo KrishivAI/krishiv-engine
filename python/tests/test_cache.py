@@ -139,7 +139,7 @@ def test_refresh_by_path_and_refresh_table(spark: SparkSession) -> None:
 def test_storage_level_repr_str_and_equality() -> None:
     level = StorageLevel(True, True, False, True, 2)
     assert repr(level) == "StorageLevel(True, True, False, True, 2)"
-    assert str(level) == "Disk Deserialized 2x Replicated"
+    assert str(level) == "Disk Memory Deserialized 2x Replicated"
     assert str(StorageLevel.MEMORY_ONLY) == "Memory Deserialized 1x Replicated"
     assert str(StorageLevel.OFF_HEAP) == "OffHeap Serialized 1x Replicated"
     assert str(StorageLevel(False, False, False, False)) == "Serialized 1x Replicated"

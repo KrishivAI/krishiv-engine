@@ -271,7 +271,7 @@ impl SessionBuilder {
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::from_config(&config));
-        let cache = Arc::new(RelationCache::new(&memory, &config));
+        let cache = Arc::new(RelationCache::new(&memory));
         let io =
             IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
         io.attach_memory(&memory);
@@ -840,6 +840,9 @@ impl Session {
 
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
+        // Before any analysis loads a table: a fill is refused if an
+        // invalidation ran after this point (it may hold the replaced rows).
+        let cache_generation = self.state.cache.generation();
         let (config, conf_version) = self.state.conf.versioned_snapshot();
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
@@ -873,8 +876,8 @@ impl Session {
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
         let parser = parser_options(&config);
-        // The cache cap follows the query's configuration snapshot.
-        self.state.cache.configure(&config);
+        // The cache cap is the query's own configuration snapshot.
+        let cache_cap = RelationCache::cap_of(&config);
         // One snapshot of the variables per query, like the configuration
         // snapshot: every reference in the query reads the same values.
         let variables = self.state.variables.snapshot();
@@ -901,6 +904,8 @@ impl Session {
             conf_version,
             catalog_epoch,
             variables_version: variables.version,
+            cache_generation,
+            cache_cap,
         }
     }
 
@@ -1531,6 +1536,10 @@ pub(crate) struct QueryEnv {
     /// The variable version the query's snapshot was taken at: a cached
     /// resolved plan is reused only while it is unchanged.
     pub(crate) variables_version: u64,
+    /// The cache's invalidation generation before the query was analyzed.
+    pub(crate) cache_generation: u64,
+    /// `krishiv.cache.maxBytes` of the query's configuration snapshot.
+    pub(crate) cache_cap: usize,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
