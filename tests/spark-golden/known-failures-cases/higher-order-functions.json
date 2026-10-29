@@ -6,21 +6,10 @@
       17
     ],
     "hof": [
-      59,
-      60,
-      62,
-      68,
-      71,
-      74,
-      75,
-      76,
-      78,
-      80
+      74
     ],
     "nested-interval-types": [
-      61,
-      73,
-      77
+      73
     ]
   },
   "file": "higher-order-functions",
