@@ -24,11 +24,14 @@ session). Usage (from repo root):
         --with 'pyspark-client==4.2.0' python tests/scripts/gen_cast_matrix.py \
         > tests/fixtures/spark-4.2.0/cast-matrix.json
 
-`--remote` overrides the endpoint (default sc://127.0.0.1:15012), `--only SRC:TGT` limits to one pair (debug),
+`--remote` overrides the endpoint (default sc://127.0.0.1:15012), `--only 'SRC -> TGT'` limits to one pair,
+as named in the fixture (debug),
 `--workers N` sets the concurrency. Progress goes to stderr; the fixture to stdout.
 """
 
 # ruff: noqa: RUF001, RUF005
+# RUF001: the whitespace and Unicode-digit inputs are literal characters, kept exactly as the ground-truth
+# inputs. RUF005: grouped type lists are built by concatenation on purpose, to read like the Spark docs.
 import argparse
 import json
 import sys
@@ -415,19 +418,28 @@ def source_values():
 
 
 # ---------------------------------------------------------------- oracle plumbing
+TRANSPORT_MARKERS = (
+    "UNAVAILABLE",
+    "DEADLINE_EXCEEDED",
+    "CANCELLED",
+    "Connection refused",
+    "Socket closed",
+    "RST_STREAM",
+)
+
+
 def error_dict(e):
-    if not isinstance(e, PySparkException):
+    if not isinstance(e, PySparkException) or any(m in str(e) for m in TRANSPORT_MARKERS):
         raise e  # not an answer from Spark (transport or client failure): stop the run
     out = {"exception": type(e).__name__}
-    if isinstance(e, PySparkException):
-        cls = e.getErrorClass()
-        if cls:
-            out["class"] = cls
-            params = e.getMessageParameters() or {}
-            out["params"] = {k: params[k] for k in sorted(params)}
-        state = e.getSqlState()
-        if state:
-            out["sqlstate"] = state
+    cls = e.getErrorClass()
+    if cls:
+        out["class"] = cls
+        params = e.getMessageParameters() or {}
+        out["params"] = {k: params[k] for k in sorted(params)}
+    state = e.getSqlState()
+    if state:
+        out["sqlstate"] = state
     if "class" not in out:
         out["message"] = str(e).strip().split("\n")[0][:300]
     return out
@@ -586,9 +598,18 @@ def _parser_strings():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--remote", default=REMOTE)
-    ap.add_argument("--only", help="SRC:TGT, limit to one pair (debug)")
+    ap.add_argument("--only", help="'SRC -> TGT': limit to one pair, as named in the fixture (debug)")
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
+    pool = ThreadPoolExecutor(max_workers=args.workers)
+    try:
+        generate(args, ap, pool)
+    finally:
+        # A failed unit stops the run: drop the queued ones and do not wait for the running ones.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def generate(args, ap, pool):
     probe = SparkSession.builder.remote(args.remote).create()
     version = probe.version
     probe.stop()
@@ -602,9 +623,10 @@ def main():
 
     pairs = [(s, t) for s in SOURCES for t in TARGETS]
     if args.only:
-        a, b = args.only.split(":")
+        a, sep, b = args.only.partition(" -> ")
+        if not sep or a not in SOURCES or b not in TARGETS:
+            ap.error(f"--only expects 'SRC -> TGT' with a known source and target, got {args.only!r}")
         pairs = [(a, b)]
-    pool = ThreadPoolExecutor(max_workers=args.workers)  # exits with the process after `main` returns
 
     # analysis verdicts
     futs = {(m, s, t): pool.submit(analysis_one, args.remote, mode_conf(m), m, s, t) for m in MODES for s, t in pairs}
