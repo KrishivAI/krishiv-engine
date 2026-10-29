@@ -103,7 +103,7 @@ use super::accumulator::Accumulator;
 use super::table::{AggCore, batch};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
-use crate::hash::{HashSeed, PARTITIONS, grown, spill_partition};
+use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
 use crate::rows::{EncodedKeys, Hll, RowLayout};
 
 /// Radix bits of `h` of a partitioned table (DuckDB's initial 4 bits; the
@@ -366,6 +366,10 @@ pub(crate) struct RowTable {
     unique: bool,
     /// Counts clears of a full fixed index (`EXPLAIN ANALYZE`).
     abandons: Option<Arc<AtomicU64>>,
+    /// Counts reallocations of the index (`EXPLAIN ANALYZE`).
+    resizes: Option<Arc<AtomicU64>>,
+    /// Where probe lengths go, for a detailed profile only.
+    probes: Option<Arc<ProbeTotals>>,
 }
 
 impl RowTable {
@@ -418,6 +422,8 @@ impl RowTable {
             rows_in: 0,
             unique: true,
             abandons: None,
+            resizes: None,
+            probes: None,
         })
     }
 
@@ -430,6 +436,19 @@ impl RowTable {
     /// Counts the clears of a full fixed index into `counter`.
     pub(crate) fn with_abandons(mut self, counter: Arc<AtomicU64>) -> Self {
         self.abandons = Some(counter);
+        self
+    }
+
+    /// Counts the reallocations of the index into `counter`.
+    pub(crate) fn with_resizes(mut self, counter: Arc<AtomicU64>) -> Self {
+        self.resizes = Some(counter);
+        self
+    }
+
+    /// Counts probe lengths into `totals` (`ExecConfig::detailed_metrics`;
+    /// `None`: not counted).
+    pub(crate) fn with_probes(mut self, totals: Option<Arc<ProbeTotals>>) -> Self {
+        self.probes = totals;
         self
     }
 
@@ -753,10 +772,16 @@ impl RowTable {
             Mode::Grow => self.index.len().saturating_add(new),
         };
         let (parts, stride, gseed, refs) = (&self.parts, self.stride, self.gseed, self.refs);
+        let before = self.index.capacity();
         self.index
             .reserve(len.saturating_sub(self.index.len()), |&r| {
                 fin(word(row_at(parts, stride, refs, r), 0), gseed)
             });
+        if self.index.capacity() != before
+            && let Some(c) = &self.resizes
+        {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// The accumulators' bytes after `new[p]` more groups in each partition
@@ -1095,15 +1120,33 @@ impl RowTable {
     /// one loop per key shape: the probe's compare of fixed-width keys has
     /// no view branch, so it stays small enough to inline.
     fn probe_all(&mut self, keys: &EncodedKeys, refs: &mut Vec<u32>, limit: usize) -> Result<()> {
+        let mut count = ProbeCount::default();
+        match (self.views.is_some(), self.probes.is_some()) {
+            (true, false) => self.probe_rows::<true, false>(keys, refs, limit, &mut count)?,
+            (false, false) => self.probe_rows::<false, false>(keys, refs, limit, &mut count)?,
+            (true, true) => self.probe_rows::<true, true>(keys, refs, limit, &mut count)?,
+            (false, true) => self.probe_rows::<false, true>(keys, refs, limit, &mut count)?,
+        }
+        if let Some(totals) = &self.probes
+            && count.lookups > 0
+        {
+            totals.add(&count);
+        }
+        Ok(())
+    }
+
+    /// The loop of [`probe_all`](Self::probe_all) for one key shape;
+    /// `COUNT` adds each lookup's key comparisons to `count`.
+    fn probe_rows<const VIEWS: bool, const COUNT: bool>(
+        &mut self,
+        keys: &EncodedKeys,
+        refs: &mut Vec<u32>,
+        limit: usize,
+        count: &mut ProbeCount,
+    ) -> Result<()> {
         let (hashes, heap) = (keys.hashes(), keys.heap());
-        if self.views.is_some() {
-            for (k, &h) in hashes.iter().enumerate() {
-                refs.push(self.find_or_insert::<true>(keys.row(k), heap, h, limit)?);
-            }
-        } else {
-            for (k, &h) in hashes.iter().enumerate() {
-                refs.push(self.find_or_insert::<false>(keys.row(k), heap, h, limit)?);
-            }
+        for (k, &h) in hashes.iter().enumerate() {
+            refs.push(self.find_or_insert::<VIEWS, COUNT>(keys.row(k), heap, h, limit, count)?);
         }
         Ok(())
     }
@@ -1111,14 +1154,16 @@ impl RowTable {
     /// The row of key row `key` (with hash `h`; its long values in
     /// `key_heap`), inserting it if new; an index holding `limit` keys is
     /// cleared before it takes another (the rows stay: a key seen again
-    /// gets a new row). `VIEWS`: the layout has string or binary views.
+    /// gets a new row). `VIEWS`: the layout has string or binary views;
+    /// `COUNT`: the lookup's key comparisons are added to `count`.
     #[inline(always)]
-    fn find_or_insert<const VIEWS: bool>(
+    fn find_or_insert<const VIEWS: bool, const COUNT: bool>(
         &mut self,
         key: &[u8],
         key_heap: &[u8],
         h: u64,
         limit: usize,
+        count: &mut ProbeCount,
     ) -> Result<u32> {
         let Self {
             parts,
@@ -1138,15 +1183,24 @@ impl RowTable {
         let g = fin(h, gseed);
         // A lookup first (hashbrown inlines `find`; most rows are hits),
         // then an insert on a miss.
+        let mut compares = 0_u64;
         let found = index
-            .find(g, |&r| match views {
-                Some(l) if VIEWS => {
-                    let (row, heap) = row_heap_at(parts, stride, *refs, r);
-                    !row.is_empty() && l.eq(row, heap, key, key_heap)
+            .find(g, |&r| {
+                if COUNT {
+                    compares += 1;
                 }
-                _ => same_key(row_at(parts, stride, *refs, r), key, stride),
+                match views {
+                    Some(l) if VIEWS => {
+                        let (row, heap) = row_heap_at(parts, stride, *refs, r);
+                        !row.is_empty() && l.eq(row, heap, key, key_heap)
+                    }
+                    _ => same_key(row_at(parts, stride, *refs, r), key, stride),
+                }
             })
             .copied();
+        if COUNT {
+            count.add(compares);
+        }
         if let Some(r) = found {
             return Ok(r);
         }
@@ -1425,12 +1479,24 @@ impl RowTable {
             v.heap.reserve(c.heap);
         }
         let mut result = Ok(());
+        let mut count = ProbeCount::default();
+        let counted = self.probes.is_some();
         for &r in &c.refs {
             let (row, heap) = row_heap_at(&src.parts, src.stride, src.refs, r);
-            let found = if self.views.is_some() {
-                self.find_or_insert::<true>(row, heap, word(row, 0), usize::MAX)
-            } else {
-                self.find_or_insert::<false>(row, heap, word(row, 0), usize::MAX)
+            let h = word(row, 0);
+            let found = match (self.views.is_some(), counted) {
+                (true, false) => {
+                    self.find_or_insert::<true, false>(row, heap, h, usize::MAX, &mut count)
+                }
+                (false, false) => {
+                    self.find_or_insert::<false, false>(row, heap, h, usize::MAX, &mut count)
+                }
+                (true, true) => {
+                    self.find_or_insert::<true, true>(row, heap, h, usize::MAX, &mut count)
+                }
+                (false, true) => {
+                    self.find_or_insert::<false, true>(row, heap, h, usize::MAX, &mut count)
+                }
             };
             match found {
                 Ok(id) => refs.push(id),
@@ -1439,6 +1505,11 @@ impl RowTable {
                     break;
                 }
             }
+        }
+        if let Some(totals) = &self.probes
+            && count.lookups > 0
+        {
+            totals.add(&count);
         }
         let mut counts = vec![0; self.parts.len()];
         if let Some(x) = counts.get_mut(part) {
@@ -1497,6 +1568,8 @@ impl RowTable {
                     rows_in: 0,
                     unique: self.unique,
                     abandons: None,
+                    resizes: None,
+                    probes: None,
                 }
             })
             .collect()

@@ -35,6 +35,7 @@ use hashbrown::hash_table::Entry;
 
 use super::layout::{EncodedKeys, RowLayout, finalize};
 use crate::error::{Result, internal};
+use crate::hash::ProbeCount;
 
 /// "No row" in a lookup result or a chain.
 pub const NO_MATCH: u32 = u32::MAX;
@@ -329,18 +330,70 @@ impl JoinIndex {
         out: &mut Vec<u32>,
         touch: bool,
     ) {
+        self.lookup::<false>(
+            layout,
+            keys,
+            which,
+            src,
+            out,
+            touch,
+            &mut ProbeCount::default(),
+        );
+    }
+
+    /// As [`find`](Self::find), counting the keys compared per lookup into
+    /// `count` (a detailed profile: `ExecConfig::detailed_metrics`).
+    pub fn find_counted(
+        &self,
+        layout: &RowLayout,
+        keys: &EncodedKeys,
+        which: &[u32],
+        src: &impl RowSource,
+        out: &mut Vec<u32>,
+        count: &mut ProbeCount,
+    ) {
+        let touch =
+            matches!(&self.kind, Kind::Salted(s) if s.len() * size_of::<u64>() >= TOUCH_MIN_BYTES);
+        self.lookup::<true>(layout, keys, which, src, out, touch, count);
+    }
+
+    /// The lookups of [`find_with`](Self::find_with); `COUNT` adds each
+    /// lookup's key comparisons to `count` (compiled out otherwise).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "find_with's arguments plus the count"
+    )]
+    fn lookup<const COUNT: bool>(
+        &self,
+        layout: &RowLayout,
+        keys: &EncodedKeys,
+        which: &[u32],
+        src: &impl RowSource,
+        out: &mut Vec<u32>,
+        touch: bool,
+        count: &mut ProbeCount,
+    ) {
         let hashes = keys.hashes();
         let heap = keys.heap();
         let g = |k: u32| finalize(hashes.get(k as usize).copied().unwrap_or(0), self.seed);
         match &self.kind {
             Kind::Flat(t) => out.extend(which.iter().map(|&k| {
                 let key = keys.row(k as usize);
-                t.find(g(k), |&id| {
-                    let (row, h) = src.row(id);
-                    layout.eq(key, heap, row, h)
-                })
-                .copied()
-                .unwrap_or(NO_MATCH)
+                let mut compares = 0_u64;
+                let found = t
+                    .find(g(k), |&id| {
+                        if COUNT {
+                            compares += 1;
+                        }
+                        let (row, h) = src.row(id);
+                        layout.eq(key, heap, row, h)
+                    })
+                    .copied()
+                    .unwrap_or(NO_MATCH);
+                if COUNT {
+                    count.add(compares);
+                }
+                found
             })),
             Kind::Salted(slots) => {
                 let mask = slots.len() - 1;
@@ -357,20 +410,28 @@ impl JoinIndex {
                         let key = keys.row(k as usize);
                         let salt = g & SALT_MASK;
                         let mut i = low(g, mask);
-                        loop {
+                        let mut compares = 0_u64;
+                        let found = loop {
                             let s = slots[i];
                             if s == 0 {
-                                return NO_MATCH;
+                                break NO_MATCH;
                             }
                             if s & SALT_MASK == salt {
                                 let id = slot_id(s);
                                 let (row, h) = src.row(id);
+                                if COUNT {
+                                    compares += 1;
+                                }
                                 if layout.eq(key, heap, row, h) {
-                                    return id;
+                                    break id;
                                 }
                             }
                             i = (i + 1) & mask;
+                        };
+                        if COUNT {
+                            count.add(compares);
                         }
+                        found
                     }));
                 }
             }

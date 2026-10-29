@@ -149,6 +149,8 @@ pub(crate) struct AggTable {
     ids: Vec<u32>,
     /// Where probe lengths go, for a detailed profile only.
     probes: Option<Arc<ProbeTotals>>,
+    /// Counts reallocations of the key index (`EXPLAIN ANALYZE`).
+    resizes: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl AggTable {
@@ -166,6 +168,7 @@ impl AggTable {
             accs,
             ids: Vec::new(),
             probes: None,
+            resizes: None,
         };
         if core.keys() == 0 {
             // A global aggregate has its one group even with no input.
@@ -179,6 +182,20 @@ impl AggTable {
     pub(crate) fn with_probes(mut self, totals: Option<Arc<ProbeTotals>>) -> Self {
         self.probes = totals;
         self
+    }
+
+    /// Counts the reallocations of the key index into `counter`.
+    pub(crate) fn with_resizes(
+        mut self,
+        counter: Option<Arc<std::sync::atomic::AtomicU64>>,
+    ) -> Self {
+        self.resizes = counter;
+        self
+    }
+
+    /// Where this table counts index reallocations, for its successor.
+    pub(crate) fn resizes(&self) -> Option<Arc<std::sync::atomic::AtomicU64>> {
+        self.resizes.clone()
     }
 
     /// Where this table counts probe lengths, for its successor.
@@ -270,7 +287,13 @@ impl AggTable {
         let n = p.keys.1;
         let mut ids = std::mem::take(&mut self.ids);
         if let Some(rows) = p.keys.as_ref() {
+            let before = self.keys.buckets();
             self.keys.reserve(n, p.keys.bytes());
+            if self.keys.buckets() != before
+                && let Some(c) = &self.resizes
+            {
+                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             self.accs.iter_mut().for_each(|a| a.reserve(n));
             match &self.probes {
                 Some(totals) => {

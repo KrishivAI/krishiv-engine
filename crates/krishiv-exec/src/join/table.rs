@@ -511,9 +511,7 @@ impl JoinTable {
     }
 
     /// As [`find_heads`](Self::find_heads), counting probe lengths (keys
-    /// compared per lookup) into `count`. Only the arrow-row index counts;
-    /// the row-layout index answers uncounted (its lookups are not in
-    /// `count`).
+    /// compared per lookup) into `count`.
     pub(crate) fn find_heads_counted(
         &self,
         keys: &Encoded,
@@ -534,6 +532,9 @@ impl JoinTable {
                 id.and_then(|id| h.get(id as usize).copied())
                     .unwrap_or(NONE)
             })),
+            (Index::Rows { index, layout }, KeyRows::Layout(encoded)) => {
+                index.find_counted(layout, encoded, rows, &self.arena, heads, count);
+            }
             _ => self.find_heads(keys, rows, heads),
         }
     }
