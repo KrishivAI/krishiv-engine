@@ -127,12 +127,34 @@ def test_krishiv_profile_becomes_a_tree():
         ed.krishiv_tree({"format": "other"})
 
 
-def test_several_roots_get_one_synthetic_root():
-    plan = [_n(0, "Scan", "t [a#1]"), _n(1, "Scan", "u [b#2]")]
-    ops = [_op(0, 0, "FileScan", "source", 0, 3), _op(1, 1, "FileScan", "source", 0, 4)]
+def test_children_are_positions_and_a_heading_has_no_operators():
+    # A `Subquery` heading (id null) sits between plan nodes: `children` are positions in `plan`, ids name the
+    # plan nodes operators report against (pre-order over plan nodes only), and operators with no node (the
+    # result sink) attach to nothing.
+    plan = [
+        {"id": 0, "name": "Filter", "detail": "x", "children": [1, 2]},
+        {"id": 1, "name": "Scan", "detail": "spark_catalog.default.t [a#1]", "children": []},
+        {"id": None, "name": "Subquery", "detail": "scalar-subquery#5", "children": [3]},
+        {"id": 2, "name": "Scan", "detail": "spark_catalog.default.u [b#2]", "children": []},
+    ]
+    ops = [
+        _op(0, 0, "Filter", "operator", 10, 4),
+        _op(1, 1, "FileScan", "source", 0, 10),
+        _op(2, 2, "FileScan", "source", 0, 7),
+        _op(3, None, "Result", "sink", 4, 0),
+    ]
     k = ed.krishiv_tree(krishiv_doc(plan, ops))
-    assert k.name == "Plan"
-    assert [c.tables for c in k.children] == [("t",), ("u",)]
+    assert (k.name, k.rows) == ("Filter", 4)
+    t, sub = k.children
+    assert (t.tables, t.rows) == (("t",), 10)
+    assert (sub.name, sub.rows, sub.seconds) == ("Subquery", 7, 0.0)  # its child's rows, no operators of its own
+    assert (sub.children[0].tables, sub.children[0].rows) == (("u",), 7)
+
+
+def test_report_names_stay_short():
+    assert ed.report_name("S", "tpcds", 10, ["q01", "q02"]) == "S_tpcds_sf10_q01-q02.md"
+    many = [f"q{i:02d}" for i in range(1, 100)]
+    assert ed.report_name("S", "tpcds", 1, many) == "S_tpcds_sf1_q01-q99-99q.md"
 
 
 def test_duckdb_profile_becomes_a_tree():
@@ -328,3 +350,55 @@ def test_run_explain_diff_writes_the_report(tmp_path: Path, monkeypatch: pytest.
     assert raw["q01"]["krishiv"]["rows"] == 3
     with pytest.raises(SystemExit, match="unknown queries"):
         ed.run_explain_diff("tpch", 1, ["q99"], dataset="tpch-duckdb", threads=1, out_dir=tmp_path / "out")
+
+
+def test_a_failing_query_is_recorded_and_the_others_still_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters.base import Query
+    from krishiv_bench.adapters.krishiv import KrishivEngine, RunnerError
+
+    data = tmp_path / "data"
+    ds = data / "tpch-duckdb" / "sf1"
+    ds.mkdir(parents=True)
+    pq.write_table(pa.table({"a": [1, 2, 3]}), ds / "t.parquet")
+    monkeypatch.setenv("KRISHIV_DATA", str(data))
+    import krishiv_bench.runner as runner
+
+    monkeypatch.setattr(
+        runner,
+        "load_queries",
+        lambda suite, engine, only, *a: [
+            Query("q01", "SELECT a FROM t", suite),
+            Query("q02", "SELECT a FROM t", suite),
+        ],
+    )
+    profile = krishiv_doc([_n(0, "Scan", "t [a#1]")], [_op(0, 0, "FileScan", "source", 0, 3)])
+    seen: dict = {}
+
+    def plan_profile(self, q):
+        if q.id == "q01":
+            raise RunnerError("[KRISHIV_UNSUPPORTED_FEATURE] something")
+        return {"rows": 3, "seconds": 0.5, "profile": profile}
+
+    def init(self, **kw):
+        del kw
+
+    def setup(self, d):
+        seen["timeout"] = self.timeout_s
+
+    monkeypatch.setattr(KrishivEngine, "__init__", init)
+    monkeypatch.setattr(KrishivEngine, "setup", setup)
+    monkeypatch.setattr(KrishivEngine, "teardown", lambda self: None)
+    monkeypatch.setattr(KrishivEngine, "plan_profile", plan_profile)
+    out = ed.run_explain_diff(
+        "tpch", 1, ["q01", "q02"], dataset="tpch-duckdb", threads=1, out_dir=tmp_path / "out", timeout_s=30
+    )
+    text = out.read_text()
+    assert "## q01\n\nNot compared: RunnerError: [KRISHIV_UNSUPPORTED_FEATURE] something" in text
+    assert "## q02" in text
+    assert "| t | 3 | 3 |" in text
+    raw = json.loads(out.with_suffix(".json").read_text())
+    assert raw["q01"] == {"error": "RunnerError: [KRISHIV_UNSUPPORTED_FEATURE] something"}
+    assert seen["timeout"] == 30

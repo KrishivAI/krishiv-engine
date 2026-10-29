@@ -400,11 +400,29 @@ fn plan_replies_the_profile_document() {
     assert!(!json.contains('\n'));
     // The document loads back: the plan tree, its operators and their row counts.
     let profile = krishiv_session::QueryProfile::from_json(json).unwrap();
+    // The plan holds the aggregate and the lineitem scan.
+    let mut names = Vec::new();
+    let mut stack = vec![&profile.plan];
+    while let Some(n) = stack.pop() {
+        names.push((n.name.clone(), n.detail.clone()));
+        stack.extend(n.children.iter());
+    }
+    assert!(names.iter().any(|(n, _)| n == "HashAggregate"), "{names:?}");
     assert!(
-        !profile.plan.children.is_empty() || profile.plan.id.is_some(),
-        "{json}"
+        names
+            .iter()
+            .any(|(n, d)| n == "Scan" && d.contains("lineitem")),
+        "{names:?}"
     );
-    assert!(!profile.metrics.operators.is_empty(), "{json}");
+    // The aggregate's output side reports the three groups (`l_returnflag` A, N, R).
+    let agg_out: u64 = profile
+        .metrics
+        .operators
+        .values()
+        .filter(|o| o.name == "HashAggregate" && o.role == krishiv_exec::OperatorRole::Source)
+        .map(|o| o.metrics.rows_out)
+        .sum();
+    assert_eq!(agg_out, 3, "{json}");
     assert!(
         r.handle_line("PLAN")
             .unwrap()
