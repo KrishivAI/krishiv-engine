@@ -1,12 +1,10 @@
 {
   "cases": {
-    "depends-on-command": [
-      20
-    ],
     "fn-json": [
       1,
       12,
       18,
+      20,
       21,
       22,
       24,

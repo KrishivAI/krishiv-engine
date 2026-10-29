@@ -9,7 +9,6 @@
       6,
       7,
       8,
-      9,
       10,
       11,
       12,
@@ -25,6 +24,9 @@
     ],
     "sql-commands": [
       0
+    ],
+    "test-udfs": [
+      9
     ]
   },
   "file": "udf/udf-window",

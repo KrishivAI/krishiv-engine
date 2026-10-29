@@ -1,6 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
+    "nested-interval-types": [
       1,
       2,
       3

@@ -1,6 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
+    "subqueries": [
       3
     ]
   },
