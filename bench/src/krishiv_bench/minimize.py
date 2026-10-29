@@ -118,6 +118,29 @@ def split_top(text: str, sep: str) -> list[str]:
     return [p.strip() for p in parts]
 
 
+def split_conjuncts(text: str) -> list[str]:
+    """Splits ``text`` at its top-level ANDs, skipping the AND that belongs to a ``BETWEEN x AND y``."""
+    m = mask(text)
+    dep = depths(m)
+    cuts: list[re.Match[str]] = []
+    pending_between = 0
+    for h in re.finditer(r"\b(?:and|between)\b", m, re.IGNORECASE):
+        if dep[h.start()] != 0:
+            continue
+        if h.group(0).lower() == "between":
+            pending_between += 1
+        elif pending_between:
+            pending_between -= 1
+        else:
+            cuts.append(h)
+    parts, last = [], 0
+    for h in cuts:
+        parts.append(text[last : h.start()])
+        last = h.end()
+    parts.append(text[last:])
+    return [p.strip() for p in parts]
+
+
 _CLAUSE = r"select|from|where|group\s+by|having|order\s+by|limit|window|qualify"
 _SETOP = r"union(?:\s+all)?|intersect|except"
 
@@ -181,8 +204,9 @@ def candidates(sql: str) -> Iterator[str]:
         hit = [h for h in top_level(m, key.replace(" ", r"\s+"), dep)]
         if key in by and hit:
             yield _replace(sql, hit[0].start(), by[key][1], "")
-    if re.search(r"\bselect\s+distinct\b", m, re.IGNORECASE):
-        yield re.sub(r"\bselect\s+distinct\b", "select", sql, count=1, flags=re.IGNORECASE)
+    distinct_at = re.search(r"\bselect\s+distinct\b", m, re.IGNORECASE)
+    if distinct_at:  # found in the masked text, replaced at the same offsets in the real one
+        yield sql[: distinct_at.start()] + "select" + sql[distinct_at.end() :]
     # Select-list items.
     if "select" in by:
         s, e = by["select"]
@@ -198,7 +222,7 @@ def candidates(sql: str) -> Iterator[str]:
     for key in ("where", "having"):
         if key in by:
             s, e = by[key]
-            conj = split_top(sql[s:e], "and")
+            conj = split_conjuncts(sql[s:e])
             if len(conj) > 1:
                 half = len(conj) // 2
                 if half > 1:
@@ -291,7 +315,7 @@ def referenced_tables(sql: str, tables: list[str]) -> list[str]:
 
 
 def seed_slice(table: pa.Table, rows: int) -> pa.Table:
-    """The first ``rows`` rows, or an even stride over the table when it has more."""
+    """The first ``rows`` rows (the whole table when it has fewer)."""
     if table.num_rows <= rows:
         return table
     return table.slice(0, rows)
@@ -440,10 +464,14 @@ class Oracle:
         order_only = not ok and ordered and compare.rows_match(k_rows, ref_rows, False, sql=sql)[0]
         return {"differs": not ok, "reference": ref_rows, "krishiv": k_rows, "order_only": order_only}
 
+    def still_differs(self, outcome: dict[str, Any]) -> bool:
+        """Whether ``outcome`` is a difference of the pinned kind (any kind when nothing is pinned)."""
+        return bool(outcome["differs"]) and (self._sig is None or signature(outcome) == self._sig)
+
     def differs(self, sql: str, tables: dict[str, pa.Table]) -> bool:
         """True when the engines disagree in the pinned way (any way, when nothing is pinned)."""
         out = self.outcome(sql, tables)
-        return bool(out["differs"]) and (self._sig is None or signature(out) == self._sig)
+        return self.still_differs(out)
 
 
 def signature(outcome: dict[str, Any]) -> str:
@@ -537,24 +565,22 @@ def load_tables(root: Path, names: list[str], whole_rows: int, pool_rows: int) -
         f = root / f"{t}.parquet"
         src = f if f.is_file() else root / t
         files = [src] if src.is_file() else sorted(src.glob("*.parquet"))
-        if len(files) == 1 and pq.ParquetFile(files[0]).metadata.num_rows > whole_rows:
-            tables[t] = _pool(files[0], pool_rows)
+        if sum(pq.ParquetFile(x).metadata.num_rows for x in files) > whole_rows:
+            tables[t] = _pool(files, pool_rows)
             big.add(t)
         else:
             tables[t] = pa.concat_tables([pq.read_table(x) for x in files])
-            if tables[t].num_rows > whole_rows:
-                big.add(t)
     return tables, big
 
 
-def _pool(path: Path, rows: int) -> pa.Table:
-    """Evenly spaced whole row groups of ``path`` until about ``rows`` rows are collected."""
-    pf = pq.ParquetFile(path)
-    groups = pf.metadata.num_row_groups
-    sizes = [pf.metadata.row_group(i).num_rows for i in range(groups)]
-    want = max(1, min(groups, round(rows / max(1, max(sizes)))))
-    chosen = sorted({int(i * groups / want) for i in range(want)})
-    return pf.read_row_groups(chosen)
+def _pool(files: list[Path], rows: int) -> pa.Table:
+    """Evenly spaced whole row groups, across all ``files`` in order, until about ``rows`` rows are collected."""
+    handles = [pq.ParquetFile(f) for f in files]
+    groups = [(h, i) for h in handles for i in range(h.metadata.num_row_groups)]
+    largest = max((h.metadata.row_group(i).num_rows for h, i in groups), default=1)
+    want = max(1, min(len(groups), round(rows / max(1, largest))))
+    chosen = sorted({int(k * len(groups) / want) for k in range(want)})
+    return pa.concat_tables([groups[k][0].read_row_group(groups[k][1]) for k in chosen])
 
 
 def sql_literal(v: Any) -> str:
@@ -587,8 +613,18 @@ def setup_sql(tables: dict[str, pa.Table]) -> str:
     return "\n".join(out) + "\n"
 
 
+def check_case_dir(out: Path) -> None:
+    """Refuses an ``--out`` that exists, is not empty and is not a previous case: it would be deleted."""
+    if out.exists() and (
+        not out.is_dir()
+        or (any(out.iterdir()) and not (out / "query.sql").exists() and not (out / "README.txt").exists())
+    ):
+        raise SystemExit(f"{out} exists and is not a previous minimize case; refusing to replace it")
+
+
 def write_case(out: Path, sql: str, tables: dict[str, pa.Table], outcome: dict[str, Any], note: str) -> Path:
     """Writes the golden case directory (see the module docstring)."""
+    check_case_dir(out)
     shutil.rmtree(out, ignore_errors=True)
     (out / "data").mkdir(parents=True)
     for n, t in tables.items():
@@ -636,6 +672,7 @@ def run_minimize(
     names = discover_tables(root)
     if not names:
         raise SystemExit(f"no dataset at {root}")
+    check_case_dir(Path(out_dir) if out_dir else data_root() / "minimized" / f"{suite}_{query}")  # before the work
     (q,) = load_queries(suite, "krishiv", [query])
     used_names = referenced_tables(q.sql, names)
     tables, big = load_tables(root, used_names, whole_rows, seed_rows * ESCALATION[-1])
@@ -652,6 +689,11 @@ def run_minimize(
         except ValueError as e:
             raise SystemExit(str(e)) from e
         outcome = oracle.outcome(sql, small)
+        if not oracle.still_differs(outcome):
+            raise SystemExit(
+                "the minimal case no longer reproduces the pinned difference on a final run (a flaky engine?); "
+                "nothing was written"
+            )
     finally:
         krishiv.teardown()
         ref.teardown()

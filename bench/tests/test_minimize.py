@@ -507,3 +507,104 @@ def test_ddmin_stops_when_told_to():
     assert mz.ddmin(items, test, stop=lambda: True) == items
     out = mz.shrink_rows({"t": _table(10)}, lambda t: True, stop=lambda: True)
     assert out["t"].num_rows == 10
+
+
+def test_split_conjuncts_keeps_a_between_whole():
+    parts = mz.split_conjuncts(
+        "a between 1 and 5 and b = 'x and y' and (c between 2 and 3 and d) and e BETWEEN 1 AND 2"
+    )
+    assert parts == ["a between 1 and 5", "b = 'x and y'", "(c between 2 and 3 and d)", "e BETWEEN 1 AND 2"]
+    out = [" ".join(c.split()) for c in mz.candidates("select a from t where a between 1 and 5 and b = 2")]
+    assert "select a from t where b = 2" in out
+    assert "select a from t where a between 1 and 5" in out
+    assert not any(c[-17:] == "where a between 1" for c in out)
+
+
+def test_distinct_is_dropped_at_the_masked_offset():
+    out = mz.candidates("select distinct a, 'select distinct' from t")
+    assert "select a, 'select distinct' from t" in out
+
+
+def test_refuses_to_delete_an_unrelated_output_directory(tmp_path: Path):
+    mz.check_case_dir(tmp_path / "new")  # does not exist: fine
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    mz.check_case_dir(empty)
+    busy = tmp_path / "busy"
+    busy.mkdir()
+    (busy / "precious.txt").write_text("x")
+    with pytest.raises(SystemExit, match="refusing"):
+        mz.check_case_dir(busy)
+    with pytest.raises(SystemExit, match="refusing"):
+        mz.write_case(busy, "select 1", {"t": _table(2)}, {"reference": [], "krishiv": []}, "n")
+    assert (busy / "precious.txt").exists()
+    afile = tmp_path / "file"
+    afile.write_text("x")
+    with pytest.raises(SystemExit, match="refusing"):
+        mz.check_case_dir(afile)
+    case = mz.write_case(tmp_path / "case", "select 1", {"t": _table(2)}, {"reference": [], "krishiv": []}, "n")
+    mz.write_case(
+        case, "select 2", {"t": _table(2)}, {"reference": [], "krishiv": []}, "n"
+    )  # a previous case: replaced
+    assert (case / "query.sql").read_text() == "select 2;\n"
+
+
+def test_pool_samples_row_groups_across_all_files(tmp_path: Path):
+    import pyarrow.parquet as pq
+
+    parts = tmp_path / "hits"
+    parts.mkdir()
+    for k in range(4):
+        pq.write_table(
+            pa.table({"k": list(range(k * 1000, k * 1000 + 1000))}), parts / f"p{k}.parquet", row_group_size=250
+        )
+    tables, big = mz.load_tables(tmp_path, ["hits"], whole_rows=500, pool_rows=1000)
+    assert big == {"hits"}
+    ks = tables["hits"].column("k").to_pylist()
+    assert len(ks) == 1000
+    assert {k // 1000 for k in ks} == {0, 1, 2, 3}  # every file contributes, not just the first
+
+
+def test_run_minimize_aborts_when_the_final_run_no_longer_differs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import pyarrow.parquet as pq
+
+    from krishiv_bench import adapters
+    from krishiv_bench.adapters.base import Query
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    root = tmp_path / "tpch-duckdb" / "sf1"
+    root.mkdir(parents=True)
+    pq.write_table(_table(30), root / "t.parquet")
+    monkeypatch.setattr("krishiv_bench.paths.dataset_dir", lambda name, sf: root)
+    monkeypatch.setattr(
+        "krishiv_bench.runner.load_queries", lambda s, e, only=None: [Query("q1", "select count(*) from t", "tpch")]
+    )
+    monkeypatch.setattr(adapters, "make_engine", lambda name, **kw: FakeEngine())
+
+    class Flaky(FakeEngine):
+        """Buggy until healed, then it answers like the reference."""
+
+        healed = False
+
+        def run(self, q):
+            if Flaky.healed:
+                self.bug = False
+            return super().run(q)
+
+    monkeypatch.setattr(mz, "KrishivEngine", lambda **kw: Flaky(bug=True))
+    orig = mz.minimize
+
+    def minimize_then_heal(*a, **k):
+        out = orig(*a, **k)
+        Flaky.healed = True
+        return out
+
+    monkeypatch.setattr(mz, "minimize", minimize_then_heal)
+    with pytest.raises(SystemExit, match="no longer reproduces"):
+        mz.run_minimize("tpch", "q1", 1, seed_rows=20, out_dir=str(tmp_path / "flaky"))
+    assert not (tmp_path / "flaky").exists()
+    busy = tmp_path / "busy"
+    busy.mkdir()
+    (busy / "x").write_text("x")
+    with pytest.raises(SystemExit, match="refusing"):
+        mz.run_minimize("tpch", "q1", 1, out_dir=str(busy))
