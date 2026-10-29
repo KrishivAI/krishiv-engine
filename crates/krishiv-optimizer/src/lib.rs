@@ -5,7 +5,10 @@
 //! Rules run in batches, each batch to a fixed point (at most
 //! [`MAX_ITERATIONS`] rounds, as Spark's `spark.sql.optimizer.maxIterations`):
 //!
-//! 0. **Implied join filters**, once: each input of an inner join is
+//! 0. **Inline CTEs**, once: each reference to a deterministic (or
+//!    singly referenced) `WITH` definition becomes a fresh instance of it
+//!    (Spark's `InlineCTE`), so the rules below see through it.
+//!    **Implied join filters**, once: each input of an inner join is
 //!    filtered with what its condition's disjunctions imply on it alone.
 //! 1. **Rewrite**: constant folding and boolean simplification, filter
 //!    pushdown (through projections, aggregates onto their grouping keys,
@@ -43,6 +46,7 @@ mod dag;
 mod expr;
 mod fold;
 mod group_limit;
+mod inline_cte;
 mod join_order;
 mod limit;
 mod project;
@@ -228,6 +232,7 @@ fn run(
             on: tracing,
             steps: Vec::new(),
         };
+        let root = t.once("InlineCTE", &root, |r| inline_cte::inline(Arc::clone(r)))?;
         let root = t.once("ImpliedJoinFilters", &root, |r| {
             dag::rewrite_up(Arc::clone(r), &mut |p| {
                 Ok(pushdown::imply_join_condition(p))

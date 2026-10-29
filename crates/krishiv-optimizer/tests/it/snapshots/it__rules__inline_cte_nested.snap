@@ -1,0 +1,18 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "WITH v AS (SELECT a, b FROM t WHERE c > 0), w AS (SELECT a FROM v WHERE b = 'x') SELECT w.a FROM w JOIN v ON w.a = v.a WHERE v.b = 'y'"
+---
+Project [a#5]
++- Join Inner, (a#5 == a#6)
+   :- Project [a#17 AS a#5]
+   :  +- Shift +14
+   :     +- Project [a#11 AS a#3]
+   :        +- Shift +11
+   :           +- Project [a#0]
+   :              +- Filter ((c#2 > 0L) and (b#1 == 'x'))
+   :                 +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #1)
+   +- Project [a#28 AS a#6]
+      +- Shift +28
+         +- Project [a#0]
+            +- Filter ((c#2 > 0L) and (b#1 == 'y'))
+               +- Shared #1, printed above

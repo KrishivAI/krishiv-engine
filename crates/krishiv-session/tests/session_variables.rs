@@ -1501,7 +1501,7 @@ fn explain_variable_commands() {
 fn decimal_variable_comparisons_keep_the_variable() {
     let s = Session::new().unwrap();
     block_on(s.sql("DECLARE VARIABLE v DECIMAL(3,1) DEFAULT 1.5")).unwrap();
-    let df = block_on(s.sql("SELECT id > v FROM range(3)")).unwrap();
+    let df = block_on(s.sql("SELECT id > v FROM range(3) ORDER BY id")).unwrap();
     let schema = block_on(df.schema()).unwrap();
     assert_eq!(schema.field(0).name(), "(id > v)");
     let rows = block_on(df.collect()).unwrap();

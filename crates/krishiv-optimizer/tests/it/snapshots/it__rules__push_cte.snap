@@ -2,7 +2,7 @@
 source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: "WITH v AS (SELECT a, b FROM t) SELECT * FROM v WHERE a = 1"
 ---
-WithCte [v]
-:- Scan spark_catalog.default.t [a#0, b#1]
-+- Filter (a#3 == 1)
-   +- CteRef v [a#3, b#4]
+Project [a#5 AS a#3, b#6 AS b#4]
++- Shift +5
+   +- Filter (a#0 == 1)
+      +- Scan spark_catalog.default.t [a#0, b#1]

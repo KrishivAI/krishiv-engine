@@ -175,7 +175,10 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
                     .iter()
                     .all(|id| aliases.contains_key(id) || child.contains(id));
                 let hits = refs.iter().any(|id| aliases.contains_key(id));
-                (!refs.is_empty() && grouped && !(hits && has_subquery(p)))
+                // A predicate on no column (a folded `false`) commutes too:
+                // with grouping keys, no input rows means no groups.
+                let constant = references(p).is_empty() && !has_subquery(p);
+                ((!refs.is_empty() || constant) && grouped && !(hits && has_subquery(p)))
                     .then(|| substitute(p, &aliases))
             })
         }
@@ -199,6 +202,13 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             kind,
             condition,
         } => push_join(plan, left, right, *kind, condition, movable),
+        // Into every input of a positional union, rewritten onto that input's
+        // columns (Spark's `PushPredicateThroughNonJoin` for `Union`).
+        PlanNode::Union {
+            inputs,
+            by_name: false,
+            ..
+        } => push_union(plan, inputs, movable),
         // A predicate on partitioning columns only keeps or drops whole
         // partitions: it filters below the window (Spark's
         // `PushPredicateThroughNonJoin`, when every partitioning
@@ -219,6 +229,56 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
     };
     stay.extend(fixed);
     (out, stay)
+}
+
+/// `movable` pushed into each input of a positional union; a predicate with a
+/// subquery or an outer reference stays above (it would run once per input).
+fn push_union(
+    plan: &Arc<LogicalPlan>,
+    inputs: &[Arc<LogicalPlan>],
+    movable: Vec<Arc<Expr>>,
+) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {
+    let (down, mut stay): (Vec<_>, Vec<_>) = movable
+        .into_iter()
+        .partition(|p| !has_subquery(p) && !has_outer_reference(p));
+    let out = plan.resolved_output();
+    let outs: Option<Vec<_>> = inputs.iter().map(|i| i.resolved_output()).collect();
+    let (Some(out), Some(outs)) = (out, outs) else {
+        stay.extend(down);
+        return (Arc::clone(plan), stay);
+    };
+    if down.is_empty() || outs.iter().any(|o| o.len() != out.len()) {
+        stay.extend(down);
+        return (Arc::clone(plan), stay);
+    }
+    let pushed = inputs
+        .iter()
+        .zip(&outs)
+        .map(|(input, cols)| {
+            let map: HashMap<AttrId, Arc<Expr>> = out
+                .iter()
+                .zip(cols)
+                .map(|(o, c)| {
+                    let col = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                        c.clone(),
+                    ))));
+                    (o.id, col)
+                })
+                .collect();
+            into(
+                input,
+                down.iter().map(|p| fold(&substitute(p, &map))).collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    // The same node with the new inputs (its origin kept).
+    let mut next = pushed.into_iter();
+    let union = Arc::clone(plan)
+        .map_children(|old| Ok::<_, std::convert::Infallible>(next.next().unwrap_or(old)));
+    match union {
+        Ok(u) => (u, stay),
+        Err(never) => match never {},
+    }
 }
 
 /// The attribute `e` reads when it is a column.
