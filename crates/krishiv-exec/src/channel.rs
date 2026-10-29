@@ -276,17 +276,37 @@ impl Order {
 }
 
 /// The bytes a held-back batch is charged: its rows' bytes, not the whole
-/// buffers it shares (a scan's filtered batch shares its decoded pages; as
-/// the sort's run accounting does).
+/// buffers it shares (a scan's filtered batch shares its decoded pages).
+/// A string or binary view column is charged its views and the bytes its
+/// rows' longer values take, not the data buffers they point into (whole
+/// pages: charging those filled the pool with a fraction of the rows).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a view's low 32 bits are its value's length"
+)]
 fn held_bytes(batch: &Batch) -> usize {
+    use arrow_array::cast::AsArray;
+    use arrow_schema::DataType;
+    let views = |lens: &mut dyn Iterator<Item = u32>, n: usize| {
+        n * 16 + lens.filter(|&l| l > 12).map(|l| l as usize).sum::<usize>()
+    };
     batch
         .data()
         .columns()
         .iter()
-        .map(|c| {
-            c.to_data()
+        .map(|c| match c.data_type() {
+            DataType::Utf8View => {
+                let a = c.as_string_view();
+                views(&mut a.views().iter().map(|v| *v as u32), a.views().len())
+            }
+            DataType::BinaryView => {
+                let a = c.as_binary_view();
+                views(&mut a.views().iter().map(|v| *v as u32), a.views().len())
+            }
+            _ => c
+                .to_data()
                 .get_slice_memory_size()
-                .unwrap_or_else(|_| c.get_array_memory_size())
+                .unwrap_or_else(|_| c.get_array_memory_size()),
         })
         .sum()
 }
@@ -683,6 +703,26 @@ mod tests {
         assert!(turn.as_mut().poll(&mut cx).is_ready());
         assert_eq!(status(&ok(sink.sink(batch(3), &mut l1, &g))), "finished");
         assert_eq!(status(&ok(sink.sink(batch(1), &mut l0, &g))), "finished");
+    }
+
+    /// A view column is charged its views and its long values' bytes, not
+    /// the buffers it shares with the batch it was sliced from.
+    #[test]
+    fn held_batches_are_charged_their_rows() {
+        use arrow_array::StringViewArray;
+        let long = "x".repeat(100);
+        let values: Vec<String> = (0..10_000).map(|i| format!("{long}{i}")).collect();
+        let all = StringViewArray::from_iter_values(values.iter());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let two = all.slice(5, 2);
+        let b = Batch::new(ok(RecordBatch::try_new(schema, vec![Arc::new(two)])));
+        let want = 2 * 16 + values[5].len() + values[6].len();
+        assert_eq!(held_bytes(&b), want);
+        assert_eq!(held_bytes(&batch(1)), 8);
     }
 
     /// A driver the runner did not register sends straight on.
