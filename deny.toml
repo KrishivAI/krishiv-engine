@@ -28,7 +28,13 @@ confidence-threshold = 0.9
 # tiny-keccak (CC0-1.0, a public-domain dedication) is reached only on wasm32:
 # arrow-array enables ahash's `compile-time-rng` there (const-random-macro, a
 # proc macro); native targets use `runtime-rng` and never build it.
-exceptions = [{ crate = "tiny-keccak", allow = ["CC0-1.0"] }]
+# webpki-root-certs (CDLA-Permissive-2.0, Mozilla's root store as data) is
+# reached through reqwest's rustls platform verifier, which object_store's
+# `aws`/`gcp`/`azure` features enable (P2-T084).
+exceptions = [
+    { crate = "tiny-keccak", allow = ["CC0-1.0"] },
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [bans]
 # Global default is a warning; the crates that matter for ABI/FFI and Arrow

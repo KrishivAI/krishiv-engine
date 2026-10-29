@@ -53,4 +53,7 @@ mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishi
 # Live async-task diagnostics over `tokio-console` (P2-T129): off by default;
 # needs `RUSTFLAGS="--cfg tokio_unstable"` for the task names.
 tokio-console = ["krishiv/tokio-console"]
+# Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
+# inside the dependency and binary-size budgets.
+cloud = ["krishiv/cloud"]
 full = ["krishiv/full"]

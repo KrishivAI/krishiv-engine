@@ -60,6 +60,9 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 loom = { workspace = true, features = ["futures"] }
 
 [features]
+# Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
+# default build stays inside the dependency and binary-size budgets.
+cloud = ["krishiv-io/cloud"]
 # Row-layout key-page prototype (P2-T157); not part of the default build.
 row-table-prototype = []
 # Live async-task diagnostics over `tokio-console` (P2-T129): task names and
