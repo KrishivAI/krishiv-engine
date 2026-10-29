@@ -373,7 +373,9 @@ class Oracle:
             return {"differs": True, "reference": ref_rows, "krishiv": f"error: {describe_error(e)}"}
         ordered = compare.has_top_level_order_by(sql)
         ok, _ = compare.rows_match(k_rows, ref_rows, ordered, sql=sql)
-        return {"differs": not ok, "reference": ref_rows, "krishiv": k_rows}
+        # The same rows in another order: a tie-order or ordering difference, not a wrong value.
+        order_only = not ok and ordered and compare.rows_match(k_rows, ref_rows, False, sql=sql)[0]
+        return {"differs": not ok, "reference": ref_rows, "krishiv": k_rows, "order_only": order_only}
 
     def differs(self, sql: str, tables: dict[str, pa.Table]) -> bool:
         """True when the engines disagree in the pinned way (any way, when nothing is pinned)."""
@@ -382,12 +384,13 @@ class Oracle:
 
 
 def signature(outcome: dict[str, Any]) -> str:
-    """The kind of difference: the error class when Krishiv failed, else ``rows`` (the answers differ)."""
+    """The kind of difference: the error class when Krishiv failed, ``order`` when only the row order differs,
+    else ``rows`` (the answers differ)."""
     k = outcome["krishiv"]
     if isinstance(k, str):
         m = re.search(r"\[([A-Z][A-Z0-9_.]+)\]", k)
         return f"error:{m.group(1)}" if m else "error"
-    return "rows"
+    return "order" if outcome.get("order_only") else "rows"
 
 
 class _Q:

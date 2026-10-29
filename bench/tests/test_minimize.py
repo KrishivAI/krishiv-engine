@@ -327,6 +327,7 @@ def test_krishiv_engine_can_be_set_up_again_after_teardown(tmp_path: Path):
 
 def test_signature_distinguishes_error_classes_from_wrong_rows():
     assert mz.signature({"krishiv": [(1,)]}) == "rows"
+    assert mz.signature({"krishiv": [(1,)], "order_only": True}) == "order"
     assert mz.signature({"krishiv": "error: RunnerError: [DIVIDE_BY_ZERO] Division by zero"}) == "error:DIVIDE_BY_ZERO"
     assert mz.signature({"krishiv": "error: something broke"}) == "error"
 
@@ -380,3 +381,17 @@ def test_load_tables_reads_small_tables_whole_and_pools_big_ones(tmp_path: Path)
     assert ks[0] == 0
     assert ks[-1] > 5000  # spread over the file, not the head
     assert tables["wide"].num_rows == 3000
+
+
+def test_a_pure_reordering_has_the_order_signature(tmp_path: Path):
+    class Rev(FakeEngine):
+        def run(self, q):
+            return [(2,), (1,)] if self.bug else [(1,), (2,)]
+
+    o = mz.Oracle(Rev(), Rev(bug=True), tmp_path / "o")
+    out = o.outcome("select k from t order by k", {"t": _table(3)})
+    assert out["differs"] is True
+    assert out["order_only"] is True
+    assert mz.signature(out) == "order"
+    unordered = o.outcome("select k from t", {"t": _table(3)})
+    assert unordered["differs"] is False
