@@ -232,6 +232,7 @@ fn invalid_values_are_typed_errors() {
         ("krishiv.sql.shuffle.partitionsHint", "4.5"),
         ("krishiv.sql.storeAssignmentPolicy", "LOOSE"),
         ("spark.sql.ansi.enabled", "yes"),
+        ("spark.sql.legacy.ctePrecedencePolicy", "sometimes"),
     ] {
         let e = c.set(k, v).unwrap_err();
         assert_eq!(
@@ -246,6 +247,45 @@ fn invalid_values_are_typed_errors() {
 }
 
 #[test]
+fn cte_precedence_policy_parses_and_defaults() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&CTE_PRECEDENCE_POLICY).and_then(ConfigValue::as_str),
+        Some("CORRECTED")
+    );
+    for (raw, canonical) in [
+        ("EXCEPTION", "EXCEPTION"),
+        ("legacy", "LEGACY"),
+        (" Corrected ", "CORRECTED"),
+    ] {
+        c.set("spark.sql.legacy.ctePrecedencePolicy", raw).unwrap();
+        assert_eq!(
+            c.get(&CTE_PRECEDENCE_POLICY).and_then(ConfigValue::as_str),
+            Some(canonical),
+            "{raw}"
+        );
+    }
+    let e = c
+        .set("spark.sql.legacy.ctePrecedencePolicy", "sometimes")
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    assert!(e.message().contains("sometimes"), "{e}");
+    assert!(e.message().contains("EXCEPTION, LEGACY, CORRECTED"), "{e}");
+    // A rejected value leaves the previous one in place.
+    assert_eq!(
+        c.get(&CTE_PRECEDENCE_POLICY).and_then(ConfigValue::as_str),
+        Some("CORRECTED")
+    );
+    // The Krishiv key takes the same values as its Spark alias.
+    c.set("krishiv.sql.legacy.ctePrecedencePolicy", "exception")
+        .unwrap();
+    assert_eq!(
+        c.get(&CTE_PRECEDENCE_POLICY).and_then(ConfigValue::as_str),
+        Some("EXCEPTION")
+    );
+}
+
+#[test]
 fn spark_aliases_map_to_krishiv_keys() {
     let mut c = Config::new();
     assert_eq!(c.set("spark.sql.ansi.enabled", "false").unwrap(), None);
@@ -253,6 +293,10 @@ fn spark_aliases_map_to_krishiv_keys() {
     assert_eq!(
         lookup("spark.sql.session.timeZone").map(|e| e.key),
         Some(SESSION_TIME_ZONE.key)
+    );
+    assert_eq!(
+        lookup("spark.sql.legacy.ctePrecedencePolicy").map(|e| e.key),
+        Some(CTE_PRECEDENCE_POLICY.key)
     );
     assert_eq!(
         lookup("krishiv.sql.ansi.enabled").map(|e| e.key),
