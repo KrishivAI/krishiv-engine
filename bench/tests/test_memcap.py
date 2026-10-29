@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 
@@ -746,9 +747,11 @@ def test_real_scope_timeout_kills_the_whole_tree():
     o = monitor(proc, cg, None, 1.0)
     assert o.timed_out
     assert cg is not None
-    try:  # the cgroup disappears with its last process: any read error means it is gone, which is the point
+    try:  # the cgroup disappears with its last process: reading it then fails with ENOENT or ENODEV
         remaining = (cg.path / "cgroup.procs").read_text().strip()
-    except OSError:
+    except OSError as e:
+        if e.errno not in (errno.ENOENT, errno.ENODEV):
+            raise  # a permission or I/O error says nothing about the processes
         remaining = ""
     assert remaining == ""
 
