@@ -1175,7 +1175,7 @@ fn key_order(
 /// `LAST_WIN` (the last value wins but the key keeps its first-seen
 /// position).
 ///
-/// Keys are grouped by sorting their indices once under [`key_order`], so
+/// Keys are grouped by sorting their indices once under `key_order`, so
 /// nested and view keys need no hashing.
 ///
 /// # Errors
