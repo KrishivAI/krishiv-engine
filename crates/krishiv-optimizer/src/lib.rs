@@ -29,7 +29,9 @@
 //!    does not have.
 //! 4. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
-//! 5. **Tidy**: the rewrite batch again over the pruned plan.
+//! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
+//!    tidy repeat until neither changes the plan (folding can leave columns
+//!    unread).
 //!
 //! Every rule applies inside subquery plans too, and rewrites a subtree
 //! shared through `Arc` once, so the plan stays a DAG. A rule that changes
@@ -285,7 +287,19 @@ fn run(
             }
         }
         let root = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
-        let root = batch(root, "Tidy", &mut t)?;
+        let mut root = batch(root, "Tidy", &mut t)?;
+        // Tidying can fold a filter to a constant and leave columns unread
+        // (a `false` that reached a filter on `b` frees `b`): prune and tidy
+        // again until neither changes the plan, so the result is a fixed point.
+        for round in 2..=MAX_ITERATIONS {
+            let pruned = prune::prune(&root);
+            t.step("Prune", round, "Prune", &root, &pruned);
+            let tidied = batch(pruned, "Tidy", &mut t)?;
+            if same_plan(&tidied, &root) {
+                break;
+            }
+            root = tidied;
+        }
         Ok((root, t.steps))
     };
     // Passes recurse once per level and nest; rewrites may deepen the plan.
@@ -299,6 +313,16 @@ fn run(
         Ok(p) => Ok((p, steps)),
         Err(_) => Ok((plan.clone(), Vec::new())),
     }
+}
+
+/// Whether `a` and `b` are the same plan: the same relation, or equal
+/// structurally (a rewrite may rebuild a relation it does not change).
+fn same_plan(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
+    Arc::ptr_eq(a, b)
+        || matches!(
+            (Plan::try_new(Arc::clone(a)), Plan::try_new(Arc::clone(b))),
+            (Ok(x), Ok(y)) if x.structurally_eq(&y)
+        )
 }
 
 /// The UDF folding context of one optimization: the session's library and

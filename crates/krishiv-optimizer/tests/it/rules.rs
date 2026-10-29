@@ -132,6 +132,12 @@ const CASES: &[(&str, &str)] = &[
     ),
     // Filters into each input of a union, rewritten onto its columns; a
     // branch whose literal makes the filter false keeps only `false`.
+    // A constant `false` that tidying folds into a filter frees a column of a
+    // shared scan: prune and tidy repeat until the plan is a fixed point.
+    (
+        "tidy_frees_columns_fixed_point",
+        "SELECT * FROM (SELECT x1.c0 AS c0 FROM (SELECT x3.d AS c0, count(*) AS c1 FROM t AS x2 JOIN u AS x3 ON x2.c = x3.a CROSS JOIN (SELECT x5.a AS c0, count(*) AS c1 FROM t AS x5 WHERE (NOT (x5.b <= 'z') AND (x5.c <> 2 AND x5.b <> x5.b)) GROUP BY x5.a) AS x4 WHERE (x2.c IN (-2, -2) AND x2.c = 3) GROUP BY x3.d) AS x1 WHERE NOT (NOT (x1.c1 IS NULL))) ORDER BY c0 LIMIT 4",
+    ),
     (
         "push_union",
         "SELECT * FROM (SELECT a, 's' AS k, c FROM t UNION ALL SELECT a, 'u' AS k, CAST(a AS BIGINT) FROM u) x WHERE k = 's' AND a > 1",
@@ -476,7 +482,8 @@ fn rules() {
         let again = optimize_with(&optimized, &support::AllDistinct).unwrap();
         assert!(
             again.structurally_eq(&optimized),
-            "{name} is a fixed point:\n{}",
+            "{name} is a fixed point:\nFIRST\n{}\nAGAIN\n{}",
+            optimized.root(),
             again.root()
         );
         insta::assert_snapshot!(*name, optimized.root().to_string(), sql);
