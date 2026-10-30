@@ -56,6 +56,8 @@ pub use format::{
     AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds,
     PushReadAt, ReadAt, ScanUnit, ScanUnitMetrics, Splittable, Step, UnitPlan, WrittenFile,
 };
+#[cfg(unix)]
+pub use io::beneath::{AnchorError, BeneathStore};
 pub use io::{
     ByteRange, FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, ObjectScheme,
     ParsedUrl, SecretResolver, StoreId, StorePolicy, StoreRegistry, Tail, VersionToken,

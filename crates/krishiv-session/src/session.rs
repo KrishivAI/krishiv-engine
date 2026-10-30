@@ -1494,40 +1494,103 @@ impl Session {
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
         let job = job_uuid();
-        let Some(write) =
-            DirectoryWrite::begin(&io, at.store.clone(), at.path.clone(), mode, job.clone())
-                .await?
-        else {
-            // `ignore` found the path: nothing is written.
-            return Ok(());
-        };
-        let schema = Arc::clone(physical.schema());
-        let plan = physical.into_write(WritePlan {
-            format: format.name().to_owned(),
-            options: options.clone(),
-            store: at.store.to_string(),
-            dir: at.path.as_ref().to_owned(),
-            job_uuid: job,
-            max_records_per_file: max_records_per_file(&options, format.name())?,
-            target_file_bytes: 0,
-        });
-        let worker = self.worker(env);
-        let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
-        let mut batches = Vec::new();
-        while let Some(batch) = rows.next().await {
-            batches.push(batch?);
+        // Every name of the write is resolved relative to the directory
+        // opened here, never through a link (P2-T199). The registration
+        // lives until the write is over.
+        let (store, _registration) = self.anchor_local_write(&at, &job)?;
+        let max_records = max_records_per_file(&options, format.name())?;
+        let written = async {
+            let Some(write) =
+                DirectoryWrite::begin(&io, store.clone(), at.path.clone(), mode, job.clone())
+                    .await?
+            else {
+                // `ignore` found the path: nothing is written.
+                return Ok(());
+            };
+            let schema = Arc::clone(physical.schema());
+            let plan = physical.into_write(WritePlan {
+                format: format.name().to_owned(),
+                options: options.clone(),
+                store: store.key().to_owned(),
+                dir: at.path.as_ref().to_owned(),
+                job_uuid: job,
+                max_records_per_file: max_records,
+                target_file_bytes: 0,
+            });
+            let worker = self.worker(env);
+            let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
+            let mut batches = Vec::new();
+            while let Some(batch) = rows.next().await {
+                batches.push(batch?);
+            }
+            drop(rows);
+            let files = committed_files(&batches)?;
+            if let Err(denied) = crate::access::still_physical(self, &at) {
+                // The files the query wrote are under the anchor: remove
+                // them (best effort) before refusing.
+                for f in &files {
+                    drop(io.delete(&store, &f.path).await);
+                }
+                return Err(denied);
+            }
+            write
+                .commit(&io, format.as_ref(), schema, &parsed, files)
+                .await?;
+            // The engine's own write may have replaced a cached path: entries
+            // reading files are dropped, so the next action lists them again.
+            // (An external change drops nothing and stays invisible.)
+            self.refresh_files();
+            Ok(())
         }
-        drop(rows);
-        let files = committed_files(&batches)?;
-        crate::access::still_physical(self, &at)?;
-        write
-            .commit(&io, format.as_ref(), schema, &parsed, files)
-            .await?;
-        // The engine's own write may have replaced a cached path: entries
-        // reading files are dropped, so the next action lists them again.
-        // (An external change drops nothing and stays invisible.)
-        self.refresh_files();
-        Ok(())
+        .await;
+        // A store error after the anchor is open may be a link swapped into
+        // the path: the audited denial is what the caller sees then.
+        if written.is_err() {
+            crate::access::still_physical(self, &at)?;
+        }
+        written
+    }
+
+    /// The store a directory write at `at` goes through: for a local path
+    /// on Unix a [`krishiv_io::BeneathStore`] anchored at the deepest
+    /// existing directory above the target, registered for this write only
+    /// (messages and `EXPLAIN` still name `file`); otherwise the plain
+    /// store of `at`.
+    fn anchor_local_write(
+        &self,
+        at: &krishiv_exec::files::LocatedPath,
+        job: &str,
+    ) -> Result<(StoreId, Option<StoreRegistration>), KrishivError> {
+        #[cfg(unix)]
+        if let Some(local) = at.display.strip_prefix("file:") {
+            match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
+                Ok(anchored) => {
+                    let id = at.store.private_to(job);
+                    self.state
+                        .io
+                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
+                    let registration = StoreRegistration {
+                        io: Arc::clone(&self.state.io),
+                        id: id.clone(),
+                    };
+                    return Ok((id, Some(registration)));
+                }
+                Err(krishiv_io::AnchorError::Swapped(_)) => {
+                    // A link or file where a directory was checked: the
+                    // audited denial if the path now resolves elsewhere.
+                    crate::access::still_physical(self, at)?;
+                    return Err(internal(format!(
+                        "a component of {} is not a directory",
+                        at.display
+                    )));
+                }
+                Err(krishiv_io::AnchorError::Io(e)) => {
+                    return Err(internal(format!("could not open {}: {e}", at.display)));
+                }
+            }
+        }
+        let _ = job;
+        Ok((at.store.clone(), None))
     }
 }
 
@@ -1561,6 +1624,18 @@ fn max_records_per_file(
         }
         .into()
     })
+}
+
+/// Removes a write's private store registration when the write is over.
+struct StoreRegistration {
+    io: Arc<IoScheduler>,
+    id: StoreId,
+}
+
+impl Drop for StoreRegistration {
+    fn drop(&mut self) {
+        self.io.unregister_store(&self.id);
+    }
 }
 
 /// The commit's files from the write plan's result rows (one per file:

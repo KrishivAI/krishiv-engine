@@ -96,10 +96,35 @@ impl StoreId {
     }
 }
 
+/// Separates a store's name from the alias of one write's private
+/// registration of it (see [`StoreId::private_to`]).
+const PRIVATE_MARK: &str = "#private-";
+
+impl StoreId {
+    /// The id under which one write (`job`) registers its own store for the
+    /// same location as `self`: a distinct registry key whose text, in every
+    /// message and in `EXPLAIN`, is still `self`'s.
+    #[must_use]
+    pub fn private_to(&self, job: &str) -> Self {
+        Self::new(format!("{}{PRIVATE_MARK}{job}", self.0))
+    }
+
+    /// The full registry key: [`Display`](fmt::Display) hides the alias of
+    /// [`Self::private_to`] and redacts credentials.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.0
+    }
+}
+
 impl fmt::Display for StoreId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let shown = self
+            .0
+            .split_once(PRIVATE_MARK)
+            .map_or(&*self.0, |(name, _)| name);
         // Typed redaction (ADR 0038): URL credentials never print.
-        OptionValue::from_user("path", self.0.as_ref()).fmt(f)
+        OptionValue::from_user("path", shown).fmt(f)
     }
 }
 
@@ -444,6 +469,15 @@ impl IoScheduler {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, Registered { store, lane });
+    }
+
+    /// Removes the store `id` (a write's private registration, once the
+    /// write is over); requests for it fail afterwards.
+    pub fn unregister_store(&self, id: &StoreId) {
+        self.stores
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
     }
 
     fn store(&self, id: &StoreId) -> Result<(Arc<dyn ObjectStore>, Arc<Lane>)> {
