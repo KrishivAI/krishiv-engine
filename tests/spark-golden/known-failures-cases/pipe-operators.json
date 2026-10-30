@@ -1,10 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      25,
-      26,
-      127
-    ],
     "parser-pipe-collate": [
       27,
       28,
@@ -251,19 +246,9 @@
       313
     ],
     "sql-commands": [
-      0,
-      1,
-      2,
-      3,
-      4,
       5,
-      6,
-      7,
       8,
-      24,
-      314,
-      315,
-      316
+      24
     ]
   },
   "file": "pipe-operators",
