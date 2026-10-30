@@ -681,6 +681,52 @@ fn footers_are_read_ahead_across_a_partition() {
     assert!(m.units > 0 && m.bytes > 0);
 }
 
+/// A scan reporting `row_index` keeps the planned split whole (a text
+/// format would count the lines before every piece again), and the indexes
+/// come back in file order.
+#[test]
+fn a_scan_reporting_row_index_keeps_whole_splits() {
+    let t = Timed::new(StorePolicy::UNPACED);
+    let file = t.file("m/f", 4000);
+    let fx = MockFixture::default();
+    let o = krishiv_io::FormatOptions::defaults(fx.format().options());
+    let scan = FileScan::new(
+        fx.format(),
+        t.sched.context(),
+        schema(),
+        vec![file],
+        o,
+        ScanOptions::default(),
+        splits(1 << 30),
+    )
+    .source(ScanPushdowns {
+        metadata: MetadataCols {
+            row_index: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    })
+    .unwrap();
+    let scan = Arc::new(scan);
+    let out =
+        t.rt.block_on(run(
+            &t.pool,
+            Arc::new(Leaf(Arc::clone(&scan) as Arc<dyn Source>)),
+            4,
+        ))
+        .unwrap();
+    let indexes: Vec<i64> = out
+        .iter()
+        .flat_map(|b| {
+            let m = b.column(b.num_columns() - 1).as_struct();
+            let row = m.column_by_name("row_index").unwrap();
+            row.as_primitive::<Int64Type>().values().to_vec()
+        })
+        .collect();
+    assert_eq!(indexes, (0..4000).collect::<Vec<i64>>());
+    assert_eq!(scan.metrics().splits, 1);
+}
+
 /// One split of a file whose units are many is cut into about four
 /// morsels per driver; the drivers read every unit once and the rows come
 /// back in file order, with the planned split as `_metadata`'s block.
