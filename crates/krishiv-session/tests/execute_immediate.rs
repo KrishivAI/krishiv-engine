@@ -362,8 +362,5 @@ fn scripts_are_refused_inside_execute_immediate_and_when_switched_off() {
         "UNSUPPORTED_FEATURE.SQL_SCRIPTING"
     );
     s.conf().set("spark.sql.scripting.enabled", "true").unwrap();
-    assert_eq!(
-        class(&s, "BEGIN SELECT 1; END"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    assert_eq!(rows(&s, "BEGIN SELECT CAST(1 AS STRING); END"), [["1"]]);
 }
