@@ -338,6 +338,45 @@ impl PyDataFrame {
         })
     }
 
+    /// Runs a collected `writeTo` request in one call (PySpark's
+    /// `DataFrameWriterV2` terminal actions): the table, the builder state
+    /// and the terminal `mode` (`create`, `replace`, `createOrReplace`,
+    /// `append`, `overwrite`, `overwritePartitions`) with the overwrite
+    /// `condition`, if given. The mapping lives here, in
+    /// `krishiv-session`, not in the facade.
+    #[pyo3(signature = (table, mode, provider=None, options=None, properties=None, partitioned_by=None, cluster_by=None, condition=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one bridge call carrying the whole writer state"
+    )]
+    fn write_to_table(
+        &self,
+        py: Python<'_>,
+        table: String,
+        mode: &str,
+        provider: Option<String>,
+        options: Option<Vec<(String, String)>>,
+        properties: Option<Vec<(String, String)>>,
+        partitioned_by: Option<Vec<String>>,
+        cluster_by: Option<Vec<String>>,
+        condition: Option<String>,
+    ) -> PyResult<()> {
+        let df = self.inner.clone();
+        block_on(py, async move {
+            df.write_to_table_with(
+                &table,
+                provider,
+                options.unwrap_or_default(),
+                properties.unwrap_or_default(),
+                partitioned_by.unwrap_or_default(),
+                cluster_by.unwrap_or_default(),
+                mode,
+                condition,
+            )
+            .await
+        })
+    }
+
     /// The text (or, with `json`, the JSON document) of explain `mode`:
     /// Spark's `simple`, `extended`, `codegen`, `cost`, `formatted`, or
     /// Krishiv's `analyze` (runs the query) and `verbose`. JSON exists for
