@@ -585,6 +585,9 @@ async fn stable_within_a_driver_and_deterministic_across_drivers() {
         let sort = Arc::new(Sort::new(schema, &[SortKey::desc(0)], Some(scope)).unwrap());
         let out = run(&deterministic(4), plan(table(40_000, 60), &sort), &q).await;
         assert!(sort.metrics().runs_spilled > 0);
+        // A plain sort (no hash exchange below a window) keeps one bucket
+        // with several drivers: its merges are those of the total order.
+        assert_eq!(sort.metrics().buckets, 1);
         outputs.push(column::<Int64Type>(&out.unwrap(), 1));
         assert_released(&root);
     }
