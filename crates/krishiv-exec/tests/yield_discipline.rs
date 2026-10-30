@@ -662,9 +662,38 @@ impl Operator for Chunked {
     }
 }
 
-/// Spins for 30 ms in one `execute` call: the negative control showing the
-/// stall detector trips on an unchunked operator over a large batch.
+/// Spins for 30 ms of CPU time in one `execute` call: the negative
+/// control showing the stall detector trips on an unchunked operator over
+/// a large batch.
 struct Spin;
+/// Spins until this thread has run for `d` of CPU time. The stall detector
+/// charges a poll its slice minus the thread's run-queue wait, so a spin
+/// timed by the wall clock holds the CPU for less than `d` on a loaded
+/// machine (the thread is preempted for part of it) and may not trip it.
+#[cfg(unix)]
+fn spin_on_cpu(d: Duration) {
+    let cpu = || {
+        let t = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
+        Duration::new(
+            t.tv_sec.unsigned_abs(),
+            u32::try_from(t.tv_nsec).unwrap_or(0),
+        )
+    };
+    let start = cpu();
+    while cpu().saturating_sub(start) < d {
+        std::hint::spin_loop();
+    }
+}
+
+/// Targets without `rustix::time` (Windows) time the spin by the wall clock:
+/// the test compiles there, and is only as reliable as a wall-clock spin.
+#[cfg(not(unix))]
+fn spin_on_cpu(d: Duration) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < d {
+        std::hint::spin_loop();
+    }
+}
 
 impl Operator for Spin {
     fn schema(&self) -> SchemaRef {
@@ -676,10 +705,7 @@ impl Operator for Spin {
     }
 
     fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(30) {
-            std::hint::spin_loop();
-        }
+        spin_on_cpu(Duration::from_millis(30));
         Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
     }
 }
