@@ -53,6 +53,8 @@ struct RangeLocal {
     current: Option<(i128, i128)>,
     step: i64,
     claimed: u64,
+    /// The claim ordinal of the current slice.
+    position: Option<u64>,
 }
 
 fn range_schema() -> SchemaRef {
@@ -103,6 +105,7 @@ impl crate::operator::Source for Range {
             current: None,
             step: self.step,
             claimed: 0,
+            position: None,
         }))
     }
 
@@ -117,6 +120,14 @@ impl crate::operator::Source for Range {
     fn morsels_claimed(&self, local: &LocalState) -> u64 {
         local.downcast_ref::<RangeLocal>().map_or(0, |l| l.claimed)
     }
+
+    fn reports_positions(&self) -> bool {
+        true
+    }
+
+    fn position(&self, local: &LocalState) -> Option<u64> {
+        local.downcast_ref::<RangeLocal>().and_then(|l| l.position)
+    }
 }
 
 impl Range {
@@ -128,10 +139,11 @@ impl Range {
         loop {
             match local.current {
                 None => {
-                    let Some(index) = g.cursor.claim() else {
+                    let Some((ordinal, index)) = g.cursor.claim_ordered() else {
                         return Ok(None);
                     };
                     local.claimed += 1;
+                    local.position = Some(ordinal);
                     match krishiv_plan::analyzer::table_functions::range_slice(
                         g.start,
                         g.end,

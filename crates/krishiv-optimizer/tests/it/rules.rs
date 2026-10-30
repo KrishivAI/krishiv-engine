@@ -116,6 +116,80 @@ const CASES: &[(&str, &str)] = &[
         "push_cte",
         "WITH v AS (SELECT a, b FROM t) SELECT * FROM v WHERE a = 1",
     ),
+    // CTE inlining (Spark's `InlineCTE`): each reference is its own instance,
+    // so each reference's filter reaches the definition's grouping key and scan.
+    (
+        "inline_cte_per_reference",
+        "WITH g AS (SELECT a, b, count(*) AS n FROM t GROUP BY a, b) SELECT x.a, x.n, y.n FROM g x JOIN g y ON x.a = y.a WHERE x.b = 'p' AND y.b = 'q'",
+    ),
+    (
+        "inline_cte_nested",
+        "WITH v AS (SELECT a, b FROM t WHERE c > 0), w AS (SELECT a FROM v WHERE b = 'x') SELECT w.a FROM w JOIN v ON w.a = v.a WHERE v.b = 'y'",
+    ),
+    (
+        "inline_cte_in_subquery",
+        "WITH v AS (SELECT a FROM t WHERE b = 'x') SELECT a FROM u WHERE a IN (SELECT a FROM v) AND a NOT IN (SELECT a + 1 FROM v)",
+    ),
+    // Filters into each input of a union, rewritten onto its columns; a
+    // branch whose literal makes the filter false keeps only `false`.
+    // A constant `false` that tidying folds into a filter frees a column of a
+    // shared scan: prune and tidy repeat until the plan is a fixed point.
+    (
+        "tidy_frees_columns_fixed_point",
+        "SELECT * FROM (SELECT x1.c0 AS c0 FROM (SELECT x3.d AS c0, count(*) AS c1 FROM t AS x2 JOIN u AS x3 ON x2.c = x3.a CROSS JOIN (SELECT x5.a AS c0, count(*) AS c1 FROM t AS x5 WHERE (NOT (x5.b <= 'z') AND (x5.c <> 2 AND x5.b <> x5.b)) GROUP BY x5.a) AS x4 WHERE (x2.c IN (-2, -2) AND x2.c = 3) GROUP BY x3.d) AS x1 WHERE NOT (NOT (x1.c1 IS NULL))) ORDER BY c0 LIMIT 4",
+    ),
+    (
+        "push_union",
+        "SELECT * FROM (SELECT a, 's' AS k, c FROM t UNION ALL SELECT a, 'u' AS k, CAST(a AS BIGINT) FROM u) x WHERE k = 's' AND a > 1",
+    ),
+    (
+        "push_union_keeps_subquery",
+        "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x WHERE a IN (SELECT a FROM u WHERE d = 'z') AND rand() > 0.5",
+    ),
+    (
+        "push_union_scalar_subquery_stays",
+        "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x WHERE a > (SELECT max(a) FROM u)",
+    ),
+    (
+        "push_union_renamed_branch_columns",
+        "SELECT * FROM (SELECT 1 AS p, 's' AS q UNION ALL SELECT 2 AS k, 's' AS z) x WHERE q = 's'",
+    ),
+    (
+        "push_union_three_inputs",
+        "SELECT * FROM (SELECT a, 'x' AS k FROM t UNION ALL SELECT a, 'y' AS k FROM u UNION ALL SELECT a, 'z' AS k FROM t WHERE c > 0) w WHERE k <> 'y' AND a > 1",
+    ),
+    (
+        "push_union_outer_reference_stays",
+        "SELECT a FROM u WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t UNION ALL SELECT a FROM t) x WHERE x.a = u.a AND x.a > 2)",
+    ),
+    (
+        "push_union_widened_branch",
+        "SELECT * FROM (SELECT a FROM t UNION ALL SELECT c FROM t) x WHERE a > 1",
+    ),
+    (
+        "push_constant_through_aggregate",
+        "SELECT * FROM (SELECT a, 'g' AS k, count(*) AS n FROM t GROUP BY a) x WHERE k = 'h'",
+    ),
+    // The q04 shape: a CTE over a union of channels, each reference filtered
+    // on its channel and year.
+    (
+        "inline_cte_union_channels",
+        "WITH y AS (SELECT a, b, 's' AS ch, count(*) AS n FROM t GROUP BY a, b UNION ALL SELECT a, d, 'u' AS ch, count(*) AS n FROM u GROUP BY a, d) SELECT p.a FROM y p JOIN y q ON p.a = q.a WHERE p.ch = 's' AND p.b = 'x' AND q.ch = 'u' AND q.b = 'y'",
+    ),
+    // A nondeterministic definition read twice stays one shared definition;
+    // read once, it is inlined.
+    (
+        "inline_cte_nondeterministic_twice",
+        "WITH r AS (SELECT a, rand() AS x FROM t) SELECT p.a FROM r p JOIN r q ON p.a = q.a WHERE p.x > 0.5",
+    ),
+    (
+        "inline_cte_keeps_one_inlines_other",
+        "WITH r AS (SELECT a, rand() AS x FROM t), v AS (SELECT a FROM u WHERE d = 'z') SELECT p.a FROM r p JOIN r q ON p.a = q.a JOIN v ON v.a = p.a WHERE p.x > 0.5",
+    ),
+    (
+        "inline_cte_nondeterministic_once",
+        "WITH r AS (SELECT a, rand() AS x FROM t) SELECT a FROM r WHERE a = 1",
+    ),
     (
         "push_cross",
         "SELECT t.a FROM t, u WHERE t.a = u.a AND t.b = 'x' AND u.d = 'y' AND 1 = 1",
@@ -432,7 +506,8 @@ fn rules() {
         let again = optimize_with(&optimized, &support::AllDistinct).unwrap();
         assert!(
             again.structurally_eq(&optimized),
-            "{name} is a fixed point:\n{}",
+            "{name} is a fixed point:\nFIRST\n{}\nAGAIN\n{}",
+            optimized.root(),
             again.root()
         );
         insta::assert_snapshot!(*name, optimized.root().to_string(), sql);

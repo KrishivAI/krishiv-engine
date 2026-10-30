@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT 1 AS p, 's' AS q UNION ALL SELECT 2 AS k, 's' AS z) x WHERE q = 's'"
+---
+Union
+:- Project [1 AS p#0, 's' AS q#1]
+:  +- OneRowRelation (shared #1)
++- Project [2 AS k#2, 's' AS z#3]
+   +- Shared #1, printed above

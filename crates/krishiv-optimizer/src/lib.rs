@@ -5,7 +5,10 @@
 //! Rules run in batches, each batch to a fixed point (at most
 //! [`MAX_ITERATIONS`] rounds, as Spark's `spark.sql.optimizer.maxIterations`):
 //!
-//! 0. **Implied join filters**, once: each input of an inner join is
+//! 0. **Inline CTEs**, once: each reference to a deterministic (or
+//!    singly referenced) `WITH` definition becomes a fresh instance of it
+//!    (Spark's `InlineCTE`), so the rules below see through it.
+//!    **Implied join filters**, once: each input of an inner join is
 //!    filtered with what its condition's disjunctions imply on it alone.
 //! 1. **Rewrite**: constant folding and boolean simplification, filter
 //!    pushdown (through projections, aggregates onto their grouping keys,
@@ -26,7 +29,9 @@
 //!    does not have.
 //! 4. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
-//! 5. **Tidy**: the rewrite batch again over the pruned plan.
+//! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
+//!    tidy repeat until neither changes the plan (folding can leave columns
+//!    unread).
 //!
 //! Every rule applies inside subquery plans too, and rewrites a subtree
 //! shared through `Arc` once, so the plan stays a DAG. A rule that changes
@@ -43,6 +48,7 @@ mod dag;
 mod expr;
 mod fold;
 mod group_limit;
+mod inline_cte;
 mod join_order;
 mod limit;
 mod project;
@@ -228,6 +234,7 @@ fn run(
             on: tracing,
             steps: Vec::new(),
         };
+        let root = t.once("InlineCTE", &root, |r| inline_cte::inline(Arc::clone(r)))?;
         let root = t.once("ImpliedJoinFilters", &root, |r| {
             dag::rewrite_up(Arc::clone(r), &mut |p| {
                 Ok(pushdown::imply_join_condition(p))
@@ -279,8 +286,27 @@ fn run(
                 }
             }
         }
-        let root = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
-        let root = batch(root, "Tidy", &mut t)?;
+        let pruned = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
+        let mut root = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
+        // Tidying can fold a filter to a constant `false` and leave columns
+        // unread (a `false` that reached a filter on `b` frees `b`; constants
+        // pass grouped aggregates), so after a tidy that changed the plan and
+        // left such a filter, prune and tidy again until nothing changes:
+        // then the plan is a fixed point. Other plans (no `Filter false`, or
+        // a tidy that changed nothing) take no extra pass.
+        let mut changed = !Arc::ptr_eq(&root, &pruned) && has_false_filter(&root);
+        let mut round = 2;
+        while changed && round <= MAX_ITERATIONS {
+            let pruned = prune::prune(&root);
+            t.step("Prune", round, "Prune", &root, &pruned);
+            if Arc::ptr_eq(&pruned, &root) {
+                break;
+            }
+            let tidied = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
+            changed = !Arc::ptr_eq(&tidied, &pruned);
+            root = tidied;
+            round += 1;
+        }
         Ok((root, t.steps))
     };
     // Passes recurse once per level and nest; rewrites may deepen the plan.
@@ -294,6 +320,29 @@ fn run(
         Ok(p) => Ok((p, steps)),
         Err(_) => Ok((plan.clone(), Vec::new())),
     }
+}
+
+/// Whether a `Filter` whose predicate is the literal `false` is anywhere in
+/// `root` (subquery plans included).
+fn has_false_filter(root: &Arc<LogicalPlan>) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![Arc::clone(root)];
+    while let Some(p) = stack.pop() {
+        if let PlanNode::Filter { predicate, .. } = &p.node
+            && matches!(
+                predicate.node,
+                ExprNode::Literal(krishiv_plan::Literal::Boolean(false))
+            )
+        {
+            return true;
+        }
+        if !seen.insert(Arc::as_ptr(&p)) {
+            continue;
+        }
+        p.for_each_expr(&mut |e| stack.extend(restrict::subquery_plans(e)));
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    false
 }
 
 /// The UDF folding context of one optimization: the session's library and

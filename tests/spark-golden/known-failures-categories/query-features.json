@@ -12,6 +12,11 @@
       "order": 210
     },
     {
+      "detail": "^schema struct<scalarsubquery\\(\\)",
+      "file": "^cte-nonlegacy$",
+      "order": 220
+    },
+    {
       "detail": "IDENTIFIER\\(\\)|NEAREST BY|FULL OUTER JOIN|multi-column PIVOT|NON_LITERAL_PIVOT_VALUES|CANNOT_RESOLVE_STAR_EXPAND|ORDER_BY_POS_OUT_OF_RANGE|in physical plans|is not an input column|INVALID_INLINE_TABLE",
       "order": 560
     },

@@ -362,6 +362,8 @@ struct FileScanLocal {
     /// The footer read in flight for a file this driver opens next.
     ahead: Option<(usize, MetadataFuture)>,
     claimed: u64,
+    /// The claim ordinal of the claimed partition.
+    position: Option<u64>,
     rows: super::RowStage,
 }
 
@@ -600,9 +602,10 @@ impl FileScanSource {
                     .await?;
                 continue;
             }
-            let Some(p) = g.cursor.claim() else {
+            let Some((ordinal, p)) = g.cursor.claim_ordered() else {
                 return Ok(None);
             };
+            local.position = Some(ordinal);
             if p >= self.partitions.len() {
                 return Err(internal(format!(
                     "partition {p} out of {}",
@@ -843,6 +846,7 @@ impl Source for FileScanSource {
             current: None,
             ahead: None,
             claimed: 0,
+            position: None,
         }))
     }
 
@@ -858,6 +862,16 @@ impl Source for FileScanSource {
         local
             .downcast_ref::<FileScanLocal>()
             .map_or(0, |l| l.claimed)
+    }
+
+    fn reports_positions(&self) -> bool {
+        true
+    }
+
+    fn position(&self, local: &LocalState) -> Option<u64> {
+        local
+            .downcast_ref::<FileScanLocal>()
+            .and_then(|l| l.position)
     }
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {

@@ -37,6 +37,11 @@
 //!   profile (`EXPLAIN ANALYZE`): hash-table probe lengths of joins and aggregates
 //!   (`"probe_lookups"`, `"probe_key_compares"`, `"max_probe_length"` in `"extra"`). Counting
 //!   slows the query: time with `PROFILE`, read these counters from a separate run.
+//! * `PLAN <query.sql>`: runs the query with the executor's profile (`EXPLAIN ANALYZE`) and replies
+//!   `OK <rows> <seconds> <json>`, where `json` is the one-line `krishiv.query-profile` v1 document
+//!   (`docs/reference/query-profile-v1.schema.json`): the physical plan tree with node ids and the
+//!   per-operator metrics, rows in and out included. Detailed metrics are on, so the seconds are not
+//!   a benchmark time (`krishiv-bench explain-diff` reads this).
 //! * `DUMP <query.sql> <out-dir>`: as `RUN`, then writes the result as Parquet to `out-dir`
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
@@ -410,6 +415,18 @@ impl Runner {
                     count_rows(&batches),
                     t.total,
                     t.json(metrics.as_ref(), &memory, metered == Metered::Detailed)
+                ))
+            }
+            (Some("PLAN"), Some(file), None, _) => {
+                let sql = read_sql(&decode_path(file)?)?;
+                let start = Instant::now();
+                let df = futures::executor::block_on(self.session.sql(&sql))?;
+                let (batches, profile) = futures::executor::block_on(df.collect_with_profile())?;
+                let secs = start.elapsed().as_secs_f64();
+                Ok(format!(
+                    "OK {} {secs:.6} {}",
+                    count_rows(&batches),
+                    profile.to_json()
                 ))
             }
             (Some("DUMP"), Some(file), Some(out), None) => {

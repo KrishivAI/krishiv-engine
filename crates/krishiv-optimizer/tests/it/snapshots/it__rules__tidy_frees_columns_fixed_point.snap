@@ -1,0 +1,19 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT x1.c0 AS c0 FROM (SELECT x3.d AS c0, count(*) AS c1 FROM t AS x2 JOIN u AS x3 ON x2.c = x3.a CROSS JOIN (SELECT x5.a AS c0, count(*) AS c1 FROM t AS x5 WHERE (NOT (x5.b <= 'z') AND (x5.c <> 2 AND x5.b <> x5.b)) GROUP BY x5.a) AS x4 WHERE (x2.c IN (-2, -2) AND x2.c = 3) GROUP BY x3.d) AS x1 WHERE NOT (NOT (x1.c1 IS NULL))) ORDER BY c0 LIMIT 4"
+---
+Limit 4
++- Sort [c0#16 ASC NULLS FIRST], true
+   +- Aggregate [d#4], [d#4 AS c0#16]
+      +- Project [d#4]
+         +- Join Inner
+            :- Project [d#4]
+            :  +- Join Inner, (c#2 == CAST(a#3 AS BIGINT))
+            :     :- Project [c#2]
+            :     :  +- Scan spark_catalog.default.t [a#0, c#2] (shared #1)
+            :     +- Scan spark_catalog.default.u [a#3, d#4]
+            +- Shift +7
+               +- Aggregate [a#0], [a#0 AS c0#5]
+                  +- Project [a#0]
+                     +- Filter false
+                        +- Shared #1, printed above

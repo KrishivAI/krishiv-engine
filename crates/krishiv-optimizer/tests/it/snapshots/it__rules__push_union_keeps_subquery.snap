@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x WHERE a IN (SELECT a FROM u WHERE d = 'z') AND rand() > 0.5"
+---
+Join LeftSemi, (a#0 == a#5)
+:- Filter (rand() > 0.5D)
+:  +- Union
+:     :- Scan spark_catalog.default.t [a#0]
+:     +- Project [a#3]
+:        +- Scan spark_catalog.default.u [a#3, d#4] (shared #1)
++- Shift +2
+   +- Project [a#3]
+      +- Filter (d#4 == 'z')
+         +- Shared #1, printed above
