@@ -447,10 +447,8 @@ fn a_self_join_instance_reads_shifted_ids() {
 #[test]
 fn unsupported_and_inconsistent_plans_fail_clearly() {
     let env = env();
-    // `FULL OUTER JOIN` planning is still unsupported; `coalesce` (which a
-    // full join's analyzer lowering uses) binds since the conditional
-    // functions do (see `conditionals`).
-    let sql = "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a = y.a";
+    // A `FULL OUTER JOIN` without an equality key has no nested loop yet.
+    let sql = "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a < y.a";
     let e = env.plan(sql).unwrap_err();
     assert_eq!(
         e.error_class(),

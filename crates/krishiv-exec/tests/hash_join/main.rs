@@ -134,6 +134,8 @@ impl Case {
             match self.join_type {
                 JoinType::RightSemi if !matched.is_empty() => out.push(fmt(b)),
                 JoinType::RightAnti if matched.is_empty() => out.push(fmt(b)),
+                // The pairs come from the probe loop below.
+                JoinType::FullOuter if matched.is_empty() => out.push(format!("∅|∅|∅|{}", fmt(b))),
                 JoinType::RightOuter => {
                     out.extend(matched.iter().map(|p| format!("{}|{}", fmt(p), fmt(b))));
                     if matched.is_empty() {
@@ -149,9 +151,9 @@ impl Case {
                 .filter(|b| self.key_eq(p, b) && (!self.filter || VLess::eval(p.v, b.v)))
                 .collect();
             match self.join_type {
-                JoinType::Inner | JoinType::LeftOuter => {
+                JoinType::Inner | JoinType::LeftOuter | JoinType::FullOuter => {
                     out.extend(matches.iter().map(|b| format!("{}|{}", fmt(p), fmt(b))));
-                    if matches.is_empty() && self.join_type == JoinType::LeftOuter {
+                    if matches.is_empty() && self.join_type != JoinType::Inner {
                         out.push(format!("{}|∅|∅|∅", fmt(p)));
                     }
                 }
@@ -217,7 +219,7 @@ fn case(join_type: JoinType, keys: usize, null_safe: bool, filter: bool) -> Case
     }
 }
 
-const TYPES: [JoinType; 8] = [
+const TYPES: [JoinType; 9] = [
     JoinType::Inner,
     JoinType::LeftOuter,
     JoinType::LeftSemi,
@@ -226,6 +228,7 @@ const TYPES: [JoinType; 8] = [
     JoinType::RightSemi,
     JoinType::RightAnti,
     JoinType::RightOuter,
+    JoinType::FullOuter,
 ];
 
 /// NULL keys, duplicates on both sides, empty and all-NULL inputs, for
@@ -474,6 +477,7 @@ async fn right_joins_reject_weighted_inputs() {
         JoinType::RightSemi,
         JoinType::RightAnti,
         JoinType::RightOuter,
+        JoinType::FullOuter,
     ] {
         for (build_side, probe_side) in [
             (weighted(&build), plain(&probe)),
@@ -509,7 +513,11 @@ async fn null_key_build_rows_spill_with_their_partitions() {
     let probe: Vec<Row> = (0..2_000_i64)
         .map(|i| r(Some(i), Some(LONG_B), i % 20))
         .collect();
-    for jt in [JoinType::RightAnti, JoinType::RightOuter] {
+    for jt in [
+        JoinType::RightAnti,
+        JoinType::RightOuter,
+        JoinType::FullOuter,
+    ] {
         for row_layout in [false, true] {
             let c = Case {
                 row_layout,

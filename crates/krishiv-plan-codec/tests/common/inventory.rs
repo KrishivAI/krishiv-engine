@@ -736,6 +736,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
+            "hash_join_full_outer",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::FullOuter)
+            }),
+        ),
+        (
             "hash_join_partitioned",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,

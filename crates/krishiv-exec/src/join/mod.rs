@@ -182,7 +182,8 @@ use crate::values::{LocalValues, Partial, Producer, Value, ValueService};
 /// The join type. The probe (left) side is preserved by the left outer and
 /// anti joins; the build side is preserved by the right semi, right anti
 /// and right outer joins, which build the input whose rows they return
-/// (design P2-T166).
+/// (design P2-T166). The full outer join preserves both sides (design
+/// P2-T052b).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinType {
     /// Matching pairs.
@@ -211,25 +212,54 @@ pub enum JoinType {
     /// preserved input. Outputs the probe columns (nullable), then the
     /// build columns.
     RightOuter,
+    /// Matching pairs, each unmatched probe row with NULL build columns and
+    /// each unmatched build row (NULL `=` keys included) with NULL probe
+    /// columns: both sides preserved. Outputs the probe columns, then the
+    /// build columns, all nullable.
+    FullOuter,
 }
 
 impl JoinType {
     /// Whether the probe emits matched pairs with their build columns.
     fn emits_build(self) -> bool {
-        matches!(self, Self::Inner | Self::LeftOuter | Self::RightOuter)
+        matches!(
+            self,
+            Self::Inner | Self::LeftOuter | Self::RightOuter | Self::FullOuter
+        )
     }
 
     /// Whether the build keeps rows whose `=` key is NULL: they match
     /// nothing, and the join returns its unmatched build rows.
     fn keeps_null_build_keys(self) -> bool {
-        matches!(self, Self::RightAnti | Self::RightOuter)
+        matches!(self, Self::RightAnti | Self::RightOuter | Self::FullOuter)
     }
 
     /// Whether the join returns rows of its build side by their matches
-    /// (right semi, right anti, right outer).
+    /// (right semi, right anti, right outer, full outer).
     #[must_use]
     pub fn builds_preserved(self) -> bool {
-        matches!(self, Self::RightSemi | Self::RightAnti | Self::RightOuter)
+        matches!(
+            self,
+            Self::RightSemi | Self::RightAnti | Self::RightOuter | Self::FullOuter
+        )
+    }
+
+    /// Whether unmatched probe rows are returned padded with NULL build
+    /// columns.
+    fn pads_probe(self) -> bool {
+        matches!(self, Self::LeftOuter | Self::FullOuter)
+    }
+
+    /// Whether the probe rows no build key matches can be dropped at the
+    /// scan: never for the joins that return them, and a full outer join
+    /// filters neither side (a row filtered out changes what the other side
+    /// pads, and which rows it returns).
+    #[must_use]
+    pub fn drops_unmatched_probe(self) -> bool {
+        matches!(
+            self,
+            Self::Inner | Self::LeftSemi | Self::RightSemi | Self::RightAnti | Self::RightOuter
+        )
     }
 }
 
@@ -573,6 +603,7 @@ impl Shared {
             JoinType::Inner => joined(false, false),
             JoinType::LeftOuter => joined(false, true),
             JoinType::RightOuter => joined(true, false),
+            JoinType::FullOuter => joined(true, true),
             JoinType::Existence => existence_schema(&probe_schema),
             JoinType::RightSemi | JoinType::RightAnti => {
                 Arc::new(Schema::new(build_fields.clone()))
@@ -821,9 +852,7 @@ impl HashJoin {
         // Inner, left semi and the right joins drop the probe rows no build
         // key matches (a right join returns build rows by their matches,
         // and a probe row that matches nothing marks nothing).
-        let drops_unmatched = matches!(shared.join_type, JoinType::Inner | JoinType::LeftSemi)
-            || shared.join_type.builds_preserved();
-        if !filters.is_empty() && !drops_unmatched {
+        if !filters.is_empty() && !shared.join_type.drops_unmatched_probe() {
             return Err(internal(format!(
                 "a {:?} join cannot filter its probe side",
                 shared.join_type
@@ -937,10 +966,12 @@ mod tests {
         assert_eq!(fields(JoinType::RightSemi), build);
         assert_eq!(fields(JoinType::RightAnti), build);
         assert_eq!(fields(JoinType::RightOuter).len(), 4);
+        assert_eq!(fields(JoinType::FullOuter).len(), 4);
         for t in [
             JoinType::RightSemi,
             JoinType::RightAnti,
             JoinType::RightOuter,
+            JoinType::FullOuter,
         ] {
             assert!(t.builds_preserved());
         }
