@@ -559,12 +559,21 @@ fn json_functions_read_map_options() {
         ),
         ["schema_of_json({\"c1\":1})"]
     );
+    // Without the option a null field is left out; with it the field is written.
     assert_eq!(
         run(
             &s,
-            "select to_json(named_struct('a', 1, 'b', 'x'), map('ignoreNullFields', 'false'))"
+            "select to_json(named_struct('a', 1, 'b', cast(null as string)))"
         ),
-        ["{\"a\":1,\"b\":\"x\"}"]
+        ["{\"a\":1}"]
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_json(named_struct('a', 1, 'b', cast(null as string)), \
+             map('ignoreNullFields', 'false'))"
+        ),
+        ["{\"a\":1,\"b\":null}"]
     );
     assert_eq!(
         names(
@@ -573,11 +582,16 @@ fn json_functions_read_map_options() {
         ),
         ["to_json(named_struct(a, 1))"]
     );
+    // A malformed record is null by default and an error under FAILFAST.
     assert_eq!(
-        run(
+        run(&s, "select to_json(from_json('{\"a\":', 'a INT'))"),
+        ["{}"]
+    );
+    assert_eq!(
+        class_of(
             &s,
-            "select to_json(from_json('{\"a\":1}', 'a INT', map('mode', 'FAILFAST')))"
+            "select from_json('{\"a\":', 'a INT', map('mode', 'FAILFAST'))"
         ),
-        ["{\"a\":1}"]
+        ErrorClass::MalformedRecordInParsingWithoutSuggestion
     );
 }
