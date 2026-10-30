@@ -503,6 +503,7 @@ fn eq(l: BoundColumn, r: BoundColumn) -> Arc<Expr> {
     let col = |c: BoundColumn| Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c))));
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
         ResolvedFunction {
+            within_group: Vec::new(),
             id: FunctionId::Builtin(Builtin::Eq),
             kind: FunctionKind::Scalar,
             args: vec![col(l), col(r)],

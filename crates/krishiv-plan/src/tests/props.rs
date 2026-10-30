@@ -194,6 +194,7 @@ impl Gen<'_> {
                     arg_names: Vec::new(),
                     distinct,
                     filter,
+                    within_group: Vec::new(),
                 })
             }
             6 => ExprNode::Cast {
@@ -236,6 +237,7 @@ impl Gen<'_> {
                     args,
                     distinct,
                     filter,
+                    within_group: Vec::new(),
                     data_type: self.data_type(),
                     nullable: self.flag(),
                     deterministic: self.flag(),
@@ -763,6 +765,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             arg_names,
             distinct,
             filter,
+            within_group: _,
         }) => {
             site!(w, name.push('x'));
             site!(w, *distinct = !*distinct);
@@ -840,6 +843,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 args,
                 distinct,
                 filter,
+                within_group: _,
                 data_type,
                 nullable,
                 deterministic: _,

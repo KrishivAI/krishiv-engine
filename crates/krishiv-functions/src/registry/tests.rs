@@ -688,6 +688,148 @@ fn aggregate_result_types() {
     assert_eq!(r, ty(DataType::Integer));
 }
 
+/// The `regr_*`, bitwise, `mode`, `listagg` and `try_*` aggregates: their
+/// kinds, determinism, arities, result types and typing errors.
+#[test]
+fn misc_aggregates() {
+    for (name, agg) in [
+        ("bit_and", Aggregate::BitAnd),
+        ("bit_or", Aggregate::BitOr),
+        ("bit_xor", Aggregate::BitXor),
+        ("regr_count", Aggregate::RegrCount),
+        ("regr_avgx", Aggregate::RegrAvgx),
+        ("regr_avgy", Aggregate::RegrAvgy),
+        ("regr_sxx", Aggregate::RegrSxx),
+        ("regr_syy", Aggregate::RegrSyy),
+        ("regr_sxy", Aggregate::RegrSxy),
+        ("regr_slope", Aggregate::RegrSlope),
+        ("regr_intercept", Aggregate::RegrIntercept),
+        ("regr_r2", Aggregate::RegrR2),
+        ("mode", Aggregate::Mode),
+        ("listagg", Aggregate::ListAgg),
+        ("string_agg", Aggregate::ListAgg),
+        ("try_sum", Aggregate::TrySum),
+        ("try_avg", Aggregate::TryAvg),
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
+        assert!(d.deterministic, "{name}");
+    }
+    for name in ["bit_and", "bit_or", "bit_xor"] {
+        let d = def(name);
+        assert!(d.arity.accepts(1) && !d.arity.accepts(2), "{name}");
+        for t in [
+            DataType::Byte,
+            DataType::Short,
+            DataType::Integer,
+            DataType::Long,
+        ] {
+            assert_eq!(
+                result(name, &[ty(t.clone())], &[]).unwrap(),
+                ArgType::new(t, true),
+                "{name}"
+            );
+        }
+        let err = result(name, &[ty(DataType::String)], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{name}"
+        );
+    }
+    // `regr_count` is a non-NULL `bigint`; the rest are nullable
+    // `double`s over two `double` arguments.
+    assert_eq!(
+        result(
+            "regr_count",
+            &[ty(DataType::Integer), ty(DataType::Integer)],
+            &[None, None]
+        )
+        .unwrap(),
+        ArgType::new(DataType::Long, false)
+    );
+    for name in [
+        "regr_avgx",
+        "regr_avgy",
+        "regr_sxx",
+        "regr_syy",
+        "regr_sxy",
+        "regr_slope",
+        "regr_intercept",
+        "regr_r2",
+    ] {
+        let d = def(name);
+        assert!(d.arity.accepts(2) && !d.arity.accepts(1), "{name}");
+        assert_eq!(
+            result(name, &[ty(DataType::Integer), ty(DataType::Integer)], &[]).unwrap(),
+            ArgType::new(DataType::Double, true),
+            "{name}"
+        );
+    }
+    // `mode` takes any single value and keeps its type.
+    assert!(def("mode").arity.accepts(0) && def("mode").arity.accepts(2));
+    assert_eq!(
+        result("mode", &[ty(DataType::Integer)], &[]).unwrap(),
+        ArgType::new(DataType::Integer, true)
+    );
+    // `listagg` and `string_agg` take a string or binary value with an
+    // optional delimiter of the same kind, and keep the value's type.
+    // (Both arguments are literals here, as the analyzer sees them.)
+    let listagg = |name: &str, args: &[ArgType], literals: &[bool]| {
+        let call = CallTypes::new(args, &[None, None]).with_literals(literals);
+        (def(name).result)(&call)
+    };
+    for name in ["listagg", "string_agg"] {
+        let d = def(name);
+        assert!(d.arity.accepts(1) && d.arity.accepts(2) && !d.arity.accepts(3));
+        assert_eq!(
+            listagg(
+                name,
+                &[ty(DataType::String), ty(DataType::Null)],
+                &[true, true]
+            )
+            .unwrap(),
+            ArgType::new(DataType::String, true),
+            "{name}"
+        );
+        assert_eq!(
+            listagg(
+                name,
+                &[ty(DataType::Binary), ty(DataType::Binary)],
+                &[true, true]
+            )
+            .unwrap(),
+            ArgType::new(DataType::Binary, true),
+            "{name}"
+        );
+        // A string delimiter for binary values is `DATA_DIFF_TYPES`;
+        // a non-foldable delimiter is `NON_FOLDABLE_INPUT`.
+        let args = [ty(DataType::Binary), ty(DataType::String)];
+        let err = listagg(name, &args, &[false, true]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchDataDiffTypes,
+            "{name}"
+        );
+        let err = listagg(name, &args, &[true, false]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchNonFoldableInput,
+            "{name}"
+        );
+    }
+    // `try_sum` types as `sum`, `try_avg` as `avg`.
+    assert_eq!(
+        result("try_sum", &[ty(DataType::Integer)], &[]).unwrap(),
+        ArgType::new(DataType::Long, true)
+    );
+    assert_eq!(
+        result("try_avg", &[ty(DataType::Integer)], &[]).unwrap(),
+        ArgType::new(DataType::Double, true)
+    );
+}
+
 #[test]
 fn legacy_day_counts_and_binary_predicates() {
     let args = [ty(DataType::Date), ty(DataType::String)];
@@ -1194,13 +1336,62 @@ fn simple_aggregates() {
         err.to_string(),
         "The second argument in any_value should be a boolean literal."
     );
-    // The aggregates that return arrays stay known-unsupported.
-    for name in ["collect_list", "collect_set", "array_agg"] {
-        assert!(
-            matches!(
-                builtins().lookup(name, SparkProfile::V4_2),
-                Lookup::KnownUnsupported
-            ),
+    // `collect_list`, `collect_set` and `array_agg` are aggregates over
+    // one argument of any type; the result is an array of the argument's
+    // type, never NULL. `vector_sum`/`vector_avg` take `ARRAY<FLOAT>` and
+    // give an array of `float`, NULL when no non-NULL vector was seen.
+    for (name, agg) in [
+        ("collect_list", Aggregate::CollectList),
+        ("collect_set", Aggregate::CollectSet),
+        ("array_agg", Aggregate::CollectList),
+    ] {
+        let d = def(name);
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert!(d.deterministic, "{name}");
+        assert!(d.arity.accepts(1) && !d.arity.accepts(2), "{name}");
+        let array = DataType::Array(ArrayType::new(DataType::Integer, false).into());
+        assert_eq!(
+            result(name, &[ty(DataType::Integer)], &[]).unwrap(),
+            ArgType::new(array, false),
+            "{name}"
+        );
+    }
+    // Spark refuses a map anywhere inside the input of `collect_set` only.
+    let map = DataType::Map(
+        krishiv_types::MapType::new(DataType::Integer, DataType::Integer, true).into(),
+    );
+    for nested in [
+        map.clone(),
+        DataType::Array(ArrayType::new(map, true).into()),
+    ] {
+        let err = result("collect_set", &[ty(nested.clone())], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnsupportedInputType,
+            "{nested:?}"
+        );
+        assert!(result("collect_list", &[ty(nested.clone())], &[]).is_ok());
+        assert!(result("array_agg", &[ty(nested)], &[]).is_ok());
+    }
+    for (name, agg) in [
+        ("vector_sum", Aggregate::VectorSum),
+        ("vector_avg", Aggregate::VectorAvg),
+    ] {
+        let d = def(name);
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert!(d.arity.accepts(1) && !d.arity.accepts(2), "{name}");
+        let floats = || DataType::Array(ArrayType::new(DataType::Float, false).into());
+        assert_eq!(
+            result(name, &[ty(floats())], &[]).unwrap(),
+            ArgType::new(floats(), true),
+            "{name}"
+        );
+        let err = result(name, &[ty(DataType::Integer)], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
             "{name}"
         );
     }

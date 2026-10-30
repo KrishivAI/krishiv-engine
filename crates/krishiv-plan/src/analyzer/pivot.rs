@@ -36,7 +36,7 @@ use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, Constant};
 use crate::{
     AttrId, Builtin, CastMode, Expr, ExprNode, FunctionCall, FunctionKind, Literal, LogicalPlan,
-    Origin, PivotValue, ResolvedExpr,
+    Origin, PivotValue, ResolvedExpr, SortOrder,
 };
 
 impl Resolver<'_> {
@@ -137,8 +137,11 @@ impl Resolver<'_> {
                     p.origin,
                 ));
             }
-            casts.push((
-                value_name(v, b, t, self),
+            // A value of the pivot column's own type needs no cast (and
+            // shows as the value, as Spark's implicit cast does).
+            let value = if from == Some(&pivot_type) {
+                trim_value_alias(&v.exprs[0])
+            } else {
                 Arc::new(
                     Expr::new(ExprNode::Cast {
                         expr: trim_value_alias(&v.exprs[0]),
@@ -146,8 +149,9 @@ impl Resolver<'_> {
                         mode: CastMode::Default,
                     })
                     .with_origin(b.expr.origin),
-                ),
-            ));
+                )
+            };
+            casts.push((value_name(v, b, t, self), value));
         }
         // The aggregates, bound by the existing machinery (which rejects a
         // nested aggregate, as Spark's `CheckAnalysis` does), then checked
@@ -284,6 +288,7 @@ impl Resolver<'_> {
                             arg_names: Vec::new(),
                             distinct: f.distinct,
                             filter: f.filter.clone(),
+                            within_group: Vec::new(),
                         }))
                         .with_origin(x.origin),
                     ));
@@ -316,6 +321,10 @@ impl Resolver<'_> {
                     };
                     (args, arg_names)
                 } else {
+                    // Every argument takes the condition, as Spark's
+                    // `transformDown` wraps them: a `listagg` delimiter or
+                    // a `mode` flag stops being foldable and is refused by
+                    // the re-bind, as Spark refuses it.
                     let args: Vec<Arc<Expr>> = f
                         .args
                         .iter()
@@ -336,6 +345,17 @@ impl Resolver<'_> {
                         arg_names,
                         distinct: f.distinct,
                         filter: f.filter.clone(),
+                        // The ordering keys are children of the call, so
+                        // they take the same condition as its arguments.
+                        within_group: f
+                            .within_group
+                            .iter()
+                            .map(|o| SortOrder {
+                                expr: if_expr(cond, Arc::clone(&o.expr), x.origin),
+                                direction: o.direction,
+                                nulls: o.nulls,
+                            })
+                            .collect(),
                     }))
                     .with_origin(x.origin),
                 ))
@@ -379,6 +399,7 @@ fn if_expr(cond: &Cond, then: Arc<Expr>, origin: Origin) -> Arc<Expr> {
         arg_names: Vec::new(),
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
     }))
     .with_origin(origin);
     Arc::new(
@@ -393,6 +414,7 @@ fn if_expr(cond: &Cond, then: Arc<Expr>, origin: Origin) -> Arc<Expr> {
             arg_names: Vec::new(),
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         }))
         .with_origin(origin),
     )

@@ -473,6 +473,18 @@ pub struct AggregateExpr {
     /// feature: aggregate_filter
     #[prost(uint64, optional, tag = "7")]
     pub mask: ::core::option::Option<u64>,
+    /// feature: mode_regr_bit_listagg_aggs (`listagg` only: the fused
+    /// delimiter bytes, empty when none or NULL was written).
+    #[prost(bytes = "vec", tag = "8")]
+    pub listagg_delimiter: ::prost::alloc::vec::Vec<u8>,
+    /// feature: mode_regr_bit_listagg_aggs (`listagg` only: one per ordering
+    /// key, in order: descending).
+    #[prost(bool, repeated, tag = "9")]
+    pub listagg_desc: ::prost::alloc::vec::Vec<bool>,
+    /// feature: mode_regr_bit_listagg_aggs (`listagg` only: one per ordering
+    /// key, in order: nulls first).
+    #[prost(bool, repeated, tag = "10")]
+    pub listagg_nulls_first: ::prost::alloc::vec::Vec<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {
@@ -1266,6 +1278,50 @@ pub enum AggregateFunction {
     Max = 5,
     First = 6,
     Last = 7,
+    /// feature: collect_aggregates
+    CollectList = 8,
+    /// feature: collect_aggregates
+    CollectSet = 9,
+    /// feature: collect_aggregates
+    VectorSum = 10,
+    /// feature: collect_aggregates
+    VectorAvg = 11,
+    /// feature: mode_regr_bit_listagg_aggs
+    BitAnd = 12,
+    /// feature: mode_regr_bit_listagg_aggs
+    BitOr = 13,
+    /// feature: mode_regr_bit_listagg_aggs
+    BitXor = 14,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrCount = 15,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrAvgx = 16,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrAvgy = 17,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrSxx = 18,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrSyy = 19,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrSxy = 20,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrSlope = 21,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrIntercept = 22,
+    /// feature: mode_regr_bit_listagg_aggs
+    RegrR2 = 23,
+    /// feature: mode_regr_bit_listagg_aggs
+    Mode = 24,
+    /// feature: mode_regr_bit_listagg_aggs
+    ModeMin = 25,
+    /// feature: mode_regr_bit_listagg_aggs
+    ModeMax = 26,
+    /// feature: mode_regr_bit_listagg_aggs
+    Listagg = 27,
+    /// feature: mode_regr_bit_listagg_aggs
+    TrySum = 28,
+    /// feature: mode_regr_bit_listagg_aggs
+    TryAvg = 29,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1282,6 +1338,28 @@ impl AggregateFunction {
             Self::Max => "AGGREGATE_FUNCTION_MAX",
             Self::First => "AGGREGATE_FUNCTION_FIRST",
             Self::Last => "AGGREGATE_FUNCTION_LAST",
+            Self::CollectList => "AGGREGATE_FUNCTION_COLLECT_LIST",
+            Self::CollectSet => "AGGREGATE_FUNCTION_COLLECT_SET",
+            Self::VectorSum => "AGGREGATE_FUNCTION_VECTOR_SUM",
+            Self::VectorAvg => "AGGREGATE_FUNCTION_VECTOR_AVG",
+            Self::BitAnd => "AGGREGATE_FUNCTION_BIT_AND",
+            Self::BitOr => "AGGREGATE_FUNCTION_BIT_OR",
+            Self::BitXor => "AGGREGATE_FUNCTION_BIT_XOR",
+            Self::RegrCount => "AGGREGATE_FUNCTION_REGR_COUNT",
+            Self::RegrAvgx => "AGGREGATE_FUNCTION_REGR_AVGX",
+            Self::RegrAvgy => "AGGREGATE_FUNCTION_REGR_AVGY",
+            Self::RegrSxx => "AGGREGATE_FUNCTION_REGR_SXX",
+            Self::RegrSyy => "AGGREGATE_FUNCTION_REGR_SYY",
+            Self::RegrSxy => "AGGREGATE_FUNCTION_REGR_SXY",
+            Self::RegrSlope => "AGGREGATE_FUNCTION_REGR_SLOPE",
+            Self::RegrIntercept => "AGGREGATE_FUNCTION_REGR_INTERCEPT",
+            Self::RegrR2 => "AGGREGATE_FUNCTION_REGR_R2",
+            Self::Mode => "AGGREGATE_FUNCTION_MODE",
+            Self::ModeMin => "AGGREGATE_FUNCTION_MODE_MIN",
+            Self::ModeMax => "AGGREGATE_FUNCTION_MODE_MAX",
+            Self::Listagg => "AGGREGATE_FUNCTION_LISTAGG",
+            Self::TrySum => "AGGREGATE_FUNCTION_TRY_SUM",
+            Self::TryAvg => "AGGREGATE_FUNCTION_TRY_AVG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1295,6 +1373,28 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_MAX" => Some(Self::Max),
             "AGGREGATE_FUNCTION_FIRST" => Some(Self::First),
             "AGGREGATE_FUNCTION_LAST" => Some(Self::Last),
+            "AGGREGATE_FUNCTION_COLLECT_LIST" => Some(Self::CollectList),
+            "AGGREGATE_FUNCTION_COLLECT_SET" => Some(Self::CollectSet),
+            "AGGREGATE_FUNCTION_VECTOR_SUM" => Some(Self::VectorSum),
+            "AGGREGATE_FUNCTION_VECTOR_AVG" => Some(Self::VectorAvg),
+            "AGGREGATE_FUNCTION_BIT_AND" => Some(Self::BitAnd),
+            "AGGREGATE_FUNCTION_BIT_OR" => Some(Self::BitOr),
+            "AGGREGATE_FUNCTION_BIT_XOR" => Some(Self::BitXor),
+            "AGGREGATE_FUNCTION_REGR_COUNT" => Some(Self::RegrCount),
+            "AGGREGATE_FUNCTION_REGR_AVGX" => Some(Self::RegrAvgx),
+            "AGGREGATE_FUNCTION_REGR_AVGY" => Some(Self::RegrAvgy),
+            "AGGREGATE_FUNCTION_REGR_SXX" => Some(Self::RegrSxx),
+            "AGGREGATE_FUNCTION_REGR_SYY" => Some(Self::RegrSyy),
+            "AGGREGATE_FUNCTION_REGR_SXY" => Some(Self::RegrSxy),
+            "AGGREGATE_FUNCTION_REGR_SLOPE" => Some(Self::RegrSlope),
+            "AGGREGATE_FUNCTION_REGR_INTERCEPT" => Some(Self::RegrIntercept),
+            "AGGREGATE_FUNCTION_REGR_R2" => Some(Self::RegrR2),
+            "AGGREGATE_FUNCTION_MODE" => Some(Self::Mode),
+            "AGGREGATE_FUNCTION_MODE_MIN" => Some(Self::ModeMin),
+            "AGGREGATE_FUNCTION_MODE_MAX" => Some(Self::ModeMax),
+            "AGGREGATE_FUNCTION_LISTAGG" => Some(Self::Listagg),
+            "AGGREGATE_FUNCTION_TRY_SUM" => Some(Self::TrySum),
+            "AGGREGATE_FUNCTION_TRY_AVG" => Some(Self::TryAvg),
             _ => None,
         }
     }

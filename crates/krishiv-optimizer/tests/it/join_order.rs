@@ -5,7 +5,10 @@
 
 use std::collections::HashMap;
 
-use krishiv_optimizer::{ColumnStats, Statistics, TableStats, optimize, optimize_with};
+use krishiv_optimizer::{
+    ColumnStats, Options, StatSource, Statistics, TableStats, optimize, optimize_with,
+    optimize_with_options,
+};
 use krishiv_plan::{
     Builtin, Expr, ExprNode, FunctionId, JoinCondition, Literal, LogicalPlan, PlanNode, ReadSource,
     ResolvedExpr, Scan,
@@ -44,6 +47,7 @@ fn fixture() -> Fixture {
     let tables = v["tables"].as_object().unwrap().iter().map(|(name, t)| {
         let columns = t["columns"].as_object().unwrap().iter().map(|(c, s)| {
             let stats = ColumnStats {
+                source: StatSource::default(),
                 distinct: s["distinct"].as_u64(),
                 nulls: Some(0),
                 min: bound(&s["min"]),
@@ -107,6 +111,32 @@ fn tpch_join_orders() {
         );
         insta::assert_snapshot!(what, optimized.root().to_string());
     }
+}
+
+/// Statistics propagation steers estimates only: with it off, every TPC-H
+/// query returns the rows it returns with it on, and both the rows of the
+/// unoptimised plan, whatever order the joins take.
+#[test]
+fn results_match_with_statistics_propagation_on_and_off() {
+    let ctx = support::ctx();
+    let stats = fixture();
+    let db = data::tpch(7, 150);
+    let off = Options {
+        stats_propagation: false,
+        ..Options::default()
+    };
+    let mut ordered_differently = 0;
+    for q in 1..=22 {
+        let plan = support::resolve(&support::tpch_sql(q), &ctx);
+        let on = optimize_with(&plan, &stats).unwrap();
+        let no = optimize_with_options(&plan, &stats, &off).unwrap();
+        let want = eval::rows(&db, plan.root());
+        assert_eq!(eval::rows(&db, on.root()), want, "q{q:02} on");
+        assert_eq!(eval::rows(&db, no.root()), want, "q{q:02} off");
+        ordered_differently += usize::from(!on.structurally_eq(&no));
+    }
+    // The switch changes plans (else the test compares a plan with itself).
+    assert!(ordered_differently > 0);
 }
 
 #[test]
@@ -382,6 +412,7 @@ impl Statistics for TpcdsFooters {
         let columns = columns.iter().map(|&(c, _, min, max, nulls, distinct)| {
             let number = |v: f64| (!v.is_nan()).then_some(Literal::Double(v));
             let stats = ColumnStats {
+                source: StatSource::default(),
                 distinct,
                 nulls: Some(nulls),
                 min: number(min),
@@ -524,7 +555,6 @@ fn literal_equalities_without_a_distinct_count_use_the_default() {
     // A distinct count from statistics still counts without the others.
     let only = without_distinct(&["l_returnflag"]);
     assert!(close(rows(eq, &only), lineitem / 3.0));
-    // An equality between two columns of one input keeps `1 / ndv`.
     // `c <=> NULL` is `c IS NULL`: the column's null fraction (none here).
     // Optimized first: folding makes the coerced NULL a literal.
     let folded = |sql: &str, stats: &Fixture| {
@@ -545,7 +575,11 @@ fn literal_equalities_without_a_distinct_count_use_the_default() {
             "{sql}: {k} {f} vs {is_null}"
         );
     }
+    // An equality between two columns of one input keeps `1 / max(ndv)`; a
+    // count that is only the default guess reads as the rows (T166), so only
+    // `col = literal` takes the default selectivity.
     let cols = "SELECT l_orderkey FROM lineitem WHERE l_commitdate = l_receiptdate";
+    // The fixture has no distinct counts: each column reads as the rows.
     assert!(close(rows(cols, &footers), 1.0), "{}", rows(cols, &footers));
 }
 

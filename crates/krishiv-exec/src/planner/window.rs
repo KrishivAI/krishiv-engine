@@ -294,7 +294,7 @@ impl Planner<'_> {
             lower(c.f).ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?;
         // The moment aggregates have no window form yet: refused, never
         // computed as another function.
-        if is_moment(lowered.function) {
+        if is_moment(&lowered.function) {
             return Err(unsupported(&format!("the window aggregate {name}")));
         }
         let function = lowered.function;

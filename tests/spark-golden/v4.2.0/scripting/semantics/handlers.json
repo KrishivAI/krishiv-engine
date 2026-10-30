@@ -1,0 +1,782 @@
+{
+ "cases": [
+  {
+   "name": "sqlexception_catches",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS c; SELECT 1/0; SELECT 'after' AS a; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<c:string>"
+    }
+   ]
+  },
+  {
+   "name": "declared_condition_sqlstate_does_not_catch",
+   "statements": [
+    {
+     "error": {
+      "class": "DIVIDE_BY_ZERO",
+      "params": {
+       "config": "\"spark.sql.ansi.enabled\""
+      },
+      "sqlstate": "22012"
+     },
+     "query": "BEGIN DECLARE c CONDITION FOR SQLSTATE '22012'; DECLARE EXIT HANDLER FOR c SELECT 'caught' AS r; SELECT 1/0; END;"
+    }
+   ]
+  },
+  {
+   "name": "declared_condition_same_name_as_error_class",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE DIVIDE_BY_ZERO CONDITION; DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 'caught' AS r; SELECT 1/0; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_for_error_class_name",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 'caught' AS r; SELECT 1/0; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_for_class_prefix",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR UNRESOLVED_COLUMN SELECT 'caught' AS r; SELECT nope; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_for_sqlstate",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '22012' SELECT 'caught' AS r; SELECT 1/0; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_for_sqlstate_other_state",
+   "statements": [
+    {
+     "error": {
+      "class": "DIVIDE_BY_ZERO",
+      "params": {
+       "config": "\"spark.sql.ansi.enabled\""
+      },
+      "sqlstate": "22012"
+     },
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '22003' SELECT 'caught' AS r; SELECT 1/0; END;"
+    }
+   ]
+  },
+  {
+   "name": "handler_not_found_does_not_catch_error",
+   "statements": [
+    {
+     "error": {
+      "class": "DIVIDE_BY_ZERO",
+      "params": {
+       "config": "\"spark.sql.ansi.enabled\""
+      },
+      "sqlstate": "22012"
+     },
+     "query": "BEGIN DECLARE EXIT HANDLER FOR NOT FOUND SELECT 'caught' AS r; SELECT 1/0; END;"
+    }
+   ]
+  },
+  {
+   "name": "specific_beats_sqlexception_same_scope",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'generic' AS r; DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 'specific' AS r; SELECT 1/0; END;",
+     "rows": [
+      [
+       "specific"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "sqlstate_beats_sqlexception",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'generic' AS r; DECLARE EXIT HANDLER FOR SQLSTATE '22012' SELECT 'state' AS r; SELECT 1/0; END;",
+     "rows": [
+      [
+       "state"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "name_beats_sqlstate",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '22012' SELECT 'state' AS r; DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 'name' AS r; SELECT 1/0; END;",
+     "rows": [
+      [
+       "name"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "inner_error_goes_to_outer_handler",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'outer' AS r; BEGIN SELECT 1/0; END; SELECT 'after' AS a; END;",
+     "rows": [
+      [
+       "outer"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "inner_handler_wins",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'outer' AS r; BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'inner' AS r; SELECT 1/0; END; SELECT 'after' AS a; END;",
+     "rows": [
+      [
+       "after"
+      ]
+     ],
+     "schema": "struct<a:string>"
+    }
+   ]
+  },
+  {
+   "name": "raise_error_sqlexception",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS r; SELECT raise_error('x'); END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "raise_error_by_class",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR USER_RAISED_EXCEPTION SELECT 'caught' AS r; SELECT raise_error('x'); END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "raise_error_by_sqlstate",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE 'P0001' SELECT 'caught' AS r; SELECT raise_error('x'); END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_covers_declare_default",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 1/0; DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS r; SELECT 'body' AS b; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_covers_inner_declare_default",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS r; BEGIN DECLARE y INT DEFAULT 1/0; SELECT 'inner' AS b; END; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_covers_if_condition",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR INVALID_BOOLEAN_STATEMENT SELECT 'caught' AS r; IF 1 THEN SELECT 'then'; END IF; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_covers_while_condition",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS r; WHILE 1 DO SELECT 'body'; END WHILE; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "ansi_off_no_handler",
+   "statements": [
+    {
+     "query": "SET spark.sql.ansi.enabled = false;",
+     "rows": [
+      [
+       "spark.sql.ansi.enabled",
+       "false"
+      ]
+     ],
+     "schema": "struct<key:string,value:string>"
+    },
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS r; SELECT 1/0 AS q; END;",
+     "rows": [
+      [
+       null
+      ]
+     ],
+     "schema": "struct<q:double>"
+    }
+   ]
+  },
+  {
+   "name": "exit_continues_after_declaring_compound",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 0; lbl: BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = 1; SET x = 2; SELECT 1/0; SET x = 3; END lbl; SELECT x; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "outermost_handler_ends_script",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS r; SELECT 1/0; SELECT 'never' AS n; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_without_result_keeps_earlier_result",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 0; DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = 1; SELECT 'first' AS f; SELECT 1/0; END;",
+     "rows": [
+      [
+       "first"
+      ]
+     ],
+     "schema": "struct<f:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_sees_variables_at_error",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 1; DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT x; SET x = 2; SELECT 1/0; END;",
+     "rows": [
+      [
+       2
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "handler_does_not_see_inner_locals",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`y`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT y; BEGIN DECLARE y INT DEFAULT 5; SELECT 1/0; END; END;"
+    }
+   ]
+  },
+  {
+   "name": "leave_out_of_handler_body_does_not_leave_label",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 0; o: BEGIN i: BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN SET x = 1; LEAVE o; END; SELECT 1/0; END i; SET x = 2; END o; SELECT x; END;",
+     "rows": [
+      [
+       2
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "handler_body_compound",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN DECLARE m STRING DEFAULT 'm'; SELECT m AS r; END; SELECT 1/0; END;",
+     "rows": [
+      [
+       "m"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_body_single_set",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 0; DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = 5; SELECT 1/0; END;",
+     "rows": [],
+     "schema": "struct<>"
+    }
+   ]
+  },
+  {
+   "name": "handler_body_single_insert",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION INSERT INTO s VALUES (77); SELECT 1/0; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT * FROM s;",
+     "rows": [
+      [
+       77
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "error_in_handler_body_inner_handler",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'inner' AS r; SELECT 1/0; END; SELECT raise_error('first'); END;",
+     "rows": [
+      [
+       "inner"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "error_in_handler_body_outer_scope_handles",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'outer' AS r; BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1/0; SELECT raise_error('first'); END; END;",
+     "rows": [
+      [
+       "outer"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "error_in_handler_body_own_compound_does_not_handle",
+   "statements": [
+    {
+     "error": {
+      "class": "USER_RAISED_EXCEPTION",
+      "params": {
+       "errorMessage": "second"
+      },
+      "sqlstate": "P0001"
+     },
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT raise_error('second'); SELECT raise_error('first'); END;"
+    }
+   ]
+  },
+  {
+   "name": "update_parquet_in_script_caught",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS r; UPDATE s SET i = 1; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "update_parquet_in_script_class",
+   "statements": [
+    {
+     "error": {
+      "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+      "params": {
+       "operation": "UPDATE TABLE",
+       "tableName": "`spark_catalog`.`<db>`.`s`"
+      },
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN UPDATE s SET i = 1; END;"
+    }
+   ]
+  },
+  {
+   "name": "handler_for_multiple_names",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO, UNRESOLVED_COLUMN SELECT 'caught' AS r; SELECT nope; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "handler_for_multiple_sqlstates",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '22003', SQLSTATE '22012' SELECT 'caught' AS r; SELECT 1/0; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "error_class_visible_cast_invalid",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR CAST_INVALID_INPUT SELECT 'caught' AS r; SELECT CAST('abc' AS INT); END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "error_class_visible_overflow",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR ARITHMETIC_OVERFLOW SELECT 'caught' AS r; SELECT 2147483647 + 1; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<r:string>"
+    }
+   ]
+  },
+  {
+   "name": "no_handler_unhandled_after_result",
+   "statements": [
+    {
+     "error": {
+      "class": "DIVIDE_BY_ZERO",
+      "params": {
+       "config": "\"spark.sql.ansi.enabled\""
+      },
+      "sqlstate": "22012"
+     },
+     "query": "BEGIN SELECT 'first' AS f; SELECT 1/0; END;"
+    }
+   ]
+  },
+  {
+   "name": "exit_handler_in_loop_body_compound",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE i INT DEFAULT 0; WHILE i < 3 DO BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET i = i + 10; SET i = i + 1; SELECT 1/0; END; END WHILE; SELECT i; END;",
+     "rows": [],
+     "schema": "struct<>"
+    }
+   ]
+  },
+  {
+   "name": "exit_handler_in_loop_body_trace",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE i INT DEFAULT 0; WHILE i < 3 DO BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION INSERT INTO s VALUES (100 + i); INSERT INTO s VALUES (i); SET i = i + 1; SELECT 1/0; END; END WHILE; INSERT INTO s VALUES (999); SELECT 'end' AS e; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT i FROM s ORDER BY i;",
+     "rows": [
+      [
+       0
+      ],
+      [
+       101
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "exit_handler_in_loop_body_no_error",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE i INT DEFAULT 0; WHILE i < 3 DO BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET i = 50; SET i = i + 1; END; END WHILE; SELECT i; END;",
+     "rows": [
+      [
+       3
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "exit_handler_in_nested_compound_then_select",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE i INT DEFAULT 0; BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET i = 10; SELECT 1/0; END; SELECT i; END;",
+     "rows": [
+      [
+       10
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "exit_handler_in_if_nested_compound",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE i INT DEFAULT 0; IF true THEN BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET i = 10; SELECT 1/0; END; END IF; SELECT i; END;",
+     "rows": [],
+     "schema": "struct<>"
+    }
+   ]
+  },
+  {
+   "name": "exit_in_if_body_compound_then_more",
+   "statements": [
+    {
+     "query": "BEGIN IF true THEN BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION INSERT INTO s VALUES (1); SELECT 1/0; END; INSERT INTO s VALUES (2); END IF; INSERT INTO s VALUES (3); SELECT 'end' AS e; END;",
+     "rows": [
+      [
+       "end"
+      ]
+     ],
+     "schema": "struct<e:string>"
+    },
+    {
+     "query": "SELECT i FROM s ORDER BY i;",
+     "rows": [
+      [
+       1
+      ],
+      [
+       2
+      ],
+      [
+       3
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "exit_in_labelled_compound_then_more",
+   "statements": [
+    {
+     "query": "BEGIN a: BEGIN BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION INSERT INTO s VALUES (1); SELECT 1/0; END; INSERT INTO s VALUES (2); END a; INSERT INTO s VALUES (3); SELECT 'end' AS e; END;",
+     "rows": [
+      [
+       "end"
+      ]
+     ],
+     "schema": "struct<e:string>"
+    },
+    {
+     "query": "SELECT i FROM s ORDER BY i;",
+     "rows": [
+      [
+       1
+      ],
+      [
+       2
+      ],
+      [
+       3
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "exit_in_for_body_compound_then_more",
+   "statements": [
+    {
+     "query": "BEGIN FOR r AS SELECT id FROM range(3) DO BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION INSERT INTO s VALUES (10 + r.id); SELECT 1/0; END; END FOR; INSERT INTO s VALUES (3); SELECT 'end' AS e; END;",
+     "rows": [
+      [
+       "end"
+      ]
+     ],
+     "schema": "struct<e:string>"
+    },
+    {
+     "query": "SELECT i FROM s ORDER BY i;",
+     "rows": [
+      [
+       3
+      ],
+      [
+       10
+      ],
+      [
+       11
+      ],
+      [
+       12
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "exit_in_while_body_compound_two_statements_after",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE i INT DEFAULT 0; WHILE i < 3 DO SET i = i + 1; BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION INSERT INTO s VALUES (i); SELECT 1/0; END; INSERT INTO s VALUES (50 + i); END WHILE; INSERT INTO s VALUES (999); END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT i FROM s ORDER BY i;",
+     "rows": [
+      [
+       1
+      ],
+      [
+       2
+      ],
+      [
+       3
+      ],
+      [
+       51
+      ],
+      [
+       52
+      ],
+      [
+       53
+      ],
+      [
+       999
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  }
+ ],
+ "file": "handlers.sql",
+ "spark": "4.2.0"
+}

@@ -263,6 +263,7 @@ mod tests {
                 args: args.into_iter().map(Arc::new).collect(),
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type: t,
                 nullable: true,
                 deterministic: true,

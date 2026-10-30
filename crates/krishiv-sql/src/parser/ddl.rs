@@ -1886,13 +1886,14 @@ impl<'s> Parser<'s> {
                         .toks
                         .get(p.pos.wrapping_sub(1))
                         .map_or(0, |t| t.span.range().end);
+                    let (end, end_byte) = p.raw_end();
                     let path = p
                         .src
-                        .get(after..)
+                        .get(after..end_byte)
                         .unwrap_or_default()
                         .trim_matches(|c: char| c <= ' ')
                         .to_owned();
-                    p.pos = p.toks.len();
+                    p.pos = end;
                     let message = if path.is_empty() {
                         Some(
                             "Resource paths cannot be empty in REFRESH statements. \
@@ -2016,9 +2017,13 @@ impl<'s> Parser<'s> {
                 return p.fail();
             }
             let word = p.any_ident()?;
-            let rest = p.src.get(word.span.range().end..).unwrap_or_default();
+            let (end, end_byte) = p.raw_end();
+            let rest = p
+                .src
+                .get(word.span.range().end..end_byte)
+                .unwrap_or_default();
             let paths = resource_paths(rest);
-            p.pos = p.toks.len();
+            p.pos = end;
             let span = p.span_from(start);
             let kind = match word.value.to_ascii_lowercase().as_str() {
                 "jar" | "jars" => ResourceType::Jar,

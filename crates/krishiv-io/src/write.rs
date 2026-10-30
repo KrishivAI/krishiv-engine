@@ -24,7 +24,7 @@ use object_store::path::Path;
 
 use crate::error::{Result, internal, unsupported};
 use crate::format::{Encoder, FileFormat};
-use crate::io::{IoContext, StoreId, Upload};
+use crate::io::{IoContext, PinnedStore, StoreId, Upload};
 use crate::options::FormatOptions;
 use crate::partition::{
     check_partition_column, partition_dir_name, partition_segment, partition_texts,
@@ -111,6 +111,9 @@ pub struct FileWriter {
     data_columns: Vec<usize>,
     format_options: FormatOptions,
     options: WriteOptions,
+    /// The store held from the start: a write's private store may be
+    /// unregistered while this writer is still aborting.
+    store: PinnedStore,
     suffix: String,
     current: Option<OpenFile>,
     /// The partition key of the open file, and its directory relative to
@@ -187,6 +190,7 @@ impl FileWriter {
             data_schema,
             data_columns,
             format_options,
+            store: io.pin(&options.store)?,
             options,
             suffix,
             current: None,
@@ -196,6 +200,12 @@ impl FileWriter {
             written: Vec::new(),
             mem,
         })
+    }
+
+    /// The store this writer writes to, held (see [`IoContext::pin`]).
+    #[must_use]
+    pub fn store(&self) -> &PinnedStore {
+        &self.store
     }
 
     /// This writer numbering its files from `counter`, shared with the other
@@ -252,7 +262,7 @@ impl FileWriter {
             )
             .await
             .map_err(|e| e.into_error(&display))?;
-        let upload = self.io.upload(&self.options.store, path.clone())?;
+        let upload = self.io.upload_pinned(&self.store, path.clone())?;
         self.current = Some(OpenFile {
             encoder,
             upload,
@@ -448,7 +458,7 @@ impl FileWriter {
             f.upload.abort().await;
         }
         for w in std::mem::take(&mut self.written) {
-            if let Err(e) = self.io.delete(&self.options.store, &w.path).await {
+            if let Err(e) = self.io.delete_pinned(&self.store, &w.path).await {
                 tracing::warn!(error = %e, "could not delete a staged file");
             }
         }

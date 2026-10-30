@@ -178,7 +178,7 @@ fn normalize_key(column: &ArrayRef) -> ArrayRef {
 
 /// Distinct key rows with dense ids `0..len` in insertion order, in one
 /// byte arena.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct KeyTable {
     data: Vec<u8>,
     /// `offsets[id]..offsets[id + 1]` is key `id`'s row; starts with 0.
