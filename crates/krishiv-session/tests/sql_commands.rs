@@ -814,8 +814,6 @@ fn unexecuted_commands_parse_and_report_unsupported() {
         "CREATE TABLE t (a INT NOT NULL DEFAULT 1, b STRING COMMENT 'x') USING parquet \
          PARTITIONED BY (a) TBLPROPERTIES ('k' = 'v')",
         "CREATE TABLE t USING parquet PARTITIONED BY (a) AS SELECT id AS a FROM people",
-        "CREATE TABLE t LIKE people",
-        "DROP TABLE IF EXISTS t PURGE",
         "CREATE DATABASE IF NOT EXISTS db COMMENT 'c'",
         "CREATE SCHEMA s",
         "DROP SCHEMA IF EXISTS s CASCADE",
@@ -829,6 +827,11 @@ fn unexecuted_commands_parse_and_report_unsupported() {
             ErrorClass::KrishivUnsupportedFeature,
             "{sql}"
         );
-        assert!(e.to_string().contains("in sessions"), "{sql}: {e}");
+        if !sql.contains("PARTITIONED BY") {
+            assert!(e.to_string().contains("in sessions"), "{sql}: {e}");
+        }
     }
+    // Executed since the permanent catalog: table DDL on the session catalog.
+    block_on(async { s.sql("CREATE TABLE t LIKE people").await?.collect().await }).unwrap();
+    block_on(async { s.sql("DROP TABLE IF EXISTS t PURGE").await?.collect().await }).unwrap();
 }

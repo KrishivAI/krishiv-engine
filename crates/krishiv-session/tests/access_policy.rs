@@ -339,11 +339,11 @@ fn inverse_matrix_reads_pass_writes_fail() {
     assert_all(&read, "OK");
     assert_all(&writes(&s, &f), DENIED);
     assert_eq!(tree(&f.dir), files, "no file was written or removed");
-    // `Drop` and `Create` are allowed: DDL passes the checks (and is not
-    // supported by the session yet).
+    // `Drop` and `Create` are allowed: DDL passes the checks and runs (here
+    // the name is a temporary view, which `DROP TABLE` drops).
     let ddl = ddl(&s);
     let drop = ddl.iter().find(|(n, _)| *n == "DROP TABLE").unwrap();
-    assert_eq!(drop.1, "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(drop.1, "OK");
 }
 
 #[test]
@@ -734,7 +734,8 @@ fn merge_sources_are_never_read_unchecked() {
 /// and calling it analyzes the body, both through the policy.
 #[test]
 fn sql_function_bodies_are_read_through_the_policy() {
-    let s = session(Policy::new(no_reads_of_s));
+    let policy = Policy::new(no_reads_of_s);
+    let s = session(policy.clone());
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
     s.register_batches("s", schema, vec![]).unwrap();
     // Creating a function whose body reads `s` is denied.
@@ -744,8 +745,7 @@ fn sql_function_bodies_are_read_through_the_policy() {
         ))),
         DENIED
     );
-    // A function over a table the principal may read works, and one that
-    // reads `s` through a view is denied when called.
+    // A function over a table the principal may read works ...
     assert_eq!(
         class(block_on(s.sql(
             "CREATE TEMPORARY FUNCTION ok_fn() RETURNS INT RETURN (SELECT max(a) FROM t)"
@@ -753,10 +753,13 @@ fn sql_function_bodies_are_read_through_the_policy() {
         "OK"
     );
     assert_eq!(class(rows(&s, "SELECT ok_fn()")), "OK");
+    // ... until the policy denies the reads: the call analyzes the body.
+    policy.deny_everything();
+    assert_eq!(class(rows(&s, "SELECT ok_fn()")), DENIED);
 }
 
-/// Persisted functions are not supported; under deny-all the statements
-/// still fail without running anything.
+/// Persisted functions are unsupported: the statements fail without
+/// changing the session.
 #[test]
 fn persisted_function_statements_change_nothing() {
     let s = session(Policy::new(allow));

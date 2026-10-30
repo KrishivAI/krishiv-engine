@@ -54,6 +54,8 @@ pub mod functions;
 mod profile;
 mod session;
 mod sql_functions;
+mod store;
+mod table_commands;
 mod udfs;
 mod variables;
 mod window;

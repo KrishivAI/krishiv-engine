@@ -6,10 +6,6 @@
     ],
     "parser-tail": [
       3
-    ],
-    "sql-commands": [
-      0,
-      4
     ]
   },
   "file": "type-coercion-edge-cases",

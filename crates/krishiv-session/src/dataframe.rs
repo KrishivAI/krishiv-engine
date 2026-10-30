@@ -1595,6 +1595,7 @@ impl DataFrame {
                 TempTable::Files {
                     source: source.clone(),
                     columns,
+                    known: false,
                 },
             );
             self.session.state.cache.invalidate_table(name);

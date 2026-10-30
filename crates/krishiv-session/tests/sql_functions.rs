@@ -796,3 +796,33 @@ fn parameter_names_compare_as_the_session_does() {
     );
     assert_eq!(e.error_class().name(), "DUPLICATE_ROUTINE_PARAMETER_NAMES");
 }
+
+/// Both uses of a parameter, written bare and qualified by the function's
+/// name, are the argument.
+#[test]
+fn a_qualified_parameter_is_the_argument() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION q(x INT) RETURNS INT RETURN q.x + x",
+    );
+    assert_eq!(ok(&s, "SELECT q(21)"), ["42"]);
+}
+
+/// A lambda variable of the calling query is not visible in the body, even
+/// when it is named like the function's parameter.
+#[test]
+fn the_body_does_not_see_the_callers_lambda_variables() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION times10(a INT) RETURNS INT RETURN a * 10",
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT aggregate(transform(array(1, 2, 3), a -> times10(a + 1)), 0, (acc, v) -> acc + v)"
+        ),
+        ["90"]
+    );
+}

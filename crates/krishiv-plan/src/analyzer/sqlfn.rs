@@ -302,9 +302,12 @@ impl Resolver<'_> {
             params,
             attrs,
         });
+        // The body sees no lambda variable of the calling query.
+        let outer_lambdas = std::mem::take(&mut self.lambdas);
         let outer = self.frame.replace(Arc::clone(&frame));
         let resolved = self.body(def, e);
         self.frame = outer;
+        self.lambdas = outer_lambdas;
         let body = resolved?;
         for (p, fp) in def.params.iter().zip(&frame.params) {
             if fp.reads.load(Ordering::Relaxed) > 1 && !is_deterministic(&fp.arg.expr) {
@@ -484,7 +487,9 @@ impl Resolver<'_> {
         let env = self.isolated_env();
         let cx = Self::lone_cx(&env);
         let outer = self.frame.take();
+        let outer_lambdas = std::mem::take(&mut self.lambdas);
         let bound = self.expr(default, &cx);
+        self.lambdas = outer_lambdas;
         self.frame = outer;
         bound
     }

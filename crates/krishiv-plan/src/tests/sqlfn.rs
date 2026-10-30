@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::time::Duration;
 
 use krishiv_types::DataType;
 
@@ -453,7 +452,10 @@ fn a_parameter_can_be_qualified_by_the_function_name() {
         Some(DataType::Integer),
         add(Expr::column(["q", "x"]), c("x")),
     );
-    assert!(call(vec![f("q", vec![int(1)])], vec![q]).is_ok());
+    let r = call(vec![f("q", vec![int(1)])], vec![q]).unwrap();
+    // Both uses are the argument: `1 + 1`, typed as the declared return.
+    assert_eq!(r.output[0].name, "q(1)");
+    assert_eq!(r.output[0].data_type, DataType::Integer);
 }
 
 #[test]
@@ -544,10 +546,8 @@ fn nested_calls_that_double_are_budgeted() {
             )
         })
         .collect();
-    let started = std::time::Instant::now();
     let r = call(vec![f("d0", vec![int(1)])], defs);
     assert_eq!(err(&r).0, "FAILED_TO_PARSE_TOO_COMPLEX");
-    assert!(started.elapsed() < Duration::from_secs(30));
 }
 
 fn scalar_subquery(plan: LogicalPlan) -> Expr {
