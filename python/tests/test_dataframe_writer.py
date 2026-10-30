@@ -332,13 +332,22 @@ def test_writeto_cluster_by_reports_unsupported(df: DataFrame) -> None:
     assert bad.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
 
 
-def test_writeto_options_and_table_property(df: DataFrame) -> None:
+def test_writeto_options_and_table_property(tmp_path: Any) -> None:
+    # The table lives in a known warehouse so the written file can be read back: the
+    # rows round-trip with or without `sep`, so only the file shows the option arrived.
+    spark = SparkSession.builder.config("spark.sql.warehouse.dir", str(tmp_path)).create()
+    df = spark.createDataFrame(pa.table({"id": [3, 1, 2], "name": ["c", None, "b"]}))
     df.writeTo("t").using("csv").option("header", True).options(sep="|").tableProperty("k", "v").create()
-    assert dicts(df.sparkSession.table("t")) == [
+    assert dicts(spark.table("t")) == [
         {"id": 1, "name": None},
         {"id": 2, "name": "b"},
         {"id": 3, "name": "c"},
     ]
+    parts = sorted((tmp_path / "t").glob("*.csv"))
+    assert len(parts) == 1
+    assert parts[0].read_text().splitlines()[0] == "id|name"
+    # The table property is covered on the Rust side (dataframe_writer_v2): the session
+    # has no statement to read table properties back from Python.
 
 
 def test_writeto_wrong_types(df: DataFrame) -> None:
