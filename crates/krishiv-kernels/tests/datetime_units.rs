@@ -43,16 +43,16 @@ fn units_parse_in_any_case_and_print_upper() {
 fn add_rejects_uneven_lengths_and_nulls_pass_through() {
     let q = Int64Array::from(vec![Some(1), None, Some(2)]);
     let t = ts(&[Some(0), Some(0), None]);
-    let out = timestamp_add(TimestampUnit::Day, &q, &t, None).unwrap();
+    let out = timestamp_add(TimestampUnit::Day, &q, &t, None, &FixedOffset(0)).unwrap();
     assert_eq!(out.value(0), DAY);
     assert!(out.is_null(1) && out.is_null(2));
     let short = ts(&[Some(0)]);
-    let err = timestamp_add(TimestampUnit::Day, &q, &short, None).unwrap_err();
+    let err = timestamp_add(TimestampUnit::Day, &q, &short, None, &FixedOffset(0)).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InternalError);
 }
 
 #[test]
-fn add_overflow_is_datetime_overflow_with_the_zone_free_label_for_ntz() {
+fn add_overflow_names_the_start_as_an_instant_in_the_session_zone() {
     let q = Int64Array::from(vec![i64::MAX]);
     // One microsecond past the epoch, so even the time units overflow.
     let t = ts(&[Some(1)]);
@@ -65,15 +65,22 @@ fn add_overflow_is_datetime_overflow_with_the_zone_free_label_for_ntz() {
         TimestampUnit::Quarter,
         TimestampUnit::Year,
     ] {
-        let err = timestamp_add(unit, &q, &t, None).unwrap_err();
+        let err = timestamp_add(unit, &q, &t, None, &FixedOffset(0)).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::DatetimeOverflow, "{unit:?}");
         assert!(
             err.error()
                 .to_string()
-                .contains("TIMESTAMP_NTZ '1970-01-01 00:00:00.000001'")
+                .contains("TIMESTAMP '1970-01-01 00:00:00.000001'")
         );
     }
-    let err = timestamp_add(TimestampUnit::Day, &q, &t, Some(&FixedOffset(3600))).unwrap_err();
+    let err = timestamp_add(
+        TimestampUnit::Day,
+        &q,
+        &t,
+        Some(&FixedOffset(3600)),
+        &FixedOffset(3600),
+    )
+    .unwrap_err();
     assert!(
         err.error()
             .to_string()
@@ -88,10 +95,10 @@ fn add_across_a_dst_change_keeps_the_wall_clock() {
     // the next night.
     let start = ts(&[Some(1_647_115_200_000_000)]);
     let q = Int64Array::from(vec![1]);
-    let day = timestamp_add(TimestampUnit::Day, &q, &start, Some(&la)).unwrap();
+    let day = timestamp_add(TimestampUnit::Day, &q, &start, Some(&la), &la).unwrap();
     assert_eq!(day.value(0), 1_647_115_200_000_000 + DAY - 3_600_000_000);
     let q24 = Int64Array::from(vec![24]);
-    let hours = timestamp_add(TimestampUnit::Hour, &q24, &start, Some(&la)).unwrap();
+    let hours = timestamp_add(TimestampUnit::Hour, &q24, &start, Some(&la), &la).unwrap();
     assert_eq!(hours.value(0), 1_647_115_200_000_000 + DAY);
 }
 
@@ -215,11 +222,9 @@ fn make_timestamp_rejects_bad_shapes_and_overflow() {
     let far = ints(&[Some(999_999_999)]);
     let err = make_timestamp(fields(&far, &s), None, true).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::DatetimeOverflow);
-    assert!(
-        make_timestamp(fields(&far, &s), None, false)
-            .unwrap()
-            .is_null(0)
-    );
+    // ... in both modes: Spark's bare `ArithmeticException` is not caught.
+    let err = make_timestamp(fields(&far, &s), None, false).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::DatetimeOverflow);
     // A per-row NULL zone is a NULL result.
     let zones = [None];
     let out = make_timestamp(fields(&y, &s), Some(&Zones::PerRow(&zones)), true).unwrap();

@@ -149,6 +149,9 @@ __all__ = [
     "lpad",
     "ltrim",
     "make_date",
+    "make_timestamp",
+    "make_timestamp_ltz",
+    "make_timestamp_ntz",
     "make_valid_utf8",
     "map_concat",
     "map_contains_key",
@@ -266,6 +269,9 @@ __all__ = [
     "trunc",
     "try_add",
     "try_divide",
+    "try_make_timestamp",
+    "try_make_timestamp_ltz",
+    "try_make_timestamp_ntz",
     "try_mod",
     "try_multiply",
     "try_parse_url",
@@ -918,6 +924,70 @@ def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Col
     return _call("make_date", _named(year, "year"), _named(month, "month"), _named(day, "day"))
 
 
+def make_timestamp(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``make_timestamp``."""
+    return _call(
+        "make_timestamp",
+        _named(years, "years"),
+        _named(months, "months"),
+        _named(days, "days"),
+        _named(hours, "hours"),
+        _named(mins, "mins"),
+        _named(secs, "secs"),
+        *_opt(_named, timezone, "timezone"),
+    )
+
+
+def make_timestamp_ltz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``make_timestamp_ltz``."""
+    return _call(
+        "make_timestamp_ltz",
+        _named(years, "years"),
+        _named(months, "months"),
+        _named(days, "days"),
+        _named(hours, "hours"),
+        _named(mins, "mins"),
+        _named(secs, "secs"),
+        *_opt(_named, timezone, "timezone"),
+    )
+
+
+def make_timestamp_ntz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+) -> Column:
+    """Calls the registry function ``make_timestamp_ntz``."""
+    return _call(
+        "make_timestamp_ntz",
+        _named(years, "years"),
+        _named(months, "months"),
+        _named(days, "days"),
+        _named(hours, "hours"),
+        _named(mins, "mins"),
+        _named(secs, "secs"),
+    )
+
+
 def make_valid_utf8(str: ColumnOrName) -> Column:
     """Calls the registry function ``make_valid_utf8``."""
     return _call("make_valid_utf8", _named(str, "str"))
@@ -1531,6 +1601,70 @@ def try_add(left: ColumnOrName, right: ColumnOrName) -> Column:
 def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_divide``."""
     return _call("try_divide", _named(left, "left"), _named(right, "right"))
+
+
+def try_make_timestamp(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``try_make_timestamp``."""
+    return _call(
+        "try_make_timestamp",
+        _named(years, "years"),
+        _named(months, "months"),
+        _named(days, "days"),
+        _named(hours, "hours"),
+        _named(mins, "mins"),
+        _named(secs, "secs"),
+        *_opt(_named, timezone, "timezone"),
+    )
+
+
+def try_make_timestamp_ltz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``try_make_timestamp_ltz``."""
+    return _call(
+        "try_make_timestamp_ltz",
+        _named(years, "years"),
+        _named(months, "months"),
+        _named(days, "days"),
+        _named(hours, "hours"),
+        _named(mins, "mins"),
+        _named(secs, "secs"),
+        *_opt(_named, timezone, "timezone"),
+    )
+
+
+def try_make_timestamp_ntz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+) -> Column:
+    """Calls the registry function ``try_make_timestamp_ntz``."""
+    return _call(
+        "try_make_timestamp_ntz",
+        _named(years, "years"),
+        _named(months, "months"),
+        _named(days, "days"),
+        _named(hours, "hours"),
+        _named(mins, "mins"),
+        _named(secs, "secs"),
+    )
 
 
 def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column:

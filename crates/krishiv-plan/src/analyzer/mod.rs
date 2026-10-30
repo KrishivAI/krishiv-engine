@@ -124,8 +124,9 @@ pub use krishiv_functions::signature::SparkProfile;
 
 /// The session time zone, resolved once per analysis: a fixed offset, or a
 /// region of the bundled time-zone database. `Copy` so the conf stays
-/// `Copy`; regions are interned (the database is finite, so the interner is
-/// bounded).
+/// `Copy`; regions are interned by lower-cased id (the database matches ids
+/// case-insensitively), and only ids it resolves are kept, so the interner
+/// holds at most one entry per zone id the database knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionZone {
     /// A fixed offset in seconds east of UTC.
@@ -169,9 +170,9 @@ impl SessionZone {
                     .get_or_init(Mutex::default)
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let interned = regions.entry(text.to_owned()).or_insert_with(|| {
+                let interned = regions.entry(text.to_ascii_lowercase()).or_insert_with(|| {
                     Box::leak(Box::new(RegionZone {
-                        id: text.to_owned(),
+                        id: text.to_ascii_lowercase(),
                         zone,
                     }))
                 });

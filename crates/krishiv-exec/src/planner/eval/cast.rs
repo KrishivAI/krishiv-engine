@@ -130,7 +130,7 @@ pub(super) fn parts(
         _ => return Err(internal("a cast mode the analyzer did not pin")),
     };
     let zone = if needs_zone(from, &to) {
-        env.zone_rules()
+        env.zone_rules()?
     } else {
         krishiv_kernels::datetime::ZoneRef::Fixed(FixedOffset(0))
     };

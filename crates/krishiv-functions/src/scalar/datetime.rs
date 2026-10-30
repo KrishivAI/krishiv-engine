@@ -728,15 +728,10 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let zone = if ntz || types.len() == 6 {
                 None
             } else {
-                match zone_arg(args, 6) {
-                    Ok(z) => Some(z),
-                    Err(e) if listed.starts_with("try_") => {
-                        // `try_*` turns an unknown zone into NULL.
-                        let _ = e;
-                        Some(ZoneArg::Literal(None))
-                    }
+                Some(match zone_arg(args, 6) {
+                    Ok(z) => z,
                     Err(e) => return Some((listed, Err(e))),
-                }
+                })
             };
             let session_zone = !ntz && types.len() == 6;
             Binding::new(
@@ -783,7 +778,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     } else {
                         Some(o.time_zone.as_ref())
                     };
-                    let out = timestamp_add(unit, &x.array::<Int64Type>(1)?, &start, zone)?;
+                    let out = timestamp_add(
+                        unit,
+                        &x.array::<Int64Type>(1)?,
+                        &start,
+                        zone,
+                        o.time_zone.as_ref(),
+                    )?;
                     Ok(Arc::new(if ntz { out } else { out.with_timezone("UTC") }) as ArrayRef)
                 },
             )
@@ -795,18 +796,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             };
             let (start_ntz, end_ntz) = (*a == ntz_type(), *b == ntz_type());
             Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
-                // Both sides count on the wall clock: an instant is read in
-                // the session zone (by the kernel when both are instants,
-                // here when it meets a zone-less value).
-                let mixed = start_ntz != end_ntz;
-                let side =
-                    |i: usize, is_ntz: bool| timestamps_as(x, i, mixed && !is_ntz, &ntz_type(), &o);
-                let zone: Option<&dyn TimeZoneRules> = if start_ntz || end_ntz {
-                    None
-                } else {
-                    Some(o.time_zone.as_ref())
-                };
-                let out = timestamp_diff(unit, &side(1, start_ntz)?, &side(2, end_ntz)?, zone)?;
+                // Spark's `TimestampDiff` takes instants: a zone-less value
+                // is read in the session zone first (a time in a DST gap
+                // moves forward), then both sides are read back on the
+                // wall clock of that zone.
+                let start = instants(x, 1, start_ntz, &o)?;
+                let end = instants(x, 2, end_ntz, &o)?;
+                let out = timestamp_diff(unit, &start, &end, Some(o.time_zone.as_ref()))?;
                 Ok(Arc::new(out) as ArrayRef)
             })
         }

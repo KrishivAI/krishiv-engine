@@ -89,11 +89,9 @@ pub(super) fn compile(
     let out = f.data_type.to_arrow();
     // The session zone's rules; a function that never reads the zone sees
     // the same rules, so no per-function list of zone readers is needed.
-    let zone = input.env.zone_rules();
+    let zone = input.env.zone_rules()?;
     // `current_timezone()` returns the configured string; the patterns print
-    // the zone id Spark normalises it to. A region session zone reaches the
-    // patterns only for functions that do not read it, which see the UTC
-    // fallback, its id included.
+    // the zone id Spark normalises it to.
     let configured: Arc<str> = match &input.env.zone_name {
         Some(name) => Arc::clone(name),
         None => Arc::from(rendered_zone(input.env.zone)),

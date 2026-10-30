@@ -184,11 +184,20 @@ pub fn builtins() -> &'static Registry {
     &BUILTINS
 }
 
+/// Whether `name` is one Spark's grammar owns (see [`grammar_row`]): it has
+/// a definition but no row in Spark's function catalog, and the lowering
+/// reaches it through the keyword-unit forms. A call spelled as an ordinary
+/// function (`timestampadd(col, 1, ts)`) also resolves here, where Spark says
+/// `UNRESOLVED_ROUTINE`: a known divergence.
+#[must_use]
+pub fn is_grammar_only(name: &str) -> bool {
+    grammar_row(name).is_some()
+}
+
 /// The catalog row of a name Spark's grammar owns: `TIMESTAMPADD` and
 /// `TIMESTAMPDIFF` (and the unit forms of `DATEADD`/`DATEDIFF` the lowering
-/// renames to them) are parsed into expressions, not registered, so
-/// `SHOW FUNCTIONS` and `DESCRIBE FUNCTION` do not know them. Three
-/// arguments, as the grammar takes.
+/// renames to them) are parsed into expressions, not registered in Spark.
+/// Three arguments, as the grammar takes.
 fn grammar_row(name: &str) -> Option<SparkFunction> {
     let name = match name {
         "timestampadd" => "timestampadd",

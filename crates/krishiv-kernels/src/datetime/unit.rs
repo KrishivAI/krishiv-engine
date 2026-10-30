@@ -116,7 +116,9 @@ impl TimestampUnit {
 /// and `None` for a `TIMESTAMP_NTZ`. Calendar units move the local
 /// date-time (a local time inside a DST gap moves forward, an ambiguous one
 /// keeps the start's offset, as `ZonedDateTime.plusDays` does); time units
-/// add elapsed time. NULL in, NULL out.
+/// add elapsed time. NULL in, NULL out. `display` is the session zone, which
+/// only renders the start in the overflow message (Spark prints the start as
+/// an instant in it, for `TIMESTAMP_NTZ` too).
 ///
 /// # Errors
 /// `DATETIME_OVERFLOW` when the result is out of range, with ANSI on or off
@@ -127,6 +129,7 @@ pub fn timestamp_add(
     quantity: &Int64Array,
     start: &TimestampMicrosecondArray,
     zone: Option<&dyn TimeZoneRules>,
+    display: &dyn TimeZoneRules,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
     if quantity.len() != start.len() {
         return Err(KernelError::internal(
@@ -143,7 +146,7 @@ pub fn timestamp_add(
         }
         let (n, t) = (quantity.value(row), start.value(row));
         let Some(moved) = add_one(unit, n, t, zone) else {
-            return Err(overflow(unit, n, t, zone, row));
+            return Err(overflow(unit, n, t, display, row));
         };
         out.push(moved);
         valid.push(true);
@@ -176,23 +179,20 @@ fn add_one(unit: TimestampUnit, n: i64, t: i64, zone: Option<&dyn TimeZoneRules>
 }
 
 /// Spark's message: `add 9223372036854775807L YEAR to TIMESTAMP '2022-02-14
-/// 01:02:03'`.
+/// 01:02:03'`, the start rendered as an instant in the session zone.
 fn overflow(
     unit: TimestampUnit,
     n: i64,
     t: i64,
-    zone: Option<&dyn TimeZoneRules>,
+    display: &dyn TimeZoneRules,
     row: usize,
 ) -> KernelError {
-    let (keyword, local) = match zone {
-        Some(tz) => ("TIMESTAMP", utc_to_local(t, tz).unwrap_or(t)),
-        None => ("TIMESTAMP_NTZ", t),
-    };
+    let local = utc_to_local(t, display).unwrap_or(t);
     let mut shown = String::new();
     format_timestamp(local, &mut shown);
     KernelError::datetime_overflow(
         row,
-        &format!("add {n}L {} to {keyword} '{shown}'", unit.name()),
+        &format!("add {n}L {} to TIMESTAMP '{shown}'", unit.name()),
     )
 }
 
@@ -205,7 +205,9 @@ fn overflow(
 ///
 /// # Errors
 /// `DATETIME_OVERFLOW` when the count does not fit a `BIGINT` (a
-/// `MICROSECOND` count over a span of more than 292,000 years);
+/// `MICROSECOND` count over a span of more than 292,000 years) or a local
+/// time leaves the range. Spark raises a bare `ArithmeticException("long
+/// overflow")` there, which has no error class;
 /// `INTERNAL_ERROR` for arrays of different lengths.
 pub fn timestamp_diff(
     unit: TimestampUnit,

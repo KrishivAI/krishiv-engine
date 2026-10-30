@@ -282,8 +282,7 @@ fn make_timestamp_errors_are_sparks_and_try_gives_null() {
         assert_eq!(err.error_class(), class, "{expr}: {err}");
         assert!(err.to_string().contains(text), "{expr}: {err}");
     }
-    // `try_` forms and ANSI off return NULL for a bad field, though not
-    // for an unknown zone name.
+    // `try_` forms and ANSI off return NULL for a bad field.
     assert_eq!(one(&s, "try_make_timestamp(2021, 13, 11, 6, 30, 45)"), None);
     assert_eq!(
         one(&s, "try_make_timestamp(2021, 7, 11, 6, 30, 60.007)"),
@@ -295,4 +294,162 @@ fn make_timestamp_errors_are_sparks_and_try_gives_null() {
     );
     block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
     assert_eq!(one(&s, "make_timestamp(2021, 13, 11, 6, 30, 45)"), None);
+}
+
+fn session_in(zone: &str) -> Session {
+    let s = Session::new().unwrap();
+    block_on(s.sql(&format!("SET spark.sql.session.timeZone = {zone}"))).unwrap();
+    s
+}
+
+/// The overlap takes the earlier offset and a gap moves forward, with the
+/// 30-minute step of `Australia/Lord_Howe` and the half-hour offset of
+/// `Asia/Kolkata` (microseconds from a Spark 4.2.0 run).
+#[test]
+fn gaps_and_overlaps_resolve_as_java_time_does() {
+    let la = session();
+    assert_eq!(
+        one(
+            &la,
+            "CAST(CAST(make_timestamp(2021, 11, 7, 1, 30, 0) AS DOUBLE) * 1000000 AS BIGINT)"
+        )
+        .as_deref(),
+        Some("1636273800000000")
+    );
+    assert_eq!(
+        one(
+            &la,
+            "CAST(CAST(timestampadd(DAY, 1, TIMESTAMP '2021-11-06 01:30:00') AS DOUBLE) * 1000000 AS BIGINT)"
+        )
+        .as_deref(),
+        Some("1636273800000000")
+    );
+    assert_eq!(
+        one(
+            &la,
+            "CAST(CAST(timestampadd(HOUR, 1, TIMESTAMP '2021-11-07 01:30:00') AS DOUBLE) * 1000000 AS BIGINT)"
+        )
+        .as_deref(),
+        Some("1636277400000000")
+    );
+    let lord_howe = session_in("Australia/Lord_Howe");
+    for (expr, want) in [
+        (
+            "make_timestamp(2021, 10, 3, 2, 15, 0)",
+            "2021-10-03 02:45:00",
+        ),
+        (
+            "CAST(CAST(make_timestamp(2021, 10, 3, 2, 15, 0) AS DOUBLE) * 1000000 AS BIGINT)",
+            "1633189500000000",
+        ),
+        (
+            "CAST(CAST(make_timestamp(2021, 4, 4, 1, 45, 0) AS DOUBLE) * 1000000 AS BIGINT)",
+            "1617461100000000",
+        ),
+        (
+            "timestampadd(DAY, 1, make_timestamp(2021, 10, 2, 2, 15, 0))",
+            "2021-10-03 02:45:00",
+        ),
+    ] {
+        assert_eq!(one(&lord_howe, expr).as_deref(), Some(want), "{expr}");
+    }
+    let kolkata = session_in("Asia/Kolkata");
+    assert_eq!(
+        one(
+            &kolkata,
+            "CAST(CAST(make_timestamp(2021, 7, 11, 6, 30, 45) AS DOUBLE) * 1000000 AS BIGINT)"
+        )
+        .as_deref(),
+        Some("1625965245000000")
+    );
+    assert_eq!(
+        one(
+            &kolkata,
+            "timestampdiff(HOUR, TIMESTAMP '2021-07-11 00:00:00', TIMESTAMP '2021-07-11 23:59:59')"
+        )
+        .as_deref(),
+        Some("23")
+    );
+}
+
+/// A zone-less operand of `timestampdiff` is read in the session zone first,
+/// so a time inside a spring-forward gap moves forward.
+#[test]
+fn timestampdiff_reads_zone_less_values_in_the_session_zone() {
+    let s = session();
+    assert_eq!(
+        one(
+            &s,
+            "timestampdiff(HOUR, TIMESTAMP_NTZ '2022-03-13 02:30:00', TIMESTAMP_NTZ '2022-03-13 04:30:00')"
+        )
+        .as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        one(
+            &s,
+            "timestampdiff(HOUR, TIMESTAMP '2022-03-13 01:30:00', TIMESTAMP_NTZ '2022-03-13 02:30:00')"
+        )
+        .as_deref(),
+        Some("2")
+    );
+}
+
+#[test]
+fn make_timestamp_seconds_follow_sparks_int_truncation_and_check_order() {
+    let s = session();
+    // The unscaled seconds are truncated to an int before they are split.
+    let err = error_of(&s, "make_timestamp(2021, 1, 1, 1, 1, 3000)");
+    assert!(
+        err.to_string()
+            .contains("SecondOfMinute (valid values 0 - 59): -1295"),
+        "{err}"
+    );
+    assert_eq!(
+        one(&s, "make_timestamp(2021, 1, 1, 1, 1, 4324.967296)").as_deref(),
+        Some("2021-01-01 01:01:30")
+    );
+    // A fraction of 60 seconds is refused before the month is checked.
+    let err = error_of(&s, "make_timestamp(2021, 13, 1, 1, 1, 60.5)");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::InvalidFractionOfSecond,
+        "{err}"
+    );
+}
+
+#[test]
+fn an_unknown_zone_is_invalid_timezone_even_for_the_try_forms() {
+    let s = session();
+    for expr in [
+        "make_timestamp(2021, 7, 11, 6, 30, 45, 'Mars/Base')",
+        "try_make_timestamp(2021, 7, 11, 6, 30, 45, 'Mars/Base')",
+    ] {
+        assert_eq!(
+            error_of(&s, expr).error_class(),
+            ErrorClass::InvalidTimezone,
+            "{expr}"
+        );
+    }
+    // A session zone that names no region fails the calls that read it.
+    let bad = session_in("Europe/Pariss");
+    assert_eq!(
+        error_of(&bad, "date_format(DATE '2022-01-01', 'yyyy')").error_class(),
+        ErrorClass::InvalidTimezone
+    );
+}
+
+#[test]
+fn make_timestamp_ntz_without_ansi_gives_null_for_a_bad_field() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert_eq!(one(&s, "make_timestamp_ntz(2021, 13, 11, 6, 30, 45)"), None);
+    assert_eq!(
+        one(&s, "try_make_timestamp_ntz(2021, 2, 30, 6, 30, 45)"),
+        None
+    );
+    assert_eq!(
+        one(&s, "try_make_timestamp_ntz(2021, 2, 28, 6, 30, 45)").as_deref(),
+        Some("2021-02-28 06:30:45")
+    );
 }

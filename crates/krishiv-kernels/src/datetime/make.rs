@@ -2,8 +2,9 @@
 //! `make_timestamp(year, month, day, hour, minute, seconds[, zone])` and its
 //! `_ltz`/`_ntz` and `try_` forms, from the six numeric fields.
 //!
-//! Fields are checked in `java.time`'s order (`LocalDate.of`, then the hour,
-//! minute and second of `LocalTime.of`) and raise its messages. `seconds` is
+//! Seconds of 60 with a fraction are refused first; the other fields are
+//! checked in `java.time`'s order (`LocalDate.of`, then the hour, minute and
+//! second of `LocalTime.of`) and raise its messages. `seconds` is
 //! a `decimal(16,6)`: 60 with no fraction rolls over to the next minute, 60
 //! with a fraction is `INVALID_FRACTION_OF_SECOND`, any other value outside
 //! 0..59 is out of bounds. A local time inside a DST gap moves forward, an
@@ -16,6 +17,7 @@ use super::Zones;
 use super::calendar::invalid_date;
 use crate::cast::datetime::{MICROS_PER_DAY, days_from_civil, local_to_utc};
 use crate::error::{KernelError, with_capacity};
+use krishiv_common::error::ErrorClass;
 
 const MICROS_PER_SECOND: i128 = 1_000_000;
 
@@ -99,14 +101,15 @@ pub fn make_timestamp(
                 if let Some(t) = instant {
                     values.push(t);
                     valid.push(true);
-                } else if fail_on_error {
-                    return Err(KernelError::datetime_overflow(row, "make_timestamp"));
                 } else {
-                    values.push(0);
-                    valid.push(false);
+                    return Err(KernelError::datetime_overflow(row, "make_timestamp"));
                 }
             }
-            Err(e) if fail_on_error => return Err(e),
+            // An overflow is Spark's bare `ArithmeticException`, which the
+            // `try_` form and ANSI off do not catch either.
+            Err(e) if fail_on_error || e.error_class() == ErrorClass::DatetimeOverflow => {
+                return Err(e);
+            }
             Err(_) => {
                 values.push(0);
                 valid.push(false);
@@ -119,10 +122,28 @@ pub fn make_timestamp(
     ))
 }
 
+/// The low 32 bits of `v` as an `int` (`Decimal.toUnscaledLong.toInt`).
+fn wrap_i32(v: i128) -> i32 {
+    let b = v.to_le_bytes();
+    i32::from_le_bytes([b[0], b[1], b[2], b[3]])
+}
+
 /// The wall-clock microseconds of row `row`, or the error Spark raises.
 fn one(f: &TimestampFields<'_>, row: usize) -> Result<i64, KernelError> {
     let (year, month, day) = (f.years.value(row), f.months.value(row), f.days.value(row));
     let out_of_bounds = |text: String| KernelError::datetime_field_out_of_bounds(row, text);
+    // Spark truncates the unscaled seconds to an `int` first, and refuses a
+    // fraction of 60 seconds before it checks any other field.
+    let unscaled = i128::from(wrap_i32(f.seconds.value(row)));
+    let whole = unscaled.div_euclid(MICROS_PER_SECOND);
+    let micros = unscaled.rem_euclid(MICROS_PER_SECOND);
+    if whole == 60 && micros != 0 {
+        return Err(KernelError::invalid_fraction_of_second(
+            row,
+            seconds_text(unscaled),
+        ));
+    }
+    let rolled = whole == 60 && micros == 0;
     if let Some(message) = invalid_date(year, month, day) {
         return Err(out_of_bounds(message));
     }
@@ -136,16 +157,6 @@ fn one(f: &TimestampFields<'_>, row: usize) -> Result<i64, KernelError> {
         return Err(out_of_bounds(format!(
             "Invalid value for MinuteOfHour (valid values 0 - 59): {minute}"
         )));
-    }
-    let unscaled = f.seconds.value(row);
-    let whole = unscaled.div_euclid(MICROS_PER_SECOND);
-    let micros = unscaled.rem_euclid(MICROS_PER_SECOND);
-    let rolled = whole == 60 && micros == 0;
-    if whole == 60 && micros != 0 {
-        return Err(KernelError::invalid_fraction_of_second(
-            row,
-            seconds_text(unscaled),
-        ));
     }
     if !rolled && !(0..=59).contains(&whole) {
         return Err(out_of_bounds(format!(
