@@ -401,7 +401,9 @@ fn q21_shaped_expected() -> (i64, i64) {
 /// [`rss_bound`] either way), so the regression check is the cause: the I/O runtime's threads
 /// stay within `krishiv.io.blockingThreads` plus its workers while a q21-shaped query whose
 /// joins spill keeps many reads in flight. The test also checks the RSS bound (and runs under a
-/// cgroup at that bound where `systemd-run --user` works) and the result.
+/// cgroup at that bound where `systemd-run --user` works) and the result. The joins keep Spark's
+/// build side (`krishiv.exec.join.buildSide=false`): built from the small side they would not
+/// spill at all, and this test covers the left semi and anti joins' spill and role reversal.
 #[test]
 fn a_q21_shaped_spilling_join_stays_within_the_bound() {
     let dir = tempfile::tempdir().unwrap();
@@ -416,6 +418,8 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
         &[
             "--conf",
             &format!("krishiv.io.blockingThreads={IO_BLOCKING}"),
+            "--conf",
+            "krishiv.exec.join.buildSide=false",
         ],
     );
     let file = dir.path().join("q21_shaped.sql");

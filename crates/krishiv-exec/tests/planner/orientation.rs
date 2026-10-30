@@ -171,3 +171,24 @@ fn a_cte_reference_is_a_default_estimate() {
         "{js:?}"
     );
 }
+
+/// `krishiv.exec.join.buildSide=false` keeps Spark's build side (the right
+/// input) whatever the statistics say.
+#[test]
+fn the_build_side_setting_keeps_sparks_side() {
+    use krishiv_exec::planner::{DefaultPlanner, PhysicalPlanner as _, PlanningContext};
+    let env = env();
+    let sql = "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE big.a = t.a)";
+    let mut config = krishiv_common::config::Config::new();
+    config.set("krishiv.exec.join.buildSide", "false").unwrap();
+    let cx = PlanningContext::new(Arc::clone(&env.tables) as _, Arc::new(config));
+    let plan = krishiv_optimizer::optimize(&env.analyze(sql)).unwrap();
+    let text = DefaultPlanner.plan(&plan, &cx).unwrap().to_string();
+    let joins: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.find("HashJoin").map(|i| &l[i..]))
+        .collect();
+    assert_eq!(joins.len(), 1, "{text}");
+    assert!(joins[0].starts_with("HashJoin LeftSemi"), "{text}");
+    assert!(!joins[0].contains("builds left"), "{text}");
+}

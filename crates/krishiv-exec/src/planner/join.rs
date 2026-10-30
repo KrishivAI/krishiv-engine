@@ -157,7 +157,13 @@ impl Planner<'_> {
         // outer join. A hint keeps Spark's side. The planner plans batch
         // queries only (unweighted rows): the right joins refuse weighted
         // inputs, so an incremental (IVM) planning mode must not flip.
-        let preferred = if choice.distribution.is_none() {
+        let build_side = self
+            .cx
+            .config
+            .get(&krishiv_common::config::EXEC_JOIN_BUILD_SIDE)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let preferred = if choice.distribution.is_none() && build_side {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
             let other = orient(join_type, single_match, &probe_stats, &build_stats);
