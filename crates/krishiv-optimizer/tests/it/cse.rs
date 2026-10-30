@@ -391,6 +391,7 @@ fn a_user_alias_named_like_a_cse_column_is_left_alone() {
     for seed in 1..=8 {
         assert_same_rows(&data::small(seed), on.root(), off.root(), "cse_1 alias");
     }
+}
 
 /// A property-test find: a self-join over a filter with repeated
 /// `coalesce` calls is a fixed point of `optimize`.
