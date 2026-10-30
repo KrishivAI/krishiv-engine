@@ -17,11 +17,11 @@ use proptest::sample::Index;
 
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, CteRef, DayTimeField, Expr, ExprNode,
-    FrameBound, FrameUnits, FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition,
-    JoinKind, JoinStrategy, Literal, LogicalPlan, NullOrdering, Origin, PivotValue, Plan, PlanId,
-    PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SetOperation, SortDirection,
-    SortOrder, SourceId, Span, SqlArgs, Star, SubqueryKind, TableVersion, UnpivotColumnSet,
-    WindowExpr, WindowFrame, WindowSpec, WindowSpecRef, YearMonthField,
+    FieldOp, FrameBound, FrameUnits, FunctionCall, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, JoinStrategy, Literal, LogicalPlan, NullOrdering, Origin, PivotValue,
+    Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SetOperation,
+    SortDirection, SortOrder, SourceId, Span, SqlArgs, Star, SubqueryKind, TableVersion,
+    UnpivotColumnSet, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef, YearMonthField,
 };
 
 // ---- generator ------------------------------------------------------------
@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 16 };
+        let kinds = if depth == 0 { 5 } else { 17 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -260,6 +260,19 @@ impl Gen<'_> {
                 data_type: self.data_type(),
                 nullable: self.flag(),
             }),
+            15 => ExprNode::UpdateFields {
+                base: Arc::new(self.expr(d)),
+                ops: self.many(0, 2, |g| {
+                    if g.flag() {
+                        FieldOp::With {
+                            name: g.name(),
+                            value: Arc::new(g.expr(d)),
+                        }
+                    } else {
+                        FieldOp::Drop { name: g.name() }
+                    }
+                }),
+            },
             11 => ExprNode::Window(WindowExpr {
                 function: Arc::new(self.expr(d)),
                 window: if self.flag() {
@@ -776,6 +789,19 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             params.iter_mut().any(|p| m_bound(p, w)) || m_expr(body, w)
         }
         ExprNode::Field { base, name } => m_string(name, w) || m_expr(base, w),
+        ExprNode::UpdateFields { base, ops } => {
+            site!(
+                w,
+                ops.push(FieldOp::Drop {
+                    name: "x".to_owned()
+                })
+            );
+            m_expr(base, w)
+                || ops.iter_mut().any(|op| match op {
+                    FieldOp::With { name, value } => m_string(name, w) || m_expr(value, w),
+                    FieldOp::Drop { name } => m_string(name, w),
+                })
+        }
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {
                 SubqueryKind::Scalar => SubqueryKind::Exists,

@@ -28,8 +28,8 @@ use twox_hash::XxHash3_128;
 
 use crate::analyzer::{PolicyVersion, TableIdent};
 use crate::{
-    AttrId, BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, Plan, PlanNode,
-    ReadSource, ResolvedExpr, SqlArgs, TableVersion,
+    AttrId, BoundColumn, Expr, ExprNode, FieldOp, Grouping, JoinCondition, LogicalPlan, Plan,
+    PlanNode, ReadSource, ResolvedExpr, SqlArgs, TableVersion,
 };
 
 /// A cache key: the normalized hash, the pinned table versions, who runs
@@ -321,6 +321,24 @@ impl Encoder {
                 self.tag("field");
                 self.expr(base, bias);
                 self.text(name);
+            }
+            ExprNode::UpdateFields { base, ops } => {
+                self.tag("update-fields");
+                self.expr(base, bias);
+                self.num(ops.len() as u64);
+                for op in ops {
+                    match op {
+                        FieldOp::With { name, value } => {
+                            self.tag("with");
+                            self.text(name);
+                            self.expr(value, bias);
+                        }
+                        FieldOp::Drop { name } => {
+                            self.tag("drop");
+                            self.text(name);
+                        }
+                    }
+                }
             }
             ExprNode::Cast { expr, to, mode } => {
                 self.tag("cast");

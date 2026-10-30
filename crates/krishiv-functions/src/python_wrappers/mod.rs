@@ -192,7 +192,10 @@ impl Param {
 
     fn argument(&self, always: bool) -> String {
         let (name, helper) = (&self.name, self.conv.helper());
-        if self.variadic {
+        if self.variadic && self.conv == Conv::Literal {
+            // `*fields: str`: every value is a literal (a key name), never a column.
+            format!("*[_lit(value, \"{name}\") for value in {name}]")
+        } else if self.variadic {
             format!("*_cols({name})")
         } else if !always && self.default.as_deref() == Some("None") {
             format!("*_opt({helper}, {name}, \"{name}\")")
@@ -202,7 +205,8 @@ impl Param {
     }
 }
 
-/// Parses `name: annotation [= default]` items; `*name: ColumnOrName` is variadic.
+/// Parses `name: annotation [= default]` items; `*name: ColumnOrName` and
+/// `*name: str` (literals) are variadic.
 /// Annotations may hold `[...]` (as `dict[str, str]` does): items split on
 /// commas outside brackets.
 fn parse_params(spec: &str) -> Result<Vec<Param>, String> {
@@ -224,9 +228,9 @@ fn parse_params(spec: &str) -> Result<Vec<Param>, String> {
         let name = name.trim_start_matches('*');
         let conv = Conv::of_annotation(annotation)
             .ok_or_else(|| format!("parameter `{item}`: unknown annotation `{annotation}`"))?;
-        if variadic && (annotation != "ColumnOrName" || default.is_some()) {
+        if variadic && (!matches!(annotation, "ColumnOrName" | "str") || default.is_some()) {
             return Err(format!(
-                "`*{name}` must be `ColumnOrName` without a default"
+                "`*{name}` must be `ColumnOrName` or `str` without a default"
             ));
         }
         out.push(Param {

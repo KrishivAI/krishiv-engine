@@ -40,6 +40,7 @@
 pub mod cast;
 mod chunk;
 pub mod compare;
+pub mod csv;
 pub mod datetime;
 pub mod datetime_pattern;
 pub mod decimal;

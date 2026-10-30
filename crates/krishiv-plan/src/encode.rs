@@ -64,9 +64,10 @@ use twox_hash::XxHash3_128;
 
 use crate::{BoundColumn, CteRef, Scan};
 use crate::{
-    CastMode, ColumnRef, DayTimeField, Expr, ExprNode, FunctionCall, Grouping, JoinCondition,
-    JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr,
-    ResolvedFunction, SortDirection, SqlArgs, Star, SubqueryKind, YearMonthField,
+    CastMode, ColumnRef, DayTimeField, Expr, ExprNode, FieldOp, FunctionCall, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanId, PlanNode,
+    ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SqlArgs, Star, SubqueryKind,
+    YearMonthField,
 };
 
 /// The version of the canonical encoding layout.
@@ -611,6 +612,31 @@ impl<'k, 'a> Encoder<'k, 'a> {
     fn exprs(&mut self, v: &'a [Arc<Expr>]) {
         self.len(v.len());
         v.iter().for_each(|e| self.expr(e));
+    }
+
+    /// An unresolved struct update, out of line so [`Self::expr_fields`]
+    /// keeps its frame: plans at the depth cap must still fit a 2 MiB
+    /// stack (see `tests::depth`).
+    #[inline(never)]
+    fn update_fields(&mut self, e: &'a Expr) {
+        if let ExprNode::UpdateFields { base, ops } = &e.node {
+            self.u8(17);
+            self.expr(base);
+            self.len(ops.len());
+            for op in ops {
+                match op {
+                    FieldOp::With { name, value } => {
+                        self.u8(1);
+                        self.str(name);
+                        self.expr(value);
+                    }
+                    FieldOp::Drop { name } => {
+                        self.u8(2);
+                        self.str(name);
+                    }
+                }
+            }
+        }
     }
 
     fn plan_fields(&mut self, p: &'a LogicalPlan) {
@@ -1167,6 +1193,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.bool(*nullable);
                 self.expr(base);
             }
+            ExprNode::UpdateFields { .. } => self.update_fields(e),
         }
     }
 

@@ -13,6 +13,7 @@ pub mod docs;
 pub mod format_neutral;
 pub mod layering;
 pub mod lint;
+pub mod metrics_gate;
 pub mod policy;
 pub mod precheck;
 pub mod profile;

@@ -300,7 +300,13 @@ impl AggregateExpr {
             (F::Avg, DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) if *s >= 0 => {
                 decimal_on(t, (*p + 4).min(38), s.saturating_add(4).min(38))
             }
-            (F::Min | F::Max | F::First { .. } | F::Last { .. } | F::AnyValue { .. }, t)
+            (F::Min | F::Max, t)
+                if accumulator::min_max_supported(t)
+                    || accumulator::struct_min_max_supported(t) =>
+            {
+                t.clone()
+            }
+            (F::First { .. } | F::Last { .. } | F::AnyValue { .. }, t)
                 if accumulator::min_max_supported(t) =>
             {
                 t.clone()

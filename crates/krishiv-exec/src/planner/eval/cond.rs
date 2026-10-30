@@ -58,6 +58,12 @@ pub(super) fn in_list(
     for item in &items {
         compare(Builtin::Eq, Arc::clone(&v), Arc::clone(item), env)?;
     }
+    if items.len() > IN_SET_THRESHOLD
+        && items.iter().all(|e| e.is_constant())
+        && let Some(set) = InSet::try_new(&v, &items)
+    {
+        return Ok(Arc::new(set));
+    }
     Ok(Arc::new(InList {
         v,
         items,
@@ -82,6 +88,247 @@ fn string_target<'a>(types: impl IntoIterator<Item = &'a ArrowType>) -> Option<A
         }
     }
     out
+}
+
+/// More constant list elements than this make an `IN` a hash-set lookup
+/// (Spark's `spark.sql.optimizer.inSetConversionThreshold` default, above
+/// which its optimizer rewrites `In` to `InSet`).
+const IN_SET_THRESHOLD: usize = 10;
+
+/// `v IN (constants)` as a set lookup (Spark's `InSet`): one hash probe
+/// per row instead of one comparison per element. The same answers as
+/// [`InList`]: true on a match, NULL when `v` is NULL or nothing matched
+/// and the list holds a NULL, else false. Built only for types whose `=`
+/// is equality of one canonical value: strings and binaries by their
+/// bytes; integers, dates, timestamps and booleans as `i64`; decimals as
+/// `i128` (one precision and scale, the analyzer's common type). Floats
+/// (`-0.0 = 0.0`, NaN) keep [`InList`].
+#[derive(Debug)]
+struct InSet {
+    v: Arc<dyn PhysExpr>,
+    keys: Keys,
+    /// The list holds a NULL.
+    has_null: bool,
+}
+
+/// A hash set with a fixed-seed fast hasher (plan data must not depend on
+/// a per-process seed; the set is only probed, never iterated).
+type FastSet<T> = std::collections::HashSet<T, foldhash::fast::FixedState>;
+
+fn fast_set<T>(n: usize) -> FastSet<T> {
+    FastSet::with_capacity_and_hasher(n, foldhash::fast::FixedState::with_seed(0))
+}
+
+/// How [`InSet`] keys its values.
+enum Keys {
+    /// String or binary bytes.
+    Bytes(FastSet<Vec<u8>>),
+    /// Integers, dates, timestamps and booleans.
+    Ints(FastSet<i64>),
+    /// Decimals (unscaled).
+    Decimals(FastSet<i128>),
+}
+
+impl std::fmt::Debug for Keys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bytes(s) => write!(f, "Bytes({} keys)", s.len()),
+            Self::Ints(s) => write!(f, "Ints({} keys)", s.len()),
+            Self::Decimals(s) => write!(f, "Decimals({} keys)", s.len()),
+        }
+    }
+}
+
+/// The bytes of row `i` of a string or binary array.
+fn byte_value(a: &dyn Array, i: usize) -> &[u8] {
+    match a.data_type() {
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => {
+            super::logic::str_value(a, i).as_bytes()
+        }
+        _ => super::logic::bin_value(a, i),
+    }
+}
+
+/// Calls `f(row, value)` for every row of an integer-like array (`None`
+/// for a NULL row), one loop per Arrow type; `false` if `a` is not one.
+fn for_each_int(a: &dyn Array, mut f: impl FnMut(Option<i64>)) -> bool {
+    use arrow_array::types::{
+        Date32Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    };
+    macro_rules! each {
+        ($t:ty) => {
+            a.as_primitive::<$t>()
+                .iter()
+                .for_each(|v| f(v.map(i64::from)))
+        };
+    }
+    match a.data_type() {
+        ArrowType::Int8 => each!(Int8Type),
+        ArrowType::Int16 => each!(Int16Type),
+        ArrowType::Int32 => each!(Int32Type),
+        ArrowType::Int64 => each!(Int64Type),
+        ArrowType::Date32 => each!(Date32Type),
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Second, _) => each!(TimestampSecondType),
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => {
+            each!(TimestampMillisecondType);
+        }
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
+            each!(TimestampMicrosecondType);
+        }
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+            each!(TimestampNanosecondType);
+        }
+        ArrowType::Boolean => a.as_boolean().iter().for_each(|v| f(v.map(i64::from))),
+        _ => return false,
+    }
+    true
+}
+
+/// Whether [`for_each_int`] reads arrays of type `t`.
+fn int_keyed(t: &ArrowType) -> bool {
+    matches!(
+        t,
+        ArrowType::Int8
+            | ArrowType::Int16
+            | ArrowType::Int32
+            | ArrowType::Int64
+            | ArrowType::Date32
+            | ArrowType::Timestamp(..)
+            | ArrowType::Boolean
+    )
+}
+
+impl InSet {
+    /// The set of `items` (constants) for `v`, or `None` when `v`'s type
+    /// has no exact key or an element does not evaluate here (it then
+    /// keeps the per-row [`InList`], which raises any error only when a
+    /// row reaches it, as Spark does).
+    fn try_new(v: &Arc<dyn PhysExpr>, items: &[Arc<dyn PhysExpr>]) -> Option<Self> {
+        let t = v.data_type().clone();
+        let empty = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
+        let mut has_null = false;
+        let mut values: Vec<ArrayRef> = Vec::with_capacity(items.len());
+        for item in items {
+            let a = Arc::clone(item.eval(&empty, 0).ok()?.array());
+            if a.len() != 1 {
+                return None;
+            }
+            if a.is_null(0) || *a.data_type() == ArrowType::Null {
+                has_null = true;
+                continue;
+            }
+            if *a.data_type() != t {
+                return None;
+            }
+            values.push(a);
+        }
+        let keys = match t {
+            ArrowType::Utf8
+            | ArrowType::LargeUtf8
+            | ArrowType::Utf8View
+            | ArrowType::Binary
+            | ArrowType::LargeBinary
+            | ArrowType::BinaryView => {
+                let mut set = fast_set(values.len());
+                set.extend(values.iter().map(|a| byte_value(a.as_ref(), 0).to_vec()));
+                Keys::Bytes(set)
+            }
+            ArrowType::Decimal128(..) => {
+                let mut set = fast_set(values.len());
+                set.extend(values.iter().map(|a| {
+                    a.as_primitive::<arrow_array::types::Decimal128Type>()
+                        .value(0)
+                }));
+                Keys::Decimals(set)
+            }
+            _ => {
+                // With every element NULL no element has been checked against
+                // the probe's type: only an integer-like probe has an exact key.
+                if !int_keyed(&t) {
+                    return None;
+                }
+                let mut set = fast_set(values.len());
+                for a in &values {
+                    let ok = for_each_int(a.as_ref(), |v| {
+                        if let Some(v) = v {
+                            set.insert(v);
+                        }
+                    });
+                    if !ok {
+                        return None;
+                    }
+                }
+                Keys::Ints(set)
+            }
+        };
+        Some(Self {
+            v: Arc::clone(v),
+            keys,
+            has_null,
+        })
+    }
+}
+
+impl PhysExpr for InSet {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Boolean
+    }
+
+    fn nullable(&self) -> bool {
+        self.v.nullable() || self.has_null
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.v.eval(batch, partition)?;
+        let a = v.array();
+        let n = a.len();
+        let mut values = Vec::with_capacity(n);
+        let mut valid = Vec::with_capacity(n);
+        let mut decide = |found: Option<bool>| match found {
+            // NULL `v`.
+            None => {
+                values.push(false);
+                valid.push(false);
+            }
+            Some(true) => {
+                values.push(true);
+                valid.push(true);
+            }
+            Some(false) => {
+                values.push(false);
+                valid.push(!self.has_null);
+            }
+        };
+        match &self.keys {
+            Keys::Bytes(set) => {
+                for i in 0..n {
+                    decide(
+                        a.is_valid(i)
+                            .then(|| set.contains(byte_value(a.as_ref(), i))),
+                    );
+                }
+            }
+            Keys::Decimals(set) => {
+                let d = a.as_primitive::<arrow_array::types::Decimal128Type>();
+                d.iter().for_each(|x| decide(x.map(|x| set.contains(&x))));
+            }
+            Keys::Ints(set) => {
+                if !for_each_int(a.as_ref(), |x| decide(x.map(|x| set.contains(&x)))) {
+                    return Err(internal("IN set over a value of another type"));
+                }
+            }
+        }
+        let out: ArrayRef = Arc::new(BooleanArray::new(
+            BooleanBuffer::from(values),
+            Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valid))),
+        ));
+        Ok(if v.is_scalar() {
+            Value::Scalar(out)
+        } else {
+            Value::Array(out)
+        })
+    }
 }
 
 /// `IN (list)` over one evaluation of `v`: each list element is evaluated
@@ -782,6 +1029,200 @@ mod tests {
             env,
         )
         .unwrap()
+    }
+
+    /// More than ten constant elements that are all NULL remove every key:
+    /// a probe type with no exact key (a float) keeps the per-element `IN`,
+    /// whose answer is NULL, instead of failing in the set lookup; the
+    /// integer-like probes still use the set and answer the same.
+    #[test]
+    fn an_all_null_long_in_list_keeps_in_list_answers_for_every_probe_type() {
+        let env = env(false);
+        let nulls =
+            || -> Vec<Arc<dyn PhysExpr>> { (0..11).map(|_| lit(&Literal::Null(None))).collect() };
+        let floats = Arc::new(Float64Array::from(vec![Some(1.5), None, Some(2.5)]));
+        let ints = Arc::new(Int64Array::from(vec![Some(1), None, Some(2)]));
+        let strs = Arc::new(StringArray::from(vec![Some("a"), None, Some("b")]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f", ArrowType::Float64, true),
+            Field::new("i", ArrowType::Int64, true),
+            Field::new("s", ArrowType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![floats, ints, strs]).unwrap();
+        for (index, t, is_set) in [
+            (0, ArrowType::Float64, false),
+            (1, ArrowType::Int64, true),
+            (2, ArrowType::Utf8, true),
+        ] {
+            let v = column(index, t, true);
+            let mut args = vec![Arc::clone(&v)];
+            args.extend(nulls());
+            let got = in_list(args, &env).unwrap();
+            assert_eq!(format!("{got:?}").starts_with("InSet"), is_set, "{got:?}");
+            let list: Arc<dyn PhysExpr> = Arc::new(InList {
+                v,
+                items: nulls(),
+                kernels: env.kernels,
+            });
+            let (got, want) = (values(&got, &batch), values(&list, &batch));
+            assert_eq!(got.as_boolean(), want.as_boolean());
+            // `x IN (NULL, ...)` is NULL for every row.
+            assert_eq!(got.as_boolean().null_count(), 3);
+        }
+    }
+
+    /// More than ten constant elements make a set lookup with the same
+    /// answers as the per-element `IN`: integers, strings (view and plain),
+    /// dates, with and without a NULL element, over a column with NULLs and
+    /// over a constant value; a float `IN` keeps the per-element path.
+    #[test]
+    fn a_long_constant_in_list_is_a_set_with_in_list_answers() {
+        let env = env(false);
+        let check = |v: Arc<dyn PhysExpr>, items: Vec<Arc<dyn PhysExpr>>, batch: &RecordBatch| {
+            let mut args = vec![Arc::clone(&v)];
+            args.extend(items.iter().cloned());
+            let set = in_list(args, &env).unwrap();
+            assert!(format!("{set:?}").starts_with("InSet"), "{set:?}");
+            let list: Arc<dyn PhysExpr> = Arc::new(InList {
+                v,
+                items,
+                kernels: env.kernels,
+            });
+            assert_eq!(set.nullable(), list.nullable());
+            let (got, want) = (values(&set, batch), values(&list, batch));
+            assert_eq!(got.as_boolean(), want.as_boolean());
+        };
+        let ints = Arc::new(Int64Array::from(vec![
+            Some(3),
+            None,
+            Some(40),
+            Some(7),
+            Some(12),
+        ]));
+        let strs = Arc::new(StringViewArray::from(vec![
+            Some("k3"),
+            None,
+            Some("a value longer than twelve bytes"),
+            Some("k40"),
+            Some(""),
+        ]));
+        let plain = Arc::new(StringArray::from(vec![
+            Some("k3"),
+            Some("x"),
+            None,
+            Some("k7"),
+            Some("k12"),
+        ]));
+        let dates = Arc::new(arrow_array::Date32Array::from(vec![
+            Some(3),
+            Some(5),
+            None,
+            Some(11),
+            Some(100),
+        ]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", ArrowType::Int64, true),
+            Field::new("s", ArrowType::Utf8View, true),
+            Field::new("p", ArrowType::Utf8, true),
+            Field::new("d", ArrowType::Date32, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![ints, strs, plain, dates]).unwrap();
+        for with_null in [false, true] {
+            let null = with_null.then(|| lit(&Literal::Null(None)));
+            let ints: Vec<_> = (0..12)
+                .map(|i| lit(&Literal::Long(i)))
+                .chain(null.clone())
+                .collect();
+            check(column(0, ArrowType::Int64, true), ints.clone(), &batch);
+            check(lit(&Literal::Long(5)), ints, &batch);
+            let mut strs: Vec<_> = (0..12)
+                .map(|i| lit(&Literal::String(format!("k{i}"))))
+                .chain(null.clone())
+                .collect();
+            strs.push(lit(&Literal::String(
+                "a value longer than twelve bytes".to_owned(),
+            )));
+            check(column(1, ArrowType::Utf8View, true), strs.clone(), &batch);
+            check(column(2, ArrowType::Utf8, true), strs, &batch);
+            let dates: Vec<_> = (0..12)
+                .map(|i| lit(&Literal::Date(i)))
+                .chain(null)
+                .collect();
+            check(column(3, ArrowType::Date32, true), dates, &batch);
+        }
+        // Decimal and zoned timestamp columns.
+        let dec = DecimalType::try_new(10, 2).unwrap();
+        let darr = Arc::new(
+            arrow_array::Decimal128Array::from(vec![Some(150), None, Some(1_234), Some(7)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        ) as ArrayRef;
+        // A zoned timestamp column, of the literals' own Arrow type.
+        let t_type = lit(&Literal::Timestamp(0)).data_type().clone();
+        assert!(
+            matches!(t_type, ArrowType::Timestamp(_, Some(_))),
+            "{t_type}"
+        );
+        let tarr = arrow_array::make_array(
+            arrow_array::TimestampMicrosecondArray::from(vec![Some(3), Some(4), None, Some(99)])
+                .into_data()
+                .into_builder()
+                .data_type(t_type.clone())
+                .build()
+                .unwrap(),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", darr.data_type().clone(), true),
+            Field::new("t", t_type.clone(), true),
+        ]));
+        let dt = RecordBatch::try_new(schema, vec![darr, tarr]).unwrap();
+        let decs: Vec<_> = (0..12)
+            .map(|i| {
+                lit(&Literal::Decimal {
+                    unscaled: i * 150,
+                    data_type: dec,
+                })
+            })
+            .collect();
+        check(column(0, dt.column(0).data_type().clone(), true), decs, &dt);
+        let ts: Vec<_> = (0..12).map(|i| lit(&Literal::Timestamp(i))).collect();
+        check(column(1, t_type, true), ts, &dt);
+        // As the analyzer coerces them: a BIGINT value against INT
+        // literals cast to BIGINT, and a DECIMAL(10,2) value against
+        // DECIMAL(3,1) literals cast up, still make a set.
+        let schema = Arc::new(Schema::new(vec![Field::new("d", ArrowType::Null, true)]));
+        let inp = input(&env, &[], &schema);
+        let cast = |e: Arc<dyn PhysExpr>, to: &DataType| {
+            super::super::cast::compile(e, to, krishiv_plan::CastMode::Legacy, inp).unwrap()
+        };
+        let small = DecimalType::try_new(3, 1).unwrap();
+        let ints: Vec<_> = (0..12)
+            .map(|i| cast(lit(&Literal::Integer(i)), &DataType::Long))
+            .collect();
+        assert!(ints.iter().all(|e| e.is_constant()));
+        check(column(0, ArrowType::Int64, true), ints, &batch);
+        let decs: Vec<_> = (0..12)
+            .map(|i| {
+                cast(
+                    lit(&Literal::Decimal {
+                        unscaled: i128::from(i) * 15,
+                        data_type: small,
+                    }),
+                    &DataType::Decimal(dec),
+                )
+            })
+            .collect();
+        check(column(0, dt.column(0).data_type().clone(), true), decs, &dt);
+        let floats: Vec<_> = std::iter::once(column(0, ArrowType::Float64, true))
+            .chain((0..12).map(|i| lit(&Literal::Double(f64::from(i)))))
+            .collect();
+        let e = in_list(floats, &env).unwrap();
+        assert!(format!("{e:?}").starts_with("InList"), "{e:?}");
+        // Ten elements stay a list, as in Spark.
+        let ten: Vec<_> = std::iter::once(column(0, ArrowType::Int64, true))
+            .chain((0..10).map(|i| lit(&Literal::Long(i))))
+            .collect();
+        assert!(format!("{:?}", in_list(ten, &env).unwrap()).starts_with("InList"));
     }
 
     /// `coalesce` answers the first non-null argument of each row.

@@ -220,6 +220,10 @@ impl PhysExpr for Cast {
         &self.parts.to
     }
 
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
     fn nullable(&self) -> bool {
         self.nullable
     }
