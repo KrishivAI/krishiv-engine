@@ -117,3 +117,97 @@ fn q86_shape_partition_by_grouping_level_and_parent() {
         ])
     );
 }
+
+/// `ORDER BY grouping(..)` over a windowed aggregate (the sort of q70 and q86):
+/// the id comes up through the windows, also for a key the select list drops.
+#[test]
+fn order_by_grouping_over_windows() {
+    let s = session();
+    let select = "SELECT a, rank() OVER (PARTITION BY grouping(a)+grouping(b) \
+                  ORDER BY sum(c) DESC) r FROM t GROUP BY rollup(a,b)";
+    for (order, want) in [
+        (
+            "grouping(a)+grouping(b) DESC, CASE WHEN grouping(a)+grouping(b)=0 THEN a END, r, a",
+            rows(&[
+                &["NULL", "1"],
+                &["x", "1"],
+                &["y", "1"],
+                &["x", "2"],
+                &["x", "3"],
+                &["y", "1"],
+            ]),
+        ),
+        (
+            "grouping(b), a, r",
+            rows(&[
+                &["x", "2"],
+                &["x", "3"],
+                &["y", "1"],
+                &["NULL", "1"],
+                &["x", "1"],
+                &["y", "1"],
+            ]),
+        ),
+        (
+            "grouping_id(), a, r",
+            rows(&[
+                &["x", "2"],
+                &["x", "3"],
+                &["y", "1"],
+                &["x", "1"],
+                &["y", "1"],
+                &["NULL", "1"],
+            ]),
+        ),
+        (
+            "grouping_id(a,b), a, r",
+            rows(&[
+                &["x", "2"],
+                &["x", "3"],
+                &["y", "1"],
+                &["x", "1"],
+                &["y", "1"],
+                &["NULL", "1"],
+            ]),
+        ),
+    ] {
+        let (types, got) = run(&s, &format!("{select} ORDER BY {order}"));
+        assert_eq!(
+            types.len(),
+            2,
+            "{order}: the id does not stay in the output"
+        );
+        assert_eq!(got, want, "{order}");
+    }
+}
+
+/// What Spark 4.2.0 refuses in that position.
+#[test]
+fn order_by_grouping_over_windows_errors() {
+    let s = session();
+    let rollup = "SELECT a, rank() OVER (ORDER BY sum(c)) r FROM t GROUP BY rollup(a,b)";
+    for (sql, class) in [
+        (
+            "SELECT a, rank() OVER (ORDER BY sum(c)) r FROM t GROUP BY a ORDER BY grouping(a)"
+                .to_owned(),
+            "UNSUPPORTED_GROUPING_EXPRESSION",
+        ),
+        (
+            format!("{rollup} ORDER BY grouping(c)"),
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        ),
+        (
+            format!("{rollup} ORDER BY grouping_id(b,a)"),
+            "GROUPING_ID_COLUMN_MISMATCH",
+        ),
+        (
+            format!("{rollup} ORDER BY sum(c)"),
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        ),
+    ] {
+        let err = block_on(async { s.sql(&sql).await?.collect().await })
+            .err()
+            .unwrap_or_else(|| panic!("{sql} ran"));
+        assert_eq!(err.error_class().name(), class, "{sql}: {err}");
+    }
+}
