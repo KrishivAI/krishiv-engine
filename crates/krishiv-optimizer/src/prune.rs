@@ -362,7 +362,7 @@ fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
     };
     if out
         .iter()
-        .filter(|c| !c.name.starts_with("cse_"))
+        .filter(|c| !crate::cse::is_cse_column(c))
         .all(|c| need.contains(&c.id))
     {
         return Arc::clone(input);
@@ -398,7 +398,7 @@ fn contains_cse(p: &LogicalPlan) -> bool {
                 continue;
             }
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &e.node
-                && output.name.starts_with("cse_")
+                && crate::cse::is_cse_column(output)
             {
                 return true;
             }
@@ -416,7 +416,7 @@ fn contains_cse(p: &LogicalPlan) -> bool {
 fn has_required_cse(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
     exprs.iter().any(|e| match &e.node {
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
-            output.name.starts_with("cse_") && req.contains(&output.id)
+            crate::cse::is_cse_column(output) && req.contains(&output.id)
         }
         _ => false,
     })

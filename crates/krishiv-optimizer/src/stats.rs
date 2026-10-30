@@ -33,7 +33,7 @@ pub(crate) fn reads_cse(e: &Expr) -> bool {
             continue;
         }
         if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
-            && c.name.starts_with("cse_")
+            && crate::cse::is_cse_column(c)
         {
             found = true;
             break;
@@ -64,7 +64,7 @@ pub(crate) fn cse_definitions(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
                 continue;
             }
             if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &e.node
-                && output.name.starts_with("cse_")
+                && crate::cse::is_cse_column(output)
             {
                 defs.insert(output.id, Arc::clone(expr));
             }

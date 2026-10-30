@@ -239,12 +239,21 @@ fn in_items_never_hoist_a_division_that_raises() {
     // evaluates `1 / b` (the executor short-circuits a batch only when all
     // its rows matched).
     let rows = vec![(Some(0), Some(0)); 4];
-    let sql = "SELECT a IN (0, 1 / b) AS p, b IN (0, 1 / b) AS q FROM t";
+    // `(a + b) + (a + b)` is the positive control: CSE runs here, and
+    // extracts it, but never a division.
+    let sql = "SELECT a IN (0, 1 / b) AS p, b IN (0, 1 / b) AS q, (a + b) + (a + b) AS z FROM t";
     for ansi in [false, true] {
         let db = make_db(&rows, 2, ansi);
         let (want, got, text) = db.both(sql);
         assert!(want.is_ok(), "ansi={ansi}: {want:?}");
         assert_eq!(got, want, "ansi={ansi}: {text}");
+        assert!(text.contains("AS cse_"), "{text}");
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.contains("AS cse_") && l.contains(" / ")),
+            "{text}"
+        );
     }
 }
 
@@ -258,5 +267,6 @@ fn an_extracted_grouping_key_is_swapped_in_the_outputs() {
         let (want, got, text) = db.both(sql);
         assert!(want.is_ok(), "{want:?}");
         assert_eq!(got, want, "ansi={ansi}: {text}");
+        assert!(text.contains("AS cse_"), "{text}");
     }
 }

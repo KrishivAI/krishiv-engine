@@ -530,7 +530,7 @@ fn cse_outputs(exprs: &[Arc<Expr>]) -> Attrs {
         .iter()
         .filter_map(|e| match &e.node {
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. })
-                if output.name.starts_with("cse_") =>
+                if crate::cse::is_cse_column(output) =>
             {
                 Some(output.id)
             }

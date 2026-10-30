@@ -47,10 +47,7 @@ use krishiv_plan::{
     LogicalPlan, Origin, PlanNode, ResolvedExpr, ResolvedFunction,
 };
 
-use crate::expr::{
-    Attrs, builtin, column, data_type, has_subquery, is_deterministic, nullable, references_into,
-    same,
-};
+use crate::expr::{Attrs, builtin, column, data_type, nullable, references_into, same};
 use crate::restrict::{MAX_ID, max_id};
 
 /// Eliminates common subexpressions within one operator, everywhere in
@@ -65,7 +62,7 @@ pub(crate) fn eliminate(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     let mut current = node;
     for _ in 0..MAX_ROUNDS {
         let next = pass(Arc::clone(&current));
-        if Arc::ptr_eq(&next, &current) || next.to_string() == current.to_string() {
+        if Arc::ptr_eq(&next, &current) {
             return next;
         }
         current = next;
@@ -77,6 +74,20 @@ pub(crate) fn eliminate(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 /// worth the plan growth.
 const MAX_ROUNDS: usize = 4;
 
+/// The next free attribute id of a plan, found when first needed.
+struct Fresh<'a> {
+    root: &'a Arc<LogicalPlan>,
+    next: Option<u64>,
+}
+
+impl Fresh<'_> {
+    fn get(&mut self) -> &mut u64 {
+        let root = self.root;
+        self.next
+            .get_or_insert_with(|| max_id(root, &mut HashMap::new()).saturating_add(1))
+    }
+}
+
 /// One round of [`eliminate`].
 fn pass(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     // Fresh attribute ids come from one plan-wide counter: ids are unique
@@ -85,12 +96,20 @@ fn pass(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     // existing one. The steps never fail; an error would come from an
     // allocation the caller already paid for, so the input plan is
     // returned as is.
-    let mut next = max_id(&node, &mut HashMap::new()).saturating_add(1);
+    // Looked up on the first extraction: most operators extract nothing.
+    let mut next = Fresh {
+        root: &node,
+        next: None,
+    };
     let Ok(rewritten) =
         crate::dag::rewrite_up(Arc::clone(&node), &mut |p| Ok(rewrite_node(p, &mut next)))
     else {
         return node;
     };
+    // No id was taken: nothing was extracted, the plan stays as it is.
+    if next.next.is_none() || Arc::ptr_eq(&rewritten, &node) {
+        return node;
+    }
     // A rewritten projection that only renames extracted columns merges
     // into its parent, which the next run's projection collapse would do:
     // without this the plan would change again on re-optimising. The
@@ -105,8 +124,33 @@ fn pass(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     }
 }
 
+/// Whether `roots` hold at least two non-leaf expressions: with fewer,
+/// nothing can occur twice, so the operator needs no analysis. Counts a
+/// shared subtree once per use (a superset of what repeats).
+fn may_repeat<'a>(roots: impl IntoIterator<Item = &'a Arc<Expr>>) -> bool {
+    let mut stack: Vec<&Expr> = roots.into_iter().map(|e| &**e).collect();
+    let mut seen = 0_u8;
+    while let Some(e) = stack.pop() {
+        match &e.node {
+            ExprNode::Literal(_)
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
+            ) => continue,
+            ExprNode::Resolved(ResolvedExpr::Alias { .. }) | ExprNode::Alias { .. } => {}
+            _ => {
+                seen += 1;
+                if seen >= 2 {
+                    return true;
+                }
+            }
+        }
+        e.for_each_child(&mut |c| stack.push(c));
+    }
+    false
+}
+
 /// One operator rewritten, or returned unchanged.
-fn rewrite_node(node: Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan> {
+fn rewrite_node(node: Arc<LogicalPlan>, next: &mut Fresh<'_>) -> Arc<LogicalPlan> {
     match &node.node {
         PlanNode::Project { input, exprs } => rewrite_project(&node, input, exprs, next),
         PlanNode::Filter { input, predicate } => rewrite_filter(&node, input, predicate, next),
@@ -119,8 +163,10 @@ fn rewrite_node(node: Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan> {
 }
 
 /// Whether `c` is a column CSE extracted (see `fresh_columns`).
-fn is_cse_column(c: &BoundColumn) -> bool {
-    c.name == format!("cse_{}", c.id.0)
+pub(crate) fn is_cse_column(c: &BoundColumn) -> bool {
+    c.name
+        .strip_prefix("cse_")
+        .is_some_and(|n| n.parse::<u64>().is_ok_and(|id| id == c.id.0))
 }
 
 /// `p` without the columns CSE extracted into its output: a filter passes
@@ -196,6 +242,7 @@ fn is_try(e: &Expr) -> bool {
 }
 
 /// Whether `e` holds a lambda variable.
+#[cfg(test)]
 fn has_lambda_var(e: &Expr) -> bool {
     let mut found = false;
     let mut stack = vec![e];
@@ -402,7 +449,18 @@ fn children(e: &Expr) -> Vec<(Arc<Expr>, bool)> {
 
 /// Whether `e` may be extracted (node-local part; `try_*` descendants are
 /// marked ineligible separately).
+#[cfg(test)]
 fn eligible(e: &Expr) -> bool {
+    eligible_with(
+        e,
+        crate::expr::is_deterministic(e) && !crate::expr::has_subquery(e) && !has_lambda_var(e),
+    )
+}
+
+/// Whether `e` may be extracted, given whether its whole subtree is clean
+/// (deterministic, no subquery, no lambda variable): [`graph`] folds that
+/// bottom-up, so no node walks its subtree again.
+fn eligible_with(e: &Expr, clean: bool) -> bool {
     match &e.node {
         ExprNode::Literal(_)
         | ExprNode::Resolved(
@@ -423,7 +481,7 @@ fn eligible(e: &Expr) -> bool {
     {
         return false;
     }
-    if !is_deterministic(e) || has_subquery(e) || has_lambda_var(e) {
+    if !clean {
         return false;
     }
     data_type(e).is_some()
@@ -541,9 +599,20 @@ fn graph(roots: &[Arc<Expr>]) -> Option<Graph> {
             }
         }
     }
+    // Children come before their parents in `order`.
+    let mut clean = vec![true; order.len()];
+    for (i, e) in order.iter().enumerate() {
+        let own = match &e.node {
+            ExprNode::Subquery { .. } | ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => false,
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => f.deterministic,
+            _ => true,
+        };
+        clean[i] = own && edges[i].iter().all(|&(j, ..)| j >= i || clean[j]);
+    }
     let eligible_map: HashMap<*const Expr, bool> = order
         .iter()
-        .map(|e| (Arc::as_ptr(e), eligible(e)))
+        .enumerate()
+        .map(|(i, e)| (Arc::as_ptr(e), eligible_with(e, clean[i])))
         .collect();
     Some((order, index, edges, tainted, eligible_map))
 }
@@ -736,8 +805,14 @@ fn analyze(
             if size < 2 {
                 continue;
             }
-            let uncond = members.iter().map(|i| uncond[*i]).sum::<u8>().min(2);
-            let cond = members.iter().map(|i| cond[*i]).sum::<u8>().min(2);
+            let uncond = members
+                .iter()
+                .fold(0_u8, |s, i| s.saturating_add(uncond[*i]))
+                .min(2);
+            let cond = members
+                .iter()
+                .fold(0_u8, |s, i| s.saturating_add(cond[*i]))
+                .min(2);
             if uncond >= 2 || (uncond >= 1 && cond >= 1) {
                 groups.push(Group {
                     expr: Arc::clone(&order[members[0]]),
@@ -963,8 +1038,11 @@ fn rewrite_project(
     node: &Arc<LogicalPlan>,
     input: &Arc<LogicalPlan>,
     exprs: &[Arc<Expr>],
-    next: &mut u64,
+    next: &mut Fresh<'_>,
 ) -> Arc<LogicalPlan> {
+    if !may_repeat(exprs) {
+        return Arc::clone(node);
+    }
     let normalized: Vec<Arc<Expr>> = exprs.iter().map(normalize).collect();
     // Row-evaluated roots: each output's expression without its alias.
     let inners: Vec<Arc<Expr>> = normalized
@@ -993,7 +1071,7 @@ fn rewrite_project(
     if unique.is_empty() {
         return Arc::clone(node);
     }
-    let Some(cols) = fresh_columns(&unique, &mut *next) else {
+    let Some(cols) = fresh_columns(&unique, next.get()) else {
         return Arc::clone(node);
     };
     let map: Vec<(Arc<Expr>, BoundColumn)> = unique.iter().cloned().zip(cols).collect();
@@ -1026,8 +1104,11 @@ fn rewrite_filter(
     node: &Arc<LogicalPlan>,
     input: &Arc<LogicalPlan>,
     predicate: &Arc<Expr>,
-    next: &mut u64,
+    next: &mut Fresh<'_>,
 ) -> Arc<LogicalPlan> {
+    if !may_repeat([predicate]) {
+        return Arc::clone(node);
+    }
     let normalized = normalize(predicate);
     let roots = vec![Arc::clone(&normalized)];
     let Some((order, index, edges, tainted, eligible_map)) = graph(&roots) else {
@@ -1041,7 +1122,7 @@ fn rewrite_filter(
     if unique.is_empty() {
         return Arc::clone(node);
     }
-    let Some(cols) = fresh_columns(&unique, &mut *next) else {
+    let Some(cols) = fresh_columns(&unique, next.get()) else {
         return Arc::clone(node);
     };
     let map: Vec<(Arc<Expr>, BoundColumn)> = unique.iter().cloned().zip(cols).collect();
@@ -1085,7 +1166,7 @@ fn aggregates_in(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
-fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan> {
+fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut Fresh<'_>) -> Arc<LogicalPlan> {
     let PlanNode::Aggregate {
         input,
         grouping,
@@ -1097,6 +1178,9 @@ fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan
     let krishiv_plan::Grouping::GroupBy(keys) = grouping else {
         return Arc::clone(node);
     };
+    if !may_repeat(keys.iter().chain(aggregates)) {
+        return Arc::clone(node);
+    }
     let normalized_keys: Vec<Arc<Expr>> = keys.iter().map(normalize).collect();
     let normalized_aggs: Vec<Arc<Expr>> = aggregates.iter().map(normalize).collect();
     // Row-evaluated roots: grouping keys plus aggregate args and filters.
@@ -1142,7 +1226,7 @@ fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan
     if unique.is_empty() {
         return Arc::clone(node);
     }
-    let Some(cols) = fresh_columns(&unique, &mut *next) else {
+    let Some(cols) = fresh_columns(&unique, next.get()) else {
         return Arc::clone(node);
     };
     let map: Vec<(Arc<Expr>, BoundColumn)> = unique.iter().cloned().zip(cols).collect();

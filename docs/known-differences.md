@@ -14,5 +14,7 @@ not specify which error is raised first. Common-subexpression elimination
 (`krishiv-optimizer`'s `cse` pass) evaluates a surely-evaluated
 subexpression once in a projection below its operator, so the row raises at
 the shared computation rather than at whichever use Spark happened to
-evaluate first. The raised error class is unchanged; only which of several
-simultaneously-raising expressions is blamed can differ.
+evaluate first. When one row would raise from several expressions, the
+error reported can differ in class as well as in the blamed expression (for
+example `DIVIDE_BY_ZERO` against `ARITHMETIC_OVERFLOW`); a query that raises
+in one engine still raises in the other.

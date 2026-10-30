@@ -335,3 +335,18 @@ fn differential_results_match() {
         "CSE fired nowhere: the differential test is vacuous"
     );
 }
+
+/// A filter that roots a subquery plan keeps the subquery's width when its
+/// repeated expression is extracted: the consumer reads the output by
+/// position.
+#[test]
+fn a_filter_rooting_a_subquery_keeps_its_width() {
+    let (on, off) = both(
+        "SELECT a FROM t WHERE a IN (SELECT a FROM t u WHERE (u.b + u.c) > 1 AND (u.b + u.c) < 3)",
+    );
+    let text = on.root().to_string();
+    assert_eq!(extractions(on.root()), 1, "{text}");
+    for seed in 1..=8 {
+        assert_same_rows(&data::small(seed), on.root(), off.root(), "subquery root");
+    }
+}
