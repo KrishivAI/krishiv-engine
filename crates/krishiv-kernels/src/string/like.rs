@@ -161,6 +161,7 @@ fn to_arrow_pattern(pattern: &str, escape: char) -> String {
     let mut chars = pattern.chars();
     while let Some(c) = chars.next() {
         let (literal, c) = if c == escape {
+            // A trailing escape cannot reach here: `compile` rejected it.
             (true, chars.next().unwrap_or(c))
         } else {
             (false, c)
@@ -198,8 +199,12 @@ pub fn like<O: OffsetSizeTrait>(
         let arrow_pattern = Scalar::new(GenericStringArray::<O>::from(vec![to_arrow_pattern(
             p, escape,
         )]));
-        return arrow_string::like::like(col, &arrow_pattern)
-            .map_err(|e| KernelError::internal(format!("arrow-string LIKE: {e}")));
+        // arrow-string compiles a regex for general patterns and refuses one
+        // over the regex size limit (a very long pattern); the matcher below
+        // has no such limit, so that case runs on it.
+        if let Ok(result) = arrow_string::like::like(col, &arrow_pattern) {
+            return Ok(result);
+        }
     }
     // The pattern of the last row, compiled once while it repeats (always,
     // for a literal pattern).

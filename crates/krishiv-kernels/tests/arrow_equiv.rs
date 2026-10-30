@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `LIKE` and string comparison kernels (which run on arrow-string /
-//! arrow-ord for a column against a literal) against the row-at-a-time
-//! oracles: Krishiv's own pattern matcher and `reference::compare_bytes`,
-//! over random strings with NULLs, multi-byte characters, newlines and
-//! escapes, for `Utf8` and `LargeUtf8`.
+//! `LIKE` and string/binary comparison kernels (a column against a literal
+//! pattern or operand, or another column, runs on arrow-string / arrow-ord)
+//! against the row-at-a-time oracles: Krishiv's own pattern matcher and
+//! `reference::compare_bytes`, over random strings with NULLs, multi-byte
+//! characters, newlines and escapes.
 
 #![expect(
     clippy::unwrap_used,
     reason = "test helpers outside #[test] fns fail loudly"
 )]
 
-use arrow_array::{Array, BooleanArray, LargeStringArray, StringArray};
+use arrow_array::{Array, BinaryArray, BooleanArray, LargeStringArray, StringArray};
 use krishiv_kernels::compare::{
     BytesOperand, CompareKind, Equal, Greater, GreaterEq, Less, LessEq, NotEqual, compare_bytes,
 };
@@ -131,4 +131,108 @@ proptest! {
         check!(Greater, CompareKind::Greater);
         check!(GreaterEq, CompareKind::GreaterEq);
     }
+}
+
+#[test]
+fn a_literal_that_is_not_utf8_falls_back_to_the_row_loop() {
+    // 0xFF cannot sit in a string array, so arrow-ord is not used; byte order still decides.
+    let arr = StringArray::from(vec![Some("a"), None, Some("é")]);
+    let got = compare_bytes::<_, Less>(
+        BytesOperand::Array(&arr),
+        BytesOperand::Scalar(Some(&[0xFF])),
+    )
+    .unwrap();
+    assert_eq!(got, BooleanArray::from(vec![Some(true), None, Some(true)]));
+}
+
+#[test]
+fn a_pattern_over_arrow_strings_regex_limit_still_matches() {
+    // ~20 KB of `_%`: arrow-string's regex exceeds its size limit, the matcher does not.
+    let pat = format!("a{}%", "_%".repeat(10_000));
+    let arr = StringArray::from(vec![Some("a"), Some("abcdef"), None]);
+    let want = oracle_like(&[Some("a".into()), Some("abcdef".into()), None], &pat, '\\');
+    let got = like::<i32>(
+        StrOperand::Array(&arr),
+        StrOperand::Scalar(Some(&pat)),
+        '\\',
+    )
+    .unwrap();
+    assert_eq!(got, want);
+    let long_underscores = format!("{}x", "_".repeat(50_000));
+    like::<i32>(
+        StrOperand::Array(&arr),
+        StrOperand::Scalar(Some(&long_underscores)),
+        '\\',
+    )
+    .unwrap();
+}
+
+#[test]
+fn empty_and_sliced_inputs() {
+    let empty = StringArray::from(Vec::<Option<&str>>::new());
+    let got = like::<i32>(
+        StrOperand::Array(&empty),
+        StrOperand::Scalar(Some("a\\")),
+        '\\',
+    )
+    .unwrap();
+    assert_eq!(got.len(), 0);
+    let arr = StringArray::from(vec![None, Some("ab"), Some("zz"), Some("ac")]);
+    let slice = arr.slice(1, 3);
+    let slice = slice.as_any().downcast_ref::<StringArray>().unwrap();
+    let got = like::<i32>(
+        StrOperand::Array(slice),
+        StrOperand::Scalar(Some("a%")),
+        '\\',
+    )
+    .unwrap();
+    assert_eq!(
+        got,
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    );
+    let got =
+        compare_bytes::<_, Less>(BytesOperand::Array(slice), BytesOperand::Scalar(Some(b"b")))
+            .unwrap();
+    assert_eq!(
+        got,
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    );
+    // The error row is the first valid row of the slice, not of the parent.
+    let err = like::<i32>(
+        StrOperand::Array(slice),
+        StrOperand::Scalar(Some("a\\")),
+        '\\',
+    )
+    .unwrap_err();
+    assert_eq!(err.row(), Some(0));
+}
+
+#[test]
+fn large_string_and_binary_comparisons() {
+    let large = LargeStringArray::from(vec![Some("a"), None, Some("é")]);
+    let got = compare_bytes::<_, Greater>(
+        BytesOperand::Array(&large),
+        BytesOperand::Scalar(Some(b"b")),
+    )
+    .unwrap();
+    assert_eq!(got, BooleanArray::from(vec![Some(false), None, Some(true)]));
+    let bin = BinaryArray::from(vec![Some(&b"\x01"[..]), Some(&[0xFF][..]), None]);
+    let got = compare_bytes::<_, Less>(
+        BytesOperand::Array(&bin),
+        BytesOperand::Scalar(Some(&[0x80])),
+    )
+    .unwrap();
+    assert_eq!(got, BooleanArray::from(vec![Some(true), Some(false), None]));
+    let other = BinaryArray::from(vec![Some(&b"\x01"[..]), Some(&[0x00][..]), Some(&b""[..])]);
+    let got =
+        compare_bytes::<_, Equal>(BytesOperand::Array(&bin), BytesOperand::Array(&other)).unwrap();
+    assert_eq!(got, BooleanArray::from(vec![Some(true), Some(false), None]));
+}
+
+#[test]
+fn per_row_patterns_keep_the_matcher() {
+    let input = StringArray::from(vec![Some("abc"), Some("abc"), None]);
+    let pats = StringArray::from(vec![Some("a%"), Some("%x"), Some("a")]);
+    let got = like::<i32>(StrOperand::Array(&input), StrOperand::Array(&pats), '\\').unwrap();
+    assert_eq!(got, BooleanArray::from(vec![Some(true), Some(false), None]));
 }

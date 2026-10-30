@@ -51,7 +51,3 @@ harness = false
 [[bench]]
 name = "list"
 harness = false
-
-[[bench]]
-name = "arrow_spike"
-harness = false
