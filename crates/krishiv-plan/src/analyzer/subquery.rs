@@ -648,8 +648,14 @@ impl Rewriter {
     fn predicates(&mut self, e: &Arc<Expr>) -> R<Vec<(Arc<Expr>, bool)>> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
+        // Expressions are DAGs: each node once (the subquery key above is
+        // separate, so a subquery under `NOT` and bare yields both).
+        let mut visited = HashSet::new();
         let mut stack = vec![Arc::clone(e)];
         while let Some(x) = stack.pop() {
+            if !visited.insert(addr(&*x)) {
+                continue;
+            }
             if not_arg(&x).is_some_and(|y| negated_in(y).is_some()) {
                 return Err(unsupported("NOT IN under a further NOT", x.origin));
             }
