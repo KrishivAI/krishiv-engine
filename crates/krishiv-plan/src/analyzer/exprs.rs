@@ -20,10 +20,11 @@ use krishiv_common::error::{
     FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
     InvalidExtractBaseFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
-    InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
-    NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
-    UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
-    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithoutSuggestion,
+    InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount, KrishivError,
+    KrishivUnsupportedFeature, NamedParametersNotSupported, NestedAggregateFunction,
+    RequiredParameterNotFound, UnexpectedPositionalArgument, UnrecognizedParameterName,
+    UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
+    WrongNumArgsWithSuggestion, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
 use krishiv_types::{DataType, DecimalType};
@@ -426,6 +427,20 @@ fn arg_of(b: &Bound) -> Arg<'_> {
 
 /// Spark's documentation root, as its errors cite it.
 pub(super) const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
+
+/// Whether `qualifier` matches the trailing parts of scope qualifier `qual`,
+/// whole identifier by whole identifier (case-folded unless
+/// `case_sensitive`). An empty qualifier matches everything; `t` matches
+/// `db.t`; `db.t` matches `db.t` and `catalog.db.t` but not `t` alone or
+/// `xdb.t`.
+fn qualifier_matches(qual: &[String], qualifier: &[String], case_sensitive: bool) -> bool {
+    let q = qualifier.len();
+    qual.len() >= q
+        && qual[qual.len() - q..]
+            .iter()
+            .zip(qualifier.iter())
+            .all(|(x, y)| same(x, y, case_sensitive))
+}
 
 fn column(c: &BoundColumn) -> ArgType {
     arg_type(c.data_type.clone(), c.nullable)
@@ -940,7 +955,10 @@ impl Resolver<'_> {
     }
 
     /// A call with `*` arguments, rewritten: `count(*)` is `count(1)`, any
-    /// other call takes the input columns. A qualified star of a struct
+    /// other call takes the input columns. `count(tbl.*)` with a single
+    /// qualified star is `INVALID_USAGE_OF_STAR_WITH_TABLE_IDENTIFIER_IN_COUNT`
+    /// unless `spark.sql.legacy.allowStarWithSingleTableIdentifierInCount`.
+    /// A qualified star of a struct
     /// column in `struct`/`named_struct` (the `STRUCT(t.*)` syntax) takes
     /// the struct's fields instead; in `named_struct` it replaces a
     /// preceding placeholder name from that same syntax.
@@ -948,6 +966,25 @@ impl Resolver<'_> {
         let ExprNode::Function(f) = &e.node else {
             return Ok(None);
         };
+        if f.unqualified()
+            .is_some_and(|n| n.eq_ignore_ascii_case("count"))
+            && let [a] = &f.args[..]
+            && let ExprNode::Star(s) = &a.node
+            && !s.qualifier.is_empty()
+            && s.plan_id.is_none()
+            && !self
+                .ctx
+                .conf
+                .allow_star_with_single_table_identifier_in_count
+            && self.qualifier_matches_scope(&s.qualifier, cx)
+        {
+            return Err(AnalysisError::new(
+                InvalidUsageOfStarWithTableIdentifierInCount {
+                    table_name: quoted(&s.qualifier),
+                },
+                a.origin,
+            ));
+        }
         if !f.args.iter().any(|a| matches!(a.node, ExprNode::Star(_))) {
             return Ok(None);
         }
@@ -1021,6 +1058,17 @@ impl Resolver<'_> {
         Ok(Some(Arc::new(
             Expr::new(ExprNode::Function(call)).with_origin(e.origin),
         )))
+    }
+
+    /// Whether `qualifier` names the qualifier of an input attribute
+    /// (a table or alias the scope knows): it must match the scope
+    /// qualifier's trailing parts exactly, whole identifier by whole
+    /// identifier (case-folded unless `case_sensitive`).
+    fn qualifier_matches_scope(&self, qualifier: &[String], cx: &Cx<'_>) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        cx.scope
+            .iter()
+            .any(|a| qualifier_matches(&a.qual, qualifier, cs))
     }
 
     /// The fields of the struct `s` (a qualified `t.*`) names, as resolved
@@ -1113,14 +1161,7 @@ impl Resolver<'_> {
             None => cx
                 .scope
                 .iter()
-                .filter(|a| {
-                    let q = s.qualifier.len();
-                    a.qual.len() >= q
-                        && a.qual[a.qual.len() - q..]
-                            .iter()
-                            .zip(&s.qualifier)
-                            .all(|(x, y)| same(x, y, cs))
-                })
+                .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
                 .cloned()
                 .collect(),
         };
@@ -1586,6 +1627,9 @@ impl Resolver<'_> {
                     }
                     return Ok(b);
                 }
+                if entry.id.name() == "count" && n == 0 {
+                    return self.parameterless_count(e, &entry, &kids, agg, window_fn);
+                }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
                 // Spark's constructor materializes the default message, so
                 // the schema names it (`assert_true(true, 'true' is not
@@ -1981,6 +2025,99 @@ impl Resolver<'_> {
             AnalysisError::new(err, origin)
         })?;
         Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`,
+    /// or `count(NULL)` — which counts no rows — when
+    /// `spark.sql.legacy.allowParameterlessCount`. The output still shows
+    /// as `count()`, as Spark names it.
+    fn parameterless_count(
+        &self,
+        e: &Arc<Expr>,
+        entry: &FunctionEntry,
+        kids: &[Bound],
+        agg: Option<Origin>,
+        window_fn: bool,
+    ) -> Result<Bound, AnalysisError> {
+        if !self.ctx.conf.allow_parameterless_count {
+            return Err(AnalysisError::new(
+                WrongNumArgsWithSuggestion {
+                    function_name: format!("`{}`", entry.id.name()),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: "0".to_owned(),
+                    legacy_num: "0".to_owned(),
+                    legacy_conf_key: "\"spark.sql.legacy.allowParameterlessCount\"".to_owned(),
+                    legacy_conf_value: "\"true\"".to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        let null = Bound {
+            expr: Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin)),
+            ty: ArgType {
+                data_type: Some(DataType::Null),
+                nullable: true,
+            },
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        };
+        let (mut call_kids, ty) = self.typed_call(entry, e, std::slice::from_ref(&null))?;
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        // `kids.first()` is the `FILTER`, if any (`n == 0`).
+        call_kids.extend(kids.first().cloned());
+        let call = ResolvedFunction {
+            id: entry.id.clone(),
+            kind: entry.kind,
+            args: call_kids
+                .first()
+                .map(|k| vec![Arc::clone(&k.expr)])
+                .unwrap_or_default(),
+            distinct: match &e.node {
+                ExprNode::Function(f) => f.distinct,
+                _ => false,
+            },
+            filter: call_kids.get(1).map(|k| Arc::clone(&k.expr)),
+            data_type,
+            nullable: ty.nullable,
+            deterministic: entry.deterministic,
+        };
+        // Shown as written: no argument, the `FILTER` after the call.
+        let shown = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    args: Vec::new(),
+                    ..call.clone()
+                },
+            )))
+            .with_origin(e.origin),
+        );
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(call))).with_origin(e.origin),
+        );
+        // The `FILTER`'s markers ride along, as for any other call.
+        let mut lateral: Vec<AttrId> = Vec::new();
+        for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+            if !lateral.contains(id) {
+                lateral.push(*id);
+            }
+        }
+        Ok(Bound {
+            expr,
+            ty,
+            agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
+                Some(e.origin)
+            } else {
+                agg
+            },
+            win: kids.iter().find_map(|k| k.win),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral,
+            // Shown as written (`count()`), not as bound (`count(NULL)`).
+            shown: Some(shown),
+        })
     }
 
     /// `ntile`'s bucket count as the literal it folds to (`ntile(1 + 1)`):

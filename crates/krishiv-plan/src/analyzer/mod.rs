@@ -73,6 +73,7 @@ mod fold;
 mod fold_ops;
 mod hints;
 mod hof;
+pub(crate) mod legacy;
 mod ops;
 mod pivot;
 mod resolve;
@@ -112,6 +113,46 @@ use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
 pub use krishiv_functions::signature::SparkProfile;
 
+/// How nested `WITH` definitions with the same name resolve
+/// (`spark.sql.legacy.ctePrecedencePolicy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CtePrecedencePolicy {
+    /// Inner definitions shadow outer ones (Spark 4.2's default).
+    Corrected,
+    /// Outer definitions take precedence (Spark's legacy inlining).
+    Legacy,
+    /// A nested shadowing definition is `AMBIGUOUS_ALIAS_IN_NESTED_CTE`.
+    Exception,
+}
+
+impl Default for CtePrecedencePolicy {
+    /// Spark 4.2's default.
+    fn default() -> Self {
+        Self::Corrected
+    }
+}
+
+impl CtePrecedencePolicy {
+    /// The policy `value` names (case-insensitive, trimmed). The valid
+    /// values are the config registry's
+    /// `spark.sql.legacy.ctePrecedencePolicy` enum (`EXCEPTION`, `LEGACY`,
+    /// `CORRECTED`): that entry is the single validation source, so an
+    /// unknown value is `None` rather than a silent default. Callers holding
+    /// an already-validated config map `None` to the default.
+    #[must_use]
+    pub fn from_value(value: &str) -> Option<Self> {
+        if value.trim().eq_ignore_ascii_case("LEGACY") {
+            Some(Self::Legacy)
+        } else if value.trim().eq_ignore_ascii_case("EXCEPTION") {
+            Some(Self::Exception)
+        } else if value.trim().eq_ignore_ascii_case("CORRECTED") {
+            Some(Self::Corrected)
+        } else {
+            None
+        }
+    }
+}
+
 /// The configuration resolution may read, and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(
@@ -148,6 +189,15 @@ pub struct ResolutionConf {
     /// default the cast path uses, so the default session resolves
     /// timestamp literals.
     pub session_zone: Option<i32>,
+    /// `spark.sql.legacy.ctePrecedencePolicy`.
+    pub cte_precedence: CtePrecedencePolicy,
+    /// `spark.sql.legacy.allowParameterlessCount`: `count()` counts no
+    /// rows (0) instead of failing with `WRONG_NUM_ARGS`.
+    pub allow_parameterless_count: bool,
+    /// `spark.sql.legacy.allowStarWithSingleTableIdentifierInCount`:
+    /// `count(tbl.*)` expands to the table's columns instead of failing
+    /// with `INVALID_USAGE_OF_STAR_WITH_TABLE_IDENTIFIER_IN_COUNT`.
+    pub allow_star_with_single_table_identifier_in_count: bool,
     /// `spark.sql.legacy.timeParserPolicy = LEGACY`: Spark's
     /// `SimpleDateFormat` parser, which Krishiv does not implement (the
     /// datetime functions with a pattern are refused).
@@ -169,6 +219,9 @@ impl Default for ResolutionConf {
             run_sql_on_files: true,
             timestamp_ntz: false,
             session_zone: Some(0),
+            cte_precedence: CtePrecedencePolicy::default(),
+            allow_parameterless_count: false,
+            allow_star_with_single_table_identifier_in_count: false,
             legacy_time_parser: false,
         }
     }
@@ -176,7 +229,7 @@ impl Default for ResolutionConf {
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 12] = [
+    pub const KEYS: [&'static str; 15] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -188,6 +241,9 @@ impl ResolutionConf {
         "spark.sql.mapKeyDedupPolicy",
         "spark.sql.timestampType",
         "spark.sql.session.timeZone",
+        "spark.sql.legacy.ctePrecedencePolicy",
+        "spark.sql.legacy.allowParameterlessCount",
+        "spark.sql.legacy.allowStarWithSingleTableIdentifierInCount",
         "spark.sql.legacy.timeParserPolicy",
     ];
 
@@ -209,6 +265,7 @@ impl ResolutionConf {
         for ((slot, key), default) in v.iter_mut().zip(Self::KEYS[..8].iter()).zip(defaults) {
             *slot = conf(key).map_or(default, |s| s.trim().eq_ignore_ascii_case("true"));
         }
+        let on = |key: &str| conf(key).is_some_and(|s| s.trim().eq_ignore_ascii_case("true"));
         Self {
             case_sensitive: v[0],
             ansi: v[1],
@@ -226,7 +283,12 @@ impl ResolutionConf {
                 None => Some(0),
                 Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
             },
-            legacy_time_parser: conf(Self::KEYS[11])
+            cte_precedence: conf(Self::KEYS[11])
+                .and_then(CtePrecedencePolicy::from_value)
+                .unwrap_or_default(),
+            allow_parameterless_count: on(Self::KEYS[12]),
+            allow_star_with_single_table_identifier_in_count: on(Self::KEYS[13]),
+            legacy_time_parser: conf(Self::KEYS[14])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
         }
     }
@@ -318,10 +380,21 @@ impl ContextFingerprint {
             c.timestamp_ntz,
             c.legacy_time_parser,
             self.files,
+            c.allow_parameterless_count,
+            c.allow_star_with_single_table_identifier_in_count,
         ];
         num(
             &mut b,
             flags.iter().fold(0, |acc, f| acc << 1 | u64::from(*f)),
+        );
+        // The CTE precedence policy.
+        num(
+            &mut b,
+            match c.cte_precedence {
+                CtePrecedencePolicy::Corrected => 0,
+                CtePrecedencePolicy::Legacy => 1,
+                CtePrecedencePolicy::Exception => 2,
+            },
         );
         // The session zone: `None` (a region id) is one input.
         num(
@@ -537,6 +610,26 @@ impl Analyzer for DefaultAnalyzer {
     ) -> BoxFuture<'a, Result<AnalyzedPlan, AnalysisError>> {
         Box::pin(async move {
             let started = std::time::Instant::now();
+            let policy = legacy::CtePolicy {
+                precedence: ctx.conf.cte_precedence,
+                case_sensitive: ctx.conf.case_sensitive,
+            };
+            if policy.precedence == CtePrecedencePolicy::Exception
+                && let Some(conflict) = legacy::nested_conflict(plan.root(), policy)?
+            {
+                return Err(conflict);
+            }
+            let input = plan;
+            let owned;
+            let plan = if policy.precedence == CtePrecedencePolicy::Legacy {
+                let inlined = legacy::eliminate(plan.root(), policy)
+                    .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+                owned = Plan::try_new(inlined)
+                    .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+                &owned
+            } else {
+                plan
+            };
             let bindings = bind::bind(plan, ctx).await?;
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
@@ -556,7 +649,7 @@ impl Analyzer for DefaultAnalyzer {
                 output,
                 pins,
                 securables,
-                input_key: plan.structural_hash(),
+                input_key: input.structural_hash(),
                 context: fingerprint(ctx, epochs),
                 query_text,
                 reads_files,

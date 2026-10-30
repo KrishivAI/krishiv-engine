@@ -217,6 +217,15 @@ fn options_follow_spark_confs() {
         ("spark.sql.ansi.doubleQuotedIdentifiers", "true"),
     ]);
     assert!(!off.enforce_reserved_keywords && !off.double_quoted_identifiers);
+    // `spark.sql.legacy.consecutiveStringLiterals.enabled` is off by default.
+    assert!(!conf(&[]).consecutive_string_literals);
+    assert!(
+        conf(&[(
+            "spark.sql.legacy.consecutiveStringLiterals.enabled",
+            " TRUE "
+        )])
+        .consecutive_string_literals
+    );
 
     let q = parse_query("SELECT \"a\"\"b\" FROM t WHERE c = 'x\\n'", &all).unwrap();
     let text = format!("{q:?}");
@@ -560,7 +569,7 @@ fn lexer_follows_spark() {
 
 #[test]
 fn strings_unescape_like_spark() {
-    let u = |raw: &str| unescape_string(raw, true);
+    let u = |raw: &str| unescape_string(raw, true, false);
     assert_eq!(u(r"'a\nb\tc\rd\0e\bf\Zg'"), "a\nb\tc\rd\0e\u{8}f\u{1a}g");
     assert_eq!(u(r"'\%\_\q\\'"), "\\%\\_q\\");
     assert_eq!(u(r"'\u0041\U0001F600\101\777'"), "A\u{1F600}A777");
@@ -572,8 +581,66 @@ fn strings_unescape_like_spark() {
     assert_eq!(u("\"say \"\"hi\"\"\""), "say \"hi\"");
     assert_eq!(u(r"'trailing\'"), "trailing\\");
     assert_eq!(u(r"R'\n'"), "\\n");
-    assert_eq!(unescape_string(r"'\n'", false), "\\n");
+    assert_eq!(unescape_string(r"'\n'", false, false), "\\n");
     assert_eq!(lexer::unquote_ident("`a``b`"), "a`b");
+}
+
+#[test]
+fn consecutive_string_literals_drop_doubled_quotes() {
+    let u = |raw: &str| unescape_string(raw, true, true);
+    // Doubled quotes vanish instead of doubling the quote.
+    assert_eq!(u("'it''s'"), "its");
+    assert_eq!(u("\"say \"\"hi\"\"\""), "say hi");
+    assert_eq!(u("'S''par''k'"), "Spark");
+    assert_eq!(u("\"S\"\"par\"\"k\""), "Spark");
+    // Other quotes and backslash escapes still decode.
+    assert_eq!(u("'S\"\"par\"\"k'"), "S\"\"par\"\"k");
+    assert_eq!(u("\"S''par''k\""), "S''par''k");
+    assert_eq!(u("\"S\\\"par\\\"k\""), "S\"par\"k");
+    assert_eq!(u("'S\\'par\\'k'"), "S'par'k");
+    assert_eq!(u(r"R'\n'"), "\\n");
+    assert_eq!(unescape_string(r"'\n'", false, true), "\\n");
+}
+
+#[test]
+fn escaped_string_literals_keep_the_body_verbatim() {
+    // With `escapedStringLiterals` the body is taken as written, doubled
+    // quotes included.
+    assert_eq!(unescape_string("'it''s'", false, false), "it''s");
+    assert_eq!(unescape_string(r"'a\nb'", false, false), r"a\nb");
+}
+
+#[test]
+fn consecutive_string_literals_parse_like_spark() {
+    use super::ast::ExprKind;
+    let value = |sql: &str, options: &ParserOptions| {
+        let item = parse_named_expression(sql, options).unwrap();
+        match item.expr.kind {
+            ExprKind::Literal(super::ast::Literal::String(s)) => s,
+            other => panic!("{sql}: not a string literal: {other:?}"),
+        }
+    };
+    let d = ParserOptions::default();
+    assert!(!d.consecutive_string_literals);
+    // Doubled quotes read as one quote; adjacent literals concatenate.
+    assert_eq!(value("\"S\"\"par\"\"k\"", &d), "S\"par\"k");
+    assert_eq!(value("'S''par''k'", &d), "S'par'k");
+    assert_eq!(value("'S' 'par' 'k'", &d), "Spark");
+    let legacy = ParserOptions {
+        consecutive_string_literals: true,
+        ..ParserOptions::default()
+    };
+    // Doubled quotes vanish, so the literal reads concatenated.
+    assert_eq!(value("\"S\"\"par\"\"k\"", &legacy), "Spark");
+    assert_eq!(value("'S''par''k'", &legacy), "Spark");
+    // Other quotes and backslash escapes are untouched.
+    assert_eq!(value("\"S\\\"par\\\"k\"", &legacy), "S\"par\"k");
+    assert_eq!(value("'S\"\"par\"\"k'", &legacy), "S\"\"par\"\"k");
+    assert_eq!(value("'S' 'par' 'k'", &legacy), "Spark");
+    // Typed literals are not string expressions: the doubled quote collapses.
+    // (the value is invalid as a date, but is reported as written, collapsed).
+    let err = parse_named_expression("DATE 'a''b'", &legacy).unwrap_err();
+    assert!(format!("{err:?}").contains("'a'b'"), "{err:?}");
 }
 
 #[test]

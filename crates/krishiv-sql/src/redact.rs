@@ -44,8 +44,8 @@ pub(crate) fn secret_ranges(sql: &str) -> Vec<Range<usize>> {
 
 /// What an option list is reading.
 enum State {
-    /// The key, parts so far.
-    Key(String),
+    /// The key, parts so far, once per reading (see [`key_text`]).
+    Key([String; 4]),
     /// The value of a key; `Some(start)` once a value token was seen.
     Value {
         sensitive: bool,
@@ -76,7 +76,7 @@ fn marks(sql: &str) -> Vec<Mark> {
     let mut depth = 0_usize;
     // The depth of the option list being read, and what it is reading.
     let mut list: Option<usize> = None;
-    let mut state = State::Key(String::new());
+    let mut state = State::Key(Default::default());
     let finish = |state: &State, marks: &mut Vec<Mark>| {
         if let State::Value {
             sensitive: true,
@@ -104,7 +104,7 @@ fn marks(sql: &str) -> Vec<Mark> {
                 depth += 1;
                 if list.is_none() && opener {
                     list = Some(depth);
-                    state = State::Key(String::new());
+                    state = State::Key(Default::default());
                     continue;
                 }
             }
@@ -117,7 +117,7 @@ fn marks(sql: &str) -> Vec<Mark> {
             TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
             TokenKind::Sym(Sym::Comma) if at_list => {
                 finish(&state, &mut marks);
-                state = State::Key(String::new());
+                state = State::Key(Default::default());
                 continue;
             }
             _ => {}
@@ -131,19 +131,21 @@ fn marks(sql: &str) -> Vec<Mark> {
         match &mut state {
             State::Key(key) if at_list && t.kind == TokenKind::Sym(Sym::Eq) => {
                 state = State::Value {
-                    sensitive: sensitive(key),
+                    sensitive: sensitive(&key[..]),
                     start: None,
                     end: 0,
                     reference: false,
                 };
             }
-            State::Key(key) if at_list && key_part && !value_starts(&code, i, key) => {
-                key.push_str(&key_text(sql, t));
+            State::Key(key) if at_list && key_part && !value_starts(&code, i, &key[0]) => {
+                for (k, part) in key.iter_mut().zip(key_text(sql, t)) {
+                    k.push_str(&part);
+                }
             }
             State::Key(key) if at_list => {
                 // A value written without `=`.
                 state = State::Value {
-                    sensitive: sensitive(key),
+                    sensitive: sensitive(&key[..]),
                     start: Some(t.span.start),
                     end: t.span.end,
                     reference: is_reference(sql, &code, i),
@@ -181,39 +183,45 @@ fn set_value(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
     let Some(eq) = code.iter().position(|t| t.kind == TokenKind::Sym(Sym::Eq)) else {
         return;
     };
-    let key: String = code[1..eq].iter().map(|t| key_text(sql, t)).collect();
+    let mut key: [String; 4] = Default::default();
+    for t in &code[1..eq] {
+        for (k, part) in key.iter_mut().zip(key_text(sql, t)) {
+            k.push_str(&part);
+        }
+    }
     let end = code
         .iter()
         .rposition(|t| t.kind != TokenKind::Sym(Sym::Semi))
         .map_or(sql.len(), |j| code[j].span.end);
     let start = code.get(eq + 1).map_or(end, |t| t.span.start);
-    if sensitive(&key) && start < end {
+    if sensitive(&key[..]) && start < end {
         marks.push(Mark::Secret(start..end));
     }
 }
 
-/// Whether a key names a secret, its escapes decoded or not (fail-safe).
-fn sensitive(key: &str) -> bool {
-    is_sensitive_key(key)
+/// Whether any reading of a key names a secret, its escapes decoded or not
+/// (fail-safe).
+fn sensitive(readings: &[String]) -> bool {
+    readings.iter().any(|k| is_sensitive_key(k))
 }
 
-/// A key part's text: identifiers unquoted, strings unescaped (both the
-/// decoded and the written form, so an escaped key cannot hide).
-fn key_text(sql: &str, t: &Token) -> String {
+/// A key part's text, once per reading: identifiers unquoted, strings
+/// unescaped with and without escapes and with and without `consecutive`
+/// (so an escaped key cannot hide). `redact_sql` has no parser options (it
+/// works from tokens alone), so the readings stay separate and a key is
+/// sensitive when any complete reading is, fail-safe in either mode.
+fn key_text(sql: &str, t: &Token) -> [String; 4] {
     let raw = t.span.text(sql);
     match t.kind {
-        TokenKind::QuotedIdent => unquote_ident(raw),
-        TokenKind::Sym(Sym::Dot) => ".".to_owned(),
-        k if k.is_string_like() => {
-            let decoded = unescape_string(raw, true);
-            let plain = unescape_string(raw, false);
-            if decoded == plain {
-                decoded
-            } else {
-                format!("{decoded}{plain}")
-            }
-        }
-        _ => raw.to_owned(),
+        TokenKind::QuotedIdent => std::array::from_fn(|_| unquote_ident(raw)),
+        TokenKind::Sym(Sym::Dot) => std::array::from_fn(|_| ".".to_owned()),
+        k if k.is_string_like() => [
+            unescape_string(raw, true, false),
+            unescape_string(raw, true, true),
+            unescape_string(raw, false, false),
+            unescape_string(raw, false, true),
+        ],
+        _ => std::array::from_fn(|_| raw.to_owned()),
     }
 }
 
@@ -275,10 +283,17 @@ fn url_marks(sql: &str, t: &Token, marks: &mut Vec<Mark>) {
         // Positions in the value are not positions in the text, and an
         // escape (`\u0040`, a doubled quote) can make the decoded value a
         // URL the written one is not: hide all when any reading is a URL.
+        // No parser options here (see `key_text`): every escapes and
+        // `consecutive` reading counts.
         let raw = t.span.text(sql);
         let readings = match t.kind {
             TokenKind::QuotedIdent => vec![unquote_ident(raw)],
-            _ => vec![unescape_string(raw, true), unescape_string(raw, false)],
+            _ => vec![
+                unescape_string(raw, true, false),
+                unescape_string(raw, true, true),
+                unescape_string(raw, false, false),
+                unescape_string(raw, false, true),
+            ],
         };
         if SecretUrl::parse(value).is_some()
             || readings.iter().any(|d| SecretUrl::parse(d).is_some())

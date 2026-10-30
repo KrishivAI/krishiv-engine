@@ -1206,7 +1206,7 @@ impl<'s> Parser<'s> {
             let (first, last) = (self.tok(n)?, self.tok(n + 3)?);
             let literal = self.tok(n + 2)?.span.text(self.src);
             return Some(Ident {
-                value: unescape_string(literal, !self.opts.escaped_string_literals),
+                value: unescape_string(literal, !self.opts.escaped_string_literals, false),
                 quoted: true,
                 span: first.span.to(last.span),
             });
@@ -1777,8 +1777,11 @@ impl<'s> Parser<'s> {
                 let Some(t) = self.tok(0) else {
                     return self.fail();
                 };
-                let zone =
-                    unescape_string(t.span.text(self.src), !self.opts.escaped_string_literals);
+                let zone = unescape_string(
+                    t.span.text(self.src),
+                    !self.opts.escaped_string_literals,
+                    false,
+                );
                 self.bump();
                 (TimeZone::Named(zone), t.span)
             }
@@ -1787,8 +1790,11 @@ impl<'s> Parser<'s> {
                 let Some(t) = self.tok(0) else {
                     return self.fail();
                 };
-                let zone =
-                    unescape_string(t.span.text(self.src), !self.opts.escaped_string_literals);
+                let zone = unescape_string(
+                    t.span.text(self.src),
+                    !self.opts.escaped_string_literals,
+                    false,
+                );
                 self.bump();
                 (TimeZone::Named(zone), t.span)
             }
