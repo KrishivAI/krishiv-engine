@@ -53,6 +53,7 @@ mod explain;
 mod explain_graph;
 pub mod functions;
 mod introspection;
+mod locals;
 mod profile;
 mod session;
 mod sql_functions;

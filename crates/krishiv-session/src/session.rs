@@ -94,6 +94,10 @@ pub type RecordBatchStream = BoxStream<'static, Result<RecordBatch, KrishivError
 #[derive(Clone)]
 pub struct Session {
     pub(crate) state: Arc<SessionState>,
+    /// The local variables of the SQL script this handle runs, outermost frame first. Empty for a
+    /// session a user holds: only the handle a script's statements run on has frames, so no other
+    /// query on the session ever sees them (`locals.rs`).
+    pub(crate) locals: Arc<[krishiv_plan::analyzer::LocalFrame]>,
 }
 
 impl fmt::Debug for Session {
@@ -315,6 +319,7 @@ impl SessionBuilder {
             None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
         };
         Ok(Session {
+            locals: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
                 catalog: Arc::new(SessionCatalog::default()),
@@ -1014,6 +1019,14 @@ impl Session {
         // One snapshot of the variables per query, like the configuration
         // snapshot: every reference in the query reads the same values.
         let variables = self.state.variables.snapshot();
+        let variables = if self.locals.is_empty() {
+            variables
+        } else {
+            Arc::new(krishiv_plan::analyzer::VariableSnapshot {
+                locals: self.locals.to_vec(),
+                ..(*variables).clone()
+            })
+        };
         let sql_functions = Arc::new(QueryFunctions::new(
             Arc::clone(&self.state.functions),
             self.state.sql_functions.snapshot(),
