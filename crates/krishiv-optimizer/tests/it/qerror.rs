@@ -330,7 +330,16 @@ fn run_suite(
     let mut errors = Errors::default();
     // The interpreter panics on constructs it does not run: those relations
     // are skipped (and counted), quietly.
-    let hook = std::panic::take_hook();
+    // Restores the panic hook on every exit, a panic included.
+    struct Hook(Option<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>>);
+    impl Drop for Hook {
+        fn drop(&mut self) {
+            if let Some(h) = self.0.take() {
+                std::panic::set_hook(h);
+            }
+        }
+    }
+    let _hook = Hook(Some(std::panic::take_hook()));
     std::panic::set_hook(Box::new(|_| {}));
     for (id, sql) in sqls {
         let Some(plan) = support::try_resolve(sql, ctx) else {
@@ -359,7 +368,6 @@ fn run_suite(
             }
         }
     }
-    std::panic::set_hook(hook);
     errors
 }
 

@@ -4,19 +4,19 @@ expression: optimized.root().to_string()
 ---
 Aggregate [], [(sum(l_extendedprice#5) / 7.0) AS avg_yearly#42]
 +- Project [l_extendedprice#5]
-   +- Join Inner, ((CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41) and (p_partkey#16 == l_partkey#1))
-      :- Project [(0.2 * avg(l_quantity))#41, p_partkey#16]
-      :  +- Join Inner, (p_partkey#16 == l_partkey#26)
-      :     :- Aggregate [l_partkey#26], [(0.2 * avg(l_quantity#29)) AS (0.2 * avg(l_quantity))#41, l_partkey#26]
-      :     :  +- Join LeftSemi, (l_partkey#26 == p_partkey#59)
-      :     :     :- Project [l_partkey#26, l_quantity#29]
-      :     :     :  +- Shift +25
-      :     :     :     +- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5] (shared #1)
-      :     :     +- Shift +43
-      :     :        +- Project [p_partkey#16]
-      :     :           +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
-      :     :              +- Scan spark_catalog.default.part [p_partkey#16, p_brand#19, p_container#22] (shared #2)
-      :     +- Project [p_partkey#16]
-      :        +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
-      :           +- Shared #2, printed above
-      +- Shared #1, printed above
+   +- Join Inner, ((p_partkey#16 == l_partkey#26) and (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41))
+      :- Aggregate [l_partkey#26], [(0.2 * avg(l_quantity#29)) AS (0.2 * avg(l_quantity))#41, l_partkey#26]
+      :  +- Join LeftSemi, (l_partkey#26 == p_partkey#59)
+      :     :- Project [l_partkey#26, l_quantity#29]
+      :     :  +- Shift +25
+      :     :     +- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5] (shared #1)
+      :     +- Shift +43
+      :        +- Project [p_partkey#16]
+      :           +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
+      :              +- Scan spark_catalog.default.part [p_partkey#16, p_brand#19, p_container#22] (shared #2)
+      +- Project [l_quantity#4, l_extendedprice#5, p_partkey#16]
+         +- Join Inner, (p_partkey#16 == l_partkey#1)
+            :- Shared #1, printed above
+            +- Project [p_partkey#16]
+               +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
+                  +- Shared #2, printed above

@@ -6,18 +6,18 @@ Limit 100
 +- Sort [i_item_id#1 ASC NULLS FIRST], true
    +- Aggregate [i_item_id#1, i_item_desc#4, i_current_price#5], [i_item_id#1, i_item_desc#4, i_current_price#5]
       +- Project [i_item_id#1, i_item_desc#4, i_current_price#5]
-         +- Join Inner, (inv_item_sk#23 == i_item_sk#0)
-            :- Project [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5]
-            :  +- Join Inner, (cs_item_sk#69 == i_item_sk#0)
-            :     :- Scan spark_catalog.default.catalog_sales [cs_item_sk#69]
-            :     +- Project [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5]
-            :        +- Filter (((i_current_price#5 >= 68.00) and (CAST(i_current_price#5 AS DECIMAL(12,2)) <= 98.00)) and (i_manufact_id#13 IN (677, 940, 694, 808)))
-            :           +- Scan spark_catalog.default.item [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5, i_manufact_id#13]
-            +- Project [inv_item_sk#23]
-               +- Join Inner, (d_date_sk#26 == inv_date_sk#22)
+         +- Join Inner, (d_date_sk#26 == inv_date_sk#22)
+            :- Project [d_date_sk#26]
+            :  +- Filter ((d_date#28 >= DATE '2000-02-01') and (d_date#28 <= DATE '2000-04-01'))
+            :     +- Scan spark_catalog.default.date_dim [d_date_sk#26, d_date#28]
+            +- Project [inv_date_sk#22, i_item_id#1, i_item_desc#4, i_current_price#5]
+               +- Join Inner, (inv_item_sk#23 == i_item_sk#0)
                   :- Project [inv_date_sk#22, inv_item_sk#23]
                   :  +- Filter ((inv_quantity_on_hand#25 >= 100) and (inv_quantity_on_hand#25 <= 500))
                   :     +- Scan spark_catalog.default.inventory [inv_date_sk#22, inv_item_sk#23, inv_quantity_on_hand#25]
-                  +- Project [d_date_sk#26]
-                     +- Filter ((d_date#28 >= DATE '2000-02-01') and (d_date#28 <= DATE '2000-04-01'))
-                        +- Scan spark_catalog.default.date_dim [d_date_sk#26, d_date#28]
+                  +- Project [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5]
+                     +- Join Inner, (cs_item_sk#69 == i_item_sk#0)
+                        :- Scan spark_catalog.default.catalog_sales [cs_item_sk#69]
+                        +- Project [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5]
+                           +- Filter (((i_current_price#5 >= 68.00) and (CAST(i_current_price#5 AS DECIMAL(12,2)) <= 98.00)) and (i_manufact_id#13 IN (677, 940, 694, 808)))
+                              +- Scan spark_catalog.default.item [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5, i_manufact_id#13]

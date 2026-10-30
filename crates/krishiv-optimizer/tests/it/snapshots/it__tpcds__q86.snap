@@ -10,10 +10,10 @@ Project [total_sum#85, i_category#88, i_class#89, lochierarchy#86, rank_within_p
             +- Aggregate [i_category#88, i_class#89, spark_grouping_id#84], [sum(ws_net_paid#29) AS total_sum#85, i_category#88, i_class#89, (CAST(((grouping__id#84 div 2L) % 2L) AS TINYINT) + CAST((grouping__id#84 % 2L) AS TINYINT)) AS lochierarchy#86, grouping__id#84, (CAST(((grouping__id#84 div 2L) % 2L) AS TINYINT) + CAST((grouping__id#84 % 2L) AS TINYINT)) AS _w0#93, CASE WHEN (CAST(CAST((grouping__id#84 % 2L) AS TINYINT) AS INT) == 0) THEN i_category#88 END AS _w1#94]
                +- Expand [[ws_net_paid#29, i_category#74, i_class#72, 0L], [ws_net_paid#29, i_category#74, CAST(NULL AS STRING), 1L], [ws_net_paid#29, CAST(NULL AS STRING), CAST(NULL AS STRING), 3L]], [ws_net_paid#29, i_category#88, i_class#89, spark_grouping_id#84]
                   +- Join Inner, (i_item_sk#62 == ws_item_sk#3)
-                     :- Project [ws_item_sk#3, ws_net_paid#29]
-                     :  +- Join Inner, (d_date_sk#34 == ws_sold_date_sk#0)
-                     :     :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_net_paid#29]
-                     :     +- Project [d_date_sk#34]
-                     :        +- Filter ((d_month_seq#37 >= 1200) and (d_month_seq#37 <= 1211))
-                     :           +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_month_seq#37]
-                     +- Scan spark_catalog.default.item [i_item_sk#62, i_class#72, i_category#74]
+                     :- Scan spark_catalog.default.item [i_item_sk#62, i_class#72, i_category#74]
+                     +- Project [ws_item_sk#3, ws_net_paid#29]
+                        +- Join Inner, (d_date_sk#34 == ws_sold_date_sk#0)
+                           :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_net_paid#29]
+                           +- Project [d_date_sk#34]
+                              +- Filter ((d_month_seq#37 >= 1200) and (d_month_seq#37 <= 1211))
+                                 +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_month_seq#37]

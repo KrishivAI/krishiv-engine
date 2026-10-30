@@ -592,13 +592,14 @@ fn a_union_adds_rows_takes_the_most_distinct_counts_and_widens_ranges() {
 }
 
 #[test]
-fn a_distinct_count_that_is_a_guess_never_drives_a_join_selectivity() {
-    // Neither side has one: the default selectivity, not `1 / rows`.
+fn an_unknown_distinct_count_reads_as_the_rows_in_a_join_selectivity() {
+    // Neither side has one: each reads as its rows, `1 / max(rows)` (T166
+    // note, section 2); only `col = literal` takes the default selectivity.
     let e = join("SELECT * FROM g JOIN g2 ON g.ga = g2.gb");
-    close(e.rows(), 1e6 * 1e6 * 0.2, "no counts");
-    // One side has one: it alone is used.
+    close(e.rows(), 1e6, "no counts");
+    // One side has one: the other reads as its rows, which is larger.
     let e = join("SELECT * FROM t JOIN g ON t.a = g.ga");
-    close(e.rows(), 1000.0 * 1e6 / 100.0, "one count");
+    close(e.rows(), 1000.0, "one count");
     // The weakest source wins on the key: a guess on either side.
     for key in ["a", "ga"] {
         assert!(!e.col(key).ndv_known(), "{key}");

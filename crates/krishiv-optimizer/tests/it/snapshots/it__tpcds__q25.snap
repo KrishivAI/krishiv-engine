@@ -5,33 +5,33 @@ expression: optimized.root().to_string()
 Limit 100
 +- Sort [i_item_id#191 ASC NULLS FIRST, i_item_desc#194 ASC NULLS FIRST, s_store_id#162 ASC NULLS FIRST, s_store_name#166 ASC NULLS FIRST], true
    +- Aggregate [i_item_id#191, i_item_desc#194, s_store_id#162, s_store_name#166], [i_item_id#191, i_item_desc#194, s_store_id#162, s_store_name#166, sum(ss_net_profit#22) AS store_sales_profit#212, sum(sr_net_loss#42) AS store_returns_loss#213, sum(cs_net_profit#76) AS catalog_sales_profit#214]
-      +- Project [ss_net_profit#22, i_item_id#191, i_item_desc#194, s_store_id#162, s_store_name#166, sr_net_loss#42, cs_net_profit#76]
-         +- Join Inner, (((ss_customer_sk#3 == sr_customer_sk#26) and (ss_item_sk#2 == sr_item_sk#25)) and (ss_ticket_number#9 == sr_ticket_number#32))
-            :- Project [ss_item_sk#2, ss_customer_sk#3, ss_ticket_number#9, ss_net_profit#22, i_item_id#191, i_item_desc#194, s_store_id#162, s_store_name#166]
-            :  +- Join Inner, (s_store_sk#161 == ss_store_sk#7)
-            :     :- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9, ss_net_profit#22, i_item_id#191, i_item_desc#194]
-            :     :  +- Join Inner, (i_item_sk#190 == ss_item_sk#2)
-            :     :     :- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9, ss_net_profit#22]
-            :     :     :  +- Join Inner, (d_date_sk#77 == ss_sold_date_sk#0)
-            :     :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9, ss_net_profit#22]
-            :     :     :     +- Project [d_date_sk#77]
-            :     :     :        +- Filter ((d_moy#85 == 4) and (d_year#83 == 2001))
-            :     :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#77, d_year#83, d_moy#85] (shared #1)
-            :     :     +- Scan spark_catalog.default.item [i_item_sk#190, i_item_id#191, i_item_desc#194]
-            :     +- Scan spark_catalog.default.store [s_store_sk#161, s_store_id#162, s_store_name#166]
-            +- Project [sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42, cs_net_profit#76]
-               +- Join Inner, (sr_returned_date_sk#23 == d_date_sk#105)
-                  :- Project [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42, cs_net_profit#76]
-                  :  +- Join Inner, (cs_sold_date_sk#43 == d_date_sk#133)
-                  :     :- Project [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42, cs_sold_date_sk#43, cs_net_profit#76]
-                  :     :  +- Join Inner, ((sr_customer_sk#26 == cs_bill_customer_sk#46) and (sr_item_sk#25 == cs_item_sk#58))
-                  :     :     :- Scan spark_catalog.default.store_returns [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42]
-                  :     :     +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#43, cs_bill_customer_sk#46, cs_item_sk#58, cs_net_profit#76]
-                  :     +- Project [d_date_sk#133]
-                  :        +- Shift +56
-                  :           +- Filter (((d_moy#85 >= 4) and (d_moy#85 <= 10)) and (d_year#83 == 2001))
-                  :              +- Shared #1, printed above
-                  +- Project [d_date_sk#105]
-                     +- Shift +28
-                        +- Filter (((d_moy#85 >= 4) and (d_moy#85 <= 10)) and (d_year#83 == 2001))
-                           +- Shared #1, printed above
+      +- Project [s_store_id#162, s_store_name#166, i_item_id#191, i_item_desc#194, ss_net_profit#22, sr_net_loss#42, cs_net_profit#76]
+         +- Join Inner, (s_store_sk#161 == ss_store_sk#7)
+            :- Scan spark_catalog.default.store [s_store_sk#161, s_store_id#162, s_store_name#166]
+            +- Project [i_item_id#191, i_item_desc#194, ss_store_sk#7, ss_net_profit#22, sr_net_loss#42, cs_net_profit#76]
+               +- Join Inner, (i_item_sk#190 == ss_item_sk#2)
+                  :- Scan spark_catalog.default.item [i_item_sk#190, i_item_id#191, i_item_desc#194]
+                  +- Project [ss_item_sk#2, ss_store_sk#7, ss_net_profit#22, sr_net_loss#42, cs_net_profit#76]
+                     +- Join Inner, (d_date_sk#77 == ss_sold_date_sk#0)
+                        :- Project [d_date_sk#77]
+                        :  +- Filter ((d_moy#85 == 4) and (d_year#83 == 2001))
+                        :     +- Scan spark_catalog.default.date_dim [d_date_sk#77, d_year#83, d_moy#85] (shared #1)
+                        +- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_net_profit#22, sr_net_loss#42, cs_net_profit#76]
+                           +- Join Inner, (((ss_customer_sk#3 == sr_customer_sk#26) and (ss_item_sk#2 == sr_item_sk#25)) and (ss_ticket_number#9 == sr_ticket_number#32))
+                              :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9, ss_net_profit#22]
+                              +- Project [sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42, cs_net_profit#76]
+                                 +- Join Inner, (sr_returned_date_sk#23 == d_date_sk#105)
+                                    :- Project [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42, cs_net_profit#76]
+                                    :  +- Join Inner, ((sr_customer_sk#26 == cs_bill_customer_sk#46) and (sr_item_sk#25 == cs_item_sk#58))
+                                    :     :- Scan spark_catalog.default.store_returns [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42]
+                                    :     +- Project [cs_bill_customer_sk#46, cs_item_sk#58, cs_net_profit#76]
+                                    :        +- Join Inner, (cs_sold_date_sk#43 == d_date_sk#133)
+                                    :           :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#43, cs_bill_customer_sk#46, cs_item_sk#58, cs_net_profit#76]
+                                    :           +- Project [d_date_sk#133]
+                                    :              +- Shift +56
+                                    :                 +- Filter (((d_moy#85 >= 4) and (d_moy#85 <= 10)) and (d_year#83 == 2001))
+                                    :                    +- Shared #1, printed above
+                                    +- Project [d_date_sk#105]
+                                       +- Shift +28
+                                          +- Filter (((d_moy#85 >= 4) and (d_moy#85 <= 10)) and (d_year#83 == 2001))
+                                             +- Shared #1, printed above

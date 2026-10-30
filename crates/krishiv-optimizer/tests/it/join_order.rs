@@ -575,22 +575,15 @@ fn literal_equalities_without_a_distinct_count_use_the_default() {
             "{sql}: {k} {f} vs {is_null}"
         );
     }
-    // An equality between two columns of one input reads `1 / max(ndv)`
-    // over the counts that come from statistics: without any, the default
-    // selectivity (a missing count is not read as "all distinct", which
-    // would estimate one row); with one, that count alone.
+    // An equality between two columns of one input keeps `1 / max(ndv)`; a
+    // count that is only the default guess reads as the rows (T166), so only
+    // `col = literal` takes the default selectivity.
     let cols = "SELECT l_orderkey FROM lineitem WHERE l_commitdate = l_receiptdate";
+    // The fixture has no distinct counts: each column reads as the rows.
     assert!(
-        close(rows(cols, &footers), lineitem * 0.2),
+        rows(cols, &footers) <= 1.0 + 1e-9,
         "{}",
         rows(cols, &footers)
-    );
-    let one = without_distinct(&["l_commitdate"]);
-    let ndv = one.0["lineitem"].columns["l_commitdate"].distinct.unwrap() as f64;
-    assert!(
-        close(rows(cols, &one), lineitem / ndv),
-        "{}",
-        rows(cols, &one)
     );
 }
 

@@ -10,145 +10,145 @@ Join Inner
 :  :  :  :  :- Join Inner
 :  :  :  :  :  :- Join Inner
 :  :  :  :  :  :  :- Aggregate [], [count(1) AS h8_30_to_9#67]
-:  :  :  :  :  :  :  +- Project [ss_store_sk#7]
+:  :  :  :  :  :  :  +- Project [s_store_sk#38]
 :  :  :  :  :  :  :     +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-:  :  :  :  :  :  :        :- Project [ss_store_sk#7]
-:  :  :  :  :  :  :        :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-:  :  :  :  :  :  :        :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-:  :  :  :  :  :  :        :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-:  :  :  :  :  :  :        :     :     :- Scan spark_catalog.default.store_sales [ss_sold_time_sk#1, ss_hdemo_sk#5, ss_store_sk#7] (shared #1)
-:  :  :  :  :  :  :        :     :     +- Project [t_time_sk#28]
-:  :  :  :  :  :  :        :     :        +- Filter ((t_hour#31 == 8) and (t_minute#32 >= 30))
-:  :  :  :  :  :  :        :     :           +- Scan spark_catalog.default.time_dim [t_time_sk#28, t_hour#31, t_minute#32] (shared #2)
-:  :  :  :  :  :  :        :     +- Project [hd_demo_sk#23]
-:  :  :  :  :  :  :        :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-:  :  :  :  :  :  :        :           +- Scan spark_catalog.default.household_demographics [hd_demo_sk#23, hd_dep_count#26, hd_vehicle_count#27] (shared #3)
-:  :  :  :  :  :  :        +- Project [s_store_sk#38]
-:  :  :  :  :  :  :           +- Filter (s_store_name#43 == 'ese')
-:  :  :  :  :  :  :              +- Scan spark_catalog.default.store [s_store_sk#38, s_store_name#43] (shared #4)
+:  :  :  :  :  :  :        :- Project [s_store_sk#38]
+:  :  :  :  :  :  :        :  +- Filter (s_store_name#43 == 'ese')
+:  :  :  :  :  :  :        :     +- Scan spark_catalog.default.store [s_store_sk#38, s_store_name#43] (shared #1)
+:  :  :  :  :  :  :        +- Project [ss_store_sk#7]
+:  :  :  :  :  :  :           +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+:  :  :  :  :  :  :              :- Project [hd_demo_sk#23]
+:  :  :  :  :  :  :              :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+:  :  :  :  :  :  :              :     +- Scan spark_catalog.default.household_demographics [hd_demo_sk#23, hd_dep_count#26, hd_vehicle_count#27] (shared #2)
+:  :  :  :  :  :  :              +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+:  :  :  :  :  :  :                 +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+:  :  :  :  :  :  :                    :- Scan spark_catalog.default.store_sales [ss_sold_time_sk#1, ss_hdemo_sk#5, ss_store_sk#7] (shared #3)
+:  :  :  :  :  :  :                    +- Project [t_time_sk#28]
+:  :  :  :  :  :  :                       +- Filter ((t_hour#31 == 8) and (t_minute#32 >= 30))
+:  :  :  :  :  :  :                          +- Scan spark_catalog.default.time_dim [t_time_sk#28, t_hour#31, t_minute#32] (shared #4)
 :  :  :  :  :  :  +- Shift +69
 :  :  :  :  :  :     +- Aggregate [], [count(1) AS h9_to_9_30#68]
-:  :  :  :  :  :        +- Project [ss_store_sk#7]
+:  :  :  :  :  :        +- Project [s_store_sk#38]
 :  :  :  :  :  :           +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-:  :  :  :  :  :              :- Project [ss_store_sk#7]
-:  :  :  :  :  :              :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-:  :  :  :  :  :              :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-:  :  :  :  :  :              :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-:  :  :  :  :  :              :     :     :- Shared #1, printed above
-:  :  :  :  :  :              :     :     +- Project [t_time_sk#28]
-:  :  :  :  :  :              :     :        +- Filter ((t_hour#31 == 9) and (t_minute#32 < 30))
-:  :  :  :  :  :              :     :           +- Shared #2, printed above
-:  :  :  :  :  :              :     +- Project [hd_demo_sk#23]
-:  :  :  :  :  :              :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-:  :  :  :  :  :              :           +- Shared #3, printed above
-:  :  :  :  :  :              +- Project [s_store_sk#38]
-:  :  :  :  :  :                 +- Filter (s_store_name#43 == 'ese')
-:  :  :  :  :  :                    +- Shared #4, printed above
+:  :  :  :  :  :              :- Project [s_store_sk#38]
+:  :  :  :  :  :              :  +- Filter (s_store_name#43 == 'ese')
+:  :  :  :  :  :              :     +- Shared #1, printed above
+:  :  :  :  :  :              +- Project [ss_store_sk#7]
+:  :  :  :  :  :                 +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+:  :  :  :  :  :                    :- Project [hd_demo_sk#23]
+:  :  :  :  :  :                    :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+:  :  :  :  :  :                    :     +- Shared #2, printed above
+:  :  :  :  :  :                    +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+:  :  :  :  :  :                       +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+:  :  :  :  :  :                          :- Shared #3, printed above
+:  :  :  :  :  :                          +- Project [t_time_sk#28]
+:  :  :  :  :  :                             +- Filter ((t_hour#31 == 9) and (t_minute#32 < 30))
+:  :  :  :  :  :                                +- Shared #4, printed above
 :  :  :  :  :  +- Shift +139
 :  :  :  :  :     +- Aggregate [], [count(1) AS h9_30_to_10#138]
-:  :  :  :  :        +- Project [ss_store_sk#7]
+:  :  :  :  :        +- Project [s_store_sk#38]
 :  :  :  :  :           +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-:  :  :  :  :              :- Project [ss_store_sk#7]
-:  :  :  :  :              :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-:  :  :  :  :              :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-:  :  :  :  :              :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-:  :  :  :  :              :     :     :- Shared #1, printed above
-:  :  :  :  :              :     :     +- Project [t_time_sk#28]
-:  :  :  :  :              :     :        +- Filter ((t_hour#31 == 9) and (t_minute#32 >= 30))
-:  :  :  :  :              :     :           +- Shared #2, printed above
-:  :  :  :  :              :     +- Project [hd_demo_sk#23]
-:  :  :  :  :              :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-:  :  :  :  :              :           +- Shared #3, printed above
-:  :  :  :  :              +- Project [s_store_sk#38]
-:  :  :  :  :                 +- Filter (s_store_name#43 == 'ese')
-:  :  :  :  :                    +- Shared #4, printed above
+:  :  :  :  :              :- Project [s_store_sk#38]
+:  :  :  :  :              :  +- Filter (s_store_name#43 == 'ese')
+:  :  :  :  :              :     +- Shared #1, printed above
+:  :  :  :  :              +- Project [ss_store_sk#7]
+:  :  :  :  :                 +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+:  :  :  :  :                    :- Project [hd_demo_sk#23]
+:  :  :  :  :                    :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+:  :  :  :  :                    :     +- Shared #2, printed above
+:  :  :  :  :                    +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+:  :  :  :  :                       +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+:  :  :  :  :                          :- Shared #3, printed above
+:  :  :  :  :                          +- Project [t_time_sk#28]
+:  :  :  :  :                             +- Filter ((t_hour#31 == 9) and (t_minute#32 >= 30))
+:  :  :  :  :                                +- Shared #4, printed above
 :  :  :  :  +- Shift +279
 :  :  :  :     +- Aggregate [], [count(1) AS h10_to_10_30#278]
-:  :  :  :        +- Project [ss_store_sk#7]
+:  :  :  :        +- Project [s_store_sk#38]
 :  :  :  :           +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-:  :  :  :              :- Project [ss_store_sk#7]
-:  :  :  :              :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-:  :  :  :              :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-:  :  :  :              :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-:  :  :  :              :     :     :- Shared #1, printed above
-:  :  :  :              :     :     +- Project [t_time_sk#28]
-:  :  :  :              :     :        +- Filter ((t_hour#31 == 10) and (t_minute#32 < 30))
-:  :  :  :              :     :           +- Shared #2, printed above
-:  :  :  :              :     +- Project [hd_demo_sk#23]
-:  :  :  :              :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-:  :  :  :              :           +- Shared #3, printed above
-:  :  :  :              +- Project [s_store_sk#38]
-:  :  :  :                 +- Filter (s_store_name#43 == 'ese')
-:  :  :  :                    +- Shared #4, printed above
+:  :  :  :              :- Project [s_store_sk#38]
+:  :  :  :              :  +- Filter (s_store_name#43 == 'ese')
+:  :  :  :              :     +- Shared #1, printed above
+:  :  :  :              +- Project [ss_store_sk#7]
+:  :  :  :                 +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+:  :  :  :                    :- Project [hd_demo_sk#23]
+:  :  :  :                    :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+:  :  :  :                    :     +- Shared #2, printed above
+:  :  :  :                    +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+:  :  :  :                       +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+:  :  :  :                          :- Shared #3, printed above
+:  :  :  :                          +- Project [t_time_sk#28]
+:  :  :  :                             +- Filter ((t_hour#31 == 10) and (t_minute#32 < 30))
+:  :  :  :                                +- Shared #4, printed above
 :  :  :  +- Shift +559
 :  :  :     +- Aggregate [], [count(1) AS h10_30_to_11#558]
-:  :  :        +- Project [ss_store_sk#7]
+:  :  :        +- Project [s_store_sk#38]
 :  :  :           +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-:  :  :              :- Project [ss_store_sk#7]
-:  :  :              :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-:  :  :              :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-:  :  :              :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-:  :  :              :     :     :- Shared #1, printed above
-:  :  :              :     :     +- Project [t_time_sk#28]
-:  :  :              :     :        +- Filter ((t_hour#31 == 10) and (t_minute#32 >= 30))
-:  :  :              :     :           +- Shared #2, printed above
-:  :  :              :     +- Project [hd_demo_sk#23]
-:  :  :              :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-:  :  :              :           +- Shared #3, printed above
-:  :  :              +- Project [s_store_sk#38]
-:  :  :                 +- Filter (s_store_name#43 == 'ese')
-:  :  :                    +- Shared #4, printed above
+:  :  :              :- Project [s_store_sk#38]
+:  :  :              :  +- Filter (s_store_name#43 == 'ese')
+:  :  :              :     +- Shared #1, printed above
+:  :  :              +- Project [ss_store_sk#7]
+:  :  :                 +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+:  :  :                    :- Project [hd_demo_sk#23]
+:  :  :                    :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+:  :  :                    :     +- Shared #2, printed above
+:  :  :                    +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+:  :  :                       +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+:  :  :                          :- Shared #3, printed above
+:  :  :                          +- Project [t_time_sk#28]
+:  :  :                             +- Filter ((t_hour#31 == 10) and (t_minute#32 >= 30))
+:  :  :                                +- Shared #4, printed above
 :  :  +- Shift +1119
 :  :     +- Aggregate [], [count(1) AS h11_to_11_30#1118]
-:  :        +- Project [ss_store_sk#7]
+:  :        +- Project [s_store_sk#38]
 :  :           +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-:  :              :- Project [ss_store_sk#7]
-:  :              :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-:  :              :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-:  :              :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-:  :              :     :     :- Shared #1, printed above
-:  :              :     :     +- Project [t_time_sk#28]
-:  :              :     :        +- Filter ((t_hour#31 == 11) and (t_minute#32 < 30))
-:  :              :     :           +- Shared #2, printed above
-:  :              :     +- Project [hd_demo_sk#23]
-:  :              :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-:  :              :           +- Shared #3, printed above
-:  :              +- Project [s_store_sk#38]
-:  :                 +- Filter (s_store_name#43 == 'ese')
-:  :                    +- Shared #4, printed above
+:  :              :- Project [s_store_sk#38]
+:  :              :  +- Filter (s_store_name#43 == 'ese')
+:  :              :     +- Shared #1, printed above
+:  :              +- Project [ss_store_sk#7]
+:  :                 +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+:  :                    :- Project [hd_demo_sk#23]
+:  :                    :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+:  :                    :     +- Shared #2, printed above
+:  :                    +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+:  :                       +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+:  :                          :- Shared #3, printed above
+:  :                          +- Project [t_time_sk#28]
+:  :                             +- Filter ((t_hour#31 == 11) and (t_minute#32 < 30))
+:  :                                +- Shared #4, printed above
 :  +- Shift +2239
 :     +- Aggregate [], [count(1) AS h11_30_to_12#2238]
-:        +- Project [ss_store_sk#7]
+:        +- Project [s_store_sk#38]
 :           +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-:              :- Project [ss_store_sk#7]
-:              :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-:              :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-:              :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-:              :     :     :- Shared #1, printed above
-:              :     :     +- Project [t_time_sk#28]
-:              :     :        +- Filter ((t_hour#31 == 11) and (t_minute#32 >= 30))
-:              :     :           +- Shared #2, printed above
-:              :     +- Project [hd_demo_sk#23]
-:              :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-:              :           +- Shared #3, printed above
-:              +- Project [s_store_sk#38]
-:                 +- Filter (s_store_name#43 == 'ese')
-:                    +- Shared #4, printed above
+:              :- Project [s_store_sk#38]
+:              :  +- Filter (s_store_name#43 == 'ese')
+:              :     +- Shared #1, printed above
+:              +- Project [ss_store_sk#7]
+:                 +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+:                    :- Project [hd_demo_sk#23]
+:                    :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+:                    :     +- Shared #2, printed above
+:                    +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+:                       +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+:                          :- Shared #3, printed above
+:                          +- Project [t_time_sk#28]
+:                             +- Filter ((t_hour#31 == 11) and (t_minute#32 >= 30))
+:                                +- Shared #4, printed above
 +- Shift +4479
    +- Aggregate [], [count(1) AS h12_to_12_30#4478]
-      +- Project [ss_store_sk#7]
+      +- Project [s_store_sk#38]
          +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-            :- Project [ss_store_sk#7]
-            :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-            :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-            :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-            :     :     :- Shared #1, printed above
-            :     :     +- Project [t_time_sk#28]
-            :     :        +- Filter ((t_hour#31 == 12) and (t_minute#32 < 30))
-            :     :           +- Shared #2, printed above
-            :     +- Project [hd_demo_sk#23]
-            :        +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
-            :           +- Shared #3, printed above
-            +- Project [s_store_sk#38]
-               +- Filter (s_store_name#43 == 'ese')
-                  +- Shared #4, printed above
+            :- Project [s_store_sk#38]
+            :  +- Filter (s_store_name#43 == 'ese')
+            :     +- Shared #1, printed above
+            +- Project [ss_store_sk#7]
+               +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
+                  :- Project [hd_demo_sk#23]
+                  :  +- Filter ((((hd_dep_count#26 == 4) and (hd_vehicle_count#27 <= 6)) or ((hd_dep_count#26 == 2) and (hd_vehicle_count#27 <= 4))) or ((hd_dep_count#26 == 0) and (hd_vehicle_count#27 <= 2)))
+                  :     +- Shared #2, printed above
+                  +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+                     +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+                        :- Shared #3, printed above
+                        +- Project [t_time_sk#28]
+                           +- Filter ((t_hour#31 == 12) and (t_minute#32 < 30))
+                              +- Shared #4, printed above

@@ -214,14 +214,10 @@ fn equality(op: Builtin, a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
     );
     match (x, y) {
         (Some((i, ci)), Some((j, cj))) => {
-            // `1 / max(NDV)` over the distinct counts that come from
-            // statistics; a count that is only the default guess is not one.
-            let known = [&ci, &cj]
-                .into_iter()
-                .filter(|c| c.ndv_known())
-                .map(|c| c.ndv)
-                .reduce(f64::max);
-            let sel = known.map_or(DEFAULT_SELECTIVITY, |n| 1.0 / n);
+            // `1 / max(NDV)`; a count that is only the default guess is
+            // read as the rows (T166 design note, section 2): only
+            // `col = literal` takes the default selectivity.
+            let sel = 1.0 / ci.ndv.max(cj.ndv).max(1.0);
             let (lo, hi) = (max_of(ci.min, cj.min), min_of(ci.max, cj.max));
             let (ndv, source) = (ci.ndv.min(cj.ndv), ci.source.min(cj.source));
             for id in [i, j] {

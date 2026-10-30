@@ -8,30 +8,30 @@ Limit 100
       +- Shift +395
          +- Project [i_category#120, i_brand#121, cc_name#122, d_year#123, d_moy#124, avg_monthly_sales#126, sum_sales#125, sum_sales#133 AS psum#144, sum_sales#141 AS nsum#145]
             +- Join Inner, ((((i_category#120 == i_category#128) and (i_brand#121 == i_brand#129)) and (cc_name#122 == cc_name#130)) and (rn#127 == (rn#135 + 1)))
-               :- Project [sum_sales#141, i_category#120, i_brand#121, cc_name#122, d_year#123, d_moy#124, sum_sales#125, avg_monthly_sales#126, rn#127]
-               :  +- Join Inner, ((((i_category#120 == i_category#136) and (i_brand#121 == i_brand#137)) and (cc_name#122 == cc_name#138)) and (rn#127 == (rn#143 - 1)))
-               :     :- Shift +16
-               :     :  +- Project [i_category#287 AS i_category#120, i_brand#283 AS i_brand#121, cc_name#365 AS cc_name#122, sum_sales#390 AS sum_sales#125, rn#392 AS rn#127] (shared #1)
-               :     :     +- Shift +275
-               :     :        +- Project [i_category#12, i_brand#8, cc_name#90, sum_sales#115, _we1#119 AS rn#117]
-               :     :           +- Window [rank() OVER (PARTITION BY i_category#12, i_brand#8, cc_name#90 ORDER BY d_year#62 ASC NULLS FIRST, d_moy#64 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we1#119], [i_category#12, i_brand#8, cc_name#90], [d_year#62 ASC NULLS FIRST, d_moy#64 ASC NULLS FIRST] (shared #2)
-               :     :              +- Window [avg(sum_sales#115) OVER (PARTITION BY i_category#12, i_brand#8, cc_name#90, d_year#62 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS _we0#118], [i_category#12, i_brand#8, cc_name#90, d_year#62], []
-               :     :                 +- Aggregate [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64], [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64, sum(cs_sales_price#43) AS sum_sales#115]
-               :     :                    +- Project [cs_sales_price#43, d_year#62, d_moy#64, i_brand#8, i_category#12, cc_name#90]
-               :     :                       +- Join Inner, (cc_call_center_sk#84 == cs_call_center_sk#33)
-               :     :                          :- Project [cs_call_center_sk#33, cs_sales_price#43, d_year#62, d_moy#64, i_brand#8, i_category#12]
-               :     :                          :  +- Join Inner, (cs_item_sk#37 == i_item_sk#0)
-               :     :                          :     :- Project [cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43, d_year#62, d_moy#64]
-               :     :                          :     :  +- Join Inner, (cs_sold_date_sk#22 == d_date_sk#56)
-               :     :                          :     :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#22, cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43]
-               :     :                          :     :     +- Filter (((d_year#62 == 1999) or ((d_year#62 == 1998) and (d_moy#64 == 12))) or ((d_year#62 == 2000) and (d_moy#64 == 1)))
-               :     :                          :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#56, d_year#62, d_moy#64]
-               :     :                          :     +- Scan spark_catalog.default.item [i_item_sk#0, i_brand#8, i_category#12]
-               :     :                          +- Scan spark_catalog.default.call_center [cc_call_center_sk#84, cc_name#90]
-               :     +- Project [i_category#287 AS i_category#120, i_brand#283 AS i_brand#121, cc_name#365 AS cc_name#122, d_year#337 AS d_year#123, d_moy#339 AS d_moy#124, sum_sales#390 AS sum_sales#125, avg_monthly_sales#391 AS avg_monthly_sales#126, rn#392 AS rn#127]
-               :        +- Shift +275
-               :           +- Project [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64, sum_sales#115, _we0#118 AS avg_monthly_sales#116, _we1#119 AS rn#117]
-               :              +- Filter (((d_year#62 == 1999) and (_we0#118 > 0.000000)) and (CASE WHEN (_we0#118 > 0.000000) THEN (abs((sum_sales#115 - _we0#118)) / _we0#118) ELSE CAST(NULL AS DECIMAL(38,16)) END > 0.1000000000000000))
-               :                 +- Shared #2, printed above
-               +- Shift +8
-                  +- Shared #1, printed above
+               :- Shift +8
+               :  +- Project [i_category#287 AS i_category#120, i_brand#283 AS i_brand#121, cc_name#365 AS cc_name#122, sum_sales#390 AS sum_sales#125, rn#392 AS rn#127] (shared #1)
+               :     +- Shift +275
+               :        +- Project [i_category#12, i_brand#8, cc_name#90, sum_sales#115, _we1#119 AS rn#117]
+               :           +- Window [rank() OVER (PARTITION BY i_category#12, i_brand#8, cc_name#90 ORDER BY d_year#62 ASC NULLS FIRST, d_moy#64 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we1#119], [i_category#12, i_brand#8, cc_name#90], [d_year#62 ASC NULLS FIRST, d_moy#64 ASC NULLS FIRST] (shared #2)
+               :              +- Window [avg(sum_sales#115) OVER (PARTITION BY i_category#12, i_brand#8, cc_name#90, d_year#62 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS _we0#118], [i_category#12, i_brand#8, cc_name#90, d_year#62], []
+               :                 +- Aggregate [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64], [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64, sum(cs_sales_price#43) AS sum_sales#115]
+               :                    +- Project [cc_name#90, i_brand#8, i_category#12, cs_sales_price#43, d_year#62, d_moy#64]
+               :                       +- Join Inner, (cc_call_center_sk#84 == cs_call_center_sk#33)
+               :                          :- Scan spark_catalog.default.call_center [cc_call_center_sk#84, cc_name#90]
+               :                          +- Project [i_brand#8, i_category#12, cs_call_center_sk#33, cs_sales_price#43, d_year#62, d_moy#64]
+               :                             +- Join Inner, (cs_item_sk#37 == i_item_sk#0)
+               :                                :- Scan spark_catalog.default.item [i_item_sk#0, i_brand#8, i_category#12]
+               :                                +- Project [cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43, d_year#62, d_moy#64]
+               :                                   +- Join Inner, (cs_sold_date_sk#22 == d_date_sk#56)
+               :                                      :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#22, cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43]
+               :                                      +- Filter (((d_year#62 == 1999) or ((d_year#62 == 1998) and (d_moy#64 == 12))) or ((d_year#62 == 2000) and (d_moy#64 == 1)))
+               :                                         +- Scan spark_catalog.default.date_dim [d_date_sk#56, d_year#62, d_moy#64]
+               +- Project [sum_sales#141, i_category#120, i_brand#121, cc_name#122, d_year#123, d_moy#124, sum_sales#125, avg_monthly_sales#126, rn#127]
+                  +- Join Inner, ((((i_category#120 == i_category#136) and (i_brand#121 == i_brand#137)) and (cc_name#122 == cc_name#138)) and (rn#127 == (rn#143 - 1)))
+                     :- Shift +16
+                     :  +- Shared #1, printed above
+                     +- Project [i_category#287 AS i_category#120, i_brand#283 AS i_brand#121, cc_name#365 AS cc_name#122, d_year#337 AS d_year#123, d_moy#339 AS d_moy#124, sum_sales#390 AS sum_sales#125, avg_monthly_sales#391 AS avg_monthly_sales#126, rn#392 AS rn#127]
+                        +- Shift +275
+                           +- Project [i_category#12, i_brand#8, cc_name#90, d_year#62, d_moy#64, sum_sales#115, _we0#118 AS avg_monthly_sales#116, _we1#119 AS rn#117]
+                              +- Filter (((d_year#62 == 1999) and (_we0#118 > 0.000000)) and (CASE WHEN (_we0#118 > 0.000000) THEN (abs((sum_sales#115 - _we0#118)) / _we0#118) ELSE CAST(NULL AS DECIMAL(38,16)) END > 0.1000000000000000))
+                                 +- Shared #2, printed above

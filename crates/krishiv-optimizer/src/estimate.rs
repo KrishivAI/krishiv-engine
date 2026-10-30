@@ -121,6 +121,8 @@ fn derived(e: &Expr, input: &RelStats, rows: f64) -> Option<AttrStats> {
                     };
                     let from = input.cols.get(&c.id)?;
                     (s.min, s.max) = (from.min, from.max);
+                    // A group of NULLs yields NULL: the input's fraction bounds it.
+                    s.null_frac = from.null_frac;
                 }
                 ("count", _) => (s.min, s.max) = (Some(0.0), Some(input.rows)),
                 _ => return None,
@@ -421,7 +423,12 @@ impl<'a> Estimator<'a> {
         };
         let mut v = View::new(&cols, self.propagate);
         let sel = pred.as_ref().map_or(1.0, |c| apply(c, &mut v));
-        let inner = if v.empty { 0.0 } else { cross * sel };
+        // `inf * 0` is NaN: a zero selectivity is zero rows.
+        let inner = if v.empty || sel <= 0.0 {
+            0.0
+        } else {
+            cross * sel
+        };
         let rows = match kind {
             JoinKind::LeftOuter => inner.max(l.rows),
             JoinKind::RightOuter => inner.max(r.rows),

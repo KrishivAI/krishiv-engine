@@ -6,20 +6,20 @@ Limit 100
 +- Sort [s_store_name#5 ASC NULLS FIRST, i_item_desc#33 ASC NULLS FIRST], true
    +- Project [s_store_name#5, i_item_desc#33, revenue#155, i_current_price#34, i_wholesale_cost#35, i_brand#37]
       +- Join Inner, (i_item_sk#29 == ss_item_sk#106)
-         :- Project [ss_item_sk#106, revenue#155, s_store_name#5]
-         :  +- Join Inner, (s_store_sk#0 == ss_store_sk#111)
-         :     :- Project [ss_store_sk#111, ss_item_sk#106, revenue#155]
-         :     :  +- Join Inner, ((ss_store_sk#58 == ss_store_sk#111) and (CAST(revenue#155 AS DECIMAL(23,7)) <= (0.1 * ave#103)))
-         :     :     :- Shift +53
-         :     :     :  +- Aggregate [ss_store_sk#58, ss_item_sk#53], [ss_store_sk#58, ss_item_sk#53, sum(ss_sales_price#64) AS revenue#102]
-         :     :     :     +- Project [ss_item_sk#53, ss_store_sk#58, ss_sales_price#64] (shared #1)
-         :     :     :        +- Join Inner, (ss_sold_date_sk#51 == d_date_sk#74)
-         :     :     :           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#51, ss_item_sk#53, ss_store_sk#58, ss_sales_price#64]
-         :     :     :           +- Project [d_date_sk#74]
-         :     :     :              +- Filter ((d_month_seq#77 >= 1176) and (d_month_seq#77 <= 1187))
-         :     :     :                 +- Scan spark_catalog.default.date_dim [d_date_sk#74, d_month_seq#77]
-         :     :     +- Aggregate [ss_store_sk#58], [ss_store_sk#58, avg(revenue#102) AS ave#103]
-         :     :        +- Aggregate [ss_store_sk#58, ss_item_sk#53], [ss_store_sk#58, sum(ss_sales_price#64) AS revenue#102]
-         :     :           +- Shared #1, printed above
-         :     +- Scan spark_catalog.default.store [s_store_sk#0, s_store_name#5]
-         +- Scan spark_catalog.default.item [i_item_sk#29, i_item_desc#33, i_current_price#34, i_wholesale_cost#35, i_brand#37]
+         :- Scan spark_catalog.default.item [i_item_sk#29, i_item_desc#33, i_current_price#34, i_wholesale_cost#35, i_brand#37]
+         +- Project [s_store_name#5, ss_item_sk#106, revenue#155]
+            +- Join Inner, (s_store_sk#0 == ss_store_sk#111)
+               :- Scan spark_catalog.default.store [s_store_sk#0, s_store_name#5]
+               +- Project [ss_store_sk#111, ss_item_sk#106, revenue#155]
+                  +- Join Inner, ((ss_store_sk#58 == ss_store_sk#111) and (CAST(revenue#155 AS DECIMAL(23,7)) <= (0.1 * ave#103)))
+                     :- Aggregate [ss_store_sk#58], [ss_store_sk#58, avg(revenue#102) AS ave#103]
+                     :  +- Aggregate [ss_store_sk#58, ss_item_sk#53], [ss_store_sk#58, sum(ss_sales_price#64) AS revenue#102]
+                     :     +- Project [ss_item_sk#53, ss_store_sk#58, ss_sales_price#64] (shared #1)
+                     :        +- Join Inner, (ss_sold_date_sk#51 == d_date_sk#74)
+                     :           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#51, ss_item_sk#53, ss_store_sk#58, ss_sales_price#64]
+                     :           +- Project [d_date_sk#74]
+                     :              +- Filter ((d_month_seq#77 >= 1176) and (d_month_seq#77 <= 1187))
+                     :                 +- Scan spark_catalog.default.date_dim [d_date_sk#74, d_month_seq#77]
+                     +- Shift +53
+                        +- Aggregate [ss_store_sk#58, ss_item_sk#53], [ss_store_sk#58, ss_item_sk#53, sum(ss_sales_price#64) AS revenue#102]
+                           +- Shared #1, printed above

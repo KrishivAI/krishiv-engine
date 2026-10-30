@@ -41,7 +41,7 @@ Paths are relative to this crate.
   ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with
   a literal outside `[min, max]` estimates 0 rows and removes nothing. A join's keys take the smaller distinct count
   (inner: the ranges intersect, no nulls); an outer join's null-supplying side gains the unmatched fraction as nulls.
-  A distinct count whose `StatSource` is `Guess` is never used by `1 / max(NDV)`. Statistics never change results;
+  `col = col` keeps `1 / max(NDV)` with an unknown count read as the rows (T166 note, section 2); only `col = literal` over an unknown count takes the default selectivity. Statistics never change results;
   `Options::stats_propagation` switches the propagation off for the differential tests.
 - Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`; differential tests run optimised and
   unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.

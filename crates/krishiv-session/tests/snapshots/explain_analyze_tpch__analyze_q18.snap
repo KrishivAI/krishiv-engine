@@ -20,25 +20,25 @@ TopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
             +- Exchange hashpartitioning(c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11)
                +- HashJoin LeftSemi, [o_orderkey#8] = [l_orderkey#33], RuntimeFilter #3: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
                   :  · sink   #4 HashJoinBuild p4: in 5 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>; build_rows=5 hash_entries=5 hash_buckets=<n> spilled_partitions=0 spill_file_bytes=<mem> finalize_ns=<t> finalize_concat_ns=<t> finalize_index_ns=<t> finalize_max_partition_ns=<t> hash_index=row-flat+chain
-                  :  · operator #20 HashJoinProbe p3: in 20 rows (1 batch); out 20 rows (1 batch); compute <t> (max <t>, <n> drivers); probe_rows=20 probe_spilled_rows=0 spill_file_bytes=<mem> grace_partitions=0 repartitions=0 recursion_depth=0 grace_hash_entries=0 grace_hash_buckets=<n> reversed_partitions=0 probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n>
-                  :- Project [o_orderkey#8, o_totalprice#11, o_orderdate#12, c_custkey#0, c_name#1, l_quantity#21]
-                  :  :  · operator #19 Project p3: in 20 rows (1 batch); out 20 rows (1 batch); compute <t> (max <t>, <n> drivers)
-                  :  +- HashJoin Inner, [o_orderkey#8] = [l_orderkey#17], RuntimeFilter #2: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
-                  :     :  · sink   #11 HashJoinBuild p6: in 160 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>; build_rows=160 hash_entries=40 hash_buckets=<n> spilled_partitions=0 spill_file_bytes=<mem> finalize_ns=<t> finalize_concat_ns=<t> finalize_index_ns=<t> finalize_max_partition_ns=<t> hash_index=row-flat+chain
-                  :     :  · operator #18 HashJoinProbe p3: in 5 rows (1 batch); out 20 rows (1 batch); compute <t> (max <t>, <n> drivers); probe_rows=5 probe_spilled_rows=0 spill_file_bytes=<mem> grace_partitions=0 repartitions=0 recursion_depth=0 grace_hash_entries=0 grace_hash_buckets=<n> reversed_partitions=0 probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n>
-                  :     :- Project [o_orderkey#8, o_totalprice#11, o_orderdate#12, c_custkey#0, c_name#1]
-                  :     :  :  · operator #17 Project p3: in 5 rows (1 batch); out 5 rows (1 batch); compute <t> (max <t>, <n> drivers)
-                  :     :  +- HashJoin Inner, [o_custkey#9] = [c_custkey#0], RuntimeFilter #1: o_custkey#9 -> spark_catalog.default.orders.o_custkey
-                  :     :     :  · sink   #13 HashJoinBuild p7: in 20 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>; build_rows=20 hash_entries=20 hash_buckets=<n> spilled_partitions=0 spill_file_bytes=<mem> finalize_ns=<t> finalize_concat_ns=<t> finalize_index_ns=<t> finalize_max_partition_ns=<t> hash_index=row-flat+chain
-                  :     :     :  · operator #16 HashJoinProbe p3: in 5 rows (1 batch); out 5 rows (1 batch); compute <t> (max <t>, <n> drivers); probe_rows=5 probe_spilled_rows=0 spill_file_bytes=<mem> grace_partitions=0 repartitions=0 recursion_depth=0 grace_hash_entries=0 grace_hash_buckets=<n> reversed_partitions=0 probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n>
-                  :     :     :- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_totalprice#11, o_orderdate#12]
-                  :     :     :     · source #15 MemoryScan p3: out 5 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>); runtime_filter_rows_tested=120 runtime_filter_rows_dropped=35 runtime_filter_units_pruned=0 runtime_filter_bytes_pruned=0 runtime_filter_splits_skipped=0 runtime_filters=#1 [o_custkey]: range, tested 40, dropped 0, #2 [o_orderkey]: range, tested 40, dropped 0, #3 [o_orderkey]: small set of 5, tested 40, dropped 35
-                  :     :     +- BroadcastExchange
-                  :     :        +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1]
-                  :     :              · source #14 MemoryScan p7: out 20 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
+                  :  · operator #20 HashJoinProbe p3: in 160 rows (1 batch); out 20 rows (1 batch); compute <t> (max <t>, <n> drivers); probe_rows=160 probe_spilled_rows=0 spill_file_bytes=<mem> grace_partitions=0 repartitions=0 recursion_depth=0 grace_hash_entries=0 grace_hash_buckets=<n> reversed_partitions=0 probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n>
+                  :- Project [l_quantity#21, o_orderkey#8, o_totalprice#11, o_orderdate#12, c_custkey#0, c_name#1]
+                  :  :  · operator #19 Project p3: in 160 rows (1 batch); out 160 rows (1 batch); compute <t> (max <t>, <n> drivers)
+                  :  +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8], RuntimeFilter #2: l_orderkey#17 -> spark_catalog.default.lineitem.l_orderkey
+                  :     :  · sink   #11 HashJoinBuild p6: in 40 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>; build_rows=40 hash_entries=40 hash_buckets=<n> spilled_partitions=0 spill_file_bytes=<mem> finalize_ns=<t> finalize_concat_ns=<t> finalize_index_ns=<t> finalize_max_partition_ns=<t> hash_index=row-flat+chain
+                  :     :  · operator #18 HashJoinProbe p3: in 160 rows (1 batch); out 160 rows (1 batch); compute <t> (max <t>, <n> drivers); probe_rows=160 probe_spilled_rows=0 spill_file_bytes=<mem> grace_partitions=0 repartitions=0 recursion_depth=0 grace_hash_entries=0 grace_hash_buckets=<n> reversed_partitions=0 probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n>
+                  :     :- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21]
+                  :     :     · source #17 MemoryScan p3: out 160 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>); runtime_filter_rows_tested=160 runtime_filter_rows_dropped=0 runtime_filter_units_pruned=0 runtime_filter_bytes_pruned=0 runtime_filter_splits_skipped=0 runtime_filters=#2 [l_orderkey]: range, tested 160, dropped 0
                   :     +- BroadcastExchange
-                  :        +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21]
-                  :              · source #12 MemoryScan p6: out 160 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
+                  :        +- Project [o_orderkey#8, o_totalprice#11, o_orderdate#12, c_custkey#0, c_name#1]
+                  :           :  · operator #16 Project p6: in 40 rows (1 batch); out 40 rows (1 batch); compute <t> (max <t>, <n> drivers)
+                  :           +- HashJoin Inner, [o_custkey#9] = [c_custkey#0], RuntimeFilter #1: o_custkey#9 -> spark_catalog.default.orders.o_custkey
+                  :              :  · sink   #12 HashJoinBuild p7: in 20 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>; build_rows=20 hash_entries=20 hash_buckets=<n> spilled_partitions=0 spill_file_bytes=<mem> finalize_ns=<t> finalize_concat_ns=<t> finalize_index_ns=<t> finalize_max_partition_ns=<t> hash_index=row-flat+chain
+                  :              :  · operator #15 HashJoinProbe p6: in 40 rows (1 batch); out 40 rows (1 batch); compute <t> (max <t>, <n> drivers); probe_rows=40 probe_spilled_rows=0 spill_file_bytes=<mem> grace_partitions=0 repartitions=0 recursion_depth=0 grace_hash_entries=0 grace_hash_buckets=<n> reversed_partitions=0 probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n>
+                  :              :- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_totalprice#11, o_orderdate#12]
+                  :              :     · source #14 MemoryScan p6: out 40 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>); runtime_filter_rows_tested=40 runtime_filter_rows_dropped=0 runtime_filter_units_pruned=0 runtime_filter_bytes_pruned=0 runtime_filter_splits_skipped=0 runtime_filters=#1 [o_custkey]: range, tested 40, dropped 0, #3 [o_orderkey]: small set of 5, tested 0, dropped 0
+                  :              +- BroadcastExchange
+                  :                 +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1]
+                  :                       · source #13 MemoryScan p7: out 20 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
                   +- BroadcastExchange
                      +- Project [l_orderkey#33]
                         :  · operator #10 Project p4: in 5 rows (1 batch); out 5 rows (1 batch); compute <t> (max <t>, <n> drivers)
@@ -58,8 +58,8 @@ Pipelines:
    p0: wall <t>, <n> drivers, <n> threads: #24 TopN -> #0 Result
    p1: wall <t>, <n> drivers, <n> threads: #23 TopN -> #1 TopN
    p2: wall <t>, <n> drivers, <n> threads: #21 HashAggregate -> #22 Project -> #2 TopN
-   p3: wall <t>, <n> drivers, <n> threads: #15 MemoryScan -> #16 HashJoinProbe -> #17 Project -> #18 HashJoinProbe -> #19 Project -> #20 HashJoinProbe -> #3 HashAggregate
+   p3: wall <t>, <n> drivers, <n> threads: #17 MemoryScan -> #18 HashJoinProbe -> #19 Project -> #20 HashJoinProbe -> #3 HashAggregate
    p4: wall <t>, <n> drivers, <n> threads: #7 HashAggregate -> #8 Project -> #9 Filter -> #10 Project -> #4 HashJoinBuild
    p5: wall <t>, <n> drivers, <n> threads: #6 MemoryScan -> #5 HashAggregate
-   p6: wall <t>, <n> drivers, <n> threads: #12 MemoryScan -> #11 HashJoinBuild
-   p7: wall <t>, <n> drivers, <n> threads: #14 MemoryScan -> #13 HashJoinBuild
+   p6: wall <t>, <n> drivers, <n> threads: #14 MemoryScan -> #15 HashJoinProbe -> #16 Project -> #11 HashJoinBuild
+   p7: wall <t>, <n> drivers, <n> threads: #13 MemoryScan -> #12 HashJoinBuild

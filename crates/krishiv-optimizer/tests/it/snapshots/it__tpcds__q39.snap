@@ -11,33 +11,33 @@ Project [wsk1#85, isk1#86, dmoy1#87, mean1#88, cov1#89, w_warehouse_sk#79, i_ite
          :     +- Project [w_warehouse_sk#26, i_item_sk#4, d_moy#48, mean#69, CASE WHEN (mean#69 == 0.0D) THEN CAST(NULL AS DOUBLE) ELSE (stdev#68 / mean#69) END AS cov#70]
          :        +- Filter (CASE WHEN (mean#69 == 0.0D) THEN 0.0D ELSE (stdev#68 / mean#69) END > 1.0D)
          :           +- Aggregate [w_warehouse_name#28, w_warehouse_sk#26, i_item_sk#4, d_moy#48], [w_warehouse_sk#26, i_item_sk#4, d_moy#48, (stddev_samp(CAST(inv_quantity_on_hand#3 AS DOUBLE)) * 1.0D) AS stdev#68, avg(inv_quantity_on_hand#3) AS mean#69]
-         :              +- Project [inv_quantity_on_hand#3, d_moy#48, w_warehouse_sk#26, w_warehouse_name#28, i_item_sk#4]
+         :              +- Project [i_item_sk#4, w_warehouse_sk#26, w_warehouse_name#28, inv_quantity_on_hand#3, d_moy#48]
          :                 +- Join Inner, (inv_item_sk#1 == i_item_sk#4)
-         :                    :- Project [inv_item_sk#1, inv_quantity_on_hand#3, d_moy#48, w_warehouse_sk#26, w_warehouse_name#28]
-         :                    :  +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#26)
-         :                    :     :- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_moy#48]
-         :                    :     :  +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
-         :                    :     :     :- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3] (shared #1)
-         :                    :     :     +- Project [d_date_sk#40, d_moy#48]
-         :                    :     :        +- Filter ((d_year#46 == 2001) and (d_moy#48 == 1))
-         :                    :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#40, d_year#46, d_moy#48] (shared #2)
-         :                    :     +- Scan spark_catalog.default.warehouse [w_warehouse_sk#26, w_warehouse_name#28] (shared #3)
-         :                    +- Scan spark_catalog.default.item [i_item_sk#4] (shared #4)
+         :                    :- Scan spark_catalog.default.item [i_item_sk#4] (shared #1)
+         :                    +- Project [w_warehouse_sk#26, w_warehouse_name#28, inv_item_sk#1, inv_quantity_on_hand#3, d_moy#48]
+         :                       +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#26)
+         :                          :- Scan spark_catalog.default.warehouse [w_warehouse_sk#26, w_warehouse_name#28] (shared #2)
+         :                          +- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_moy#48]
+         :                             +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
+         :                                :- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3] (shared #3)
+         :                                +- Project [d_date_sk#40, d_moy#48]
+         :                                   +- Filter ((d_year#46 == 2001) and (d_moy#48 == 1))
+         :                                      +- Scan spark_catalog.default.date_dim [d_date_sk#40, d_year#46, d_moy#48] (shared #4)
          +- Shift +7
             +- Project [w_warehouse_sk#116 AS w_warehouse_sk#72, i_item_sk#94 AS i_item_sk#73, d_moy#138 AS d_moy#74, mean#159 AS mean#76, cov#160 AS cov#77]
                +- Shift +90
                   +- Project [w_warehouse_sk#26, i_item_sk#4, d_moy#48, mean#69, CASE WHEN (mean#69 == 0.0D) THEN CAST(NULL AS DOUBLE) ELSE (stdev#68 / mean#69) END AS cov#70]
                      +- Filter (CASE WHEN (mean#69 == 0.0D) THEN 0.0D ELSE (stdev#68 / mean#69) END > 1.0D)
                         +- Aggregate [w_warehouse_name#28, w_warehouse_sk#26, i_item_sk#4, d_moy#48], [w_warehouse_sk#26, i_item_sk#4, d_moy#48, (stddev_samp(CAST(inv_quantity_on_hand#3 AS DOUBLE)) * 1.0D) AS stdev#68, avg(inv_quantity_on_hand#3) AS mean#69]
-                           +- Project [inv_quantity_on_hand#3, d_moy#48, w_warehouse_sk#26, w_warehouse_name#28, i_item_sk#4]
+                           +- Project [i_item_sk#4, w_warehouse_sk#26, w_warehouse_name#28, inv_quantity_on_hand#3, d_moy#48]
                               +- Join Inner, (inv_item_sk#1 == i_item_sk#4)
-                                 :- Project [inv_item_sk#1, inv_quantity_on_hand#3, d_moy#48, w_warehouse_sk#26, w_warehouse_name#28]
-                                 :  +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#26)
-                                 :     :- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_moy#48]
-                                 :     :  +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
-                                 :     :     :- Shared #1, printed above
-                                 :     :     +- Project [d_date_sk#40, d_moy#48]
-                                 :     :        +- Filter ((d_year#46 == 2001) and (d_moy#48 == 2))
-                                 :     :           +- Shared #2, printed above
-                                 :     +- Shared #3, printed above
-                                 +- Shared #4, printed above
+                                 :- Shared #1, printed above
+                                 +- Project [w_warehouse_sk#26, w_warehouse_name#28, inv_item_sk#1, inv_quantity_on_hand#3, d_moy#48]
+                                    +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#26)
+                                       :- Shared #2, printed above
+                                       +- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_moy#48]
+                                          +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
+                                             :- Shared #3, printed above
+                                             +- Project [d_date_sk#40, d_moy#48]
+                                                +- Filter ((d_year#46 == 2001) and (d_moy#48 == 2))
+                                                   +- Shared #4, printed above

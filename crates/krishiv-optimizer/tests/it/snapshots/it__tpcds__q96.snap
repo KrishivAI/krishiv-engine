@@ -5,19 +5,19 @@ expression: optimized.root().to_string()
 Limit 100
 +- Sort [count(1)#67 ASC NULLS FIRST], true
    +- Aggregate [], [count(1) AS count(1)#67]
-      +- Project [ss_hdemo_sk#5]
+      +- Project [hd_demo_sk#23]
          +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#23)
-            :- Project [ss_hdemo_sk#5]
-            :  +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
-            :     :- Project [ss_hdemo_sk#5, ss_store_sk#7]
-            :     :  +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
-            :     :     :- Scan spark_catalog.default.store_sales [ss_sold_time_sk#1, ss_hdemo_sk#5, ss_store_sk#7]
-            :     :     +- Project [t_time_sk#28]
-            :     :        +- Filter ((t_hour#31 == 20) and (t_minute#32 >= 30))
-            :     :           +- Scan spark_catalog.default.time_dim [t_time_sk#28, t_hour#31, t_minute#32]
-            :     +- Project [s_store_sk#38]
-            :        +- Filter (s_store_name#43 == 'ese')
-            :           +- Scan spark_catalog.default.store [s_store_sk#38, s_store_name#43]
-            +- Project [hd_demo_sk#23]
-               +- Filter (hd_dep_count#26 == 7)
-                  +- Scan spark_catalog.default.household_demographics [hd_demo_sk#23, hd_dep_count#26]
+            :- Project [hd_demo_sk#23]
+            :  +- Filter (hd_dep_count#26 == 7)
+            :     +- Scan spark_catalog.default.household_demographics [hd_demo_sk#23, hd_dep_count#26]
+            +- Project [ss_hdemo_sk#5]
+               +- Join Inner, (ss_store_sk#7 == s_store_sk#38)
+                  :- Project [s_store_sk#38]
+                  :  +- Filter (s_store_name#43 == 'ese')
+                  :     +- Scan spark_catalog.default.store [s_store_sk#38, s_store_name#43]
+                  +- Project [ss_hdemo_sk#5, ss_store_sk#7]
+                     +- Join Inner, (ss_sold_time_sk#1 == t_time_sk#28)
+                        :- Scan spark_catalog.default.store_sales [ss_sold_time_sk#1, ss_hdemo_sk#5, ss_store_sk#7]
+                        +- Project [t_time_sk#28]
+                           +- Filter ((t_hour#31 == 20) and (t_minute#32 >= 30))
+                              +- Scan spark_catalog.default.time_dim [t_time_sk#28, t_hour#31, t_minute#32]

@@ -163,10 +163,14 @@ fn rewrite_node(node: Arc<LogicalPlan>, next: &mut Fresh<'_>) -> Arc<LogicalPlan
 }
 
 /// Whether `c` is a column CSE extracted (see `fresh_columns`).
+///
+/// The name is `cse_<id>` of the id the column was created with; a
+/// self-join's `Shift` renumbers the column upward and keeps its name, so
+/// the id may exceed the number in the name, never fall below it.
 pub(crate) fn is_cse_column(c: &BoundColumn) -> bool {
     c.name
         .strip_prefix("cse_")
-        .is_some_and(|n| n.parse::<u64>().is_ok_and(|id| id == c.id.0))
+        .is_some_and(|n| n.parse::<u64>().is_ok_and(|id| c.id.0 >= id))
 }
 
 /// `p` without the columns CSE extracted into its output: a filter passes

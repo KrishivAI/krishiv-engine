@@ -8,27 +8,27 @@ Limit 100
       +- Join Inner, ((s_store_id1#126 == s_store_id2#222) and (d_week_seq1#125 == (d_week_seq2#221 - 52)))
          :- Project [s_store_name#72 AS s_store_name1#124, d_week_seq#58 AS d_week_seq1#125, s_store_id#68 AS s_store_id1#126, sun_sales#60 AS sun_sales1#127, mon_sales#61 AS mon_sales1#128, tue_sales#62 AS tue_sales1#129, wed_sales#63 AS wed_sales1#130, thu_sales#64 AS thu_sales1#131, fri_sales#65 AS fri_sales1#132, sat_sales#66 AS sat_sales1#133]
          :  +- Join Inner, (ss_store_sk#59 == s_store_sk#67)
-         :     :- Project [d_week_seq#58, ss_store_sk#59, sun_sales#60, mon_sales#61, tue_sales#62, wed_sales#63, thu_sales#64, fri_sales#65, sat_sales#66]
-         :     :  +- Join Inner, (d_week_seq#100 == d_week_seq#58)
-         :     :     :- Project [d_week_seq#264 AS d_week_seq#58, ss_store_sk#244 AS ss_store_sk#59, sun_sales#288 AS sun_sales#60, mon_sales#289 AS mon_sales#61, tue_sales#290 AS tue_sales#62, wed_sales#291 AS wed_sales#63, thu_sales#292 AS thu_sales#64, fri_sales#293 AS fri_sales#65, sat_sales#294 AS sat_sales#66] (shared #1)
-         :     :     :  +- Shift +237
-         :     :     :     +- Aggregate [d_week_seq#27, ss_store_sk#7], [d_week_seq#27, ss_store_sk#7, sum(CASE WHEN (d_day_name#37 == 'Sunday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sun_sales#51, sum(CASE WHEN (d_day_name#37 == 'Monday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS mon_sales#52, sum(CASE WHEN (d_day_name#37 == 'Tuesday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS tue_sales#53, sum(CASE WHEN (d_day_name#37 == 'Wednesday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS wed_sales#54, sum(CASE WHEN (d_day_name#37 == 'Thursday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS thu_sales#55, sum(CASE WHEN (d_day_name#37 == 'Friday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS fri_sales#56, sum(CASE WHEN (d_day_name#37 == 'Saturday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sat_sales#57]
-         :     :     :        +- Project [ss_store_sk#7, ss_sales_price#13, d_week_seq#27, d_day_name#37]
-         :     :     :           +- Join Inner, (d_date_sk#23 == ss_sold_date_sk#0)
-         :     :     :              :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_sales_price#13]
-         :     :     :              +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_week_seq#27, d_day_name#37]
-         :     :     +- Project [d_week_seq#100]
-         :     :        +- Filter ((d_month_seq#99 >= 1212) and (d_month_seq#99 <= 1223))
-         :     :           +- Scan spark_catalog.default.date_dim [d_month_seq#99, d_week_seq#100] (shared #2)
-         :     +- Scan spark_catalog.default.store [s_store_sk#67, s_store_id#68, s_store_name#72] (shared #3)
+         :     :- Scan spark_catalog.default.store [s_store_sk#67, s_store_id#68, s_store_name#72] (shared #1)
+         :     +- Project [d_week_seq#58, ss_store_sk#59, sun_sales#60, mon_sales#61, tue_sales#62, wed_sales#63, thu_sales#64, fri_sales#65, sat_sales#66]
+         :        +- Join Inner, (d_week_seq#100 == d_week_seq#58)
+         :           :- Project [d_week_seq#264 AS d_week_seq#58, ss_store_sk#244 AS ss_store_sk#59, sun_sales#288 AS sun_sales#60, mon_sales#289 AS mon_sales#61, tue_sales#290 AS tue_sales#62, wed_sales#291 AS wed_sales#63, thu_sales#292 AS thu_sales#64, fri_sales#293 AS fri_sales#65, sat_sales#294 AS sat_sales#66] (shared #2)
+         :           :  +- Shift +237
+         :           :     +- Aggregate [d_week_seq#27, ss_store_sk#7], [d_week_seq#27, ss_store_sk#7, sum(CASE WHEN (d_day_name#37 == 'Sunday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sun_sales#51, sum(CASE WHEN (d_day_name#37 == 'Monday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS mon_sales#52, sum(CASE WHEN (d_day_name#37 == 'Tuesday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS tue_sales#53, sum(CASE WHEN (d_day_name#37 == 'Wednesday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS wed_sales#54, sum(CASE WHEN (d_day_name#37 == 'Thursday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS thu_sales#55, sum(CASE WHEN (d_day_name#37 == 'Friday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS fri_sales#56, sum(CASE WHEN (d_day_name#37 == 'Saturday') THEN ss_sales_price#13 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sat_sales#57]
+         :           :        +- Project [ss_store_sk#7, ss_sales_price#13, d_week_seq#27, d_day_name#37]
+         :           :           +- Join Inner, (d_date_sk#23 == ss_sold_date_sk#0)
+         :           :              :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_sales_price#13]
+         :           :              +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_week_seq#27, d_day_name#37]
+         :           +- Project [d_week_seq#100]
+         :              +- Filter ((d_month_seq#99 >= 1212) and (d_month_seq#99 <= 1223))
+         :                 +- Scan spark_catalog.default.date_dim [d_month_seq#99, d_week_seq#100] (shared #3)
          +- Shift +86
             +- Project [d_week_seq#58 AS d_week_seq2#135, s_store_id#68 AS s_store_id2#136, sun_sales#60 AS sun_sales2#137, mon_sales#61 AS mon_sales2#138, tue_sales#62 AS tue_sales2#139, wed_sales#63 AS wed_sales2#140, thu_sales#64 AS thu_sales2#141, fri_sales#65 AS fri_sales2#142, sat_sales#66 AS sat_sales2#143]
                +- Join Inner, (ss_store_sk#59 == s_store_sk#67)
-                  :- Project [d_week_seq#58, ss_store_sk#59, sun_sales#60, mon_sales#61, tue_sales#62, wed_sales#63, thu_sales#64, fri_sales#65, sat_sales#66]
-                  :  +- Join Inner, (d_week_seq#100 == d_week_seq#58)
-                  :     :- Shared #1, printed above
-                  :     +- Project [d_week_seq#100]
-                  :        +- Filter ((d_month_seq#99 >= 1224) and (d_month_seq#99 <= 1235))
-                  :           +- Shared #2, printed above
-                  +- Project [s_store_sk#67, s_store_id#68]
-                     +- Shared #3, printed above
+                  :- Project [s_store_sk#67, s_store_id#68]
+                  :  +- Shared #1, printed above
+                  +- Project [d_week_seq#58, ss_store_sk#59, sun_sales#60, mon_sales#61, tue_sales#62, wed_sales#63, thu_sales#64, fri_sales#65, sat_sales#66]
+                     +- Join Inner, (d_week_seq#100 == d_week_seq#58)
+                        :- Shared #2, printed above
+                        +- Project [d_week_seq#100]
+                           +- Filter ((d_month_seq#99 >= 1224) and (d_month_seq#99 <= 1235))
+                              +- Shared #3, printed above

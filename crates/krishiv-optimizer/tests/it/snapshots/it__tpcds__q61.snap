@@ -8,58 +8,58 @@ Limit 100
       +- Join Inner
          :- Aggregate [], [sum(ss_ext_sales_price#15) AS promotions#152]
          :  +- Project [ss_ext_sales_price#15]
-         :     +- Join Inner, (ss_customer_sk#3 == c_customer_sk#99)
-         :        :- Project [ss_customer_sk#3, ss_ext_sales_price#15]
-         :        :  +- Join Inner, (ss_promo_sk#8 == p_promo_sk#52)
-         :        :     :- Project [ss_customer_sk#3, ss_promo_sk#8, ss_ext_sales_price#15]
-         :        :     :  +- Join Inner, (ss_store_sk#7 == s_store_sk#23)
-         :        :     :     :- Project [ss_customer_sk#3, ss_store_sk#7, ss_promo_sk#8, ss_ext_sales_price#15]
-         :        :     :     :  +- Join Inner, (ss_item_sk#2 == i_item_sk#130)
-         :        :     :     :     :- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_promo_sk#8, ss_ext_sales_price#15]
-         :        :     :     :     :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#71)
-         :        :     :     :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_promo_sk#8, ss_ext_sales_price#15] (shared #1)
-         :        :     :     :     :     +- Project [d_date_sk#71]
-         :        :     :     :     :        +- Filter ((d_year#77 == 1998) and (d_moy#79 == 11))
-         :        :     :     :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#71, d_year#77, d_moy#79] (shared #2)
-         :        :     :     :     +- Project [i_item_sk#130]
-         :        :     :     :        +- Filter (i_category#142 == 'Jewelry')
-         :        :     :     :           +- Scan spark_catalog.default.item [i_item_sk#130, i_category#142] (shared #3)
-         :        :     :     +- Project [s_store_sk#23]
-         :        :     :        +- Filter (s_gmt_offset#50 == -5.00)
-         :        :     :           +- Scan spark_catalog.default.store [s_store_sk#23, s_gmt_offset#50] (shared #4)
-         :        :     +- Project [p_promo_sk#52]
-         :        :        +- Filter (((p_channel_dmail#60 == 'Y') or (p_channel_email#61 == 'Y')) or (p_channel_tv#63 == 'Y'))
-         :        :           +- Scan spark_catalog.default.promotion [p_promo_sk#52, p_channel_dmail#60, p_channel_email#61, p_channel_tv#63]
-         :        +- Project [c_customer_sk#99]
-         :           +- Join Inner, (ca_address_sk#117 == c_current_addr_sk#103)
-         :              :- Scan spark_catalog.default.customer [c_customer_sk#99, c_current_addr_sk#103] (shared #5)
-         :              +- Project [ca_address_sk#117]
-         :                 +- Filter (ca_gmt_offset#128 == -5.00)
-         :                    +- Scan spark_catalog.default.customer_address [ca_address_sk#117, ca_gmt_offset#128] (shared #6)
+         :     +- Join Inner, (ca_address_sk#117 == c_current_addr_sk#103)
+         :        :- Project [ca_address_sk#117]
+         :        :  +- Filter (ca_gmt_offset#128 == -5.00)
+         :        :     +- Scan spark_catalog.default.customer_address [ca_address_sk#117, ca_gmt_offset#128] (shared #1)
+         :        +- Project [c_current_addr_sk#103, ss_ext_sales_price#15]
+         :           +- Join Inner, (ss_customer_sk#3 == c_customer_sk#99)
+         :              :- Scan spark_catalog.default.customer [c_customer_sk#99, c_current_addr_sk#103] (shared #2)
+         :              +- Project [ss_customer_sk#3, ss_ext_sales_price#15]
+         :                 +- Join Inner, (ss_promo_sk#8 == p_promo_sk#52)
+         :                    :- Project [p_promo_sk#52]
+         :                    :  +- Filter (((p_channel_dmail#60 == 'Y') or (p_channel_email#61 == 'Y')) or (p_channel_tv#63 == 'Y'))
+         :                    :     +- Scan spark_catalog.default.promotion [p_promo_sk#52, p_channel_dmail#60, p_channel_email#61, p_channel_tv#63]
+         :                    +- Project [ss_customer_sk#3, ss_promo_sk#8, ss_ext_sales_price#15]
+         :                       +- Join Inner, (ss_store_sk#7 == s_store_sk#23)
+         :                          :- Project [s_store_sk#23]
+         :                          :  +- Filter (s_gmt_offset#50 == -5.00)
+         :                          :     +- Scan spark_catalog.default.store [s_store_sk#23, s_gmt_offset#50] (shared #3)
+         :                          +- Project [ss_customer_sk#3, ss_store_sk#7, ss_promo_sk#8, ss_ext_sales_price#15]
+         :                             +- Join Inner, (ss_item_sk#2 == i_item_sk#130)
+         :                                :- Project [i_item_sk#130]
+         :                                :  +- Filter (i_category#142 == 'Jewelry')
+         :                                :     +- Scan spark_catalog.default.item [i_item_sk#130, i_category#142] (shared #4)
+         :                                +- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_promo_sk#8, ss_ext_sales_price#15]
+         :                                   +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#71)
+         :                                      :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_promo_sk#8, ss_ext_sales_price#15] (shared #5)
+         :                                      +- Project [d_date_sk#71]
+         :                                         +- Filter ((d_year#77 == 1998) and (d_moy#79 == 11))
+         :                                            +- Scan spark_catalog.default.date_dim [d_date_sk#71, d_year#77, d_moy#79] (shared #6)
          +- Shift +154
             +- Aggregate [], [sum(ss_ext_sales_price#15) AS total#153]
                +- Project [ss_ext_sales_price#15]
-                  +- Join Inner, (ss_customer_sk#3 == c_customer_sk#99)
-                     :- Project [ss_customer_sk#3, ss_ext_sales_price#15]
-                     :  +- Join Inner, (ss_store_sk#7 == s_store_sk#23)
-                     :     :- Project [ss_customer_sk#3, ss_store_sk#7, ss_ext_sales_price#15]
-                     :     :  +- Join Inner, (ss_item_sk#2 == i_item_sk#130)
-                     :     :     :- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ext_sales_price#15]
-                     :     :     :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#71)
-                     :     :     :     :- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ext_sales_price#15]
-                     :     :     :     :  +- Shared #1, printed above
-                     :     :     :     +- Project [d_date_sk#71]
-                     :     :     :        +- Filter ((d_year#77 == 1998) and (d_moy#79 == 11))
-                     :     :     :           +- Shared #2, printed above
-                     :     :     +- Project [i_item_sk#130]
-                     :     :        +- Filter (i_category#142 == 'Jewelry')
-                     :     :           +- Shared #3, printed above
-                     :     +- Project [s_store_sk#23]
-                     :        +- Filter (s_gmt_offset#50 == -5.00)
-                     :           +- Shared #4, printed above
-                     +- Project [c_customer_sk#99]
-                        +- Join Inner, (ca_address_sk#117 == c_current_addr_sk#103)
-                           :- Shared #5, printed above
-                           +- Project [ca_address_sk#117]
-                              +- Filter (ca_gmt_offset#128 == -5.00)
-                                 +- Shared #6, printed above
+                  +- Join Inner, (ca_address_sk#117 == c_current_addr_sk#103)
+                     :- Project [ca_address_sk#117]
+                     :  +- Filter (ca_gmt_offset#128 == -5.00)
+                     :     +- Shared #1, printed above
+                     +- Project [c_current_addr_sk#103, ss_ext_sales_price#15]
+                        +- Join Inner, (ss_customer_sk#3 == c_customer_sk#99)
+                           :- Shared #2, printed above
+                           +- Project [ss_customer_sk#3, ss_ext_sales_price#15]
+                              +- Join Inner, (ss_store_sk#7 == s_store_sk#23)
+                                 :- Project [s_store_sk#23]
+                                 :  +- Filter (s_gmt_offset#50 == -5.00)
+                                 :     +- Shared #3, printed above
+                                 +- Project [ss_customer_sk#3, ss_store_sk#7, ss_ext_sales_price#15]
+                                    +- Join Inner, (ss_item_sk#2 == i_item_sk#130)
+                                       :- Project [i_item_sk#130]
+                                       :  +- Filter (i_category#142 == 'Jewelry')
+                                       :     +- Shared #4, printed above
+                                       +- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ext_sales_price#15]
+                                          +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#71)
+                                             :- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ext_sales_price#15]
+                                             :  +- Shared #5, printed above
+                                             +- Project [d_date_sk#71]
+                                                +- Filter ((d_year#77 == 1998) and (d_moy#79 == 11))
+                                                   +- Shared #6, printed above

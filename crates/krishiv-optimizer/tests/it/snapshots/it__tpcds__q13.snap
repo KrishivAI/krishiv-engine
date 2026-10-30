@@ -5,24 +5,24 @@ expression: optimized.root().to_string()
 Aggregate [], [avg(ss_quantity#10) AS avg1#107, avg(ss_ext_sales_price#15) AS avg2#108, avg(ss_ext_wholesale_cost#16) AS avg3#109, sum(ss_ext_wholesale_cost#16) AS sum(ss_ext_wholesale_cost)#110]
 +- Project [ss_quantity#10, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
    +- Join Inner, (s_store_sk#23 == ss_store_sk#7)
-      :- Project [ss_store_sk#7, ss_quantity#10, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
-      :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#79)
-      :     :- Project [ss_sold_date_sk#0, ss_store_sk#7, ss_quantity#10, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
-      :     :  +- Join Inner, ((ss_hdemo_sk#5 == hd_demo_sk#61) and (((((((cd_marital_status#54 == 'M') and (cd_education_status#55 == 'Advanced Degree')) and (ss_sales_price#13 >= 100.00)) and (ss_sales_price#13 <= 150.00)) and (hd_dep_count#64 == 3)) or (((((cd_marital_status#54 == 'S') and (cd_education_status#55 == 'College')) and (ss_sales_price#13 >= 50.00)) and (ss_sales_price#13 <= 100.00)) and (hd_dep_count#64 == 1))) or (((((cd_marital_status#54 == 'W') and (cd_education_status#55 == '2 yr Degree')) and (ss_sales_price#13 >= 150.00)) and (ss_sales_price#13 <= 200.00)) and (hd_dep_count#64 == 1))))
-      :     :     :- Project [ss_sold_date_sk#0, ss_hdemo_sk#5, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_ext_sales_price#15, ss_ext_wholesale_cost#16, cd_marital_status#54, cd_education_status#55]
-      :     :     :  +- Join Inner, (cd_demo_sk#52 == ss_cdemo_sk#4)
-      :     :     :     :- Project [ss_sold_date_sk#0, ss_cdemo_sk#4, ss_hdemo_sk#5, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
-      :     :     :     :  +- Join Inner, ((ss_addr_sk#6 == ca_address_sk#66) and ((((((ca_country#76 == 'United States') and (ca_state#74 IN ('TX', 'OH', 'TX'))) and (ss_net_profit#22 >= 100.00)) and (ss_net_profit#22 <= 200.00)) or ((((ca_country#76 == 'United States') and (ca_state#74 IN ('OR', 'NM', 'KY'))) and (ss_net_profit#22 >= 150.00)) and (ss_net_profit#22 <= 300.00))) or ((((ca_country#76 == 'United States') and (ca_state#74 IN ('VA', 'TX', 'MS'))) and (ss_net_profit#22 >= 50.00)) and (ss_net_profit#22 <= 250.00))))
-      :     :     :     :     :- Filter (((cse_111#111 and (ca_state#74 IN ('TX', 'OH', 'TX'))) or (cse_111#111 and (ca_state#74 IN ('OR', 'NM', 'KY')))) or (cse_111#111 and (ca_state#74 IN ('VA', 'TX', 'MS'))))
-      :     :     :     :     :  +- Project [ca_address_sk#66, ca_state#74, ca_country#76, (ca_country#76 == 'United States') AS cse_111#111]
-      :     :     :     :     :     +- Scan spark_catalog.default.customer_address [ca_address_sk#66, ca_state#74, ca_country#76]
-      :     :     :     :     +- Filter (((((ss_sales_price#13 >= 100.00) and (ss_sales_price#13 <= 150.00)) or ((ss_sales_price#13 >= 50.00) and (ss_sales_price#13 <= 100.00))) or ((ss_sales_price#13 >= 150.00) and (ss_sales_price#13 <= 200.00))) and ((((ss_net_profit#22 >= 100.00) and (ss_net_profit#22 <= 200.00)) or ((ss_net_profit#22 >= 150.00) and (ss_net_profit#22 <= 300.00))) or ((ss_net_profit#22 >= 50.00) and (ss_net_profit#22 <= 250.00))))
-      :     :     :     :        +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_cdemo_sk#4, ss_hdemo_sk#5, ss_addr_sk#6, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_ext_sales_price#15, ss_ext_wholesale_cost#16, ss_net_profit#22]
-      :     :     :     +- Filter ((((cd_marital_status#54 == 'M') and (cd_education_status#55 == 'Advanced Degree')) or ((cd_marital_status#54 == 'S') and (cd_education_status#55 == 'College'))) or ((cd_marital_status#54 == 'W') and (cd_education_status#55 == '2 yr Degree')))
-      :     :     :        +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#52, cd_marital_status#54, cd_education_status#55]
-      :     :     +- Filter (((hd_dep_count#64 == 3) or (hd_dep_count#64 == 1)) or (hd_dep_count#64 == 1))
-      :     :        +- Scan spark_catalog.default.household_demographics [hd_demo_sk#61, hd_dep_count#64]
-      :     +- Project [d_date_sk#79]
-      :        +- Filter (d_year#85 == 2001)
-      :           +- Scan spark_catalog.default.date_dim [d_date_sk#79, d_year#85]
-      +- Scan spark_catalog.default.store [s_store_sk#23]
+      :- Scan spark_catalog.default.store [s_store_sk#23]
+      +- Project [ss_store_sk#7, ss_quantity#10, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
+         +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#79)
+            :- Project [d_date_sk#79]
+            :  +- Filter (d_year#85 == 2001)
+            :     +- Scan spark_catalog.default.date_dim [d_date_sk#79, d_year#85]
+            +- Project [ss_sold_date_sk#0, ss_store_sk#7, ss_quantity#10, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
+               +- Join Inner, ((cd_demo_sk#52 == ss_cdemo_sk#4) and (((((((cd_marital_status#54 == 'M') and (cd_education_status#55 == 'Advanced Degree')) and (ss_sales_price#13 >= 100.00)) and (ss_sales_price#13 <= 150.00)) and (hd_dep_count#64 == 3)) or (((((cd_marital_status#54 == 'S') and (cd_education_status#55 == 'College')) and (ss_sales_price#13 >= 50.00)) and (ss_sales_price#13 <= 100.00)) and (hd_dep_count#64 == 1))) or (((((cd_marital_status#54 == 'W') and (cd_education_status#55 == '2 yr Degree')) and (ss_sales_price#13 >= 150.00)) and (ss_sales_price#13 <= 200.00)) and (hd_dep_count#64 == 1))))
+                  :- Filter ((((cd_marital_status#54 == 'M') and (cd_education_status#55 == 'Advanced Degree')) or ((cd_marital_status#54 == 'S') and (cd_education_status#55 == 'College'))) or ((cd_marital_status#54 == 'W') and (cd_education_status#55 == '2 yr Degree')))
+                  :  +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#52, cd_marital_status#54, cd_education_status#55]
+                  +- Project [hd_dep_count#64, ss_sold_date_sk#0, ss_cdemo_sk#4, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
+                     +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#61)
+                        :- Filter (((hd_dep_count#64 == 3) or (hd_dep_count#64 == 1)) or (hd_dep_count#64 == 1))
+                        :  +- Scan spark_catalog.default.household_demographics [hd_demo_sk#61, hd_dep_count#64]
+                        +- Project [ss_sold_date_sk#0, ss_cdemo_sk#4, ss_hdemo_sk#5, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_ext_sales_price#15, ss_ext_wholesale_cost#16]
+                           +- Join Inner, ((ss_addr_sk#6 == ca_address_sk#66) and ((((((ca_country#76 == 'United States') and (ca_state#74 IN ('TX', 'OH', 'TX'))) and (ss_net_profit#22 >= 100.00)) and (ss_net_profit#22 <= 200.00)) or ((((ca_country#76 == 'United States') and (ca_state#74 IN ('OR', 'NM', 'KY'))) and (ss_net_profit#22 >= 150.00)) and (ss_net_profit#22 <= 300.00))) or ((((ca_country#76 == 'United States') and (ca_state#74 IN ('VA', 'TX', 'MS'))) and (ss_net_profit#22 >= 50.00)) and (ss_net_profit#22 <= 250.00))))
+                              :- Filter (((cse_111#111 and (ca_state#74 IN ('TX', 'OH', 'TX'))) or (cse_111#111 and (ca_state#74 IN ('OR', 'NM', 'KY')))) or (cse_111#111 and (ca_state#74 IN ('VA', 'TX', 'MS'))))
+                              :  +- Project [ca_address_sk#66, ca_state#74, ca_country#76, (ca_country#76 == 'United States') AS cse_111#111]
+                              :     +- Scan spark_catalog.default.customer_address [ca_address_sk#66, ca_state#74, ca_country#76]
+                              +- Filter (((((ss_sales_price#13 >= 100.00) and (ss_sales_price#13 <= 150.00)) or ((ss_sales_price#13 >= 50.00) and (ss_sales_price#13 <= 100.00))) or ((ss_sales_price#13 >= 150.00) and (ss_sales_price#13 <= 200.00))) and ((((ss_net_profit#22 >= 100.00) and (ss_net_profit#22 <= 200.00)) or ((ss_net_profit#22 >= 150.00) and (ss_net_profit#22 <= 300.00))) or ((ss_net_profit#22 >= 50.00) and (ss_net_profit#22 <= 250.00))))
+                                 +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_cdemo_sk#4, ss_hdemo_sk#5, ss_addr_sk#6, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_ext_sales_price#15, ss_ext_wholesale_cost#16, ss_net_profit#22]

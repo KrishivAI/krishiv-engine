@@ -8,16 +8,16 @@ Project [w_warehouse_name#6, i_item_id#19, inv_before#68, inv_after#69]
       +- Filter ((cse_70#70 >= CAST((2.000 / 3.000) AS DECIMAL(38,16))) and (cse_70#70 <= CAST((3.000 / 2.000) AS DECIMAL(38,16))))
          +- Project [w_warehouse_name#6, i_item_id#19, inv_before#68, inv_after#69, CASE WHEN (inv_before#68 > 0L) THEN ((CAST(inv_after#69 AS DECIMAL(20,0)) * 1.000) / CAST(inv_before#68 AS DECIMAL(20,0))) ELSE CAST(NULL AS DECIMAL(38,16)) END AS cse_70#70]
             +- Aggregate [w_warehouse_name#6, i_item_id#19], [w_warehouse_name#6, i_item_id#19, sum(CASE WHEN (d_date#42 < DATE '2000-03-11') THEN inv_quantity_on_hand#3 ELSE 0 END) AS inv_before#68, sum(CASE WHEN (d_date#42 >= DATE '2000-03-11') THEN inv_quantity_on_hand#3 ELSE 0 END) AS inv_after#69]
-               +- Project [inv_quantity_on_hand#3, d_date#42, i_item_id#19, w_warehouse_name#6]
+               +- Project [w_warehouse_name#6, inv_quantity_on_hand#3, d_date#42, i_item_id#19]
                   +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#4)
-                     :- Project [inv_warehouse_sk#2, inv_quantity_on_hand#3, d_date#42, i_item_id#19]
-                     :  +- Join Inner, (i_item_sk#18 == inv_item_sk#1)
-                     :     :- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_date#42]
-                     :     :  +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
-                     :     :     :- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3]
-                     :     :     +- Filter ((d_date#42 >= DATE '2000-02-10') and (d_date#42 <= DATE '2000-04-10'))
-                     :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#40, d_date#42]
-                     :     +- Project [i_item_sk#18, i_item_id#19]
-                     :        +- Filter ((i_current_price#23 >= 0.99) and (i_current_price#23 <= 1.49))
-                     :           +- Scan spark_catalog.default.item [i_item_sk#18, i_item_id#19, i_current_price#23]
-                     +- Scan spark_catalog.default.warehouse [w_warehouse_sk#4, w_warehouse_name#6]
+                     :- Scan spark_catalog.default.warehouse [w_warehouse_sk#4, w_warehouse_name#6]
+                     +- Project [inv_warehouse_sk#2, inv_quantity_on_hand#3, d_date#42, i_item_id#19]
+                        +- Join Inner, (i_item_sk#18 == inv_item_sk#1)
+                           :- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_date#42]
+                           :  +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
+                           :     :- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3]
+                           :     +- Filter ((d_date#42 >= DATE '2000-02-10') and (d_date#42 <= DATE '2000-04-10'))
+                           :        +- Scan spark_catalog.default.date_dim [d_date_sk#40, d_date#42]
+                           +- Project [i_item_sk#18, i_item_id#19]
+                              +- Filter ((i_current_price#23 >= 0.99) and (i_current_price#23 <= 1.49))
+                                 +- Scan spark_catalog.default.item [i_item_sk#18, i_item_id#19, i_current_price#23]

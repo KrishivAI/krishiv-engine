@@ -448,10 +448,8 @@ fn a_filter_of_an_incomplete_value_applies_nothing() {
 }
 
 /// A broadcast build that is itself a join publishing a runtime filter:
-/// its operators hold the instantiation's value service. The outer join is
-/// a left join, so join ordering keeps the inner join below it as a build
-/// whatever the estimates say.
-const NESTED: &str = "SELECT x.a FROM t AS x LEFT JOIN (SELECT y.a FROM t AS y JOIN \
+/// its operators hold the instantiation's value service.
+const NESTED: &str = "SELECT x.a FROM t AS x JOIN (SELECT y.a FROM t AS y JOIN \
                       (SELECT a FROM t WHERE b < 30) AS z ON y.a = z.a) AS w ON x.a = w.a";
 
 #[test]
