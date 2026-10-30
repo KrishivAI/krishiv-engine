@@ -732,6 +732,19 @@ fn cast(v: V, to: &DataType, _mode: CastMode) -> V {
             let p: Vec<i64> = s.split('-').map(|x| x.trim().parse().unwrap()).collect();
             V::Date(days(p[0], p[1], p[2]))
         }
+        (V::Str(s), DataType::Double | DataType::Float) => {
+            // Invalid input is NULL here; ANSI's error is not modelled.
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_precision_loss,
+                reason = "test interpreter rounds to fixed point"
+            )]
+            let num = s
+                .trim()
+                .parse::<f64>()
+                .map_or(V::Null, |f| V::Num((f * SCALE as f64).round() as i128));
+            num
+        }
         (V::Str(s), DataType::Integer | DataType::Long | DataType::Decimal(_)) => {
             // Invalid input is NULL here; ANSI's error is not modelled.
             let (int, frac) = s.trim().split_once('.').unwrap_or((s.trim(), ""));

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use krishiv_common::config::Config;
 use krishiv_common::error::ErrorClass;
-use krishiv_exec::physical::{PhysNode, TaskSpec, WorkerContext, instantiate};
+use krishiv_exec::physical::{PhysNode, TaskSpec, WorkerContext, WritePlan, instantiate};
 use krishiv_exec::planner::MemoryTables;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
@@ -47,6 +47,7 @@ fn query_results_are_written_committed_and_read_back() {
             StorePath::from("result"),
             mode,
             "job-1",
+            false,
         ))
     };
 
@@ -62,7 +63,9 @@ fn query_results_are_written_committed_and_read_back() {
             job_uuid: "job-1".to_owned(),
             max_records_per_file: 0,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
         })
+        .unwrap()
         .with_io(io.clone())
         .with_formats(Arc::new(FormatRegistry::with_defaults()))
         .with_config(Arc::new(Config::new()));
@@ -122,6 +125,7 @@ fn query_results_are_written_committed_and_read_back() {
                 job_uuid: "job-1".to_owned(),
                 max_records_per_file: 0,
                 target_file_bytes: 0,
+                partition_by: Vec::new(),
             }),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
@@ -158,6 +162,7 @@ fn query_results_are_written_committed_and_read_back() {
         job_uuid: "job-1".to_owned(),
         max_records_per_file: 0,
         target_file_bytes: 0,
+        partition_by: Vec::new(),
     };
     let bad_plan = krishiv_exec::physical::PhysicalPlan::new(
         PhysNode::WriteFiles {
@@ -264,6 +269,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
             StorePath::from("two"),
             SaveMode::ErrorIfExists,
             "job-two",
+            false,
         ))
         .unwrap()
         .unwrap();
@@ -321,6 +327,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
             job_uuid: "job-two".to_owned(),
             max_records_per_file: 0,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -444,6 +451,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
             StorePath::from("retry"),
             SaveMode::ErrorIfExists,
             "job-retry",
+            false,
         ))
         .unwrap()
         .unwrap();
@@ -499,6 +507,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
             job_uuid: "job-retry".to_owned(),
             max_records_per_file: 0,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -695,6 +704,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
             job_uuid: "job-empty".to_owned(),
             max_records_per_file: 0,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -756,6 +766,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
             StorePath::from("empty"),
             SaveMode::ErrorIfExists,
             "job-empty",
+            false,
         ))
         .unwrap()
         .unwrap();
@@ -825,6 +836,7 @@ fn a_write_without_a_configuration_is_refused() {
                 job_uuid: "job-1".to_owned(),
                 max_records_per_file: 0,
                 target_file_bytes: 0,
+                partition_by: Vec::new(),
             }),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
@@ -848,4 +860,100 @@ fn a_write_without_a_configuration_is_refused() {
         e.to_string().contains("a write without a configuration"),
         "{e}"
     );
+}
+
+#[test]
+fn a_partitioned_write_sorts_by_the_partition_columns_below_the_writer() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/planner");
+    let db = parquet_dir(&fixtures, &["t"], true, &rt);
+    let plan = db.plan_sql("SELECT id, s FROM t").unwrap();
+    let write_plan = |partition_by: Vec<usize>| WritePlan {
+        format: "parquet".to_owned(),
+        options: BTreeMap::new(),
+        store: "file://out".to_owned(),
+        dir: "out".to_owned(),
+        job_uuid: "job-1".to_owned(),
+        max_records_per_file: 0,
+        target_file_bytes: 0,
+        partition_by,
+    };
+    // A partition column the input does not have is refused, not
+    // indexed.
+    let e = db
+        .plan_sql("SELECT id, s FROM t")
+        .unwrap()
+        .into_write(write_plan(vec![2]))
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("partition column 2"), "{e}");
+    let write = plan.into_write(write_plan(vec![1])).unwrap();
+    // The spillable local sort on the partition columns sits directly
+    // below the writer.
+    let PhysNode::WriteFiles {
+        input,
+        write: Some(w),
+    } = write.root()
+    else {
+        panic!("not a write");
+    };
+    assert_eq!(w.partition_by, [1]);
+    let PhysNode::Sort { input: _, keys } = input.as_ref() else {
+        panic!("no sort below the writer");
+    };
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].column, 1);
+    assert!(!keys[0].descending && keys[0].nulls_first);
+    let text = write.to_string();
+    assert!(text.contains("Sort"), "{text}");
+    assert!(text.contains("partitioned by [s]"), "{text}");
+}
+
+/// A partition column the plan's input does not have is refused at
+/// instantiation, not indexed.
+#[test]
+fn a_write_with_an_out_of_range_partition_column_is_refused() {
+    let out = tempfile::tempdir().unwrap();
+    let store = Arc::new(LocalFileSystem::new_with_prefix(out.path()).unwrap());
+    let sched = IoScheduler::new(IoConfig::default());
+    sched.register_store(
+        StoreId::new("file://out"),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+    );
+    let plan = krishiv_exec::physical::PhysicalPlan::new(
+        PhysNode::WriteFiles {
+            input: Box::new(PhysNode::OneRow),
+            write: Some(WritePlan {
+                format: "parquet".to_owned(),
+                options: BTreeMap::new(),
+                store: "file://out".to_owned(),
+                dir: "result".to_owned(),
+                job_uuid: "job-1".to_owned(),
+                max_records_per_file: 0,
+                target_file_bytes: 0,
+                partition_by: vec![9],
+            }),
+        },
+        WritePlan::result_schema(),
+        krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
+        krishiv_exec::physical::ExprEnv {
+            ansi: true,
+            legacy_statistical_aggregate: false,
+            zone: None,
+            zone_name: None,
+            query_start_micros: 0,
+            user: Arc::from("u"),
+            map_key_dedup_last_win: false,
+        },
+    );
+    let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
+        .with_io(sched.context())
+        .with_formats(Arc::new(FormatRegistry::with_defaults()))
+        .with_config(Arc::new(Config::new()));
+    let e = instantiate(&plan, &worker).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("partition column 9"), "{e}");
 }

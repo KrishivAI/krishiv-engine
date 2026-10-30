@@ -1,0 +1,47 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, ratio#278, store_qty#279, store_wholesale_cost#280, store_sales_price#281, other_chan_qty#282, other_chan_wholesale_cost#283, other_chan_sales_price#284]
++- Limit 100
+   +- Sort [ss_sold_year#260 ASC NULLS FIRST, ss_item_sk#261 ASC NULLS FIRST, ss_customer_sk#262 ASC NULLS FIRST, ss_qty#263 DESC NULLS LAST, ss_wc#264 DESC NULLS LAST, ss_sp#265 DESC NULLS LAST, other_chan_qty#282 ASC NULLS FIRST, other_chan_wholesale_cost#283 ASC NULLS FIRST, other_chan_sales_price#284 ASC NULLS FIRST, ratio#278 ASC NULLS FIRST], true
+      +- Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, round(((CAST(ss_qty#263 AS DECIMAL(20,0)) * 1.00) / CAST(cse_821#821 AS DECIMAL(20,0))), 2) AS ratio#278, ss_qty#263 AS store_qty#279, ss_wc#264 AS store_wholesale_cost#280, ss_sp#265 AS store_sales_price#281, cse_821#821 AS other_chan_qty#282, (coalesce(ws_wc#270, 0.00) + coalesce(cs_wc#276, 0.00)) AS other_chan_wholesale_cost#283, (coalesce(ws_sp#271, 0.00) + coalesce(cs_sp#277, 0.00)) AS other_chan_sales_price#284, ss_qty#263, ss_wc#264, ss_sp#265]
+         +- Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, ss_qty#263, ss_wc#264, ss_sp#265, ws_wc#270, ws_sp#271, cs_wc#276, cs_sp#277, (coalesce(ws_qty#269, 0L) + coalesce(cs_qty#275, 0L)) AS cse_821#821]
+            +- Filter ((coalesce(ws_qty#269, 0L) > 0L) or (coalesce(cs_qty#275, 0L) > 0L))
+               +- Join LeftOuter, (((cs_sold_year#272 == ss_sold_year#260) and (cs_item_sk#273 == ss_item_sk#261)) and (cs_customer_sk#274 == ss_customer_sk#262))
+                  :- Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, ss_qty#263, ss_wc#264, ss_sp#265, ws_qty#269, ws_wc#270, ws_sp#271]
+                  :  +- Join LeftOuter, (((ws_sold_year#266 == ss_sold_year#260) and (ws_item_sk#267 == ss_item_sk#261)) and (ws_customer_sk#268 == ss_customer_sk#262))
+                  :     :- Project [ss_sold_year#541 AS ss_sold_year#260, ss_item_sk#472 AS ss_item_sk#261, ss_customer_sk#473 AS ss_customer_sk#262, ss_qty#542 AS ss_qty#263, ss_wc#543 AS ss_wc#264, ss_sp#544 AS ss_sp#265]
+                  :     :  +- Shift +285
+                  :     :     +- Aggregate [d_year#234, ss_item_sk#187, ss_customer_sk#188], [d_year#234 AS ss_sold_year#256, ss_item_sk#187, ss_customer_sk#188, sum(ss_quantity#195) AS ss_qty#257, sum(ss_wholesale_cost#196) AS ss_wc#258, sum(ss_sales_price#198) AS ss_sp#259]
+                  :     :        +- Project [d_year#234, ss_item_sk#187, ss_customer_sk#188, ss_quantity#195, ss_wholesale_cost#196, ss_sales_price#198]
+                  :     :           +- Join Inner, (ss_sold_date_sk#185 == d_date_sk#228)
+                  :     :              :- Filter (d_year#234 == 2000)
+                  :     :              :  +- Scan spark_catalog.default.date_dim [d_date_sk#228, d_year#234]
+                  :     :              +- Project [ss_sold_date_sk#185, ss_item_sk#187, ss_customer_sk#188, ss_quantity#195, ss_wholesale_cost#196, ss_sales_price#198]
+                  :     :                 +- Filter isnull(sr_ticket_number#217)
+                  :     :                    +- Join LeftOuter, ((sr_ticket_number#217 == ss_ticket_number#194) and (ss_item_sk#187 == sr_item_sk#210))
+                  :     :                       :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#185, ss_item_sk#187, ss_customer_sk#188, ss_ticket_number#194, ss_quantity#195, ss_wholesale_cost#196, ss_sales_price#198]
+                  :     :                       +- Scan spark_catalog.default.store_returns [sr_item_sk#210, sr_ticket_number#217]
+                  :     +- Project [ws_sold_year#631 AS ws_sold_year#266, ws_item_sk#548 AS ws_item_sk#267, ws_customer_sk#632 AS ws_customer_sk#268, ws_qty#633 AS ws_qty#269, ws_wc#634 AS ws_wc#270, ws_sp#635 AS ws_sp#271]
+                  :        +- Shift +545
+                  :           +- Aggregate [d_year#64, ws_item_sk#3, ws_bill_customer_sk#4], [d_year#64 AS ws_sold_year#86, ws_item_sk#3, ws_bill_customer_sk#4 AS ws_customer_sk#87, sum(ws_quantity#18) AS ws_qty#88, sum(ws_wholesale_cost#19) AS ws_wc#89, sum(ws_sales_price#21) AS ws_sp#90]
+                  :              +- Project [d_year#64, ws_item_sk#3, ws_bill_customer_sk#4, ws_quantity#18, ws_wholesale_cost#19, ws_sales_price#21]
+                  :                 +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#58)
+                  :                    :- Scan spark_catalog.default.date_dim [d_date_sk#58, d_year#64]
+                  :                    +- Project [ws_sold_date_sk#0, ws_item_sk#3, ws_bill_customer_sk#4, ws_quantity#18, ws_wholesale_cost#19, ws_sales_price#21]
+                  :                       +- Filter isnull(wr_order_number#47)
+                  :                          +- Join LeftOuter, ((wr_order_number#47 == ws_order_number#17) and (ws_item_sk#3 == wr_item_sk#36))
+                  :                             :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_bill_customer_sk#4, ws_order_number#17, ws_quantity#18, ws_wholesale_cost#19, ws_sales_price#21]
+                  :                             +- Scan spark_catalog.default.web_returns [wr_item_sk#36, wr_order_number#47]
+                  +- Project [cs_sold_year#816 AS cs_sold_year#272, cs_item_sk#742 AS cs_item_sk#273, cs_customer_sk#817 AS cs_customer_sk#274, cs_qty#818 AS cs_qty#275, cs_wc#819 AS cs_wc#276, cs_sp#820 AS cs_sp#277]
+                     +- Shift +636
+                        +- Aggregate [d_year#158, cs_item_sk#106, cs_bill_customer_sk#94], [d_year#158 AS cs_sold_year#180, cs_item_sk#106, cs_bill_customer_sk#94 AS cs_customer_sk#181, sum(cs_quantity#109) AS cs_qty#182, sum(cs_wholesale_cost#110) AS cs_wc#183, sum(cs_sales_price#112) AS cs_sp#184]
+                           +- Project [d_year#158, cs_bill_customer_sk#94, cs_item_sk#106, cs_quantity#109, cs_wholesale_cost#110, cs_sales_price#112]
+                              +- Join Inner, (cs_sold_date_sk#91 == d_date_sk#152)
+                                 :- Scan spark_catalog.default.date_dim [d_date_sk#152, d_year#158]
+                                 +- Project [cs_sold_date_sk#91, cs_bill_customer_sk#94, cs_item_sk#106, cs_quantity#109, cs_wholesale_cost#110, cs_sales_price#112]
+                                    +- Filter isnull(cr_order_number#141)
+                                       +- Join LeftOuter, ((cr_order_number#141 == cs_order_number#108) and (cs_item_sk#106 == cr_item_sk#127))
+                                          :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#91, cs_bill_customer_sk#94, cs_item_sk#106, cs_order_number#108, cs_quantity#109, cs_wholesale_cost#110, cs_sales_price#112]
+                                          +- Scan spark_catalog.default.catalog_returns [cr_item_sk#127, cr_order_number#141]

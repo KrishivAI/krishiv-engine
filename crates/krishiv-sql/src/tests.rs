@@ -3210,3 +3210,56 @@ fn variable_statements() {
     };
     assert!(matches!(*e.statement, ast::Statement::DeclareVariable(_)));
 }
+
+/// `EXECUTE IMMEDIATE query [INTO ...] [USING ...]`.
+#[test]
+fn execute_immediate_statements() {
+    use ast::{ExprKind, Statement};
+    let d = ParserOptions::default();
+    let run = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::ExecuteImmediate(e) => e,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let e = run("EXECUTE IMMEDIATE 'SELECT 1'");
+    assert!(e.into.is_empty() && e.using.is_empty());
+    let e = run("EXECUTE IMMEDIATE s INTO a, b.c USING 1, 'x' AS y, (2) z;");
+    assert_eq!(e.into.len(), 2);
+    let aliases: Vec<_> = e
+        .using
+        .iter()
+        .map(|a| a.alias.as_ref().map(|i| i.value.as_str()))
+        .collect();
+    assert_eq!(aliases, [None, Some("y"), Some("z")]);
+    // A parenthesized list is the argument list; a parenthesized
+    // expression followed by an alias is one argument.
+    assert_eq!(run("EXECUTE IMMEDIATE s USING (1, 'x')").using.len(), 2);
+    let e = run("EXECUTE IMMEDIATE s USING (SELECT 42) AS first, 2 AS second");
+    assert_eq!(e.using.len(), 2);
+    assert_eq!(
+        run("EXECUTE IMMEDIATE concat('a', 'b') USING :x")
+            .using
+            .len(),
+        1
+    );
+    assert!(matches!(
+        run("EXECUTE IMMEDIATE s USING :x").using[0].value.kind,
+        ExprKind::NamedParameter(_)
+    ));
+    // No parenthesized `INTO` list, no empty `USING`.
+    for bad in [
+        "EXECUTE IMMEDIATE s INTO (a, b)",
+        "EXECUTE IMMEDIATE s USING",
+        "EXECUTE IMMEDIATE",
+        "EXECUTE IMMEDIATE s INTO",
+    ] {
+        assert!(parse_statement(bad, &d).is_err(), "{bad}");
+    }
+}
+
+/// `:IDENTIFIER(...)` is not a parameter marker: ANTLR fails at its argument.
+#[test]
+fn identifier_clause_is_not_a_named_marker() {
+    let d = ParserOptions::default();
+    let e = parse_statement("SELECT :IDENTIFIER('param1') FROM t", &d).unwrap_err();
+    assert_eq!(e.span.start, 19);
+}

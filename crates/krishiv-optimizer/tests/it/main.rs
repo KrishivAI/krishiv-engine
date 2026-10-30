@@ -8,10 +8,12 @@
     reason = "test helpers sit outside #[test] fns"
 )]
 
+mod cse;
 mod join_order;
 mod props;
 mod rules;
 mod sum_rewrite;
 mod support;
+mod tpcds;
 mod tpch;
 mod udf;

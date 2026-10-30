@@ -112,6 +112,7 @@ pub fn classify(statement: &Statement) -> StatementClass {
         | Statement::DeclareVariable(_)
         | Statement::SetVariable(_)
         | Statement::DropVariable(_)
+        | Statement::ExecuteImmediate(_)
         | Statement::CreateView(_)
         | Statement::DropView(_) => StatementClass::Session,
         Statement::CreateTable(t) => {
@@ -250,7 +251,7 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
             }
             Vec::new()
         }
-        Statement::Update(_) => return None,
+        Statement::Update(_) | Statement::ExecuteImmediate(_) => return None,
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::DropView(_)
@@ -363,6 +364,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         | Statement::DeclareVariable(_)
         | Statement::SetVariable(_)
         | Statement::DropVariable(_)
+        | Statement::ExecuteImmediate(_)
         | Statement::CreateView(_)
         | Statement::DropView(_)
         // Functions have no securable yet: a persisted one is refused by

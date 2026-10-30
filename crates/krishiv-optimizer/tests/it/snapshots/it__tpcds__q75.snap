@@ -1,0 +1,105 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [sales_cnt_diff#294 ASC NULLS FIRST, sales_amt_diff#295 ASC NULLS FIRST], true
+   +- Project [d_year#283 AS prev_year#290, d_year#276 AS year_#291, i_brand_id#277, i_class_id#278, i_category_id#279, i_manufact_id#280, sales_cnt#288 AS prev_yr_cnt#292, sales_cnt#281 AS curr_yr_cnt#293, (sales_cnt#281 - sales_cnt#288) AS sales_cnt_diff#294, (sales_amt#282 - sales_amt#289) AS sales_amt_diff#295]
+      +- Join Inner, (((((i_brand_id#277 == i_brand_id#284) and (i_class_id#278 == i_class_id#285)) and (i_category_id#279 == i_category_id#286)) and (i_manufact_id#280 == i_manufact_id#287)) and ((CAST(sales_cnt#281 AS DECIMAL(17,2)) / CAST(sales_cnt#288 AS DECIMAL(17,2))) < 0.90000000000000000000))
+         :- Project [d_year#358 AS d_year#276, i_brand_id#337 AS i_brand_id#277, i_class_id#339 AS i_class_id#278, i_category_id#341 AS i_category_id#279, i_manufact_id#343 AS i_manufact_id#280, sales_cnt#570 AS sales_cnt#281, sales_amt#571 AS sales_amt#282]
+         :  +- Shift +296
+         :     +- Aggregate [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47], [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sum(sales_cnt#111) AS sales_cnt#274, sum(sales_amt#112) AS sales_amt#275]
+         :        +- Aggregate [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112], [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112]
+         :           +- Union
+         :              :- Aggregate [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112], [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112]
+         :              :  +- Union
+         :              :     :- Project [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, (cs_quantity#18 - coalesce(cr_return_quantity#101, 0)) AS sales_cnt#111, (cs_ext_sales_price#23 - coalesce(cr_return_amount#102, 0.00)) AS sales_amt#112]
+         :              :     :  +- Join LeftOuter, ((cs_order_number#17 == cr_order_number#100) and (cs_item_sk#15 == cr_item_sk#86))
+         :              :     :     :- Project [cs_item_sk#15, cs_order_number#17, cs_quantity#18, cs_ext_sales_price#23, d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+         :              :     :     :  +- Join Inner, (i_item_sk#34 == cs_item_sk#15)
+         :              :     :     :     :- Project [cs_item_sk#15, cs_order_number#17, cs_quantity#18, cs_ext_sales_price#23, d_year#62]
+         :              :     :     :     :  +- Join Inner, (d_date_sk#56 == cs_sold_date_sk#0)
+         :              :     :     :     :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_item_sk#15, cs_order_number#17, cs_quantity#18, cs_ext_sales_price#23] (shared #1)
+         :              :     :     :     :     +- Filter (d_year#62 == 2002)
+         :              :     :     :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#56, d_year#62] (shared #2)
+         :              :     :     :     +- Project [i_item_sk#34, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+         :              :     :     :        +- Filter (i_category#46 == 'Books')
+         :              :     :     :           +- Scan spark_catalog.default.item [i_item_sk#34, i_brand_id#41, i_class_id#43, i_category_id#45, i_category#46, i_manufact_id#47] (shared #3)
+         :              :     :     +- Scan spark_catalog.default.catalog_returns [cr_item_sk#86, cr_order_number#100, cr_return_quantity#101, cr_return_amount#102] (shared #4)
+         :              :     +- Project [d_year#142, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, (ss_quantity#123 - coalesce(sr_return_quantity#174, 0)) AS sales_cnt#184, (ss_ext_sales_price#128 - coalesce(sr_return_amt#175, 0.00)) AS sales_amt#185]
+         :              :        +- Join LeftOuter, ((ss_ticket_number#122 == sr_ticket_number#173) and (ss_item_sk#115 == sr_item_sk#166))
+         :              :           :- Project [ss_item_sk#115, ss_ticket_number#122, ss_quantity#123, ss_ext_sales_price#128, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, d_year#142]
+         :              :           :  +- Join Inner, (d_date_sk#136 == ss_sold_date_sk#113)
+         :              :           :     :- Project [ss_sold_date_sk#113, ss_item_sk#115, ss_ticket_number#122, ss_quantity#123, ss_ext_sales_price#128, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+         :              :           :     :  +- Join Inner, (i_item_sk#34 == ss_item_sk#115)
+         :              :           :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#113, ss_item_sk#115, ss_ticket_number#122, ss_quantity#123, ss_ext_sales_price#128] (shared #5)
+         :              :           :     :     +- Project [i_item_sk#34, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+         :              :           :     :        +- Filter (i_category#46 == 'Books')
+         :              :           :     :           +- Shared #3, printed above
+         :              :           :     +- Shift +80
+         :              :           :        +- Filter (d_year#62 == 2002)
+         :              :           :           +- Shared #2, printed above
+         :              :           +- Scan spark_catalog.default.store_returns [sr_item_sk#166, sr_ticket_number#173, sr_return_quantity#174, sr_return_amt#175] (shared #6)
+         :              +- Project [d_year#226, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, (ws_quantity#204 - coalesce(wr_return_quantity#262, 0)) AS sales_cnt#272, (ws_ext_sales_price#209 - coalesce(wr_return_amt#263, 0.00)) AS sales_amt#273]
+         :                 +- Join LeftOuter, ((ws_order_number#203 == wr_order_number#261) and (ws_item_sk#189 == wr_item_sk#250))
+         :                    :- Project [ws_item_sk#189, ws_order_number#203, ws_quantity#204, ws_ext_sales_price#209, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, d_year#226]
+         :                    :  +- Join Inner, (d_date_sk#220 == ws_sold_date_sk#186)
+         :                    :     :- Project [ws_sold_date_sk#186, ws_item_sk#189, ws_order_number#203, ws_quantity#204, ws_ext_sales_price#209, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+         :                    :     :  +- Join Inner, (i_item_sk#34 == ws_item_sk#189)
+         :                    :     :     :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#186, ws_item_sk#189, ws_order_number#203, ws_quantity#204, ws_ext_sales_price#209] (shared #7)
+         :                    :     :     +- Project [i_item_sk#34, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+         :                    :     :        +- Filter (i_category#46 == 'Books')
+         :                    :     :           +- Shared #3, printed above
+         :                    :     +- Shift +164
+         :                    :        +- Filter (d_year#62 == 2002)
+         :                    :           +- Shared #2, printed above
+         :                    +- Scan spark_catalog.default.web_returns [wr_item_sk#250, wr_order_number#261, wr_return_quantity#262, wr_return_amt#263] (shared #8)
+         +- Shift +7
+            +- Project [d_year#358 AS d_year#276, i_brand_id#337 AS i_brand_id#277, i_class_id#339 AS i_class_id#278, i_category_id#341 AS i_category_id#279, i_manufact_id#343 AS i_manufact_id#280, sales_cnt#570 AS sales_cnt#281, sales_amt#571 AS sales_amt#282]
+               +- Shift +296
+                  +- Aggregate [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47], [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sum(sales_cnt#111) AS sales_cnt#274, sum(sales_amt#112) AS sales_amt#275]
+                     +- Aggregate [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112], [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112]
+                        +- Union
+                           :- Aggregate [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112], [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, sales_cnt#111, sales_amt#112]
+                           :  +- Union
+                           :     :- Project [d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, (cs_quantity#18 - coalesce(cr_return_quantity#101, 0)) AS sales_cnt#111, (cs_ext_sales_price#23 - coalesce(cr_return_amount#102, 0.00)) AS sales_amt#112]
+                           :     :  +- Join LeftOuter, ((cs_order_number#17 == cr_order_number#100) and (cs_item_sk#15 == cr_item_sk#86))
+                           :     :     :- Project [cs_item_sk#15, cs_order_number#17, cs_quantity#18, cs_ext_sales_price#23, d_year#62, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+                           :     :     :  +- Join Inner, (i_item_sk#34 == cs_item_sk#15)
+                           :     :     :     :- Project [cs_item_sk#15, cs_order_number#17, cs_quantity#18, cs_ext_sales_price#23, d_year#62]
+                           :     :     :     :  +- Join Inner, (d_date_sk#56 == cs_sold_date_sk#0)
+                           :     :     :     :     :- Shared #1, printed above
+                           :     :     :     :     +- Filter (d_year#62 == 2001)
+                           :     :     :     :        +- Shared #2, printed above
+                           :     :     :     +- Project [i_item_sk#34, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+                           :     :     :        +- Filter (i_category#46 == 'Books')
+                           :     :     :           +- Shared #3, printed above
+                           :     :     +- Shared #4, printed above
+                           :     +- Project [d_year#142, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, (ss_quantity#123 - coalesce(sr_return_quantity#174, 0)) AS sales_cnt#184, (ss_ext_sales_price#128 - coalesce(sr_return_amt#175, 0.00)) AS sales_amt#185]
+                           :        +- Join LeftOuter, ((ss_ticket_number#122 == sr_ticket_number#173) and (ss_item_sk#115 == sr_item_sk#166))
+                           :           :- Project [ss_item_sk#115, ss_ticket_number#122, ss_quantity#123, ss_ext_sales_price#128, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, d_year#142]
+                           :           :  +- Join Inner, (d_date_sk#136 == ss_sold_date_sk#113)
+                           :           :     :- Project [ss_sold_date_sk#113, ss_item_sk#115, ss_ticket_number#122, ss_quantity#123, ss_ext_sales_price#128, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+                           :           :     :  +- Join Inner, (i_item_sk#34 == ss_item_sk#115)
+                           :           :     :     :- Shared #5, printed above
+                           :           :     :     +- Project [i_item_sk#34, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+                           :           :     :        +- Filter (i_category#46 == 'Books')
+                           :           :     :           +- Shared #3, printed above
+                           :           :     +- Shift +80
+                           :           :        +- Filter (d_year#62 == 2001)
+                           :           :           +- Shared #2, printed above
+                           :           +- Shared #6, printed above
+                           +- Project [d_year#226, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, (ws_quantity#204 - coalesce(wr_return_quantity#262, 0)) AS sales_cnt#272, (ws_ext_sales_price#209 - coalesce(wr_return_amt#263, 0.00)) AS sales_amt#273]
+                              +- Join LeftOuter, ((ws_order_number#203 == wr_order_number#261) and (ws_item_sk#189 == wr_item_sk#250))
+                                 :- Project [ws_item_sk#189, ws_order_number#203, ws_quantity#204, ws_ext_sales_price#209, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47, d_year#226]
+                                 :  +- Join Inner, (d_date_sk#220 == ws_sold_date_sk#186)
+                                 :     :- Project [ws_sold_date_sk#186, ws_item_sk#189, ws_order_number#203, ws_quantity#204, ws_ext_sales_price#209, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+                                 :     :  +- Join Inner, (i_item_sk#34 == ws_item_sk#189)
+                                 :     :     :- Shared #7, printed above
+                                 :     :     +- Project [i_item_sk#34, i_brand_id#41, i_class_id#43, i_category_id#45, i_manufact_id#47]
+                                 :     :        +- Filter (i_category#46 == 'Books')
+                                 :     :           +- Shared #3, printed above
+                                 :     +- Shift +164
+                                 :        +- Filter (d_year#62 == 2001)
+                                 :           +- Shared #2, printed above
+                                 +- Shared #8, printed above
