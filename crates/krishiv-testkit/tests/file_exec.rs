@@ -70,6 +70,15 @@ fn splits(max_partition_bytes: u64) -> SplitConfig {
     }
 }
 
+/// As [`splits`], with an open cost that keeps every split one morsel
+/// (the floor of a morsel's size): for tests of what happens inside one.
+fn whole_splits(max_partition_bytes: u64) -> SplitConfig {
+    SplitConfig {
+        open_cost_in_bytes: 1 << 40,
+        ..splits(max_partition_bytes)
+    }
+}
+
 struct Leaf(Arc<dyn Source>);
 
 impl ExecNode for Leaf {
@@ -596,7 +605,7 @@ fn prefetch_hides_store_latency() {
                 prefetch_bytes,
                 ..ScanOptions::default()
             },
-            splits(1 << 30),
+            whole_splits(1 << 30),
         )
         .build(ScanPushdowns::default())
         .unwrap();
@@ -650,7 +659,7 @@ fn footers_are_read_ahead_across_a_partition() {
         files,
         o,
         ScanOptions::default(),
-        splits(1 << 30),
+        whole_splits(1 << 30),
     )
     .with_partitions(vec![partition])
     .source(ScanPushdowns::default())
@@ -670,6 +679,47 @@ fn footers_are_read_ahead_across_a_partition() {
     let m = scan.metrics();
     assert_eq!((m.splits, m.rows), (4, 1200));
     assert!(m.units > 0 && m.bytes > 0);
+}
+
+/// One split of a file whose units are many is cut into about four
+/// morsels per driver; the drivers read every unit once and the rows come
+/// back in file order, with the planned split as `_metadata`'s block.
+#[test]
+fn a_split_is_cut_into_morsels_for_every_driver() {
+    let t = Timed::new(StorePolicy::UNPACED);
+    let file = t.file("m/f", 4000);
+    let fx = MockFixture::default();
+    let o = krishiv_io::FormatOptions::defaults(fx.format().options());
+    let size = file.size;
+    let scan = FileScan::new(
+        fx.format(),
+        t.sched.context(),
+        schema(),
+        vec![file],
+        o,
+        ScanOptions::default(),
+        splits(1 << 30),
+    )
+    .source(ScanPushdowns::default())
+    .unwrap();
+    assert_eq!(scan.partitions().len(), 1);
+    let scan = Arc::new(scan);
+    let out =
+        t.rt.block_on(run(
+            &t.pool,
+            Arc::new(Leaf(Arc::clone(&scan) as Arc<dyn Source>)),
+            4,
+        ))
+        .unwrap();
+    let ids: Vec<i32> = out
+        .iter()
+        .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+        .collect();
+    assert_eq!(ids, (0..4000).collect::<Vec<i32>>());
+    // 4 drivers, 4 morsels each: 16 pieces of the one split.
+    let m = scan.metrics();
+    assert_eq!((m.splits, m.rows), (16, 4000));
+    assert!(size > 16);
 }
 
 /// The mock format without selections, row indexes or writing.

@@ -2,10 +2,17 @@
 //! The file scan: [`FileScan`] (what the planner pushes into, over any
 //! [`FileFormat`]) and the [`FileScanSource`] it builds.
 //!
-//! - **Morsels are Spark's file partitions** ([`krishiv_io::split`]): a
-//!   driver claims one and reads its splits in order, each through a
+//! - **Morsels are pieces of Spark's file partitions**
+//!   ([`krishiv_io::split::morsels`]): about four per driver, each a run of
+//!   one partition's splits or a byte range of one split, in partition
+//!   order. Drivers claim them as they finish, so a filter that keeps
+//!   one stretch of a sorted file (the row groups of a few dates) is read
+//!   by every driver, not by the two or three that own that stretch's
+//!   split. A driver reads a morsel's pieces in order, each through a
 //!   [`ScanStream`] (metadata from the cache, schema mapping, the format's
-//!   sans-IO decoder, fetches and prefetch through the I/O scheduler).
+//!   sans-IO decoder, fetches and prefetch through the I/O scheduler); a
+//!   piece reads the units its range owns, as a split does, so the rows
+//!   and their order are those of the partitions.
 //! - **Footers are pipelined**: when a driver opens a split it starts
 //!   reading the footer of the next split's file on the I/O runtime
 //!   ([`IoContext::prefetch_metadata`]), so it is cached by the time that
@@ -46,7 +53,7 @@ use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
-use krishiv_io::split::{FilePartition, SplitConfig, SplitFile};
+use krishiv_io::split::{FilePartition, MorselSplit, SplitConfig, SplitFile};
 use krishiv_io::{
     ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
     MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowLevel, ScanOptions, ScanRequest, ScanStream,
@@ -85,6 +92,8 @@ pub struct FileScan {
     format_options: FormatOptions,
     scan_options: ScanOptions,
     partitions: Partitions,
+    /// The smallest morsel: `spark.sql.files.openCostInBytes`.
+    min_morsel_bytes: u64,
 }
 
 impl std::fmt::Debug for FileScan {
@@ -117,6 +126,7 @@ impl FileScan {
             format_options,
             scan_options,
             partitions: Partitions::Plan(splits),
+            min_morsel_bytes: splits.open_cost_in_bytes,
         }
     }
 
@@ -313,6 +323,7 @@ pub struct FileScanSource {
     io: IoContext,
     files: Arc<[FileRef]>,
     partitions: Arc<[FilePartition]>,
+    min_morsel_bytes: u64,
     /// Table level, immutable.
     request: ScanRequest,
     selection: Option<Arc<dyn FileSelections>>,
@@ -336,6 +347,8 @@ impl std::fmt::Debug for FileScanSource {
 }
 
 struct FileScanGlobal {
+    /// The morsels, in partition order.
+    morsels: Vec<Vec<MorselSplit>>,
     cursor: MorselCursor,
     /// The table-level request with the runtime filters attached.
     request: ScanRequest,
@@ -343,11 +356,12 @@ struct FileScanGlobal {
     returned: AtomicU64,
 }
 
-/// The split being read.
+/// The piece being read.
 struct Current {
     stream: ScanStream,
     file: usize,
-    range: ByteRange,
+    /// The planned split the piece belongs to (for `_metadata`).
+    split: ByteRange,
 }
 
 type MetadataFuture = BoxFuture<'static, krishiv_io::Result<Arc<dyn FileMetadata>>>;
@@ -356,13 +370,13 @@ struct FileScanLocal {
     consumer: Arc<ConsumerHandle>,
     /// The query's scan decode gate.
     gate: Arc<krishiv_io::ScanGate>,
-    /// The claimed partition and its next split.
-    partition: Option<(usize, usize)>,
+    /// The claimed morsel and its next piece.
+    morsel: Option<(usize, usize)>,
     current: Option<Current>,
     /// The footer read in flight for a file this driver opens next.
     ahead: Option<(usize, MetadataFuture)>,
     claimed: u64,
-    /// The claim ordinal of the claimed partition.
+    /// The claim ordinal of the claimed morsel.
     position: Option<u64>,
     rows: super::RowStage,
 }
@@ -447,6 +461,7 @@ impl FileScanSource {
             io: scan.io.clone(),
             files: Arc::clone(&scan.files),
             partitions: scan.plan(),
+            min_morsel_bytes: scan.min_morsel_bytes,
             request,
             selection: p.selection,
             format_options: scan.format_options.clone(),
@@ -489,14 +504,36 @@ impl FileScanSource {
             .add(&current.stream.metrics(), current.stream.overcommitted());
     }
 
-    /// Starts reading the footer of the file after `next` in `partition`
-    /// if it is another file and none is in flight for it.
-    fn read_ahead(&self, local: &mut FileScanLocal, partition: usize, next: usize) {
-        let Some(split) = self.partitions[partition].splits.get(next + 1) else {
+    /// The morsels the drivers of `ctx`'s executor claim: whole splits
+    /// when the scan reports `row_index` (a text format would count the
+    /// lines before every piece again), else pieces no smaller than
+    /// `spark.sql.files.openCostInBytes`.
+    fn morsels(&self, ctx: &TaskContext) -> Vec<Vec<MorselSplit>> {
+        let target = if self.request.metadata_cols.row_index {
+            u64::MAX
+        } else {
+            krishiv_io::split::morsel_bytes(
+                &self.partitions,
+                ctx.executor().parallelism(),
+                self.min_morsel_bytes,
+            )
+        };
+        let caps = self.format.capabilities(&self.format_options);
+        krishiv_io::split::morsels(&self.partitions, target, |f| {
+            self.files
+                .get(f)
+                .is_some_and(|f| caps.is_splittable(f.path.as_ref()))
+        })
+    }
+
+    /// Starts reading the footer of the file after piece `next` of
+    /// `morsel` if it is another file and none is in flight for it.
+    fn read_ahead(&self, local: &mut FileScanLocal, morsel: &[MorselSplit], next: usize) {
+        let Some(piece) = morsel.get(next + 1) else {
             return;
         };
-        let opening = self.partitions[partition].splits[next].file;
-        let wanted = split.file;
+        let opening = morsel[next].file;
+        let wanted = piece.file;
         if wanted == opening || local.ahead.as_ref().is_some_and(|(f, _)| *f == wanted) {
             return;
         }
@@ -515,10 +552,10 @@ impl FileScanSource {
         &self,
         local: &mut FileScanLocal,
         request: &ScanRequest,
-        file: usize,
-        range: ByteRange,
+        piece: MorselSplit,
     ) -> Result<()> {
-        // Stage 0: a filter that drops every row skips the split unopened.
+        let MorselSplit { file, range, split } = piece;
+        // Stage 0: a filter that drops every row skips the piece unopened.
         if let Some(f) = request.dynamic.iter().find(|f| f.drops_everything()) {
             f.filter().stats().add_split(range.len());
             return Ok(());
@@ -556,7 +593,7 @@ impl FileScanSource {
         local.current = Some(Current {
             stream,
             file,
-            range,
+            split,
         });
         Ok(())
     }
@@ -581,7 +618,7 @@ impl FileScanSource {
                     Some(b) => {
                         let file = self.file(cur.file)?;
                         let b = local.rows.apply(b)?;
-                        let b = self.append_metadata(b, file, cur.range)?;
+                        let b = self.append_metadata(b, file, cur.split)?;
                         g.returned.fetch_add(b.num_rows() as u64, Ordering::Relaxed);
                         return Ok(Some(Batch::new(b)));
                     }
@@ -593,28 +630,24 @@ impl FileScanSource {
                     }
                 }
             }
-            if let Some((p, next)) = local.partition
-                && let Some(split) = self.partitions[p].splits.get(next).copied()
+            if let Some((m, next)) = local.morsel
+                && let Some(piece) = g.morsels[m].get(next).copied()
             {
-                local.partition = Some((p, next + 1));
-                self.read_ahead(local, p, next);
-                self.open(local, &g.request, split.file, split.range)
-                    .await?;
+                local.morsel = Some((m, next + 1));
+                self.read_ahead(local, &g.morsels[m], next);
+                self.open(local, &g.request, piece).await?;
                 continue;
             }
-            let Some((ordinal, p)) = g.cursor.claim_ordered() else {
+            let Some((ordinal, m)) = g.cursor.claim_ordered() else {
                 return Ok(None);
             };
             local.position = Some(ordinal);
-            if p >= self.partitions.len() {
-                return Err(internal(format!(
-                    "partition {p} out of {}",
-                    self.partitions.len()
-                )));
+            if m >= g.morsels.len() {
+                return Err(internal(format!("morsel {m} out of {}", g.morsels.len())));
             }
-            local.partition = Some((p, 0));
+            local.morsel = Some((m, 0));
             local.claimed += 1;
-            // Runtime filter decisions depend on this partition's rows only.
+            // Runtime filter decisions depend on this morsel's rows only.
             local.rows.start_partition();
         }
     }
@@ -825,9 +858,11 @@ impl Source for FileScanSource {
         if request.row_level.runtime_filters() {
             request.dynamic = self.runtime.scan_filters(&self.request.table_schema);
         }
+        let morsels = self.morsels(ctx);
         Ok(Arc::new(FileScanGlobal {
             request,
-            cursor: MorselCursor::new(self.partitions.len(), ctx.query().config().seed),
+            cursor: MorselCursor::new(morsels.len(), ctx.query().config().seed),
+            morsels,
             returned: AtomicU64::new(0),
         }))
     }
@@ -842,7 +877,7 @@ impl Source for FileScanSource {
             rows: super::RowStage::new(&g.request.dynamic, &self.mapped, self.runtime.settings()),
             consumer: Arc::clone(ctx.consumer().consumer()),
             gate: Arc::clone(ctx.query().scan_gate()),
-            partition: None,
+            morsel: None,
             current: None,
             ahead: None,
             claimed: 0,

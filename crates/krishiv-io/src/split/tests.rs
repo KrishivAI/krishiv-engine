@@ -5,7 +5,10 @@
 use krishiv_common::config::Config;
 use serde_json::Value;
 
-use super::{FileSplit, SplitConfig, SplitFile, max_split_bytes, plan};
+use super::{
+    FilePartition, FileSplit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
+    max_split_bytes, morsel_bytes, morsels, plan,
+};
 use crate::format::{Capabilities, Splittable};
 use crate::io::ByteRange;
 
@@ -153,4 +156,122 @@ fn ten_thousand_files_cover_every_byte_once() {
         }
     }
     assert!(covered.iter().zip(&files).all(|(c, f)| *c == f.size));
+}
+
+fn part(index: usize, splits: &[(usize, u64, u64)]) -> FilePartition {
+    FilePartition {
+        index,
+        splits: splits
+            .iter()
+            .map(|&(file, start, end)| FileSplit {
+                file,
+                range: ByteRange::new(start, end),
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn morsel_bytes_cuts_four_per_driver_above_the_floor() {
+    // 246 MB over 12 drivers: 48 morsels of ~5.1 MB.
+    let one = [part(0, &[(0, 0, 246_000_000)])];
+    assert_eq!(MORSELS_PER_DRIVER, 4);
+    assert_eq!(morsel_bytes(&one, 12, 4 << 20), 5_125_000);
+    // A small table is cut no finer than the floor.
+    let small = [part(0, &[(0, 0, 10 << 20)])];
+    assert_eq!(morsel_bytes(&small, 12, 4 << 20), 4 << 20);
+    // No drivers counts as one; no bytes and no floor still gives 1.
+    assert_eq!(morsel_bytes(&one, 0, 1), 61_500_000);
+    assert_eq!(morsel_bytes(&[], 4, 0), 1);
+}
+
+#[test]
+fn morsels_cut_splits_into_near_equal_pieces_in_order() {
+    let parts = [part(0, &[(0, 0, 100)]), part(1, &[(0, 100, 250)])];
+    let m = morsels(&parts, 40, |_| true);
+    let ranges: Vec<Vec<(u64, u64, u64, u64)>> = m
+        .iter()
+        .map(|m| {
+            m.iter()
+                .map(|p| (p.range.start, p.range.end, p.split.start, p.split.end))
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        ranges,
+        vec![
+            vec![(0, 33, 0, 100)],
+            vec![(33, 66, 0, 100)],
+            vec![(66, 100, 0, 100)],
+            vec![(100, 137, 100, 250)],
+            vec![(137, 175, 100, 250)],
+            vec![(175, 212, 100, 250)],
+            vec![(212, 250, 100, 250)],
+        ]
+    );
+}
+
+#[test]
+fn morsels_pack_small_splits_and_never_span_partitions() {
+    let parts = [
+        part(0, &[(0, 0, 10), (1, 0, 10), (2, 0, 30), (3, 0, 5)]),
+        part(1, &[(4, 0, 5)]),
+        part(2, &[]),
+    ];
+    let m = morsels(&parts, 25, |_| true);
+    let files: Vec<Vec<usize>> = m
+        .iter()
+        .map(|m| m.iter().map(|p| p.file).collect())
+        .collect();
+    // File 2 (30 bytes) is cut in two pieces of 15; the empty partition
+    // gives no morsel.
+    assert_eq!(files, vec![vec![0, 1], vec![2], vec![2, 3], vec![4]]);
+}
+
+#[test]
+fn morsels_keep_unsplittable_splits_whole() {
+    let parts = [part(0, &[(0, 0, 100), (1, 0, 100)])];
+    let m = morsels(&parts, 30, |f| f == 1);
+    assert_eq!(
+        m[0],
+        vec![MorselSplit {
+            file: 0,
+            range: ByteRange::new(0, 100),
+            split: ByteRange::new(0, 100),
+        }]
+    );
+    assert_eq!(m.len(), 1 + 4);
+}
+
+#[test]
+fn morsels_tile_every_split_exactly() {
+    let files: Vec<SplitFile> = (0..500_u64)
+        .map(|i| SplitFile {
+            size: (i * 7919) % (300 << 20) + 1,
+            splittable: i % 3 != 0,
+        })
+        .collect();
+    let parts = plan(&SplitConfig::from_config(&Config::new(), 16), &files);
+    for drivers in [1, 7, 64] {
+        let target = morsel_bytes(&parts, drivers, 1 << 20);
+        let m = morsels(&parts, target, |f| files[f].splittable);
+        // Flattened, the pieces tile the partitions' splits in order.
+        let pieces: Vec<MorselSplit> = m.iter().flatten().copied().collect();
+        let mut at = 0;
+        for p in &parts {
+            for s in &p.splits {
+                let mut start = s.range.start;
+                while start < s.range.end {
+                    let piece = pieces[at];
+                    assert_eq!((piece.file, piece.split), (s.file, s.range));
+                    assert_eq!(piece.range.start, start);
+                    assert!(piece.range.len() <= target || !files[s.file].splittable);
+                    start = piece.range.end;
+                    at += 1;
+                }
+                assert_eq!(start, s.range.end);
+            }
+        }
+        assert_eq!(at, pieces.len());
+    }
 }

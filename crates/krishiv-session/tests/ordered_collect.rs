@@ -186,3 +186,55 @@ fn errors_and_a_dropped_stream_end_an_ordered_query() {
     // The session still answers.
     assert_eq!(collect_in_order(&s, "SELECT id FROM range(3)"), [0, 1, 2]);
 }
+
+/// The `EXPLAIN ANALYZE` text of `sql`.
+fn analyzed(session: &Session, sql: &str) -> String {
+    let df = block_on(session.sql(&format!("EXPLAIN ANALYZE {sql}"))).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let col = batches[0].column(0);
+    match col.data_type() {
+        DataType::Utf8View => col.as_string_view().value(0).to_owned(),
+        _ => col.as_string::<i32>().value(0).to_owned(),
+    }
+}
+
+/// One Parquet file of 32 row groups cut into finer morsels than its
+/// splits (a small `openCostInBytes` lowers the morsel floor): every run
+/// returns the rows in file order, also for a filter that keeps one
+/// stretch of the file.
+#[test]
+fn finer_morsels_keep_the_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sorted.parquet");
+    let file = std::fs::File::create(&path).unwrap();
+    let batch = ids(0..80_000);
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2_500))
+        .build();
+    let mut w = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let path = path.to_str().unwrap().to_owned();
+    let all = format!("SELECT id FROM parquet.`{path}` WHERE id % 3 != 1");
+    let stretch = format!("SELECT id FROM parquet.`{path}` WHERE id >= 50000 AND id < 61000");
+    let want_all: Vec<i64> = (0..80_000).filter(|i| i % 3 != 1).collect();
+    let want_stretch: Vec<i64> = (50_000..61_000).collect();
+    for threads in [2, 8] {
+        let s = session(threads);
+        s.conf()
+            .set("spark.sql.files.openCostInBytes", "1024")
+            .unwrap();
+        // Four morsels per driver, each a piece of one of the `threads`
+        // planned splits.
+        let text = analyzed(&s, &all);
+        let pieces: usize = text
+            .split("scan_splits=")
+            .nth(1)
+            .and_then(|t| t.split(' ').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        assert!(pieces >= 4 * threads, "{text}");
+        repeat_under_load(&s, &all, &want_all);
+        repeat_under_load(&s, &stretch, &want_stretch);
+    }
+}

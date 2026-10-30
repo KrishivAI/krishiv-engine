@@ -168,5 +168,89 @@ fn pack(splits: &[FileSplit], max_split: u64, open_cost: u64) -> Vec<FilePartiti
     parts
 }
 
+/// Morsels a scan cuts per driver: enough that a driver which finds its
+/// morsels cheap (a filter that skips their row groups) claims more, so a
+/// selective filter over clustered data still spreads over every driver.
+pub const MORSELS_PER_DRIVER: u64 = 4;
+
+/// A piece of a split, as one morsel reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MorselSplit {
+    /// Index of the file in the planner's input.
+    pub file: usize,
+    /// The bytes this piece reads: the units (row groups, lines) whose
+    /// midpoint or start it holds, as for any split.
+    pub range: ByteRange,
+    /// The planned split the piece belongs to (what `_metadata`'s
+    /// `file_block_start` and `file_block_length` report).
+    pub split: ByteRange,
+}
+
+/// The morsel size for `partitions` read by `drivers` drivers:
+/// [`MORSELS_PER_DRIVER`] morsels per driver, never less than `floor` bytes
+/// (the cost of opening a split).
+#[must_use]
+pub fn morsel_bytes(partitions: &[FilePartition], drivers: usize, floor: u64) -> u64 {
+    let total: u64 = partitions
+        .iter()
+        .flat_map(|p| &p.splits)
+        .map(|s| s.range.len())
+        .fold(0, u64::saturating_add);
+    let morsels = (drivers.max(1) as u64).saturating_mul(MORSELS_PER_DRIVER);
+    total.div_ceil(morsels).max(floor).max(1)
+}
+
+/// The morsels drivers claim for `partitions`: each partition's splits in
+/// order, splittable ones (`splittable(file)`) cut into near-equal pieces
+/// of at most `target` bytes, and consecutive pieces of one partition
+/// packed up to `target` bytes. A morsel never spans two partitions, and
+/// reading the morsels in order reads every partition's rows in its order:
+/// a unit belongs to the piece holding its midpoint (lines: the piece
+/// holding their start), as it belongs to one split. Partitions without
+/// splits give no morsel.
+#[must_use]
+pub fn morsels(
+    partitions: &[FilePartition],
+    target: u64,
+    splittable: impl Fn(usize) -> bool,
+) -> Vec<Vec<MorselSplit>> {
+    let target = target.max(1);
+    let mut out = Vec::new();
+    for p in partitions {
+        let mut current: Vec<MorselSplit> = Vec::new();
+        let mut size: u64 = 0;
+        for s in &p.splits {
+            let len = s.range.len();
+            let pieces = if splittable(s.file) && len > target {
+                len.div_ceil(target)
+            } else {
+                1
+            };
+            for i in 0..pieces {
+                let at = |k: u64| {
+                    // `len * k / pieces` without overflow.
+                    let off = u128::from(len) * u128::from(k) / u128::from(pieces);
+                    s.range.start + u64::try_from(off).unwrap_or(len)
+                };
+                let range = ByteRange::new(at(i), at(i + 1));
+                if !current.is_empty() && size.saturating_add(range.len()) > target {
+                    out.push(std::mem::take(&mut current));
+                    size = 0;
+                }
+                size = size.saturating_add(range.len());
+                current.push(MorselSplit {
+                    file: s.file,
+                    range,
+                    split: s.range,
+                });
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;
