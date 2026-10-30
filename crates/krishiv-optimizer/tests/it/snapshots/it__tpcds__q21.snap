@@ -5,8 +5,8 @@ expression: optimized.root().to_string()
 Project [w_warehouse_name#6, i_item_id#19, inv_before#68, inv_after#69]
 +- Limit 100
    +- Sort [w_warehouse_name#6 ASC NULLS FIRST, i_item_id#19 ASC NULLS FIRST], true
-      +- Filter ((cse_70#70 >= CAST((2.000 / 3.000) AS DECIMAL(38,16))) and (cse_70#70 <= CAST((3.000 / 2.000) AS DECIMAL(38,16))))
-         +- Project [w_warehouse_name#6, i_item_id#19, inv_before#68, inv_after#69, CASE WHEN (inv_before#68 > 0L) THEN ((CAST(inv_after#69 AS DECIMAL(20,0)) * 1.000) / CAST(inv_before#68 AS DECIMAL(20,0))) ELSE CAST(NULL AS DECIMAL(38,16)) END AS cse_70#70]
+      +- Filter ((cse_0#4294967296 >= CAST((2.000 / 3.000) AS DECIMAL(38,16))) and (cse_0#4294967296 <= CAST((3.000 / 2.000) AS DECIMAL(38,16))))
+         +- Project [w_warehouse_name#6, i_item_id#19, inv_before#68, inv_after#69, CASE WHEN (inv_before#68 > 0L) THEN ((CAST(inv_after#69 AS DECIMAL(20,0)) * 1.000) / CAST(inv_before#68 AS DECIMAL(20,0))) ELSE CAST(NULL AS DECIMAL(38,16)) END AS cse_0#4294967296]
             +- Aggregate [w_warehouse_name#6, i_item_id#19], [w_warehouse_name#6, i_item_id#19, sum(CASE WHEN (d_date#42 < DATE '2000-03-11') THEN inv_quantity_on_hand#3 ELSE 0 END) AS inv_before#68, sum(CASE WHEN (d_date#42 >= DATE '2000-03-11') THEN inv_quantity_on_hand#3 ELSE 0 END) AS inv_after#69]
                +- Project [w_warehouse_name#6, inv_quantity_on_hand#3, d_date#42, i_item_id#19]
                   +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#4)

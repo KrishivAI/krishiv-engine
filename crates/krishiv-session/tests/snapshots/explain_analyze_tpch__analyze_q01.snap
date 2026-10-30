@@ -9,15 +9,15 @@ Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST]
 :  · sink   #1 Sort p1: in 6 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>
 :  · source #8 Sort p0: out 6 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
 +- Exchange rangepartitioning(l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST)
-   +- Project [l_returnflag#8, l_linestatus#9, sum(l_quantity#4)#4611686018427387913 AS sum_qty#16, sum(l_extendedprice#5)#4611686018427387914 AS sum_base_price#17, sum(cse_24#24)#4611686018427387915 AS sum_disc_price#18, sum((cse_24#24 * (1 + l_tax#7)))#4611686018427387916 AS sum_charge#19, avg(l_quantity#4)#4611686018427387917 AS avg_qty#20, avg(l_extendedprice#5)#4611686018427387918 AS avg_price#21, avg(l_discount#6)#4611686018427387919 AS avg_disc#22, count(1)#4611686018427387920 AS count_order#23]
+   +- Project [l_returnflag#8, l_linestatus#9, sum(l_quantity#4)#4611686018427387913 AS sum_qty#16, sum(l_extendedprice#5)#4611686018427387914 AS sum_base_price#17, sum(cse_0#4294967296)#4611686018427387915 AS sum_disc_price#18, sum((cse_0#4294967296 * (1 + l_tax#7)))#4611686018427387916 AS sum_charge#19, avg(l_quantity#4)#4611686018427387917 AS avg_qty#20, avg(l_extendedprice#5)#4611686018427387918 AS avg_price#21, avg(l_discount#6)#4611686018427387919 AS avg_disc#22, count(1)#4611686018427387920 AS count_order#23]
       :  · operator #7 Project p1: in 6 rows (1 batch); out 6 rows (1 batch); compute <t> (max <t>, <n> drivers)
-      +- HashAggregate keys=[l_returnflag#8, l_linestatus#9], functions=[sum(l_quantity#4), sum(l_extendedprice#5), sum(cse_24#24), sum((cse_24#24 * (1 + l_tax#7))), avg(l_quantity#4), avg(l_extendedprice#5), avg(l_discount#6), count(1)]
+      +- HashAggregate keys=[l_returnflag#8, l_linestatus#9], functions=[sum(l_quantity#4), sum(l_extendedprice#5), sum(cse_0#4294967296), sum((cse_0#4294967296 * (1 + l_tax#7))), avg(l_quantity#4), avg(l_extendedprice#5), avg(l_discount#6), count(1)]
          :  · sink   #2 HashAggregate p2: in 80 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>; groups=6 spill_runs=0 spill_files=0 spill_bytes=<mem> repartitions=0 hash_entries=6 hash_buckets=<n> hash_resizes=<n> hash_index=swiss row_abandons=0 row_final_tasks=0 row_final_spills=0 row_final_flushes=0 table_layout=rows probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n>
          :  · source #6 HashAggregate p1: out 6 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
          +- Exchange hashpartitioning(l_returnflag#8, l_linestatus#9)
-            +- Project [l_returnflag#8, l_linestatus#9, l_quantity#4, l_extendedprice#5, cse_24#24, (cse_24#24 * (1 + l_tax#7)), l_quantity#4, l_extendedprice#5, l_discount#6]
+            +- Project [l_returnflag#8, l_linestatus#9, l_quantity#4, l_extendedprice#5, cse_0#4294967296, (cse_0#4294967296 * (1 + l_tax#7)), l_quantity#4, l_extendedprice#5, l_discount#6]
                :  · operator #5 Project p2: in 80 rows (1 batch); out 80 rows (1 batch); compute <t> (max <t>, <n> drivers)
-               +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, (l_extendedprice#5 * (1 - l_discount#6)) AS cse_24#24]
+               +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, (l_extendedprice#5 * (1 - l_discount#6)) AS cse_0#4294967296]
                   :  · operator #4 Project p2: in 80 rows (1 batch); out 80 rows (1 batch); compute <t> (max <t>, <n> drivers)
                   +- Scan spark_catalog.default.lineitem [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10], PushedFilters: [(l_shipdate#10 <= DATE '1998-09-02')]
                         · source #3 MemoryScan p2: out 80 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)

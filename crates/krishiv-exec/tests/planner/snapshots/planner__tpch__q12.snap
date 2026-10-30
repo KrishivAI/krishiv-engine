@@ -1,15 +1,14 @@
 ---
 source: crates/krishiv-exec/tests/planner/tpch.rs
-assertion_line: 592
 expression: tpch.plan(q).to_string()
 ---
 Sort [l_shipmode#23 ASC NULLS FIRST]
 +- Exchange rangepartitioning(l_shipmode#23 ASC NULLS FIRST)
-   +- Project [l_shipmode#23, sum(CASE WHEN (cse_27#27 or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END)#4611686018427387915 AS high_line_count#25, sum(CASE WHEN ((NOT cse_27#27) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)#4611686018427387916 AS low_line_count#26]
-      +- HashAggregate keys=[l_shipmode#23], functions=[sum(CASE WHEN (cse_27#27 or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END), sum(CASE WHEN ((NOT cse_27#27) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)]
+   +- Project [l_shipmode#23, sum(CASE WHEN (cse_0#4294967296 or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END)#4611686018427387915 AS high_line_count#25, sum(CASE WHEN ((NOT cse_0#4294967296) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)#4611686018427387916 AS low_line_count#26]
+      +- HashAggregate keys=[l_shipmode#23], functions=[sum(CASE WHEN (cse_0#4294967296 or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END), sum(CASE WHEN ((NOT cse_0#4294967296) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)]
          +- Exchange hashpartitioning(l_shipmode#23)
-            +- Project [l_shipmode#23, CASE WHEN (cse_27#27 or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END, CASE WHEN ((NOT cse_27#27) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END]
-               +- Project [o_orderpriority#5, l_shipmode#23, (o_orderpriority#5 == '1-URGENT') AS cse_27#27]
+            +- Project [l_shipmode#23, CASE WHEN (cse_0#4294967296 or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END, CASE WHEN ((NOT cse_0#4294967296) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END]
+               +- Project [o_orderpriority#5, l_shipmode#23, (o_orderpriority#5 == '1-URGENT') AS cse_0#4294967296]
                   +- HashJoin Inner, [o_orderkey#0] = [l_orderkey#9], RuntimeFilter #1: o_orderkey#0 -> spark_catalog.default.orders.o_orderkey
                      :- Scan spark_catalog.default.orders [o_orderkey#0, o_orderpriority#5]
                      +- BroadcastExchange

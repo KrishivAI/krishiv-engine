@@ -373,3 +373,22 @@ fn a_filter_rooting_a_subquery_keeps_its_width() {
         assert_same_rows(&data::small(seed), on.root(), off.root(), "subquery root");
     }
 }
+
+/// A user alias named like a CSE column (`cse_<n>`) is a user column: it
+/// must survive the pass that narrows union inputs, and results must not
+/// change.
+#[test]
+fn a_user_alias_named_like_a_cse_column_is_left_alone() {
+    let (on, off) = both(
+        "SELECT a AS cse_1, (c + 1) * (c + 1) AS x FROM t \
+         UNION ALL SELECT a, c FROM t",
+    );
+    let text = on.root().to_string();
+    // The user's `AS cse_1` and one extraction (`AS cse_0` of the pass).
+    assert_eq!(occurrences(on.root(), "AS cse_1#"), 1, "{text}");
+    assert_eq!(occurrences(on.root(), "AS cse_0#"), 1, "{text}");
+    assert_eq!(on.root().resolved_output(), off.root().resolved_output());
+    for seed in 1..=8 {
+        assert_same_rows(&data::small(seed), on.root(), off.root(), "cse_1 alias");
+    }
+}
