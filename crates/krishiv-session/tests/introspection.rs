@@ -271,3 +271,47 @@ fn many_stars_in_a_pattern_stay_fast() {
     );
     assert!(rows(&s, "SHOW TABLES LIKE '*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*c'").is_empty());
 }
+
+/// Review follow-ups: column statistics, namespace secrets, names and locations in `SHOW CREATE TABLE`.
+#[test]
+fn describe_modes_secrets_and_quoting() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (`a b` INT, c STRING) USING parquet");
+    assert_eq!(
+        class(&s, "DESCRIBE EXTENDED t c"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        class(&s, "DESCRIBE FORMATTED t c"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    let text = table(&s, "SHOW CREATE TABLE t").1[0][0].clone();
+    assert!(text.contains("  `a b` INT"), "{text}");
+    assert!(text.contains("\n  c STRING"), "{text}");
+    run(
+        &s,
+        "CREATE DATABASE d WITH DBPROPERTIES ('db.password'='hunter2', 'k'='v')",
+    );
+    let shown = table(&s, "DESCRIBE NAMESPACE EXTENDED d").1;
+    let props = shown
+        .iter()
+        .find(|r| r[0] == "Properties")
+        .map(|r| r[1].clone())
+        .unwrap();
+    assert!(
+        !props.contains("hunter2") && props.contains("k=v"),
+        "{props}"
+    );
+    // An external location with a quote reads back as one literal.
+    let odd = dir.path().join("it's");
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (x INT) USING parquet LOCATION '{}'",
+            odd.display().to_string().replace('\'', "\\'")
+        ),
+    );
+    let text = table(&s, "SHOW CREATE TABLE e").1[0][0].clone();
+    assert!(text.contains("it\\'s'"), "{text}");
+}

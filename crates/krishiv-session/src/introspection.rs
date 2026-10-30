@@ -120,6 +120,19 @@ fn type_sql(t: &DataType) -> Result<String, KrishivError> {
     Ok(text.to_uppercase())
 }
 
+/// A name as Spark's `quoteIfNeeded` writes it: bare when it is word characters
+/// and not all digits, else in backquotes.
+fn quote_if_needed(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.chars().all(|c| c.is_ascii_digit());
+    if plain {
+        name.to_owned()
+    } else {
+        format!("`{}`", name.replace('`', "``"))
+    }
+}
+
 fn sql_literal(v: &str) -> String {
     format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
 }
@@ -132,6 +145,19 @@ impl Session {
         booleans: &[&str],
         rows: Vec<Vec<Cell>>,
     ) -> Result<DataFrame, KrishivError> {
+        self.frame_with_order(columns, booleans, rows, true).await
+    }
+
+    /// [`Self::ordered_frame`], with the rows sorted into their written order
+    /// only when `sorted`. Spark's `SHOW COLUMNS` plan is not a sort, so its
+    /// golden results compare as a set; a sort node would compare them in order.
+    async fn frame_with_order(
+        &self,
+        columns: &[&str],
+        booleans: &[&str],
+        rows: Vec<Vec<Cell>>,
+        sorted: bool,
+    ) -> Result<DataFrame, KrishivError> {
         let mut all = vec!["__krishiv_row_order"];
         all.extend_from_slice(columns);
         let keyed = rows
@@ -143,6 +169,13 @@ impl Session {
             })
             .collect();
         let df = self.string_frame(&all, keyed).await?;
+        // Rows with a `key` column come out sorted by it; the others keep
+        // their order through the hidden column.
+        let df = if columns.contains(&"key") || !sorted {
+            df
+        } else {
+            df.order_by([col("__krishiv_row_order")])
+        };
         let df = df.select(columns.iter().map(|&c| {
             if booleans.contains(&c) {
                 col(c).eq(lit("true")).alias(c)
@@ -152,6 +185,17 @@ impl Session {
         }));
         df.analyzed_in(self.query_env()).await?;
         Ok(df)
+    }
+
+    /// The text of `DESCRIBE EXTENDED` and `SHOW CREATE TABLE` is Spark 4.2's
+    /// (`Created By`, `COLLATE UTF8_BINARY`); other profiles are refused rather
+    /// than shown 4.2 output.
+    fn require_current_profile(&self, what: &str) -> Result<(), KrishivError> {
+        if self.state.profile == krishiv_plan::analyzer::SparkProfile::V4_2 {
+            Ok(())
+        } else {
+            Err(unsupported(&format!("{what} under this Spark profile")))
+        }
     }
 
     fn require_namespace(&self, namespace: &str) -> Result<(), KrishivError> {
@@ -243,7 +287,7 @@ impl Session {
                 }
                 let columns = self.columns_of_relation(&name).await?;
                 let rows = columns.into_iter().map(|c| vec![s(c.0)]).collect();
-                self.ordered_frame(&["col_name"], &[], rows).await
+                self.frame_with_order(&["col_name"], &[], rows, false).await
             }
             ShowKind::Namespaces { pattern, .. } => {
                 let rows = store
@@ -262,6 +306,10 @@ impl Session {
                     return self.ordered_frame(&["key", "value"], &[], Vec::new()).await;
                 }
                 let table = self.stored_relation(&name)?;
+                if table.view.is_some() {
+                    self.authorize_view_select(&name.namespace, &name.name, &env)
+                        .await?;
+                }
                 let rows = match key {
                     Some(k) => vec![vec![
                         s(k),
@@ -289,6 +337,7 @@ impl Session {
                 }
                 let env = self.query_env();
                 let name = self.table_name(name, &env)?;
+                self.require_current_profile("SHOW CREATE TABLE")?;
                 if self.temp_entry_of(&name, &env) {
                     return Err(ExpectPermanentViewNotTemp {
                         operation: "SHOW CREATE TABLE".to_owned(),
@@ -297,6 +346,10 @@ impl Session {
                     .into());
                 }
                 let table = self.stored_relation(&name)?;
+                if table.view.is_some() {
+                    self.authorize_view_select(&name.namespace, &name.name, &env)
+                        .await?;
+                }
                 self.ordered_frame(
                     &["createtab_stmt"],
                     &[],
@@ -347,6 +400,10 @@ impl Session {
                 .collect());
         }
         let table = self.stored_relation(name)?;
+        if table.view.is_some() {
+            self.authorize_view_select(&name.namespace, &name.name, &env)
+                .await?;
+        }
         Ok(table
             .columns
             .iter()
@@ -375,7 +432,11 @@ impl Session {
                 let name = self.table_name(table, &env)?;
                 let columns = self.columns_of_relation(&name).await?;
                 if !column.is_empty() {
-                    return self.describe_column(&columns, column, mode.is_some()).await;
+                    if mode.is_some() {
+                        // Spark adds statistics rows; the engine keeps none.
+                        return Err(unsupported("DESCRIBE EXTENDED | FORMATTED ... column"));
+                    }
+                    return self.describe_column(&columns, column, false).await;
                 }
                 let mut rows: Vec<Vec<Cell>> = columns
                     .iter()
@@ -433,7 +494,7 @@ impl Session {
                     let props = meta
                         .properties
                         .iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, v)| format!("{k}={}", redact(k, v)))
                         .collect::<Vec<_>>()
                         .join(", ");
                     rows.push(vec![s("Properties"), s(format!("({props})"))]);
@@ -511,6 +572,7 @@ impl Session {
         &self,
         name: &TableName,
     ) -> Result<Vec<(String, String)>, KrishivError> {
+        self.require_current_profile("DESCRIBE EXTENDED")?;
         let t = self.stored_relation(name)?;
         let mut rows = vec![
             ("Catalog".to_owned(), crate::catalog::CATALOG.to_owned()),
@@ -579,7 +641,7 @@ impl Session {
 /// `SHOW CREATE TABLE` text of a table or view, in Spark's layout.
 fn create_statement(t: &CatalogTable) -> Result<String, KrishivError> {
     let column = |c: &crate::store::StoreColumn| -> Result<String, KrishivError> {
-        let mut out = format!("  {} {}", c.name, type_sql(&c.data_type)?);
+        let mut out = format!("  {} {}", quote_if_needed(&c.name), type_sql(&c.data_type)?);
         if !c.nullable {
             out.push_str(" NOT NULL");
         }
@@ -600,8 +662,8 @@ fn create_statement(t: &CatalogTable) -> Result<String, KrishivError> {
             .columns
             .iter()
             .map(|c| match &c.comment {
-                Some(m) => format!("  {} COMMENT {}", c.name, sql_literal(m)),
-                None => format!("  {}", c.name),
+                Some(m) => format!("  {} COMMENT {}", quote_if_needed(&c.name), sql_literal(m)),
+                None => format!("  {}", quote_if_needed(&c.name)),
             })
             .collect::<Vec<_>>()
             .join(",\n");
@@ -640,7 +702,10 @@ fn create_statement(t: &CatalogTable) -> Result<String, KrishivError> {
         out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
     }
     if !t.managed {
-        out.push_str(&format!("LOCATION 'file:{}'\n", t.location.display()));
+        out.push_str(&format!(
+            "LOCATION {}\n",
+            sql_literal(&format!("file:{}", t.location.display()))
+        ));
     }
     if !t.properties.is_empty() {
         out.push_str(&format!("TBLPROPERTIES (\n{})\n", pairs(&t.properties)));
