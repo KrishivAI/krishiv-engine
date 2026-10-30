@@ -82,6 +82,12 @@ message ExprEnv {
   // the first value on duplicate map keys.
   // feature: map_key_dedup_policy
   optional bool map_key_dedup_last_win = 6;
+  // `spark.sql.session.timeZone` as configured, when it differs from what
+  // `zone` renders (`UTC`, `+05:30`): `current_timezone()` returns it and
+  // `VV`/`z` print its zone id; a worker without the feature would show the
+  // rendered offset instead.
+  // feature: session_zone_name
+  optional string zone_name = 7;
 }
 
 message ExplainNode {

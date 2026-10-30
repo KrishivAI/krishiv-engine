@@ -15,18 +15,19 @@ use super::datetime::{MICROS_PER_DAY, days_from_civil};
 use super::text::trim_all;
 
 /// The zone a timestamp string names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Zone {
     /// None: the session zone applies.
     Session,
     /// A fixed offset in seconds east of UTC (`Z` is 0).
     Offset(i32),
-    /// A region id (`America/Los_Angeles`): needs the tz database.
-    Region,
+    /// A region id (`America/Los_Angeles`), resolved against the bundled
+    /// time-zone database where the zone is applied.
+    Region(String),
 }
 
 /// The outcome of parsing a string as a timestamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Parsed {
     /// The local date-time as microseconds since 1970-01-01 00:00:00, and
     /// the zone it is in.
@@ -74,7 +75,7 @@ pub fn timestamp_text(s: &str) -> TimestampText {
 pub fn timestamp_has_zone(s: &str) -> bool {
     matches!(
         parse(s.as_bytes()),
-        Parsed::At(_, Zone::Offset(_) | Zone::Region)
+        Parsed::At(_, Zone::Offset(_) | Zone::Region(_))
     )
 }
 
@@ -224,13 +225,17 @@ fn zone(z: &[u8]) -> Option<Zone> {
                 }
             }
             // Java region ids: a letter, then letters, digits and `~/._+-`.
+            // (all ASCII, so the text below is always valid UTF-8).
             let region = z.first().is_some_and(u8::is_ascii_alphabetic)
                 && z.len() > 1
                 && z.iter().all(|b| {
                     b.is_ascii_alphanumeric()
                         || matches!(b, b'~' | b'/' | b'.' | b'_' | b'+' | b'-')
                 });
-            region.then_some(Zone::Region)
+            if !region {
+                return None;
+            }
+            Some(Zone::Region(str::from_utf8(z).ok()?.to_owned()))
         }
     }
 }
@@ -303,7 +308,7 @@ mod tests {
         );
         assert_eq!(
             at("1970-01-01 00:00:00 America/Los_Angeles"),
-            Some((0, Zone::Region))
+            Some((0, Zone::Region("America/Los_Angeles".to_owned())))
         );
         assert_eq!(
             at("1970-01-01 00:00:00.123456789"),
@@ -358,7 +363,10 @@ mod tests {
         }
         assert_eq!(zone(b" GMT+8"), Some(Zone::Offset(8 * 3600)));
         assert_eq!(zone(b"UTC-01:30"), Some(Zone::Offset(-5400)));
-        assert_eq!(zone(b"Europe/Berlin"), Some(Zone::Region));
+        assert_eq!(
+            zone(b"Europe/Berlin"),
+            Some(Zone::Region("Europe/Berlin".to_owned()))
+        );
         assert_eq!(zone(b"1x"), None);
     }
 }

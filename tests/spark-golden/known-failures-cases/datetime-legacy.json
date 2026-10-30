@@ -11,9 +11,6 @@
     ],
     "datetime": [
       11,
-      13,
-      14,
-      15,
       16,
       17,
       18,
@@ -175,6 +172,11 @@
     "fn-url-xml-csv": [
       77,
       224
+    ],
+    "legacy-time-parser": [
+      13,
+      14,
+      15
     ],
     "nested-interval-types": [
       74,

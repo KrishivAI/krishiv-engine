@@ -1,6 +1,6 @@
 {
   "cases": {
-    "datetime": [
+    "legacy-time-parser": [
       0,
       1,
       2,

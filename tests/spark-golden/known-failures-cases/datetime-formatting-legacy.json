@@ -1,6 +1,6 @@
 {
   "cases": {
-    "datetime": [
+    "depends-on-command": [
       1,
       2,
       3,
@@ -30,13 +30,12 @@
       27,
       28,
       29,
-      30,
+      30
+    ],
+    "legacy-time-parser": [
       31,
       32,
       33
-    ],
-    "sql-commands": [
-      0
     ]
   },
   "file": "datetime-formatting-legacy",

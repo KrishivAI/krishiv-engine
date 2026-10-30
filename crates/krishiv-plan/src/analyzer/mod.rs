@@ -210,6 +210,10 @@ pub struct ResolutionConf {
     /// a SQL function's parameter named like a parameterless function
     /// (`current_user`) is the parameter, not the function.
     pub udf_parameter_shadows_function: bool,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`: Spark's
+    /// `SimpleDateFormat` parser, which Krishiv does not implement (the
+    /// datetime functions with a pattern are refused).
+    pub legacy_time_parser: bool,
 }
 
 impl Default for ResolutionConf {
@@ -231,13 +235,14 @@ impl Default for ResolutionConf {
             allow_parameterless_count: false,
             allow_star_with_single_table_identifier_in_count: false,
             udf_parameter_shadows_function: false,
+            legacy_time_parser: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 15] = [
+    pub const KEYS: [&'static str; 16] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -253,6 +258,7 @@ impl ResolutionConf {
         "spark.sql.legacy.allowParameterlessCount",
         "spark.sql.legacy.allowStarWithSingleTableIdentifierInCount",
         "spark.sql.legacy.allowUdfParameterToShadowParameterlessFunction",
+        "spark.sql.legacy.timeParserPolicy",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -300,6 +306,8 @@ impl ResolutionConf {
                 .map_or(d.udf_parameter_shadows_function, |s| {
                     s.trim().eq_ignore_ascii_case("true")
                 }),
+            legacy_time_parser: conf(Self::KEYS[15])
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
         }
     }
 }
@@ -388,6 +396,7 @@ impl ContextFingerprint {
             c.map_key_dedup_last_win,
             c.run_sql_on_files,
             c.timestamp_ntz,
+            c.legacy_time_parser,
             self.files,
             c.allow_parameterless_count,
             c.allow_star_with_single_table_identifier_in_count,
