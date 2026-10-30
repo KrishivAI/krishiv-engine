@@ -163,6 +163,11 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
     /// same query runs each partition's stream from its start, so one
     /// partition's values never depend on another's rows.
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value>;
+    /// Whether its value is the same for every row and partition (a
+    /// literal, or a cast of one): it reads no column and no state.
+    fn is_constant(&self) -> bool {
+        false
+    }
 }
 
 /// What every expression of one query is evaluated with.
@@ -504,6 +509,10 @@ impl PhysExpr for Lit {
 
     fn eval(&self, _batch: &RecordBatch, _partition: u32) -> Result<Value> {
         Ok(Value::Scalar(Arc::clone(&self.value)))
+    }
+
+    fn is_constant(&self) -> bool {
+        true
     }
 }
 

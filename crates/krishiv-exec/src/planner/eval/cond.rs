@@ -58,6 +58,12 @@ pub(super) fn in_list(
     for item in &items {
         compare(Builtin::Eq, Arc::clone(&v), Arc::clone(item), env)?;
     }
+    if items.len() > IN_SET_THRESHOLD
+        && items.iter().all(|e| e.is_constant())
+        && let Some(set) = InSet::try_new(&v, &items)
+    {
+        return Ok(Arc::new(set));
+    }
     Ok(Arc::new(InList {
         v,
         items,
@@ -82,6 +88,184 @@ fn string_target<'a>(types: impl IntoIterator<Item = &'a ArrowType>) -> Option<A
         }
     }
     out
+}
+
+/// More constant list elements than this make an `IN` a hash-set lookup
+/// (Spark's `spark.sql.optimizer.inSetConversionThreshold` default, above
+/// which its optimizer rewrites `In` to `InSet`).
+const IN_SET_THRESHOLD: usize = 10;
+
+/// `v IN (constants)` as a set lookup (Spark's `InSet`): one hash probe
+/// per row instead of one comparison per element. The same answers as
+/// [`InList`]: true on a match, NULL when `v` is NULL or nothing matched
+/// and the list holds a NULL, else false. Built only for types whose `=`
+/// is byte equality of a canonical encoding (strings and binaries by their
+/// bytes, integers, dates, timestamps, decimals and booleans by their
+/// row encoding); floats (`-0.0 = 0.0`, NaN) keep [`InList`].
+#[derive(Debug)]
+struct InSet {
+    v: Arc<dyn PhysExpr>,
+    keys: Keys,
+    /// The list holds a NULL.
+    has_null: bool,
+}
+
+/// How [`InSet`] keys its values.
+enum Keys {
+    /// String or binary bytes.
+    Bytes(std::collections::HashSet<Vec<u8>>),
+    /// Row-encoded values of one fixed-width type.
+    Rows(arrow_row::RowConverter, std::collections::HashSet<Vec<u8>>),
+}
+
+impl std::fmt::Debug for Keys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bytes(s) => write!(f, "Bytes({} keys)", s.len()),
+            Self::Rows(_, s) => write!(f, "Rows({} keys)", s.len()),
+        }
+    }
+}
+
+/// The bytes of row `i` of a string or binary array.
+fn byte_value(a: &dyn Array, i: usize) -> &[u8] {
+    match a.data_type() {
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => {
+            super::logic::str_value(a, i).as_bytes()
+        }
+        _ => super::logic::bin_value(a, i),
+    }
+}
+
+impl InSet {
+    /// The set of `items` (constants) for `v`, or `None` when `v`'s type
+    /// has no exact key or an element does not evaluate here (it then
+    /// keeps the per-row [`InList`], which raises any error only when a
+    /// row reaches it, as Spark does).
+    fn try_new(v: &Arc<dyn PhysExpr>, items: &[Arc<dyn PhysExpr>]) -> Option<Self> {
+        let t = v.data_type().clone();
+        let bytes = matches!(
+            t,
+            ArrowType::Utf8
+                | ArrowType::LargeUtf8
+                | ArrowType::Utf8View
+                | ArrowType::Binary
+                | ArrowType::LargeBinary
+                | ArrowType::BinaryView
+        );
+        let fixed = matches!(
+            t,
+            ArrowType::Int8
+                | ArrowType::Int16
+                | ArrowType::Int32
+                | ArrowType::Int64
+                | ArrowType::Date32
+                | ArrowType::Timestamp(..)
+                | ArrowType::Decimal128(..)
+                | ArrowType::Boolean
+        );
+        if !bytes && !fixed {
+            return None;
+        }
+        let empty = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
+        let mut has_null = false;
+        let mut values: Vec<ArrayRef> = Vec::with_capacity(items.len());
+        for item in items {
+            let a = Arc::clone(item.eval(&empty, 0).ok()?.array());
+            if a.len() != 1 {
+                return None;
+            }
+            if a.is_null(0) || *a.data_type() == ArrowType::Null {
+                has_null = true;
+                continue;
+            }
+            if *a.data_type() != t {
+                return None;
+            }
+            values.push(a);
+        }
+        let keys = if bytes {
+            Keys::Bytes(
+                values
+                    .iter()
+                    .map(|a| byte_value(a.as_ref(), 0).to_vec())
+                    .collect(),
+            )
+        } else {
+            let conv = arrow_row::RowConverter::new(vec![arrow_row::SortField::new(t)]).ok()?;
+            let mut set = std::collections::HashSet::with_capacity(values.len());
+            for a in &values {
+                let rows = conv.convert_columns(&[Arc::clone(a)]).ok()?;
+                set.insert(rows.row(0).as_ref().to_vec());
+            }
+            Keys::Rows(conv, set)
+        };
+        Some(Self {
+            v: Arc::clone(v),
+            keys,
+            has_null,
+        })
+    }
+}
+
+impl PhysExpr for InSet {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Boolean
+    }
+
+    fn nullable(&self) -> bool {
+        self.v.nullable() || self.has_null
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.v.eval(batch, partition)?;
+        let a = v.array();
+        let n = a.len();
+        let mut values = Vec::with_capacity(n);
+        let mut valid = Vec::with_capacity(n);
+        let mut decide = |found: Option<bool>| match found {
+            // NULL `v`.
+            None => {
+                values.push(false);
+                valid.push(false);
+            }
+            Some(true) => {
+                values.push(true);
+                valid.push(true);
+            }
+            Some(false) => {
+                values.push(false);
+                valid.push(!self.has_null);
+            }
+        };
+        match &self.keys {
+            Keys::Bytes(set) => {
+                for i in 0..n {
+                    decide(
+                        a.is_valid(i)
+                            .then(|| set.contains(byte_value(a.as_ref(), i))),
+                    );
+                }
+            }
+            Keys::Rows(conv, set) => {
+                let rows = conv
+                    .convert_columns(&[Arc::clone(a)])
+                    .map_err(|e| internal(&e.to_string()))?;
+                for i in 0..n {
+                    decide(a.is_valid(i).then(|| set.contains(rows.row(i).as_ref())));
+                }
+            }
+        }
+        let out: ArrayRef = Arc::new(BooleanArray::new(
+            BooleanBuffer::from(values),
+            Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valid))),
+        ));
+        Ok(if v.is_scalar() {
+            Value::Scalar(out)
+        } else {
+            Value::Array(out)
+        })
+    }
 }
 
 /// `IN (list)` over one evaluation of `v`: each list element is evaluated
@@ -782,6 +966,97 @@ mod tests {
             env,
         )
         .unwrap()
+    }
+
+    /// More than ten constant elements make a set lookup with the same
+    /// answers as the per-element `IN`: integers, strings (view and plain),
+    /// dates, with and without a NULL element, over a column with NULLs and
+    /// over a constant value; a float `IN` keeps the per-element path.
+    #[test]
+    fn a_long_constant_in_list_is_a_set_with_in_list_answers() {
+        let env = env(false);
+        let check = |v: Arc<dyn PhysExpr>, items: Vec<Arc<dyn PhysExpr>>, batch: &RecordBatch| {
+            let mut args = vec![Arc::clone(&v)];
+            args.extend(items.iter().cloned());
+            let set = in_list(args, &env).unwrap();
+            assert!(format!("{set:?}").starts_with("InSet"), "{set:?}");
+            let list: Arc<dyn PhysExpr> = Arc::new(InList {
+                v,
+                items,
+                kernels: env.kernels,
+            });
+            assert_eq!(set.nullable(), list.nullable());
+            let (got, want) = (values(&set, batch), values(&list, batch));
+            assert_eq!(got.as_boolean(), want.as_boolean());
+        };
+        let ints = Arc::new(Int64Array::from(vec![
+            Some(3),
+            None,
+            Some(40),
+            Some(7),
+            Some(12),
+        ]));
+        let strs = Arc::new(StringViewArray::from(vec![
+            Some("k3"),
+            None,
+            Some("a value longer than twelve bytes"),
+            Some("k40"),
+            Some(""),
+        ]));
+        let plain = Arc::new(StringArray::from(vec![
+            Some("k3"),
+            Some("x"),
+            None,
+            Some("k7"),
+            Some("k12"),
+        ]));
+        let dates = Arc::new(arrow_array::Date32Array::from(vec![
+            Some(3),
+            Some(5),
+            None,
+            Some(11),
+            Some(100),
+        ]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", ArrowType::Int64, true),
+            Field::new("s", ArrowType::Utf8View, true),
+            Field::new("p", ArrowType::Utf8, true),
+            Field::new("d", ArrowType::Date32, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![ints, strs, plain, dates]).unwrap();
+        for with_null in [false, true] {
+            let null = with_null.then(|| lit(&Literal::Null(None)));
+            let ints: Vec<_> = (0..12)
+                .map(|i| lit(&Literal::Long(i)))
+                .chain(null.clone())
+                .collect();
+            check(column(0, ArrowType::Int64, true), ints.clone(), &batch);
+            check(lit(&Literal::Long(5)), ints, &batch);
+            let mut strs: Vec<_> = (0..12)
+                .map(|i| lit(&Literal::String(format!("k{i}"))))
+                .chain(null.clone())
+                .collect();
+            strs.push(lit(&Literal::String(
+                "a value longer than twelve bytes".to_owned(),
+            )));
+            check(column(1, ArrowType::Utf8View, true), strs.clone(), &batch);
+            check(column(2, ArrowType::Utf8, true), strs, &batch);
+            let dates: Vec<_> = (0..12)
+                .map(|i| lit(&Literal::Date(i)))
+                .chain(null)
+                .collect();
+            check(column(3, ArrowType::Date32, true), dates, &batch);
+        }
+        let floats: Vec<_> = std::iter::once(column(0, ArrowType::Float64, true))
+            .chain((0..12).map(|i| lit(&Literal::Double(f64::from(i)))))
+            .collect();
+        let e = in_list(floats, &env).unwrap();
+        assert!(format!("{e:?}").starts_with("InList"), "{e:?}");
+        // Ten elements stay a list, as in Spark.
+        let ten: Vec<_> = std::iter::once(column(0, ArrowType::Int64, true))
+            .chain((0..10).map(|i| lit(&Literal::Long(i))))
+            .collect();
+        assert!(format!("{:?}", in_list(ten, &env).unwrap()).starts_with("InList"));
     }
 
     /// `coalesce` answers the first non-null argument of each row.
