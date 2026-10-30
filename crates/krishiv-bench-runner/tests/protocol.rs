@@ -400,11 +400,38 @@ fn plan_replies_the_profile_document() {
     assert!(!json.contains('\n'));
     // The document loads back: the plan tree, its operators and their row counts.
     let profile = krishiv_session::QueryProfile::from_json(json).unwrap();
+    fn walk<'a>(
+        n: &'a krishiv_exec::profile::ProfileNode,
+        out: &mut Vec<&'a krishiv_exec::profile::ProfileNode>,
+    ) {
+        out.push(n);
+        for c in &n.children {
+            walk(c, out);
+        }
+    }
+    let mut nodes = Vec::new();
+    walk(&profile.plan, &mut nodes);
+    // The plan holds the aggregate over the scan of `lineitem`.
     assert!(
-        !profile.plan.children.is_empty() || profile.plan.id.is_some(),
-        "{json}"
+        nodes.iter().any(|n| n.name.contains("Aggregate")),
+        "no aggregate in {nodes:#?}"
     );
-    assert!(!profile.metrics.operators.is_empty(), "{json}");
+    assert!(
+        nodes
+            .iter()
+            .any(|n| n.name.contains("Scan") && n.detail.contains("lineitem")),
+        "no lineitem scan in {nodes:#?}"
+    );
+    // The root produced the query's 3 groups, as the `OK 3` of the reply says.
+    let root = profile.plan.id.expect("the root is a plan node");
+    let produced: Vec<u64> = profile
+        .metrics
+        .operators
+        .values()
+        .filter(|o| o.node == Some(root) && o.role != krishiv_exec::OperatorRole::Sink)
+        .map(|o| o.metrics.rows_out)
+        .collect();
+    assert_eq!(produced.last(), Some(&3), "{produced:?} in {json}");
     assert!(
         r.handle_line("PLAN")
             .unwrap()

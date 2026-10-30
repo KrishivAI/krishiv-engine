@@ -36,11 +36,7 @@ use krishiv_plan::{
 
 use crate::dag;
 use crate::expr::is_deterministic;
-use crate::restrict::{max_id, subquery_plans};
-
-/// The largest attribute id a plan may hold (the analyzer's bound, about
-/// 2^62): an instance that would pass it is not inlined.
-const MAX_ID: u64 = 1 << 62;
+use crate::restrict::{MAX_ID, max_id, subquery_plans};
 
 /// `root` with its CTE references inlined where Spark inlines them.
 pub(crate) fn inline(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {

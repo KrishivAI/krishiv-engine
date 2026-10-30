@@ -118,6 +118,7 @@ def main(argv=None) -> None:
     ed.add_argument("--threads", type=int, default=8, help="threads for both engines")
     ed.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
     ed.add_argument("--out", default=None, help="report directory (default $KRISHIV_DATA/results/explain-diff)")
+    ed.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds for Krishiv (0 = none)")
     ed.add_argument("--runner", help=RUNNER_HELP)
     xb = sub.add_parser(
         "ab",
@@ -286,6 +287,7 @@ def main(argv=None) -> None:
             a.memory_limit,
             a.runner,
             Path(a.out) if a.out else None,
+            timeout_s=a.timeout,
         )
     elif a.cmd == "ab":
         from .ab import parse_conf, run_ab

@@ -105,15 +105,15 @@ def krishiv_tree(doc: dict[str, Any]) -> PNode:
     """The plan of a ``krishiv.query-profile`` v1 document as a :class:`PNode` tree."""
     if doc.get("format") != "krishiv.query-profile" or doc.get("version") != 1:
         raise ValueError("not a krishiv.query-profile v1 document")
-    nodes = {n["id"]: n for n in doc["plan"]}
+    plan = doc["plan"]  # a flat pre-order list; `children` are positions in it, `id` is null for a heading node
     ops: dict[Any, list[dict]] = collections.defaultdict(list)
     for o in sorted(doc["operators"], key=lambda o: o["id"]):
         ops[o.get("node")].append(o)
 
     def build(i: int) -> PNode:
-        n = nodes[i]
+        n = plan[i]
         kids = [build(c) for c in n["children"]]
-        mine = ops.get(i, [])
+        mine = ops.get(n["id"], []) if n["id"] is not None else []
         out = [o for o in mine if o["role"] != "sink"]
         sinks = [o for o in mine if o["role"] == "sink"]
         if out:
@@ -139,8 +139,8 @@ def krishiv_tree(doc: dict[str, Any]) -> PNode:
         p.signature = f"{n['name']}({_strip_ids(n['detail'])})[{','.join(k.signature for k in kids)}]"
         return p
 
-    child_ids = {c for n in doc["plan"] for c in n["children"]}
-    roots = [n["id"] for n in doc["plan"] if n["id"] not in child_ids]
+    child_pos = {c for n in plan for c in n["children"]}
+    roots = [i for i in range(len(plan)) if i not in child_pos]
     trees = [build(r) for r in roots]
     if len(trees) == 1:
         return trees[0]
@@ -507,14 +507,21 @@ def run_explain_diff(
     memory_limit: str = "12g",
     runner: str | None = None,
     out_dir: Path | None = None,
+    timeout_s: float = 600,
 ) -> Path:
-    """Profiles ``queries`` on both engines and writes one Markdown report (and the raw profiles as JSON)."""
+    """Profiles ``queries`` on both engines and writes one Markdown report (and the raw profiles as JSON).
+
+    A query that fails (an unsupported feature, a crash, a timeout, an unreadable profile) is recorded in the
+    report and the run goes on. ``timeout_s`` bounds each Krishiv query (0 disables it).
+    """
     import time
+
+    import duckdb
 
     from .abba import bench_lock, discover_tables
     from .adapters.base import Dataset
     from .adapters.duckdb_engine import DuckDBEngine
-    from .adapters.krishiv import KrishivEngine
+    from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
     from .paths import data_root, dataset_dir, results_dir
     from .runner import SUITE_DATASET, load_queries
 
@@ -532,26 +539,36 @@ def run_explain_diff(
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
     out_dir = out_dir or results_dir() / "explain-diff"
     out_dir.mkdir(parents=True, exist_ok=True)
-    report = out_dir / f"{stamp}_{suite}_sf{sf:g}_{'-'.join(queries)}.md"
+    # A full suite run would put every query id in the name and pass the filesystem's limit.
+    tag = "-".join(queries) if len(queries) <= 5 else f"{queries[0]}-to-{queries[-1]}-{len(queries)}q"
+    report = out_dir / f"{stamp}_{suite}_sf{sf:g}_{tag}.md"
     raw: dict[str, Any] = {}
     parts = [f"# explain-diff {suite} SF{sf:g} ({stamp})", ""]
     with bench_lock():
         krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=runner)
+        krishiv.timeout_s = timeout_s or None  # 0 disables the timeout
         duck = DuckDBEngine(threads=threads, memory_limit=memory_limit.upper())
-        duck.setup(ds)
-        krishiv.setup(ds)
         try:
+            duck.setup(ds)
+            krishiv.setup(ds)
             for qid in queries:
-                kp = krishiv.plan_profile(kq[qid])
-                assert duck.con is not None
-                t0 = time.perf_counter()
-                row = duck.con.execute("EXPLAIN (ANALYZE, FORMAT json) " + dq[qid].sql.rstrip().rstrip(";")).fetchone()
-                d_secs = time.perf_counter() - t0
-                assert row is not None
-                ddoc = json.loads(row[1])
-                k_tree, d_tree = krishiv_tree(kp["profile"]), duckdb_tree(ddoc)
-                parts.append(markdown(qid, k_tree, d_tree, diff(k_tree, d_tree), kp["seconds"], d_secs))
-                raw[qid] = {"krishiv": kp, "duckdb": ddoc}
+                try:
+                    kp = krishiv.plan_profile(kq[qid])
+                    assert duck.con is not None
+                    t0 = time.perf_counter()
+                    row = duck.con.execute(
+                        "EXPLAIN (ANALYZE, FORMAT json) " + dq[qid].sql.rstrip().rstrip(";")
+                    ).fetchone()
+                    d_secs = time.perf_counter() - t0
+                    assert row is not None
+                    ddoc = json.loads(row[1])
+                    k_tree, d_tree = krishiv_tree(kp["profile"]), duckdb_tree(ddoc)
+                    parts.append(markdown(qid, k_tree, d_tree, diff(k_tree, d_tree), kp["seconds"], d_secs))
+                    raw[qid] = {"krishiv": kp, "duckdb": ddoc}
+                except (RunnerError, RunnerCrashed, ValueError, KeyError, duckdb.Error) as e:
+                    msg = f"{type(e).__name__}: {str(e).strip().splitlines()[0] if str(e).strip() else ''}"
+                    parts += [f"## {qid}", "", f"**failed** - {msg}", ""]
+                    raw[qid] = {"error": msg}
         finally:
             krishiv.teardown()
             duck.teardown()

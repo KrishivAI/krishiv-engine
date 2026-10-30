@@ -328,3 +328,97 @@ def test_run_explain_diff_writes_the_report(tmp_path: Path, monkeypatch: pytest.
     assert raw["q01"]["krishiv"]["rows"] == 3
     with pytest.raises(SystemExit, match="unknown queries"):
         ed.run_explain_diff("tpch", 1, ["q99"], dataset="tpch-duckdb", threads=1, out_dir=tmp_path / "out")
+
+
+def test_krishiv_tree_reads_children_as_positions_and_ops_by_node_id():
+    """`children` are positions in the flat plan list and a heading node's `id` is null (profile `plan_json`)."""
+    plan = [
+        _n(None, "Subquery", "", [1, 2]),
+        _n(7, "Scan", "spark_catalog.default.a [x#1]"),
+        _n(9, "Scan", "spark_catalog.default.b [y#2]"),
+    ]
+    ops = [_op(0, 7, "FileScan", "source", 0, 4), _op(1, 9, "FileScan", "source", 0, 6)]
+    tree = ed.krishiv_tree(krishiv_doc(plan, ops))
+    assert tree.name == "Subquery"
+    assert [c.rows for c in tree.children] == [4, 6]
+    assert tree.tables == ("a", "b")
+
+
+def _prepare_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plan_profile, ids):
+    """A tiny TPC-H-shaped dataset and a Krishiv engine whose `plan_profile` is `plan_profile`."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters.base import Query
+    from krishiv_bench.adapters.krishiv import KrishivEngine
+
+    ds = tmp_path / "data" / "tpch-duckdb" / "sf1"
+    ds.mkdir(parents=True)
+    pq.write_table(pa.table({"a": [1, 2, 3]}), ds / "t.parquet")
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    import krishiv_bench.runner as runner
+
+    monkeypatch.setattr(
+        runner, "load_queries", lambda suite, engine, only, *a: [Query(i, "SELECT a FROM t", suite) for i in ids]
+    )
+    monkeypatch.setattr(KrishivEngine, "setup", lambda self, d: None)
+    monkeypatch.setattr(KrishivEngine, "teardown", lambda self: None)
+    monkeypatch.setattr(KrishivEngine, "plan_profile", plan_profile)
+    monkeypatch.setattr(KrishivEngine, "__init__", lambda self, **kw: None)
+
+
+def _ok_profile(self, q):
+    profile = krishiv_doc([_n(0, "Scan", "t [a#1]")], [_op(0, 0, "FileScan", "source", 0, 3)])
+    return {"rows": 3, "seconds": 0.5, "profile": profile}
+
+
+def test_a_failed_query_is_recorded_and_the_run_goes_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from krishiv_bench.adapters.krishiv import RunnerError
+
+    def profile(self, q):
+        if q.id == "q02":
+            raise RunnerError("KRISHIV_UNSUPPORTED_FEATURE: qualify\nsecond line")
+        return _ok_profile(self, q)
+
+    _prepare_run(tmp_path, monkeypatch, profile, ["q01", "q02", "q03"])
+    out = ed.run_explain_diff(
+        "tpch", 1, ["q01", "q02", "q03"], dataset="tpch-duckdb", threads=1, out_dir=tmp_path / "o"
+    )
+    text = out.read_text()
+    assert "## q01" in text
+    assert "## q03" in text
+    assert "## q02\n\n**failed** - RunnerError: KRISHIV_UNSUPPORTED_FEATURE: qualify\n" in text
+    raw = json.loads(out.with_suffix(".json").read_text())
+    assert raw["q02"] == {"error": "RunnerError: KRISHIV_UNSUPPORTED_FEATURE: qualify"}
+    assert raw["q01"]["krishiv"]["rows"] == 3
+    assert raw["q03"]["krishiv"]["rows"] == 3
+
+
+def test_the_report_name_stays_bounded_for_a_full_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    ids = [f"q{i:02d}" for i in range(1, 100)]
+    _prepare_run(tmp_path, monkeypatch, _ok_profile, ids)
+    out = ed.run_explain_diff("tpch", 1, ids, dataset="tpch-duckdb", threads=1, out_dir=tmp_path / "o")
+    assert len(out.name) < 100
+    assert out.name.endswith("_q01-to-q99-99q.md")
+    assert out.exists()
+    few = ed.run_explain_diff("tpch", 1, ids[:2], dataset="tpch-duckdb", threads=1, out_dir=tmp_path / "o")
+    assert few.name.endswith("_q01-q02.md")
+
+
+@pytest.mark.parametrize(("given", "expected"), [(None, 600.0), (0, None), (12.5, 12.5)])
+def test_the_krishiv_runner_gets_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: float | None, expected: float | None
+):
+    seen: list[float | None] = []
+
+    def profile(self, q):
+        seen.append(self.timeout_s)
+        return _ok_profile(self, q)
+
+    _prepare_run(tmp_path, monkeypatch, profile, ["q01"])
+    out_dir = tmp_path / "o"
+    if given is None:
+        ed.run_explain_diff("tpch", 1, ["q01"], dataset="tpch-duckdb", threads=1, out_dir=out_dir)
+    else:
+        ed.run_explain_diff("tpch", 1, ["q01"], dataset="tpch-duckdb", threads=1, out_dir=out_dir, timeout_s=given)
+    assert seen == [expected]
