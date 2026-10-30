@@ -184,7 +184,7 @@ pub fn builtins() -> &'static Registry {
     &BUILTINS
 }
 
-/// Whether `name` is one Spark's grammar owns (see [`grammar_row`]): it has
+/// Whether `name` is one Spark's grammar owns (`TIMESTAMPADD` and `TIMESTAMPDIFF`): it has
 /// a definition but no row in Spark's function catalog, and the lowering
 /// reaches it through the keyword-unit forms. A call spelled as an ordinary
 /// function (`timestampadd(col, 1, ts)`) also resolves here, where Spark says
