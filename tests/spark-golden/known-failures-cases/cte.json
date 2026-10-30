@@ -2,17 +2,11 @@
   "cases": {
     "depends-on-command": [
       19,
-      45,
       46,
-      47,
-      48
+      47
     ],
     "query-features": [
       17
-    ],
-    "sql-commands": [
-      3,
-      54
     ],
     "subqueries": [
       27,

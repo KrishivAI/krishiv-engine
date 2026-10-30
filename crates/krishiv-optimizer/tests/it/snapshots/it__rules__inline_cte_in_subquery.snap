@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "WITH v AS (SELECT a FROM t WHERE b = 'x') SELECT a FROM u WHERE a IN (SELECT a FROM v) AND a NOT IN (SELECT a + 1 FROM v)"
+---
+Join LeftAnti, ((a#3 == (a + 1)#8) or isnull((a#3 == (a + 1)#8)))
+:- Join LeftSemi, (a#3 == a#5)
+:  :- Scan spark_catalog.default.u [a#3]
+:  +- Project [a#9 AS a#5]
+:     +- Shift +9 (shared #1)
+:        +- Project [a#0]
+:           +- Filter (b#1 == 'x')
+:              +- Scan spark_catalog.default.t [a#0, b#1]
++- Shift +2
+   +- Project [(a#9 + 1) AS (a + 1)#6]
+      +- Shared #1, printed above

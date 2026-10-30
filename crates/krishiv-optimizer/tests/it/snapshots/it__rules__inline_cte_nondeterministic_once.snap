@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "WITH r AS (SELECT a, rand() AS x FROM t) SELECT a FROM r WHERE a = 1"
+---
+Project [a#6 AS a#4]
++- Shift +6
+   +- Filter (a#0 == 1)
+      +- Scan spark_catalog.default.t [a#0]

@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x WHERE a > (SELECT max(a) FROM u)
+---
+Filter (a#0 > scalar-subquery)
+:  +- Aggregate [], [max(a#3) AS max(a)#5]
+:     +- Scan spark_catalog.default.u [a#3] (shared #1)
++- Union
+   :- Scan spark_catalog.default.t [a#0]
+   +- Shared #1, printed above

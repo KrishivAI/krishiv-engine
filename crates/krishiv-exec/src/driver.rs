@@ -323,6 +323,8 @@ struct Driver {
     waiting: Option<(usize, Blocked, Instant)>,
     batches: u64,
     yields: u64,
+    /// The source position last reported to the sink.
+    position: Option<u64>,
 }
 
 impl Driver {
@@ -378,6 +380,7 @@ impl Driver {
             waiting: None,
             batches: 0,
             yields: 0,
+            position: None,
             owner,
             run,
         })
@@ -418,6 +421,7 @@ impl Driver {
             m.compute_time += since(&*run.executor, start).saturating_sub(waited);
             let next = next?;
             let Some(batch) = next else { break };
+            self.report_position()?;
             self.metrics(0).output(batch.num_rows());
             self.batches += 1;
             if let Some(from) = self.push(0, batch).await? {
@@ -441,6 +445,25 @@ impl Driver {
                 .await?
                 .0?;
             self.metrics(k).compute_time += since(&*run.executor, start);
+        }
+        Ok(())
+    }
+
+    /// Tells the sink when the source moved to another morsel (see
+    /// [`Sink::position`](crate::operator::Sink::position)).
+    fn report_position(&mut self) -> Result<()> {
+        let run = Arc::clone(&self.run);
+        let position = run.pipeline.source.1.position(&self.source_local);
+        if position == self.position {
+            return Ok(());
+        }
+        self.position = position;
+        if let Some(p) = position {
+            let k = run.pipeline.operators.len() + 1;
+            let slots = self.slots.get_mut();
+            let local = slots.slot(k)?.local.as_mut();
+            let local = local.ok_or_else(|| internal("sink state missing".to_owned()))?;
+            run.pipeline.sink.1.position(local, &run.sink_global, p);
         }
         Ok(())
     }

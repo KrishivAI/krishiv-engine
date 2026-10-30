@@ -1,8 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      5
-    ],
     "fn-string": [
       20,
       21,
@@ -23,11 +20,7 @@
       40
     ],
     "sql-commands": [
-      2,
-      3,
-      4,
-      19,
-      41
+      19
     ]
   },
   "file": "postgreSQL/text",

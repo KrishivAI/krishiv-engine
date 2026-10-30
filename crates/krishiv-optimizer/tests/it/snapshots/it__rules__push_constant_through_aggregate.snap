@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT a, 'g' AS k, count(*) AS n FROM t GROUP BY a) x WHERE k = 'h'"
+---
+Aggregate [a#0], [a#0, 'g' AS k#3, count(1) AS n#4]
++- Filter false
+   +- Scan spark_catalog.default.t [a#0]

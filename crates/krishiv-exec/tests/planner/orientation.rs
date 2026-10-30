@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Which input a hash join prefers to build (design P2-T166): a semi, anti
-//! or left outer join whose right input is much larger than its left
-//! prefers to build the left one. Those joins do not run yet, so the plan
-//! keeps the right build and `EXPLAIN` shows the preference.
+//! Which input a hash join builds (design P2-T166): a semi, anti or left
+//! outer join whose right input is much larger than its left builds the
+//! left one, as a right semi, right anti or right outer join, and `EXPLAIN`
+//! shows the statistics that chose it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,32 +60,53 @@ fn joins(env: &Env, sql: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_much_larger_right_input_is_shown_as_the_side_not_to_build() {
+fn a_much_larger_right_input_builds_the_left_one() {
     let env = env();
-    let cases = [
-        (
-            "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
-            "HashJoin LeftSemi, [a#0] = [a#3], RuntimeFilter #1: a#0 -> spark_catalog.default.t.a, \
-             prefers RightSemi (probe: 10 rows / 0.0 MiB, statistics; build: 100000000 rows / 1144.4 MiB, statistics)",
+    let stats = |mib: &str| {
+        format!(
+            "builds left (left: 10 rows / 0.0 MiB, statistics; right: 100000000 rows / {mib} MiB, statistics)"
+        )
+    };
+    // The large side probes, and the small side's keys filter its scan.
+    assert_eq!(
+        joins(
+            &env,
+            "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE big.a = t.a)"
         ),
-        (
-            "SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
-            "HashJoin LeftAnti, [a#0] = [a#3], \
-             prefers RightAnti (probe: 10 rows / 0.0 MiB, statistics; build: 100000000 rows / 1144.4 MiB, statistics)",
+        [format!(
+            "HashJoin RightSemi, [a#3] = [a#0], RuntimeFilter #1: a#3 -> spark_catalog.default.big.a (bloom), {}",
+            stats("1144.4")
+        )]
+    );
+    assert_eq!(
+        joins(
+            &env,
+            "SELECT b FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.b = t.b)"
         ),
-    ];
-    for (sql, want) in cases {
-        assert_eq!(joins(&env, sql), [want], "{sql}");
-    }
+        [format!(
+            "HashJoin RightAnti, [b#4] = [b#1], RuntimeFilter #1: b#4 -> spark_catalog.default.big.b (bloom), {}",
+            stats("1525.9")
+        )]
+    );
     let outer = joins(
         &env,
-        "SELECT t.a, big.b FROM t LEFT JOIN big ON t.a = big.a",
+        "SELECT t.b, big.a FROM t LEFT JOIN big ON t.b = big.b",
     );
-    assert_eq!(outer.len(), 1);
-    assert!(outer[0].starts_with("HashJoin LeftOuter"), "{outer:?}");
+    assert_eq!(outer.len(), 1, "{outer:?}");
     assert!(
-        outer[0].contains(", prefers RightOuter (probe: 10 rows"),
+        outer[0].starts_with("HashJoin RightOuter, [b#"),
         "{outer:?}"
+    );
+    assert!(outer[0].contains("builds left (left: 10 rows"), "{outer:?}");
+    // Nullable keys flip too: build rows with a NULL `=` key are stored
+    // (and spill) with their partition, never indexed.
+    let anti = joins(
+        &env,
+        "SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
+    );
+    assert!(
+        anti.len() == 1 && anti[0].starts_with("HashJoin RightAnti"),
+        "{anti:?}"
     );
 }
 
@@ -134,31 +155,66 @@ fn a_default_estimate_needs_a_larger_ratio() {
     let sql = "SELECT a FROM bare WHERE EXISTS (SELECT 1 FROM big WHERE big.a = bare.a)";
     let js = joins(&env, sql);
     assert!(
-        js.iter().any(|j| j.contains(
-            "prefers RightSemi (probe: 1000000 rows / 11.4 MiB, default; build: 100000000"
-        )),
+        js.iter().any(|j| j.starts_with("HashJoin RightSemi")
+            && j.ends_with(
+                "builds left (left: 1000000 rows / 11.4 MiB, default; \
+                 right: 100000000 rows / 1144.4 MiB, statistics)"
+            )),
         "{js:?}"
     );
     let sql = "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM mid WHERE mid.a = t.a)";
     assert!(
         joins(&env, sql)
             .iter()
-            .any(|j| j.contains("prefers RightSemi")),
+            .any(|j| j.starts_with("HashJoin RightSemi")),
         "{sql}"
     );
 }
 
-/// A `WITH` reference reads as a default-sized relation (the estimator
-/// does not look through it), so it is not taken as resting on statistics.
+/// A deterministic `WITH` definition is inlined (Spark's `InlineCTE`), so
+/// its reference reads the statistics of what it scans; a nondeterministic
+/// one read twice stays a reference, a default-sized relation (the
+/// estimator does not look through it), not taken as resting on statistics.
 #[test]
-fn a_cte_reference_is_a_default_estimate() {
+fn an_inlined_cte_reads_statistics_and_a_kept_one_is_a_default_estimate() {
     let env = env();
     let sql = "WITH c AS (SELECT a FROM big) \
                SELECT a FROM t WHERE EXISTS (SELECT 1 FROM c WHERE c.a = t.a)";
     let js = joins(&env, sql);
     assert_eq!(js.len(), 1, "{js:?}");
     assert!(
-        js[0].ends_with("prefers RightSemi (probe: 10 rows / 0.0 MiB, statistics; build: 1000000 rows / 11.4 MiB, default)"),
+        js[0].starts_with("HashJoin RightSemi")
+            && js[0].ends_with(
+                "builds left (left: 10 rows / 0.0 MiB, statistics; \
+                 right: 100000000 rows / 1144.4 MiB, statistics)"
+            ),
         "{js:?}"
     );
+    let sql = "WITH c AS (SELECT a, rand() AS r FROM big) \
+               SELECT a FROM t WHERE EXISTS (SELECT 1 FROM c WHERE c.a = t.a) \
+               AND EXISTS (SELECT 1 FROM c WHERE c.a + 1 = t.a)";
+    let js = joins(&env, sql);
+    assert_eq!(js.len(), 2, "{js:?}");
+    assert!(js.iter().all(|j| j.contains("default)")), "{js:?}");
+}
+
+/// `krishiv.exec.join.buildSide=false` keeps Spark's build side (the right
+/// input) whatever the statistics say.
+#[test]
+fn the_build_side_setting_keeps_sparks_side() {
+    use krishiv_exec::planner::{DefaultPlanner, PhysicalPlanner as _, PlanningContext};
+    let env = env();
+    let sql = "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE big.a = t.a)";
+    let mut config = krishiv_common::config::Config::new();
+    config.set("krishiv.exec.join.buildSide", "false").unwrap();
+    let cx = PlanningContext::new(Arc::clone(&env.tables) as _, Arc::new(config));
+    let plan = krishiv_optimizer::optimize(&env.analyze(sql)).unwrap();
+    let text = DefaultPlanner.plan(&plan, &cx).unwrap().to_string();
+    let joins: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.find("HashJoin").map(|i| &l[i..]))
+        .collect();
+    assert_eq!(joins.len(), 1, "{text}");
+    assert!(joins[0].starts_with("HashJoin LeftSemi"), "{text}");
+    assert!(!joins[0].contains("builds left"), "{text}");
 }

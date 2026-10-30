@@ -402,17 +402,37 @@ pub(crate) fn columns(e: &PushdownExpr) -> Vec<ColumnPath> {
     out
 }
 
-/// Rows the filter saw and kept, since the decoder last read them.
+/// Rows the filter saw and kept, since the decoder last read them; and,
+/// for `EXPLAIN ANALYZE`, the rows the filter evaluated while decoding and
+/// kept, over the decoder's life.
 #[derive(Debug, Default)]
 pub(crate) struct Counters {
     seen: AtomicU64,
     kept: AtomicU64,
+    filtered: AtomicU64,
+    passed: AtomicU64,
 }
 
 impl Counters {
     pub(crate) fn add(&self, seen: usize, kept: usize) {
         self.seen.fetch_add(seen as u64, Ordering::Relaxed);
         self.kept.fetch_add(kept as u64, Ordering::Relaxed);
+    }
+
+    /// As [`add`](Self::add), for rows the filter evaluated while decoding
+    /// (not a measurement sample): also counted in [`totals`](Self::totals).
+    pub(crate) fn add_filtered(&self, seen: usize, kept: usize) {
+        self.add(seen, kept);
+        self.filtered.fetch_add(seen as u64, Ordering::Relaxed);
+        self.passed.fetch_add(kept as u64, Ordering::Relaxed);
+    }
+
+    /// `(evaluated, kept)` by the filter while decoding, never reset.
+    pub(crate) fn totals(&self) -> (u64, u64) {
+        (
+            self.filtered.load(Ordering::Relaxed),
+            self.passed.load(Ordering::Relaxed),
+        )
     }
 
     /// `(seen, kept)`, and resets both.
@@ -498,7 +518,7 @@ impl ArrowPredicate for ScanPredicate {
             BooleanBuffer::new_set(n)
         };
         let kept = keep.count_set_bits();
-        self.counters.add(n, kept);
+        self.counters.add_filtered(n, kept);
         // A dense batch is passed whole (a superset): decoding the other
         // columns with a fragmented selection costs more than the rows it
         // drops, and the `Filter` above drops them anyway.
@@ -552,6 +572,9 @@ pub(crate) struct LateMaterialization {
     /// There is no predicate to filter with yet (no static one, no runtime
     /// filter): the decoder stays as it is until one is published.
     idle: bool,
+    /// Row groups decoded with the filter, and without it.
+    groups_on: u64,
+    groups_off: u64,
 }
 
 impl LateMaterialization {
@@ -585,7 +608,16 @@ impl LateMaterialization {
             measured: false,
             wanted: guess,
             idle: false,
+            groups_on: 0,
+            groups_off: 0,
         }
+    }
+
+    /// `(row groups decoded with the filter, without it, rows the filter
+    /// evaluated, rows it kept)`, for `EXPLAIN ANALYZE`.
+    pub(crate) fn report(&self) -> (u64, u64, u64, u64) {
+        let (filtered, passed) = self.counters.totals();
+        (self.groups_on, self.groups_off, filtered, passed)
     }
 
     /// Whether the current row group is decoded with the filter.
@@ -687,6 +719,11 @@ impl LateMaterialization {
 
     /// A row group starts: while off, its first batch is measured.
     pub(crate) fn start_row_group(&mut self) {
+        if self.on {
+            self.groups_on += 1;
+        } else {
+            self.groups_off += 1;
+        }
         self.sample = !self.on && !self.disabled && !self.idle;
     }
 

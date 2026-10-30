@@ -56,6 +56,10 @@ serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 
+# The thread CPU clock of the stall-detector negative controls; absent on Windows.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["time"] }
+
 [target.'cfg(loom)'.dev-dependencies]
 loom = { workspace = true, features = ["futures"] }
 

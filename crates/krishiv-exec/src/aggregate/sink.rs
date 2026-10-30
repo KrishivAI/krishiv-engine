@@ -88,6 +88,9 @@ struct Counters {
     row_layout: std::sync::atomic::AtomicBool,
     /// Times a thread-local row table's fixed index was cleared when full.
     row_abandons: Arc<AtomicU64>,
+    /// Reallocations of the tables' hash indexes (every table, local and
+    /// final).
+    resizes: Arc<AtomicU64>,
     /// Partition tasks of the row tables' final phase.
     row_final_tasks: AtomicU64,
     /// Final phases that moved to disk (out of memory, or a spill request).
@@ -220,10 +223,16 @@ impl HashAggregate {
                 Table::Rows(
                     RowTable::new(&self.core, &g.seed, mode, local, 0)?
                         .widening(widen, self.widen_at)
-                        .with_abandons(Arc::clone(&self.counters.row_abandons)),
+                        .with_abandons(Arc::clone(&self.counters.row_abandons))
+                        .with_resizes(Arc::clone(&self.counters.resizes))
+                        .with_probes(g.probes.clone()),
                 )
             }
-            None => Table::Keys(AggTable::new(&self.core, &g.seed)?.with_probes(g.probes.clone())),
+            None => Table::Keys(
+                AggTable::new(&self.core, &g.seed)?
+                    .with_probes(g.probes.clone())
+                    .with_resizes(Some(Arc::clone(&self.counters.resizes))),
+            ),
         })
     }
 
@@ -1453,6 +1462,7 @@ impl Sink for HashAggregate {
             ("repartitions", m.repartitions),
             ("hash_entries", c.hash_entries.load(AtomicOrdering::Relaxed)),
             ("hash_buckets", c.hash_buckets.load(AtomicOrdering::Relaxed)),
+            ("hash_resizes", c.resizes.load(AtomicOrdering::Relaxed)),
         ]);
         out.push((
             std::borrow::Cow::Borrowed("hash_index"),

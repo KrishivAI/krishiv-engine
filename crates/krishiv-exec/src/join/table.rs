@@ -14,8 +14,16 @@
 //! re-encode. Each distinct key points to its newest row; older rows with
 //! the same key are chained through [`JoinTable::next`], so duplicate keys
 //! never lengthen a probe sequence.
+//!
+//! A join that returns its build rows by their matches (right semi, right
+//! anti, right outer; design P2-T166) gives the table a match bitmap
+//! ([`JoinTable::with_marks`]): probe drivers set a row's bit when a pair
+//! with it matches, and once every probe driver's input ended (the flush
+//! barrier orders those writes before the reads) the rows are emitted by
+//! their bits.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt64Type;
@@ -88,6 +96,17 @@ pub(crate) fn arena_schema(format: ArenaFormat<'_>) -> Result<SchemaRef> {
         }
     }
     Ok(Arc::new(Schema::new(fields)))
+}
+
+/// The arena column flagging rows with a NULL `=` key (right anti and
+/// right outer joins: stored, emitted as unmatched, never indexed).
+pub(crate) const NULL_KEY: &str = "null_key";
+
+/// `schema` with the [`NULL_KEY`] column appended.
+pub(crate) fn with_null_key(schema: &SchemaRef) -> SchemaRef {
+    let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(Field::new(NULL_KEY, DataType::Boolean, false));
+    Arc::new(Schema::new(fields))
 }
 
 /// Bytes of the arrow-row key rows in arena chunks (0 for row-layout
@@ -195,6 +214,9 @@ pub(crate) struct RowArena {
     hashes: UInt64Array,
     keys: Cols,
     payload: Option<Cols>,
+    /// Rows with a NULL `=` key that a right anti or right outer join
+    /// keeps: stored, never indexed (column `null_key`, when present).
+    null_key: Option<arrow_array::BooleanArray>,
 }
 
 impl RowArena {
@@ -212,6 +234,10 @@ impl RowArena {
             .clone();
         let keys = Cols::of(&batch, "key")?.ok_or_else(bad)?;
         let payload = Cols::of(&batch, "payload")?;
+        let null_key = match batch.data().column_by_name(NULL_KEY) {
+            Some(c) => Some(c.as_boolean_opt().ok_or_else(bad)?.clone()),
+            None => None,
+        };
         if u32::try_from(batch.num_rows()).is_err() {
             return Err(internal("a join partition has over 2^32 rows".to_owned()));
         }
@@ -220,6 +246,7 @@ impl RowArena {
             hashes,
             keys,
             payload,
+            null_key,
         })
     }
 
@@ -301,6 +328,13 @@ impl RowSource for RowArena {
     fn hash(&self, id: u32) -> u64 {
         self.hashes.values().get(id as usize).copied().unwrap_or(0)
     }
+
+    #[inline]
+    fn indexed(&self, id: u32) -> bool {
+        self.null_key
+            .as_ref()
+            .is_none_or(|f| (id as usize) >= f.len() || !f.value(id as usize))
+    }
 }
 
 /// The kind of a table's index, for `EXPLAIN ANALYZE` (a bit each, so a
@@ -354,6 +388,9 @@ pub(crate) struct JoinTable {
     arena: RowArena,
     index: Index,
     next: Vec<u32>,
+    /// One bit per row: a pair with the row matched (empty unless
+    /// [`with_marks`](Self::with_marks)).
+    marks: Vec<AtomicU64>,
 }
 
 impl JoinTable {
@@ -422,7 +459,82 @@ impl JoinTable {
             }
             Index::Rows { index, .. } => index.memory_size(),
         };
-        index + self.next.capacity() * size_of::<u32>()
+        index + self.next.capacity() * size_of::<u32>() + self.marks.capacity() * size_of::<u64>()
+    }
+
+    /// Bytes of the match bitmap of a table of `rows` rows
+    /// ([`with_marks`](Self::with_marks)).
+    pub(crate) fn marks_bytes(rows: usize) -> usize {
+        rows.div_ceil(64) * size_of::<u64>()
+    }
+
+    /// This table with a match bitmap, every bit clear.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if the bitmap cannot be allocated.
+    pub(crate) fn with_marks(mut self) -> Result<Self> {
+        let words = self.arena.len().div_ceil(64);
+        let mut marks = Vec::new();
+        marks
+            .try_reserve_exact(words)
+            .map_err(|e| internal(e.to_string()))?;
+        marks.resize_with(words, || AtomicU64::new(0));
+        self.marks = marks;
+        Ok(self)
+    }
+
+    /// Whether a pair with `row` matched (`false` without a bitmap).
+    #[inline]
+    pub(crate) fn is_marked(&self, row: u32) -> bool {
+        self.marks
+            .get(row as usize / 64)
+            .is_some_and(|w| w.load(Ordering::Relaxed) & (1 << (row % 64)) != 0)
+    }
+
+    /// Records that a pair with `row` matched. Probe drivers mark
+    /// concurrently; a bit already set is not written again, so rows many
+    /// probes match keep their cache line shared.
+    #[inline]
+    pub(crate) fn mark(&self, row: u32) {
+        if let Some(w) = self.marks.get(row as usize / 64) {
+            let bit = 1 << (row % 64);
+            if w.load(Ordering::Relaxed) & bit == 0 {
+                w.fetch_or(bit, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Marks `head` and every older row with its key (no residual
+    /// condition: every row of the chain matches). A chain whose head is
+    /// marked was marked whole already.
+    pub(crate) fn mark_chain(&self, head: u32) {
+        if head == NONE || self.is_marked(head) {
+            return;
+        }
+        let mut r = head;
+        while r != NONE {
+            self.mark(r);
+            r = self.next.get(r as usize).copied().unwrap_or(NONE);
+        }
+    }
+
+    /// Up to `limit` rows in `*from..end` whose mark is `marked`, appended
+    /// to `out`; `*from` moves past the rows looked at.
+    pub(crate) fn rows_marked(
+        &self,
+        marked: bool,
+        from: &mut u32,
+        end: u32,
+        limit: usize,
+        out: &mut Vec<u32>,
+    ) {
+        let n = u32::try_from(self.arena.len()).unwrap_or(u32::MAX).min(end);
+        while *from < n && out.len() < limit {
+            if self.is_marked(*from) == marked {
+                out.push(*from);
+            }
+            *from += 1;
+        }
     }
 
     /// [`build`](Self::build) with the row-layout index forced (tests).
@@ -444,7 +556,7 @@ impl JoinTable {
                 keys.reserve(n, arrow.values().len());
                 let mut heads: Vec<u32> = Vec::new();
                 heads.try_reserve_exact(n).map_err(oom)?;
-                for row in 0..u32::try_from(n).unwrap_or(0) {
+                for row in (0..u32::try_from(n).unwrap_or(0)).filter(|&r| arena.indexed(r)) {
                     let (id, new) =
                         keys.insert_hashed(arrow.value(row as usize), arena.hash(row))?;
                     if new {
@@ -471,7 +583,12 @@ impl JoinTable {
             },
             (None, None) => return Err(internal("join key rows without a layout".to_owned())),
         };
-        Ok(Self { arena, index, next })
+        Ok(Self {
+            arena,
+            index,
+            next,
+            marks: Vec::new(),
+        })
     }
 
     /// For each probe row `rows[j]` of `keys` (encoded in this table's key
@@ -511,9 +628,7 @@ impl JoinTable {
     }
 
     /// As [`find_heads`](Self::find_heads), counting probe lengths (keys
-    /// compared per lookup) into `count`. Only the arrow-row index counts;
-    /// the row-layout index answers uncounted (its lookups are not in
-    /// `count`).
+    /// compared per lookup) into `count`.
     pub(crate) fn find_heads_counted(
         &self,
         keys: &Encoded,
@@ -534,6 +649,9 @@ impl JoinTable {
                 id.and_then(|id| h.get(id as usize).copied())
                     .unwrap_or(NONE)
             })),
+            (Index::Rows { index, layout }, KeyRows::Layout(encoded)) => {
+                index.find_counted(layout, encoded, rows, &self.arena, heads, count);
+            }
             _ => self.find_heads(keys, rows, heads),
         }
     }

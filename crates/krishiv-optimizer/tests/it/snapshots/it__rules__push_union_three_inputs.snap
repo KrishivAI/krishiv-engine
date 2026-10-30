@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT a, 'x' AS k FROM t UNION ALL SELECT a, 'y' AS k FROM u UNION ALL SELECT a, 'z' AS k FROM t WHERE c > 0) w WHERE k <> 'y' AND a > 1"
+---
+Union
+:- Union
+:  :- Project [a#0, 'x' AS k#3]
+:  :  +- Filter (a#0 > 1)
+:  :     +- Scan spark_catalog.default.t [a#0, c#2] (shared #1)
+:  +- Project [a#4, 'y' AS k#6]
+:     +- Filter false
+:        +- Scan spark_catalog.default.u [a#4]
++- Project [a#0, 'z' AS k#7]
+   +- Filter ((c#2 > 0L) and (a#0 > 1))
+      +- Shared #1, printed above
