@@ -25,7 +25,6 @@
 //! **Platforms:** on macOS (no `O_PATH`) every ancestor of the anchor needs
 //! read permission; a search-only (mode 0711) ancestor fails with `EACCES`.
 
-use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
 use std::os::fd::OwnedFd;
@@ -85,6 +84,9 @@ pub enum AnchorError {
     /// A component of the path is a link or not a directory: it changed
     /// since the path was checked.
     Swapped(String),
+    /// A directory of the path has a name object paths cannot carry
+    /// unchanged (non-ASCII text or reserved characters).
+    UnsupportedName(String),
     /// Any other failure (permissions, I/O).
     Io(std::io::Error),
 }
@@ -93,6 +95,7 @@ impl fmt::Display for AnchorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Swapped(path) => write!(f, "a link or non-directory on the path {path}"),
+            Self::UnsupportedName(name) => write!(f, "the directory name {name:?}"),
             Self::Io(e) => write!(f, "{e}"),
         }
     }
@@ -227,6 +230,15 @@ impl BeneathStore {
             }
         }
         names.truncate(depth);
+        // Object paths percent-encode some names (`LocalFileSystem` names
+        // files by the encoded text), so a directory above the target whose
+        // name changes under encoding cannot be addressed by them.
+        if let Some(name) = names
+            .iter()
+            .find(|n| Path::from_iter([n.as_str()]).as_ref() != n.as_str())
+        {
+            return Err(AnchorError::UnsupportedName(name.clone()));
+        }
         Ok(Self {
             inner: Arc::new(Inner {
                 anchor: fd,
@@ -375,14 +387,14 @@ fn create_staging(parent: &OwnedFd, name: &str) -> Result<(File, String), Errno>
             Mode::from_bits_truncate(0o666),
         ) {
             Ok(fd) => return Ok((File::from(fd), staging)),
-            Err(Errno::EXIST) => n = n.saturating_add(1),
+            Err(Errno::EXIST) => n = n.checked_add(1).ok_or(Errno::EXIST)?,
             Err(e) => return Err(e),
         }
     }
 }
 
 fn modified(st: &Stat) -> DateTime<Utc> {
-    let secs = i64::from(st.st_mtime);
+    let secs = st.st_mtime;
     let nanos = u32::try_from(st.st_mtime_nsec).unwrap_or(0);
     DateTime::from_timestamp(secs, nanos).unwrap_or_default()
 }
@@ -402,7 +414,8 @@ fn meta_of(location: Path, st: &Stat) -> ObjectMeta {
 
 /// A staging file name (`<name>#<digits>`) of an upload in flight.
 fn is_staging(name: &str) -> bool {
-    name.rsplit_once('#')
+    // As `LocalFileSystem` reads a name: the text after the first `#`.
+    name.split_once('#')
         .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
@@ -441,17 +454,18 @@ fn entries(dir: &OwnedFd) -> StoreResult<Vec<(String, Stat)>> {
     Ok(out)
 }
 
-/// Opens the sub-directory `name` of `dir` for listing, never through a link.
-fn open_listing(dir: &OwnedFd, name: &str, at: &Path) -> StoreResult<OwnedFd> {
-    openat(dir, name, LIST_FLAGS, Mode::empty()).map_err(|e| errno(at, e))
-}
-
 impl BeneathStore {
     /// A readable descriptor of the directory `prefix`, or `None` when it
     /// does not exist or is not a directory.
     fn listing_dir(&self, prefix: &Path) -> StoreResult<Option<OwnedFd>> {
         let rel = self.rel(prefix)?;
-        let path_fd = match self.dir(&rel, false) {
+        self.listing_rel(&rel, prefix)
+    }
+
+    /// As [`Self::listing_dir`] for the directory `rel` below the anchor;
+    /// `prefix` names it in errors.
+    fn listing_rel(&self, rel: &[String], prefix: &Path) -> StoreResult<Option<OwnedFd>> {
+        let path_fd = match self.dir(rel, false) {
             Ok(fd) => fd,
             Err(Errno::NOENT) => return Ok(None),
             // A file in place of the directory lists nothing; a link there
@@ -480,24 +494,23 @@ impl BeneathStore {
     }
 
     fn list_all(&self, prefix: &Path) -> StoreResult<Vec<ObjectMeta>> {
-        let Some(root) = self.listing_dir(prefix)? else {
-            return Ok(Vec::new());
-        };
-        let base_rel = self.rel(prefix)?;
         let mut out = Vec::new();
-        let mut pending = VecDeque::from([(root, base_rel)]);
-        while let Some((dir, rel)) = pending.pop_front() {
+        // Directories still to read, by path below the anchor: each is
+        // re-resolved when its turn comes (never through a link), so one
+        // directory descriptor is open at a time however wide the tree is.
+        let mut pending = vec![self.rel(prefix)?];
+        while let Some(rel) = pending.pop() {
+            let dir = self.listing_rel(&rel, prefix)?;
+            let Some(dir) = dir else { continue };
             for (name, st) in entries(&dir)? {
-                let at = child_path(&self.inner.base, &rel, &name)?;
                 if FileType::from_raw_mode(st.st_mode) == FileType::Directory {
-                    let sub = open_listing(&dir, &name, &at)?;
-                    let mut sub_rel = rel.clone();
-                    sub_rel.push(name);
-                    pending.push_back((sub, sub_rel));
+                    let mut sub = rel.clone();
+                    sub.push(name);
+                    pending.push(sub);
                 } else if !is_staging(&name) {
                     // A link is an object of its own (its lstat size and
                     // mtime), never descended into.
-                    out.push(meta_of(at, &st));
+                    out.push(meta_of(child_path(&self.inner.base, &rel, &name)?, &st));
                 }
             }
         }

@@ -609,6 +609,20 @@ impl ScheduledRequest {
     }
 }
 
+/// A registered store held by its user (see [`IoContext::pin`]).
+#[derive(Clone)]
+pub struct PinnedStore {
+    id: StoreId,
+    store: Arc<dyn ObjectStore>,
+    lane: Arc<Lane>,
+}
+
+impl fmt::Debug for PinnedStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PinnedStore({})", self.id)
+    }
+}
+
 /// A query's handle on the scheduler (cheap to clone).
 #[derive(Clone)]
 pub struct IoContext {
@@ -1057,9 +1071,37 @@ impl IoContext {
     /// # Errors
     /// `INTERNAL_ERROR` if the store is not registered.
     pub fn upload(&self, store: &StoreId, path: Path) -> Result<Upload> {
-        let (s, lane) = self.sched.store(store)?;
-        let display = format!("{store}/{path}");
-        Ok(Upload::new(self.clone(), s, lane, path, display))
+        self.upload_pinned(&self.pin(store)?, path)
+    }
+
+    /// The registered store `id`, held: later requests through the
+    /// returned handle work even after the store is unregistered (a writer
+    /// that is still aborting when its write's private store is removed).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if the store is not registered.
+    pub fn pin(&self, id: &StoreId) -> Result<PinnedStore> {
+        let (store, lane) = self.sched.store(id)?;
+        Ok(PinnedStore {
+            id: id.clone(),
+            store,
+            lane,
+        })
+    }
+
+    /// [`Self::upload`] through a pinned store.
+    ///
+    /// # Errors
+    /// None today; the signature matches [`Self::upload`].
+    pub fn upload_pinned(&self, pinned: &PinnedStore, path: Path) -> Result<Upload> {
+        let display = format!("{}/{path}", pinned.id);
+        Ok(Upload::new(
+            self.clone(),
+            Arc::clone(&pinned.store),
+            Arc::clone(&pinned.lane),
+            path,
+            display,
+        ))
     }
 
     async fn put(
@@ -1256,9 +1298,17 @@ impl IoContext {
     /// # Errors
     /// `TASK_WRITE_FAILED` if the store refuses, or after retries.
     pub async fn delete(&self, store: &StoreId, path: &Path) -> Result<()> {
-        let (s, lane) = self.sched.store(store)?;
+        self.delete_pinned(&self.pin(store)?, path).await
+    }
+
+    /// [`Self::delete`] through a pinned store.
+    ///
+    /// # Errors
+    /// As [`Self::delete`].
+    pub async fn delete_pinned(&self, pinned: &PinnedStore, path: &Path) -> Result<()> {
+        let (s, lane) = (&pinned.store, &pinned.lane);
         let cfg = &self.sched.config;
-        let display = format!("{store}/{path}");
+        let display = format!("{}/{path}", pinned.id);
         let mut attempt = 0;
         loop {
             let r = {

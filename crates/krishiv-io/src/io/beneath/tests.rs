@@ -2,12 +2,6 @@
 //! `BeneathStore` against a real directory tree: nothing is created, written
 //! or deleted outside the anchor, with `openat2` and with the component walk.
 
-#![expect(
-    clippy::unwrap_used,
-    clippy::panic,
-    reason = "test helpers outside #[test] fns fail loudly"
-)]
-
 use std::os::unix::fs::symlink;
 use std::path::{Path as FsPath, PathBuf};
 
@@ -507,11 +501,48 @@ async fn a_directory_swapped_for_a_link_during_the_write_is_denied() {
 
 #[test]
 fn staging_names_are_recognized() {
-    assert!(is_staging("part-0#1") && is_staging("a#b#23"));
+    assert!(is_staging("part-0#1") && is_staging("a#23"));
+    // As `LocalFileSystem` reads a name: the text after the first `#`.
+    assert!(!is_staging("a#1#2") && !is_staging("a#b#23"));
     assert!(
         !is_staging("part-0")
             && !is_staging("part#")
             && !is_staging("part#x")
             && !is_staging("a#1b")
     );
+}
+
+#[test]
+fn a_directory_name_object_paths_would_encode_is_refused_up_front() {
+    let f = fixture();
+    for name in ["jos\u{e9}", "a~b", "a#b", "a%b"] {
+        std::fs::create_dir_all(f.root.join(name)).unwrap();
+        let e = BeneathStore::anchor(&f.root.join(name).join("out"));
+        assert!(
+            matches!(e, Err(AnchorError::UnsupportedName(ref n)) if n == name),
+            "{name}: {e:?}"
+        );
+    }
+    // The target's own name is not checked: it is encoded like any part name.
+    BeneathStore::anchor(&f.root.join("a/jos\u{e9}")).unwrap();
+}
+
+#[tokio::test]
+async fn a_listing_holds_one_descriptor_however_wide_the_tree_is() {
+    let f = fixture();
+    let s = store(&f, false);
+    for i in 0..300 {
+        std::fs::create_dir_all(f.root.join(format!("a/t/d{i}/e"))).unwrap();
+        std::fs::write(f.root.join(format!("a/t/d{i}/e/f")), b"x").unwrap();
+    }
+    // A low descriptor limit would fail a listing that keeps every pending
+    // directory open; the walk re-opens each directory when its turn comes.
+    let before = open_fds();
+    let all: Vec<_> = s.list(Some(&obj(&f, "t"))).try_collect().await.unwrap();
+    assert_eq!(all.len(), 300);
+    assert!(open_fds() <= before + 2, "no descriptor is left open");
+}
+
+fn open_fds() -> usize {
+    std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count)
 }

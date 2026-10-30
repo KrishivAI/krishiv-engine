@@ -1545,8 +1545,11 @@ impl Session {
         .await;
         // A store error after the anchor is open may be a link swapped into
         // the path: the audited denial is what the caller sees then.
-        if written.is_err() {
-            crate::access::still_physical(self, &at)?;
+        if written.is_err()
+            && let Err(denied) = crate::access::still_physical(self, &at)
+            && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
+        {
+            return Err(denied);
         }
         written
     }
@@ -1579,13 +1582,22 @@ impl Session {
                     // A link or file where a directory was checked: the
                     // audited denial if the path now resolves elsewhere.
                     crate::access::still_physical(self, at)?;
-                    return Err(internal(format!(
-                        "a component of {} is not a directory",
-                        at.display
-                    )));
+                    return Err(anchor_failed(
+                        at,
+                        "a component of the path is not a directory",
+                    ));
+                }
+                Err(krishiv_io::AnchorError::UnsupportedName(name)) => {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!(
+                            "writing below the directory {name:?} (a name with non-ASCII or \
+                             reserved characters above the target)"
+                        ),
+                    }
+                    .into());
                 }
                 Err(krishiv_io::AnchorError::Io(e)) => {
-                    return Err(internal(format!("could not open {}: {e}", at.display)));
+                    return Err(anchor_failed(at, &e.to_string()));
                 }
             }
         }
@@ -1624,6 +1636,17 @@ fn max_records_per_file(
         }
         .into()
     })
+}
+
+/// A write directory that could not be opened, as the path-based store
+/// reports it (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`).
+fn anchor_failed(at: &krishiv_exec::files::LocatedPath, reason: &str) -> KrishivError {
+    krishiv_common::error::KrishivObjectStoreRequestFailed {
+        path: at.display.clone(),
+        attempts: "1".to_owned(),
+        reason: reason.to_owned(),
+    }
+    .into()
 }
 
 /// Removes a write's private store registration when the write is over.
