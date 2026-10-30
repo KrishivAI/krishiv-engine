@@ -439,6 +439,10 @@ impl ScanPushdown for MemoryScan {
 }
 
 impl Source for MemoryScan {
+    fn runtime_filters(&self) -> Vec<krishiv_io::FilterId> {
+        self.runtime.filters().iter().map(|f| f.id()).collect()
+    }
+
     fn name(&self) -> &'static str {
         "MemoryScan"
     }

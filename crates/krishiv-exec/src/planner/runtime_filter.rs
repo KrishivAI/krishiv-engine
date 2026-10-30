@@ -21,13 +21,13 @@
 //!
 //! # Scans below pipeline breakers
 //! A site below an aggregate, a sort or another join's build side is read
-//! by a pipeline that may run while the producer's build does: the scan
-//! starts with the filter pending and adopts it at its next check point
-//! (row group, batch) — correct, only less effective. A scheduling-only
-//! dependency that makes such scans wait for the build was measured and
-//! dropped: the executor runs pipelines in dependency waves, so the extra
-//! dependency adds a wave and serializes unrelated pipelines (TPC-DS q30,
-//! q81 and q74 ran 1.6–1.9x slower with it).
+//! by a pipeline that could run while the producer's build does, so the
+//! executor starts it after the producer's pipeline (`runner.rs`,
+//! `with_filter_order`) unless the producer runs with or after it. A scan
+//! that still starts with the filter pending adopts it at its next check
+//! point (row group, batch): correct, only less effective. Pipelines start
+//! as soon as their own dependencies end, so the extra dependency delays
+//! that scan and nothing unrelated to it.
 //!
 //! # Cost model
 //! min/max and the distinct keys (up to the larger of
