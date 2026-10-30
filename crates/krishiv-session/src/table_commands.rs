@@ -1066,12 +1066,24 @@ impl Session {
     /// location, then adds the metadata (so a failed write leaves none).
     async fn create_table_as(
         &self,
-        mut table: CatalogTable,
+        table: CatalogTable,
         query: &Query,
         mode: CreateMode,
     ) -> Result<(), KrishivError> {
         let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        self.create_table_from(table, &df, mode).await
+    }
+
+    /// Writes `df` to the location of the new `table` (whose columns are
+    /// the frame's), then adds the metadata: the shared tail of `CREATE
+    /// TABLE ... AS SELECT` and `writeTo(..).create()`.
+    async fn create_table_from(
+        &self,
+        mut table: CatalogTable,
+        df: &DataFrame,
+        mode: CreateMode,
+    ) -> Result<(), KrishivError> {
         let analysis = df.analyzed_in(self.query_env()).await?;
         table.columns = analysis
             .analyzed
@@ -1093,7 +1105,7 @@ impl Session {
             .into());
         }
         // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        self.write_table_rows(&table, &df, "errorifexists").await?;
+        self.write_table_rows(&table, df, "errorifexists").await?;
         self.add_table(table, mode, true).await
     }
 
@@ -1402,8 +1414,33 @@ impl Session {
         let table = self.table_for_write(&name, "INSERT", &env)?;
         let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let listed: Vec<String> = c
+            .columns
+            .iter()
+            .map(|n| match n {
+                ColumnName::Ident(i) => Ok(i.value.clone()),
+                _ => Err(unsupported("IDENTIFIER() column names")),
+            })
+            .collect::<Result<_, _>>()?;
+        self.insert_rows(&name, &table, &source, &listed, c.by_name, c.overwrite)
+            .await
+    }
+
+    /// Inserts the rows of `source` into `table` (`INSERT INTO|OVERWRITE`,
+    /// `writeTo(..).append()`): `listed` names the target columns (empty:
+    /// all, by position, or by name with `by_name`).
+    async fn insert_rows(
+        &self,
+        name: &TableName,
+        table: &Arc<CatalogTable>,
+        source: &DataFrame,
+        listed: &[String],
+        by_name: bool,
+        overwrite: bool,
+    ) -> Result<(), KrishivError> {
+        let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
-        if c.overwrite
+        if overwrite
             && crate::catalog::reads_stored_table(
                 analysis.analyzed.plan.root(),
                 &name.namespace,
@@ -1426,18 +1463,10 @@ impl Session {
                 nullable: c.nullable,
             })
             .collect();
-        let listed: Vec<String> = c
-            .columns
-            .iter()
-            .map(|n| match n {
-                ColumnName::Ident(i) => Ok(i.value.clone()),
-                _ => Err(unsupported("IDENTIFIER() column names")),
-            })
-            .collect::<Result<_, _>>()?;
         let assignment = assign(
-            &table,
-            &listed,
-            c.by_name,
+            table,
+            listed,
+            by_name,
             &output,
             env.analysis.conf.case_sensitive,
         )?;
@@ -1465,12 +1494,96 @@ impl Session {
             select.push(value.alias(&column.name));
         }
         let df = base.select(select);
-        let mode = if c.overwrite { "overwrite" } else { "append" };
-        let written = self.write_table_rows(&table, &df, mode).await;
+        let mode = if overwrite { "overwrite" } else { "append" };
+        let written = self.write_table_rows(table, &df, mode).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
-        self.forget_cached(&name);
-        written.map_err(|e| overflow_in_table_insert(e, &table, &output, &assignment))
+        self.forget_cached(name);
+        written.map_err(|e| overflow_in_table_insert(e, table, &output, &assignment))
+    }
+
+    /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`
+    /// is `CREATE TABLE name AS SELECT` over `df` (one code path, a failed
+    /// write leaves no table), `Append` is `INSERT INTO name` by position.
+    /// `Replace` and `CreateOrReplace` fail as `REPLACE TABLE AS SELECT` does
+    /// on file-source tables; overwrites and partitioned or clustered tables
+    /// are unsupported, as in `INSERT` and `CREATE TABLE`.
+    pub(crate) async fn exec_write_v2(
+        &self,
+        df: &DataFrame,
+        spec: V2WriteSpec,
+        mode: V2Mode,
+    ) -> Result<(), KrishivError> {
+        let env = self.query_env();
+        let parsed = krishiv_sql::parse_multipart_identifier(&spec.table, &self.parser_options())
+            .map_err(|e| e.error)?;
+        let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
+        let name = TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?;
+        match mode {
+            // An append ignores the layout the builder was given: the
+            // existing table's layout rules.
+            V2Mode::Append => {
+                let table = self.table_for_write(&name, "INSERT", &env)?;
+                return self.insert_rows(&name, &table, df, &[], false, false).await;
+            }
+            V2Mode::Replace | V2Mode::CreateOrReplace => {
+                return Err(UnsupportedFeatureTableOperation {
+                    table_name: name.quoted(),
+                    operation: "REPLACE TABLE AS SELECT".to_owned(),
+                }
+                .into());
+            }
+            V2Mode::Create => {}
+        }
+        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+            return Err(unsupported("partitioned tables"));
+        }
+        let warehouse = self.warehouse_dir()?;
+        let provider = self.provider_of(spec.provider)?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
+        self.check_namespace(&name)?;
+        if self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some()
+        {
+            return Err(krishiv_common::error::TableOrViewAlreadyExists {
+                relation_name: name.quoted(),
+            }
+            .into());
+        }
+        let mut options = BTreeMap::new();
+        for (k, v) in &spec.options {
+            // Table metadata is stored as plain text: a secret never is.
+            let Some(text) = v.as_plain() else {
+                return Err(unsupported("secret table options"));
+            };
+            options.insert(k.clone(), text.to_owned());
+        }
+        if provider == "csv" {
+            options
+                .entry("header".to_owned())
+                .or_insert_with(|| "true".to_owned());
+        }
+        let table = CatalogTable {
+            namespace: name.namespace.clone(),
+            name: name.name.clone(),
+            managed: true,
+            provider,
+            location: managed_location(&warehouse, &name.namespace, &name.name),
+            columns: Vec::new(),
+            options,
+            properties: spec.properties,
+            comment: None,
+            created_ms: now_ms(),
+            root: warehouse,
+            view: None,
+        };
+        self.create_table_from(table, df, CreateMode::ErrorIfExists)
+            .await
     }
 
     /// Writes `df` to the files of `table` with the writer's save `mode`.
@@ -1486,6 +1599,37 @@ impl Session {
         }
         writer.save(&table.location.display().to_string()).await
     }
+}
+
+/// What [`Session::exec_write_v2`] writes: the table name as written and
+/// the builder state of [`DataFrameWriterV2`](crate::DataFrameWriterV2).
+/// Tables are managed (the writer has no `LOCATION`).
+pub(crate) struct V2WriteSpec {
+    /// The table name as written (`t`, `db.t` or `spark_catalog.db.t`).
+    pub table: String,
+    /// `using`: `None` for `spark.sql.sources.default`.
+    pub provider: Option<String>,
+    /// `option`/`options`: the table's options and its read options.
+    pub options: BTreeMap<String, OptionValue>,
+    /// `tableProperty`: the `TBLPROPERTIES`.
+    pub properties: BTreeMap<String, String>,
+    /// `partitionedBy` columns.
+    pub partitioned_by: Vec<String>,
+    /// `clusterBy` columns.
+    pub cluster_by: Vec<String>,
+}
+
+/// What [`Session::exec_write_v2`] does with the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V2Mode {
+    /// Create it; an existing table fails with `TABLE_OR_VIEW_ALREADY_EXISTS`.
+    Create,
+    /// Replace it (unsupported for file-source tables).
+    Replace,
+    /// Create or replace it (unsupported for file-source tables).
+    CreateOrReplace,
+    /// Append the rows to the existing table.
+    Append,
 }
 
 /// Where a table column's value comes from.

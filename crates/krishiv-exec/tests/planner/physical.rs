@@ -285,6 +285,7 @@ fn inconsistent_plans_are_internal_errors() {
             job_uuid: "job-1".to_owned(),
             max_records_per_file: 0,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
         }),
     };
     check(
