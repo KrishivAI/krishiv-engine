@@ -32,7 +32,6 @@ use krishiv_common::error::{
     NotSupportedCommandWithoutHiveSupport, SchemaNotFound, TableOrViewNotFound,
     UnresolvedColumnWithSuggestion, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
 };
-use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
@@ -181,9 +180,10 @@ impl Session {
     pub(crate) async fn exec_create_table(
         &self,
         t: &CreateTable,
-        text: &RedactedSql,
+        original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let warehouse = self.warehouse_dir()?;
         if t.temporary {
             return Err(unsupported("CREATE TEMPORARY TABLE"));
         }
@@ -246,8 +246,8 @@ impl Session {
             }
             .into());
         }
-        let mut options = options_of(&t.options, text);
-        let properties = options_of(&t.tblproperties, text);
+        let mut options = options_of(&t.options, original);
+        let properties = options_of(&t.tblproperties, original);
         let external = t.external || t.location.is_some();
         let location = match &t.location {
             Some(l) if l.is_empty() => {
@@ -257,7 +257,7 @@ impl Session {
                 .into());
             }
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
-            None => managed_location(&self.warehouse_dir()?, &name.namespace, &name.name),
+            None => managed_location(&warehouse, &name.namespace, &name.name),
         };
         if provider == "csv" {
             options
@@ -275,12 +275,12 @@ impl Session {
             properties,
             comment: t.comment.clone(),
             created_ms: now_ms(),
-            root: self.warehouse_dir()?,
+            root: warehouse.clone(),
         };
         match &t.as_query {
             Some(query) => self.create_table_as(table, query, mode).await?,
             None => {
-                table.columns = self.columns_of(t, text)?;
+                table.columns = self.columns_of(t, original)?;
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
@@ -319,7 +319,7 @@ impl Session {
     fn columns_of(
         &self,
         t: &CreateTable,
-        text: &RedactedSql,
+        original: &str,
     ) -> Result<Vec<StoreColumn>, KrishivError> {
         let mut columns: Vec<StoreColumn> = Vec::new();
         for element in &t.elements {
@@ -345,10 +345,12 @@ impl Session {
                 name: ident.value.clone(),
                 data_type: def.data_type.to_data_type()?,
                 nullable: !def.not_null,
-                default: def
-                    .default
-                    .as_ref()
-                    .map(|e| text.fragment(e.span.start..e.span.end).to_owned()),
+                default: def.default.as_ref().map(|e| {
+                    original
+                        .get(e.span.start..e.span.end)
+                        .unwrap_or_default()
+                        .to_owned()
+                }),
                 comment: def.comment.clone(),
             });
         }
@@ -516,9 +518,10 @@ impl Session {
     pub(crate) async fn exec_create_table_like(
         &self,
         t: &CreateTableLike,
-        text: &RedactedSql,
+        original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let warehouse = self.warehouse_dir()?;
         if t.file_format.is_some() || t.row_format.is_some() {
             return Err(NotSupportedCommandWithoutHiveSupport {
                 cmd: "CREATE Hive TABLE (AS SELECT)".to_owned(),
@@ -577,7 +580,7 @@ impl Session {
         let external = t.location.is_some();
         let location = match &t.location {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
-            None => managed_location(&self.warehouse_dir()?, &name.namespace, &name.name),
+            None => managed_location(&warehouse, &name.namespace, &name.name),
         };
         let mut options = BTreeMap::new();
         if provider == "csv" {
@@ -591,10 +594,10 @@ impl Session {
             location,
             columns,
             options,
-            properties: options_of(&t.tblproperties, text),
+            properties: options_of(&t.tblproperties, original),
             comment: None,
             created_ms: now_ms(),
-            root: self.warehouse_dir()?,
+            root: warehouse.clone(),
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -612,9 +615,11 @@ impl Session {
         if self.temp_entry_of(&name, &env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
+            self.state.cache.invalidate_table(&name.name);
         } else if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) {
             // Checked before the metadata goes: a refused delete must not orphan the files.
             let dir = self.deletable_dir(&table).await?;
+            self.forget_cached(&name);
             self.state
                 .catalog
                 .store
@@ -643,9 +648,20 @@ impl Session {
             }
             .into());
         }
-        self.delete_table_files(&table, true).await?;
+        self.forget_cached(&name);
+        let deleted = self.delete_table_files(&table, true).await;
+        // Data may have changed even when the cleanup failed part way.
         self.state.catalog.store.bump();
+        self.forget_cached(&name);
+        deleted?;
         self.empty_frame().await
+    }
+
+    /// Drops the cached relations that read the permanent table `name`: its data or existence changed.
+    fn forget_cached(&self, name: &TableName) {
+        self.state
+            .cache
+            .invalidate_table(&format!("{}.{}", name.namespace, name.name));
     }
 
     /// The permanent table `name` for a command that writes it.
@@ -755,11 +771,36 @@ impl Session {
             };
             select.push(value.alias(&column.name));
         }
-        let df = base.select(select);
+        let mut df = base.select(select);
+        if table.columns.iter().any(|c| !c.nullable) {
+            // A NULL for a NOT NULL column fails the write before any file is committed.
+            let quote = |n: &str| format!("`{}`", n.replace('`', "``"));
+            let checked = table
+                .columns
+                .iter()
+                .map(|column| {
+                    let q = quote(&column.name);
+                    if column.nullable {
+                        Ok(col(&column.name))
+                    } else {
+                        let message = format!(
+                            "NOT_NULL_ASSERT_VIOLATION: NULL value appeared in non-nullable field {q}"
+                        )
+                        .replace('\'', "''");
+                        expr(&format!(
+                            "CASE WHEN {q} IS NULL THEN raise_error('{message}') ELSE {q} END"
+                        ))
+                        .map(|e| e.alias(&column.name))
+                    }
+                })
+                .collect::<Result<Vec<_>, KrishivError>>()?;
+            df = df.select(checked);
+        }
         let mode = if c.overwrite { "overwrite" } else { "append" };
         let written = self.write_table_rows(&table, &df, mode).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
+        self.forget_cached(&name);
         written.map_err(|e| overflow_in_table_insert(e, &table, &output, &assignment))
     }
 
@@ -978,8 +1019,11 @@ fn overflow_in_table_insert(
             matches!(from, Source::Position(i)
                 if sql(&c.data_type) == target_type && sql(&output[*i].data_type) == source_type)
         })
-        .map(|(c, _)| c.name.clone())
-        .unwrap_or_default();
+        .map(|(c, _)| c.name.clone());
+    // No column matches: the overflow is the query's own, and Spark reports it as it is.
+    let Some(column) = column else {
+        return e;
+    };
     CastOverflowInTableInsert {
         source_type,
         target_type,
@@ -990,7 +1034,7 @@ fn overflow_in_table_insert(
 
 /// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
 /// for options as Spark does not (kept as written).
-fn options_of(options: &[TableOption], text: &RedactedSql) -> BTreeMap<String, String> {
+fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
     options
         .iter()
         .map(|o| {
@@ -1004,7 +1048,7 @@ fn options_of(options: &[TableOption], text: &RedactedSql) -> BTreeMap<String, S
             let value = o
                 .value
                 .as_ref()
-                .map(|v| literal_text(text.fragment(v.span.start..v.span.end)))
+                .map(|v| literal_text(original.get(v.span.start..v.span.end).unwrap_or_default()))
                 .unwrap_or_default();
             (key, value)
         })

@@ -361,6 +361,53 @@ fn dropping_a_table_after_the_warehouse_moved_removes_its_files() {
 }
 
 #[test]
+fn not_null_columns_refuse_nulls() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT NOT NULL, b INT)");
+    run(&s, "INSERT INTO t VALUES (1, NULL)");
+    let e = err(&s, "INSERT INTO t VALUES (NULL, 2)");
+    assert!(e.to_string().contains("NOT_NULL_ASSERT_VIOLATION"), "{e}");
+    let e = err(&s, "INSERT INTO t (b) VALUES (3)");
+    assert!(e.to_string().contains("NOT_NULL_ASSERT_VIOLATION"), "{e}");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM t"), ["1"]);
+}
+
+#[test]
+fn a_query_overflow_is_reported_as_the_querys_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a BIGINT)");
+    let e = err(&s, "INSERT INTO t SELECT CAST(3000000000 AS INT)");
+    assert_eq!(e.error_class().name(), "CAST_OVERFLOW", "{e}");
+}
+
+#[test]
+fn writes_and_drops_clear_cached_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT)");
+    run(&s, "INSERT INTO t VALUES (1)");
+    let df = s.table("t").cache();
+    let rows = |df: &krishiv_session::DataFrame| {
+        block_on(async { df.collect().await }).map(|b| {
+            b.iter()
+                .map(arrow_array::RecordBatch::num_rows)
+                .sum::<usize>()
+        })
+    };
+    assert_eq!(rows(&df).unwrap(), 1);
+    run(&s, "INSERT INTO t VALUES (2)");
+    assert_eq!(rows(&df).unwrap(), 2);
+    run(&s, "TRUNCATE TABLE t");
+    assert_eq!(rows(&df).unwrap(), 0);
+    run(&s, "INSERT INTO t VALUES (5)");
+    assert_eq!(rows(&df).unwrap(), 1);
+    run(&s, "DROP TABLE t");
+    assert!(rows(&df).is_err());
+}
+
+#[test]
 fn a_failed_insert_writes_no_files() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
@@ -535,6 +582,7 @@ fn names_that_could_be_paths_are_refused_and_nothing_outside_the_warehouse_is_to
     assert!(dir.path().exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_link_in_the_warehouse_is_never_followed_by_a_delete() {
     let dir = tempfile::tempdir().unwrap();
