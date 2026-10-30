@@ -531,6 +531,14 @@ impl Session {
             Statement::CreateTable(t) => self.exec_create_table(&t, query).await,
             Statement::CreateTableLike(t) => self.exec_create_table_like(&t, query).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
+            Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
+            Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
+            Statement::Use(u) => self.exec_use(&u).await,
+            Statement::Show(s) => self.exec_show(&s).await,
+            Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
+            Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
+            Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
+            Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             _ => Err(unsupported_statement("statements other than queries")),
@@ -1033,10 +1041,21 @@ impl Session {
     ) -> Result<AnalyzedPlan, KrishivError> {
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
-        let plan = crate::catalog::expand_temp_views(
+        let next_source = || self.next_source_id();
+        let plan = crate::catalog::expand_views(
             &self.state.catalog,
             plan,
             env.analysis.conf.case_sensitive,
+            Some(&crate::catalog::StoredViews {
+                parser: env.parser,
+                next_source: &next_source,
+                namespace: env
+                    .catalog
+                    .namespace()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| self.state.catalog.current_namespace()),
+            }),
         )?;
         let plan = Plan::try_new(plan)?;
         let analyzed = DefaultAnalyzer
@@ -1742,7 +1761,7 @@ const PARSER_KEYS: [&str; 10] = [
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
-fn unsupported_statement(what: &str) -> KrishivError {
+pub(crate) fn unsupported_statement(what: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: format!("{what} in sessions"),
     }

@@ -3,11 +3,6 @@
     "nested-interval-types": [
       20,
       24
-    ],
-    "sql-commands": [
-      10,
-      11,
-      12
     ]
   },
   "file": "double-quoted-identifiers",
