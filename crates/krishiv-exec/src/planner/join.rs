@@ -105,7 +105,7 @@ impl Planner<'_> {
         if choice.cartesian {
             // `SHUFFLE_REPLICATE_NL`: every pair of rows, the whole
             // condition as the filter.
-            return self.nested_loop(left, right, JoinType::Inner, &conjuncts);
+            return self.nested_loop(left, right, JoinType::Inner, kind, &conjuncts);
         }
         // The build side: right, else left (a right outer join is a left
         // outer join with the sides swapped).
@@ -116,6 +116,7 @@ impl Planner<'_> {
             JoinKind::LeftSemi => JoinType::LeftSemi,
             JoinKind::LeftAnti if null_aware => JoinType::NullAwareAnti,
             JoinKind::LeftAnti => JoinType::LeftAnti,
+            JoinKind::Existence(_) => JoinType::Existence,
             _ => JoinType::Inner,
         };
         let (probe, build) = if build_left {
@@ -127,7 +128,7 @@ impl Planner<'_> {
             (left, right)
         };
         if keys.is_empty() {
-            return self.nested_loop(probe, build, join_type, &residual);
+            return self.nested_loop(probe, build, join_type, kind, &residual);
         }
         let probe_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.0)).collect();
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
@@ -251,6 +252,9 @@ impl Planner<'_> {
         if matches!(join_type, JoinType::RightSemi | JoinType::RightAnti) {
             layout.clone_from(&build.layout);
         }
+        if let JoinKind::Existence(id) = kind {
+            layout.push(id);
+        }
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
         }
@@ -369,6 +373,7 @@ impl Planner<'_> {
         probe: Planned,
         build: Planned,
         join_type: JoinType,
+        kind: JoinKind,
         residual: &[&Expr],
     ) -> Result<Planned> {
         // Every probe row meets every build row: the build is broadcast.
@@ -378,6 +383,9 @@ impl Planner<'_> {
         let mut sites = probe.sites.clone();
         if matches!(join_type, JoinType::Inner | JoinType::LeftOuter) {
             layout.extend(&build.layout);
+        }
+        if let JoinKind::Existence(id) = kind {
+            layout.push(id);
         }
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
@@ -559,6 +567,7 @@ fn kind_sql(kind: JoinKind) -> &'static str {
         JoinKind::FullOuter => "FULL OUTER",
         JoinKind::LeftSemi => "LEFT SEMI",
         JoinKind::LeftAnti => "LEFT ANTI",
+        JoinKind::Existence(_) => "EXISTENCE",
         _ => "INNER",
     }
 }
@@ -578,7 +587,11 @@ fn can_build(left: bool, kind: JoinKind) -> bool {
 
 /// The sides Spark's shuffled hash join builds.
 fn spark_shuffle_hash(left: bool, kind: JoinKind) -> bool {
-    !left || !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti)
+    !left
+        || !matches!(
+            kind,
+            JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+        )
 }
 
 impl Planner<'_> {

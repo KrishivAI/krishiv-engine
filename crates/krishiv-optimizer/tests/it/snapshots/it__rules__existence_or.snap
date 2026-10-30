@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a) OR b = 'x'"
+---
+Project [a#0]
++- Filter (exists#6 or (b#1 == 'x'))
+   +- Join ExistenceJoin(exists#6), (a#3 == a#0)
+      :- Scan spark_catalog.default.t [a#0, b#1]
+      +- Scan spark_catalog.default.u [a#3]
