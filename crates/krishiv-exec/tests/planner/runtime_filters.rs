@@ -409,7 +409,12 @@ fn filters_prune_splits_row_groups_and_rows() {
     // pipeline starts after it: nearly every row meets the filter.
     let q = "SELECT x.k, t.v FROM (SELECT s AS k, count(*) AS c FROM big GROUP BY s) x \
              JOIN small t ON x.k = t.s";
-    let (_, c) = run(&t.plan_sql(q).unwrap());
+    let plan = t.plan_sql(q).unwrap();
+    configured(&mut t, MODES[0].1);
+    let off = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    configured(&mut t, &[]);
+    let (got, c) = run(&plan);
+    assert_eq!(sorted(&got), off);
     assert!(c.rows_dropped >= 3_600, "{c:?}");
 }
 
@@ -656,8 +661,12 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
         scan_waits(t.plan_sql(q).unwrap().plan.root(), &mut out);
         out
     };
-    let other = waits("SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64");
-    assert!(!other.is_empty() && other.iter().all(|w| *w), "{other:?}");
-    let own = waits("SELECT a.v FROM big a JOIN big b ON a.k64 = b.k64");
-    assert!(!own.is_empty() && own.iter().all(|w| !*w), "{own:?}");
+    assert_eq!(
+        waits("SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64"),
+        [true]
+    );
+    assert_eq!(
+        waits("SELECT a.v FROM big a JOIN big b ON a.k64 = b.k64"),
+        [false]
+    );
 }
