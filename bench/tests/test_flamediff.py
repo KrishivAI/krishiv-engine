@@ -43,8 +43,7 @@ def test_shares_count_a_recursive_frame_once_per_stack():
 def test_top_changes_ranks_by_absolute_share_change_and_truncates():
     a, b = {"r;x": 8.0, "r;y": 2.0}, {"r;x": 4.0, "r;y": 6.0}
     ch = flamediff.top_changes(a, b, n=1)
-    assert ch["self"] == [("x", 0.8, 0.4)] or ch["self"][0][0] in {"x", "y"}
-    assert len(ch["self"]) == 1
+    assert ch["self"] == [("x", 0.8, 0.4)]
     assert len(ch["inclusive"]) == 1
     full = flamediff.top_changes(a, b)
     assert {f for f, *_ in full["self"]} == {"x", "y"}
@@ -99,6 +98,18 @@ def test_run_flamediff_writes_all_outputs(tmp_path, monkeypatch):
     assert (out / "b.folded").read_text() == "r;x 4\nr;y 6\n"
     assert (out / "diff.folded").read_text() == "r;x 8 4\nr;y 2 6\n"
     assert "+40.00 pp" in (out / "summary.md").read_text()
+
+
+def test_run_flamediff_names_the_failing_side(tmp_path, monkeypatch):
+    stub(monkeypatch, tmp_path)
+
+    def sampler(runner, *a):
+        if runner == "B":
+            raise flamediff.RunnerCrashed("runner exited")
+        return Counter({"r;x": 1})
+
+    with pytest.raises(SystemExit, match=r"side B \(B\)"):
+        flamediff.run_flamediff("tpch", "q01", "A", "B", sampler=sampler)
 
 
 def test_run_flamediff_default_output_dir_and_errors(tmp_path, monkeypatch):

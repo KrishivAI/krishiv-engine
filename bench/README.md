@@ -169,9 +169,9 @@ uv run krishiv-bench bisect --suite tpcds --sf 1 --query q14 --good <sha> --bad 
 
 Bisects the first-parent commits after `--good` up to `--bad` (one commit per merged PR). Each probed commit gets its own
 `krishiv-bench-runner` (`--profile dist`, built in a scratch worktree under `$KRISHIV_DATA/bisect/<ts>`, one shared target
-dir, binaries cached by SHA). `--correctness` (default): the commit is bad when its rows differ from DuckDB's or the engine
+dir for the run; a binary is reused within the run and everything is removed at the end). `--correctness` (default): the commit is bad when its rows differ from DuckDB's or the engine
 fails. `--time`: a paired ABBA (`ab`) of the `--good` build against the probed build; bad when B/A is at least
-`--threshold` (default 1.10) with the 95% CI above 1. A commit that does not build is skipped, and the result then names
+`--threshold` (default 1.10) with the 95% CI above 1. A commit that does not build, or whose runner does not start, is skipped, and the result then names
 the range of candidates. The `--bad` commit must reproduce the problem or the run stops. Holds the bench lock. Output
 `$KRISHIV_DATA/results/<ts>_bisect_<suite>_<query>.json`. `nightly-perf.sh` calls it for a flagged regression.
 
@@ -191,7 +191,7 @@ from a perf PR's A/B.
 ## Trend page (`trend`)
 
 ```sh
-uv run krishiv-bench trend [--out <docs repo>/research/bench/trend.md] [--last 10]
+uv run krishiv-bench trend [--out trend.md] [--last 10]
 ```
 
 Per suite and scale factor: the Krishiv/DuckDB ratio of every query in the last `--last` `abba` results (oldest left), a

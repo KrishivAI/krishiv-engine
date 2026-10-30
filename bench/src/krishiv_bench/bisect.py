@@ -23,7 +23,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shutil
+import signal
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -90,21 +92,36 @@ def first_bad(commits: Sequence[str], probe: Probe) -> tuple[list[str], dict[str
     return list(commits[lo : hi + 1]), verdicts
 
 
+def resolve(repo: Path, rev: str) -> str:
+    """Full SHA of ``rev``; later git calls take only SHAs, so a revision cannot be read as an option.
+
+    # Errors
+    ``BisectError`` when ``rev`` is not a commit.
+    """
+    done = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--verify", "-q", "--end-of-options", f"{rev}^{{commit}}"],
+        capture_output=True,
+        text=True,
+    )
+    if done.returncode != 0:
+        raise BisectError(f"unknown revision {rev!r}")
+    return done.stdout.strip()
+
+
 def commits_between(repo: Path, good: str, bad: str) -> list[str]:
     """Full SHAs after ``good`` up to and including ``bad``, first-parent, oldest first.
 
     # Errors
     ``BisectError`` if git rejects either revision or ``good`` is not an ancestor of ``bad``.
     """
-    for rev in (good, bad):
-        if subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", f"{rev}^{{commit}}"],
-                          capture_output=True, text=True).returncode != 0:  # fmt: skip
-            raise BisectError(f"unknown revision {rev!r}")
-    ancestor = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", good, bad], capture_output=True)
+    good_sha, bad_sha = resolve(repo, good), resolve(repo, bad)
+    ancestor = subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", good_sha, bad_sha], capture_output=True
+    )
     if ancestor.returncode != 0:
         raise BisectError(f"--good {good} is not an ancestor of --bad {bad}")
     out = subprocess.run(
-        ["git", "-C", str(repo), "rev-list", "--reverse", "--first-parent", f"{good}..{bad}"],
+        ["git", "-C", str(repo), "rev-list", "--reverse", "--first-parent", f"{good_sha}..{bad_sha}"],
         capture_output=True,
         text=True,
         check=True,
@@ -132,7 +149,7 @@ class RunnerSource(Protocol):
 
 
 class Builder:
-    """Builds the bench runner of a commit in a scratch worktree; binaries are cached by SHA."""
+    """Builds the bench runner of a commit in a scratch worktree; binaries are cached by SHA for this run only."""
 
     def __init__(
         self,
@@ -151,20 +168,32 @@ class Builder:
         dest = self.bin / sha / RUNNER_CRATE
         if dest.is_file():
             return dest
-        if not self.tree.exists():
-            self._git("worktree", "add", "-q", "--detach", str(self.tree), sha)
-        else:
-            self._git("-C", str(self.tree), "checkout", "-q", "--detach", sha)
-        build = self._run(
-            [*self.cargo, "build", "-q", "--profile", "dist", "-p", RUNNER_CRATE, "--target-dir", str(self.target)],
-            cwd=self.tree,
-            capture_output=True,
-            text=True,
-            timeout=BUILD_TIMEOUT_S,
-        )
+        try:
+            if not self.tree.exists():
+                self._git("worktree", "add", "-q", "--detach", str(self.tree), sha)
+            else:
+                self._git("-C", str(self.tree), "checkout", "-q", "--force", "--detach", sha)
+            build = self._run(
+                [
+                    *self.cargo,
+                    *("build", "-q", "--locked", "--profile", "dist", "-p", RUNNER_CRATE),
+                    *("--target-dir", str(self.target)),
+                ],
+                cwd=self.tree,
+                capture_output=True,
+                text=True,
+                timeout=BUILD_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"  {sha[:10]}: build timed out after {BUILD_TIMEOUT_S:.0f}s")
+            return None
+        except subprocess.CalledProcessError as e:
+            print(f"  {sha[:10]}: checkout failed: {(e.stderr or '').strip()[-200:]}")
+            return None
         built = self.target / "dist" / RUNNER_CRATE
         if build.returncode != 0 or not built.is_file():
-            print(f"  {sha[:10]}: build failed: {(build.stderr or '').strip().splitlines()[-1:]}")
+            tail = (build.stderr or "").strip().splitlines()[-1:]
+            print(f"  {sha[:10]}: build failed: {tail[0] if tail else 'no output'}")
             return None
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(built, dest)
@@ -181,7 +210,9 @@ class Builder:
                 capture_output=True,
                 text=True,
             )
-        shutil.rmtree(self.work / "target", ignore_errors=True)
+        self._run(["git", "-C", str(self.repo), "worktree", "prune"], capture_output=True, text=True)
+        shutil.rmtree(self.target, ignore_errors=True)
+        shutil.rmtree(self.bin, ignore_errors=True)
 
 
 def correctness_probe(
@@ -197,11 +228,16 @@ def correctness_probe(
         eng = KrishivEngine(threads=threads, memory_limit=memory, binary=binary)
         eng.timeout_s = timeout_s or None
         try:
-            eng.setup(ds)
-            rows = eng.run(check_query(query))
-        except (RunnerError, RunnerCrashed) as e:
-            print(f"  {sha[:10]}: bad ({describe_error(e)})")
-            return True
+            try:
+                eng.setup(ds)
+            except (RunnerError, RunnerCrashed) as e:  # e.g. a runner protocol older than this harness
+                print(f"  {sha[:10]}: skipped, runner did not start ({describe_error(e)})")
+                return None
+            try:
+                rows = eng.run(check_query(query))
+            except (RunnerError, RunnerCrashed) as e:
+                print(f"  {sha[:10]}: bad ({describe_error(e)})")
+                return True
         finally:
             eng.teardown()
         ok, msg = compare.rows_match(rows, reference_rows, ordered, sql=query.sql)
@@ -238,15 +274,20 @@ def time_probe(
         (settle or wait_idle)()
         entry: dict[str, Any]
         try:
-            a.setup(ds)
-            b.setup(ds)
+            try:
+                a.setup(ds)
+                b.setup(ds)
+            except (RunnerError, RunnerCrashed) as e:  # a runner that does not start cannot be judged
+                print(f"  {sha[:10]}: skipped, runner did not start ({describe_error(e)})")
+                return None
             entry = one_query(query, a, b, reps)
-        except (RunnerError, RunnerCrashed) as e:  # the probed build does not even start
-            entry = {"status": "failed", "reason": f"B did not start: {describe_error(e)}"}
         finally:
             a.teardown()
             b.teardown()
         if entry["status"] != "ok":
+            if entry["reason"].startswith("a "):  # the good build failed: not evidence against this commit
+                print(f"  {sha[:10]}: skipped, the good build failed ({entry['reason'][:100]})")
+                return None
             print(f"  {sha[:10]}: bad ({entry['reason'][:120]})")
             return True
         bad = entry["ratio"] >= threshold and entry["ratio_ci95"][0] > 1.0
@@ -291,11 +332,15 @@ def run_bisect(
     """Bisect ``good..bad`` for ``query_id``; see the module docstring.
 
     # Errors
-    ``SystemExit`` for a missing dataset or unknown query; ``BisectError`` (a ``SystemExit`` message from the CLI)
+    ``SystemExit`` for a missing dataset or unknown query; ``BisectError`` (the CLI exits with its message)
     when the revisions are unusable or the ``--bad`` end does not reproduce the problem.
     """
     if mode not in MODES:
         raise BisectError(f"mode must be one of {MODES}, got {mode!r}")
+    if reps < 1:
+        raise BisectError("--reps must be at least 1")
+    if threshold <= 0:
+        raise BisectError("--threshold must be positive")
     repo = repo or bench_root().parent
     ds = resolve_dataset(suite, sf, dataset)
     queries = load_queries(suite, "krishiv", [query_id])
@@ -303,13 +348,16 @@ def run_bisect(
         raise SystemExit(f"unknown query {query_id} in suite {suite}")
     query = queries[0]
     shas = commits_between(repo, good, bad)
+    if not shas:
+        raise BisectError(f"no commits between --good {good} and --bad {bad}")
     started = dt.datetime.now(dt.UTC)
     work = work or data_root() / "bisect" / started.strftime("%Y%m%dT%H%M%SZ")
     work.mkdir(parents=True, exist_ok=True)
     builder = builder or Builder(repo, work)
     memory = memory_limit.lower()
-    good_sha = subprocess.run(["git", "-C", str(repo), "rev-parse", good], capture_output=True, text=True,
-                              check=True).stdout.strip()  # fmt: skip
+    good_sha = resolve(repo, good)
+    # `timeout` (the nightly script) stops us with SIGTERM: unwind so the scratch worktree is removed.
+    previous_handler = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     try:
         with bench_lock():
             if mode == "correctness":
@@ -329,7 +377,9 @@ def run_bisect(
             if probe(shas[-1]) is not True:
                 raise BisectError(f"the --bad commit {bad} does not show the problem ({mode}); nothing to bisect")
             culprits, verdicts = first_bad(shas, lambda s: True if s == shas[-1] else probe(s))
+            verdicts[shas[-1]] = True  # probed above
     finally:
+        signal.signal(signal.SIGTERM, previous_handler)
         builder.close()
     record = {
         "schema": 1,

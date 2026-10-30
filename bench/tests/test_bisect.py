@@ -43,10 +43,9 @@ def test_first_bad_empty_range_is_an_error():
 
 def test_first_bad_skips_unjudgeable_commits():
     culprits, _, _ = search(10, 6, unjudgeable={4, 5})
-    assert culprits == ["c6"] or culprits[-1] == "c6"
+    assert culprits == ["c4", "c5", "c6"]  # c4 and c5 might be the culprit: they cannot be built
     culprits, _, _ = search(10, 6, unjudgeable={6})
-    assert culprits == ["c6", "c7"][: len(culprits)] or culprits[-1] == "c7"
-    assert "c7" in culprits
+    assert culprits == ["c6", "c7"]
 
 
 def test_first_bad_reports_the_range_when_the_boundary_is_unjudgeable():
@@ -181,17 +180,21 @@ def test_correctness_probe_good_bad_error_and_unbuildable(tmp_path):
     assert wrong("b") is True
 
 
-def test_correctness_probe_engine_failure_is_bad(tmp_path):
+def test_correctness_probe_start_failure_is_skipped_and_query_error_is_bad(tmp_path):
     crash = tmp_path / "crash"
     crash.write_text("#!/bin/sh\nexit 3\n")
     crash.chmod(0o755)
+    failing = tmp_path / "failing"
+    failing.write_text("#!/bin/sh\necho 'READY 1.0.0 t'\nwhile read l; do echo 'ERR boom'; done\n")
+    failing.chmod(0o755)
     probe = bisect.correctness_probe(
-        StubBuilder({"c": crash}), make_ds(tmp_path), Query("q01", "select 1", "tpch"), [], 1, "1g", 5
+        StubBuilder({"c": crash, "f": failing}), make_ds(tmp_path), Query("q01", "select 1", "tpch"), [], 1, "1g", 5
     )
-    assert probe("c") is True
+    assert probe("c") is None  # never reached READY: not evidence about the commit
+    assert probe("f") is True
 
 
-def test_time_probe_flags_a_failure_and_judges_by_ratio(tmp_path, monkeypatch):
+def test_time_probe_flags_a_failure_and_judges_by_ratio(tmp_path):
     good = make_runner(tmp_path, "good")
     ds, query = make_ds(tmp_path), Query("q01", "select 1", "tpch")
     settled = []
@@ -201,12 +204,52 @@ def test_time_probe_flags_a_failure_and_judges_by_ratio(tmp_path, monkeypatch):
     assert probe("same") is False
     assert probe("n") is None
     assert settled == [1]
-    # A mode conf difference is not applied here, but a failing probed build is bad.
+    # A probed build whose runner exits at start cannot be judged; one that fails the query is bad.
     crash = tmp_path / "crash"
     crash.write_text("#!/bin/sh\nexit 3\n")
     crash.chmod(0o755)
     builder.runners["c"] = crash
-    assert probe("c") is True
+    assert probe("c") is None
+    failing = tmp_path / "failing"
+    failing.write_text("#!/bin/sh\necho 'READY 1.0.0 t'\nwhile read l; do echo 'ERR boom'; done\n")
+    failing.chmod(0o755)
+    builder.runners["f"] = failing
+    assert probe("f") is True
+
+
+def test_time_probe_a_side_failure_is_not_blamed_on_the_commit(tmp_path, monkeypatch):
+    good = make_runner(tmp_path, "good")
+    monkeypatch.setattr(bisect, "one_query", lambda *a: {"status": "failed", "reason": "a crashed/timed out: x"})
+    probe = bisect.time_probe(
+        StubBuilder({"x": good}), make_ds(tmp_path), Query("q01", "select 1", "tpch"), good, 1, "1g", 30, 1, 1.10,
+        settle=lambda: None,
+    )  # fmt: skip
+    assert probe("x") is None
+    monkeypatch.setattr(bisect, "one_query", lambda *a: {"status": "failed", "reason": "b error: boom"})
+    assert probe("x") is True
+
+
+def test_builder_timeout_and_checkout_failure_skip_the_commit(repo, tmp_path, capsys):
+    head = git(repo, "rev-parse", "HEAD")
+    work = tmp_path / "work"
+
+    def timing_out(cmd, **kw):
+        if cmd[0] == "cargo":
+            raise subprocess.TimeoutExpired(cmd, 1)
+        return subprocess.run(cmd, **{k: v for k, v in kw.items() if k != "timeout"})
+
+    assert Builder(repo, work, run=timing_out).runner(head) is None
+    assert "timed out" in capsys.readouterr().out
+    assert Builder(repo, tmp_path / "w2").runner("0" * 40) is None  # git refuses the checkout
+    assert "checkout failed" in capsys.readouterr().out
+
+
+def test_builder_close_removes_the_cached_binaries(repo, tmp_path):
+    work = tmp_path / "work"
+    b = Builder(repo, work, run=FakeRun(work / "target", source=make_runner(tmp_path, "fake")))
+    assert b.runner(git(repo, "rev-parse", "HEAD")) is not None
+    b.close()
+    assert not b.bin.exists()
 
 
 def test_time_probe_ratio_threshold(tmp_path, monkeypatch):
@@ -309,6 +352,25 @@ def test_run_bisect_time_mode_end_to_end(tmp_path, repo, monkeypatch):
     monkeypatch.setattr(bisect, "one_query", fake_one_query)
     f, _ = run_with(monkeypatch, tmp_path, repo, "time", builder)
     assert [c["sha"] for c in json.loads(f.read_text())["culprits"]] == [shas[2]]
+
+
+def test_run_bisect_empty_range_and_bad_arguments(tmp_path, repo, monkeypatch):
+    shas = git(repo, "rev-list", "--reverse", "HEAD").split()
+    builder = StubBuilder({})
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    monkeypatch.setattr(bisect, "resolve_dataset", lambda *a, **k: make_ds(tmp_path))
+    monkeypatch.setattr(bisect, "load_queries", lambda suite, eng, only: [Query("q01", "select 1", suite)])
+    with pytest.raises(BisectError, match="no commits between"):
+        bisect.run_bisect("tpch", "q01", shas[1], shas[1], repo=repo, builder=builder, work=tmp_path / "w")
+    with pytest.raises(BisectError, match="--reps"):
+        bisect.run_bisect("tpch", "q01", shas[0], shas[1], repo=repo, reps=0)
+    with pytest.raises(BisectError, match="--threshold"):
+        bisect.run_bisect("tpch", "q01", shas[0], shas[1], repo=repo, threshold=0)
+
+
+def test_resolve_rejects_option_like_revisions(repo):
+    with pytest.raises(BisectError, match="unknown revision"):
+        bisect.resolve(repo, "--all")
 
 
 def test_run_bisect_rejects_a_bad_mode_and_unknown_query(tmp_path, repo, monkeypatch):

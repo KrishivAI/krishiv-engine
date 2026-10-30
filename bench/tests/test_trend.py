@@ -6,6 +6,8 @@ import json
 import math
 from pathlib import Path
 
+import pytest
+
 from krishiv_bench import trend
 
 
@@ -27,7 +29,7 @@ def test_sparkline_scale_gaps_and_flat():
     assert line[0] == "▁"
     assert line[1] == " "
     assert line[2] == "█"
-    assert line[3] == "▅" or line[3] in trend.BARS
+    assert line == "▁ █▅"
 
 
 def test_change_flat_up_down_and_missing():
@@ -83,8 +85,6 @@ def test_run_trend_default_and_custom_output(tmp_path, monkeypatch, capsys):
     assert custom.is_file()
     monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
     assert trend.run_trend().parent == tmp_path / "results"
-    import pytest
-
     with pytest.raises(SystemExit, match="--last"):
         trend.run_trend(last=0, directory=tmp_path)
 
@@ -109,8 +109,6 @@ def test_cli_trend_bisect_and_flamediff_dispatch(tmp_path, monkeypatch):
         raise bisect.BisectError("nope")
 
     monkeypatch.setattr(bisect, "run_bisect", boom)
-    import pytest
-
     with pytest.raises(SystemExit, match="bisect: nope"):
         cli.main(["bisect", "--query", "q07", "--good", "g", "--bad", "b"])
 
@@ -118,3 +116,16 @@ def test_cli_trend_bisect_and_flamediff_dispatch(tmp_path, monkeypatch):
     cli.main(["flamediff", "--query", "q01", "--a-runner", "A", "--b-runner", "B", "--out", "/x"])
     assert seen["fd"][:4] == ("tpch", "q01", "A", "B")
     assert str(seen["fd"][-1]) == "/x"
+
+
+def test_non_finite_or_non_positive_ratios_are_ignored(tmp_path):
+    rec = {"kind": "abba", "suite": "tpch", "started_utc": "2026-10-01T00:00:00", "dataset": {"scale_factor": 1}}
+    q = {
+        "q1": {"status": "ok", "ratio": 0},
+        "q2": {"status": "ok", "ratio": float("inf")},
+        "q3": {"status": "ok", "ratio": 2.0},
+    }
+    (tmp_path / "a_abba_x.json").write_text(json.dumps({**rec, "queries": q}))
+    run = trend.load_runs(tmp_path)[("tpch", "1")][0]
+    assert run["ratios"] == {"q1": None, "q2": None, "q3": 2.0}
+    assert run["geomean"] == 2.0

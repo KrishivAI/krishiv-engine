@@ -25,8 +25,9 @@ from pathlib import Path
 from typing import Any
 
 from .abba import bench_lock, wait_idle
-from .adapters.krishiv import KrishivEngine
+from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .dataset import resolve_dataset
+from .errors import describe_error
 from .ledger import parse_perf_script, perf_launcher, perf_script
 from .paths import results_dir
 from .runner import load_queries
@@ -171,9 +172,12 @@ def run_flamediff(
     sampler = sampler or sample_side
     with bench_lock():
         wait_idle()
-        stacks = [
-            sampler(r, ds, queries[0], runs, threads, memory_limit.lower(), timeout_s) for r in (a_runner, b_runner)
-        ]
+        stacks = []
+        for side, runner in (("A", a_runner), ("B", b_runner)):
+            try:
+                stacks.append(sampler(runner, ds, queries[0], runs, threads, memory_limit.lower(), timeout_s))
+            except (RunnerError, RunnerCrashed, subprocess.SubprocessError) as e:
+                raise SystemExit(f"side {side} ({runner}): {describe_error(e)}") from e
     for side, st in zip("AB", stacks, strict=True):
         if not st:
             raise SystemExit(

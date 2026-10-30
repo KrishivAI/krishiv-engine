@@ -3,8 +3,9 @@
 ``krishiv-bench trend [--out FILE] [--last N]`` reads ``$KRISHIV_DATA/results/*_abba_*.json`` and writes one
 Markdown section per suite and scale factor: a row per query with its ratio in each of the last ``N`` runs
 (oldest left), a sparkline, and the change from the previous run; a failed query shows ``x`` and a run whose
-load average exceeded the bound is starred (indicative only). The first row is the geomean over the queries that
-passed. Results of other kinds, unreadable files and runs without a ratio are ignored. The default output is
+load average exceeded the bound is starred (indicative only). The first row is the geomean the run recorded
+(computed over its passing queries when the record has none). Results of other kinds, unreadable files and runs
+without a ratio are ignored. The default output is
 ``$KRISHIV_DATA/results/trend.md``; the nightly script passes ``--out`` to write it into the docs repo.
 """
 
@@ -24,6 +25,12 @@ DEFAULT_LAST = 10
 FLAT = 0.03
 
 
+def _ratio(entry: dict[str, Any]) -> float | None:
+    """The query's ratio, or None when it failed or the value is not a positive finite number."""
+    r = entry.get("ratio") if entry.get("status") == "ok" else None
+    return r if isinstance(r, int | float) and r > 0 and math.isfinite(r) else None
+
+
 def load_runs(directory: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
     """Valid ``abba`` runs of ``directory`` grouped by ``(suite, sf)``, oldest first.
 
@@ -36,8 +43,8 @@ def load_runs(directory: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
             if rec.get("kind") != "abba":
                 continue
             queries = rec["queries"]
-            ratios = {q: (e["ratio"] if e.get("status") == "ok" else None) for q, e in queries.items()}
-            good = [r for r in ratios.values() if r is not None and r > 0 and math.isfinite(r)]
+            ratios = {q: _ratio(e) for q, e in queries.items()}
+            good = [r for r in ratios.values() if r is not None]
             if not good:
                 continue
             summary = rec.get("summary", {})
