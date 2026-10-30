@@ -179,7 +179,7 @@ def main(argv=None) -> None:
         "remote-filter",
         help="selective scan over a FineWeb-Edu sample (per-engine time, peak RSS, pass/fail)",
     )
-    rf.add_argument("--engines", default="krishiv,duckdb,polars", help="comma list of engines")
+    rf.add_argument("--engines", help="comma list of engines (default: krishiv,duckdb,polars; duckdb,polars with --s3)")
     rf.add_argument("--mirror", type=Path, help="local mirror dir (default: $KRISHIV_DATA/remote-filter/sample-10BT)")
     rf.add_argument("--sources", help="JSON list of Parquet URLs for remote reads (default: the mirror's files)")
     rf.add_argument(
@@ -187,6 +187,12 @@ def main(argv=None) -> None:
         action="append",
         default=None,
         help="cgroup MemoryMax of each engine process (e.g. 4g); repeatable. Default: an uncapped scope and a 4g one",
+    )
+    rf.add_argument(
+        "--s3",
+        action="store_true",
+        help="serve the mirror from a throw-away MinIO container (docker run --rm) and read it over s3:// "
+        "(DuckDB and Polars; Krishiv reads the local mirror)",
     )
     rf.add_argument("--reps", type=int, default=5, help="timed repetitions per scope (after one validation pass)")
     rf.add_argument("--timeout", type=float, default=1800, help="per-engine timeout seconds (0 = none)")
@@ -395,10 +401,15 @@ def main(argv=None) -> None:
         try:
             run_remote_filter(
                 a.sources or str(a.mirror or default_mirror()),
-                [e.strip() for e in a.engines.split(",") if e.strip()],
+                [
+                    e.strip()
+                    for e in (a.engines or ("duckdb,polars" if a.s3 else "krishiv,duckdb,polars")).split(",")
+                    if e.strip()
+                ],
                 a.memory_limit or [None, "4g"],
                 a.timeout or None,
                 reps=a.reps,
+                s3=a.s3,
             )
         except (ValueError, FileNotFoundError) as e:
             ap.error(str(e))

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import resource
 import sys
 import time
@@ -38,7 +39,7 @@ def parse_input(arg: str) -> tuple[str, list[str]]:
         items = json.loads(arg)
         if not isinstance(items, list) or not items or not all(isinstance(x, str) for x in items):
             raise SystemExit(f"input JSON list must be a non-empty list of strings (got {arg[:80]!r})")
-        if all(x.startswith("https://") for x in items):
+        if all(x.startswith(("https://", "s3://")) for x in items):
             return "urls", list(items)
         return "files", expand_files(items)
     p = Path(arg)
@@ -108,11 +109,37 @@ def peak_rss_bytes() -> int:
     return max(own, kids) * 1024
 
 
+def s3_settings() -> dict[str, str] | None:
+    """The throw-away S3 server's endpoint and credentials from the environment, or None for other sources."""
+    endpoint = os.environ.get("KRISHIV_BENCH_S3_ENDPOINT")
+    if not endpoint:
+        return None
+    return {
+        "endpoint": endpoint,
+        "key": os.environ.get("KRISHIV_BENCH_S3_KEY", ""),
+        "secret": os.environ.get("KRISHIV_BENCH_S3_SECRET", ""),
+    }
+
+
 def run_duckdb(items: list[str], out: Path) -> dict:
     import duckdb
 
     con = duckdb.connect()
     con.execute(f"SET threads = {THREADS}")
+    if any(i.startswith("s3://") for i in items):
+        s3 = s3_settings()
+        if s3 is None:
+            raise SystemExit("s3:// sources need KRISHIV_BENCH_S3_ENDPOINT (run with --s3)")
+        con.execute("INSTALL httpfs")
+        con.execute("LOAD httpfs")
+        for k, v in (
+            ("s3_endpoint", s3["endpoint"]),
+            ("s3_access_key_id", s3["key"]),
+            ("s3_secret_access_key", s3["secret"]),
+            ("s3_url_style", "path"),
+        ):
+            con.execute(f"SET {k} = {sql_literal(v)}")
+        con.execute("SET s3_use_ssl = false")
     sources_sql = ", ".join(sql_literal(u) for u in items)
     target = sql_literal(str(out / "result.parquet"))
     t1 = time.perf_counter()
@@ -126,7 +153,19 @@ def run_duckdb(items: list[str], out: Path) -> dict:
 def run_polars(items: list[str], out: Path) -> dict:
     import polars as pl
 
-    frame = pl.scan_parquet(items)
+    options = None
+    if any(i.startswith("s3://") for i in items):
+        s3 = s3_settings()
+        if s3 is None:
+            raise SystemExit("s3:// sources need KRISHIV_BENCH_S3_ENDPOINT (run with --s3)")
+        options = {
+            "aws_endpoint_url": f"http://{s3['endpoint']}",
+            "aws_access_key_id": s3["key"],
+            "aws_secret_access_key": s3["secret"],
+            "aws_region": "us-east-1",
+            "aws_allow_http": "true",
+        }
+    frame = pl.scan_parquet(items, storage_options=options)
     filt = (pl.col("int_score") >= 4) & (pl.col("token_count") >= 4000) & (pl.col("language_score") >= 0.95)
     t1 = time.perf_counter()
     frame.filter(filt).sink_parquet(str(out / "result.parquet"), compression="zstd")

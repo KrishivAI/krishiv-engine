@@ -91,12 +91,44 @@ def mirror_table_files(mirror: Path) -> list[Path]:
     )
 
 
-def write_expected(directory: Path, rows: int | None, sum_tokens: int | None, files: list[str]) -> Path:
-    """``expected.json``: the row and token counts once a run has recorded them (None while unknown)."""
+def write_expected(
+    directory: Path, rows: int | None, sum_tokens: int | None, files: list[str], revision: str | None = None
+) -> Path:
+    """``expected.json``: the row and token counts once a run has recorded them (None while unknown), and the
+    commit the mirror was downloaded at when known."""
     f = directory / EXPECTED_FILE
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"rows": rows, "sum_tokens": sum_tokens, "files": files}, indent=2) + "\n")
+    doc: dict = {"rows": rows, "sum_tokens": sum_tokens, "files": files}
+    if revision:
+        doc["revision"] = revision
+    f.write_text(json.dumps(doc, indent=2) + "\n")
     return f
+
+
+@contextlib.contextmanager
+def _environ(extra: dict[str, str]):
+    """``os.environ`` plus ``extra`` for the children, restored afterwards."""
+    saved = {k: os.environ.get(k) for k in extra}
+    os.environ.update(extra)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def check_mirror_revision(mirror: Path) -> str | None:
+    """The commit the mirror was downloaded at (``fw/.revision``), checked against the one ``expected.json`` was
+    recorded at; None for a mirror without a marker (placed by hand)."""
+    marker = mirror / TABLE / REVISION_FILE
+    revision = marker.read_text().strip() if marker.is_file() else None
+    recorded = (load_expected(mirror) or {}).get("revision")
+    if revision and recorded and recorded != revision:
+        raise ValueError(f"the mirror is at commit {revision} but expected.json was recorded at {recorded}")
+    return revision
 
 
 def load_expected(directory: Path) -> dict | None:
@@ -201,7 +233,9 @@ def fetch_remote_filter(
 
     print("manifest:", write_manifest(dest, "remote-filter-sample-10BT"))
     if not (dest / EXPECTED_FILE).is_file():
-        write_expected(dest, None, None, sorted(f.name for f in table_dir.glob("*.parquet")))
+        marker = table_dir / REVISION_FILE
+        revision = marker.read_text().strip() if marker.is_file() else None
+        write_expected(dest, None, None, sorted(f.name for f in table_dir.glob("*.parquet")), revision)
     return dest
 
 
@@ -464,6 +498,8 @@ def run_remote_filter(
     timeout_s: float | None = 1800,
     run=run_one,
     reps: int = DEFAULT_REPS,
+    s3: bool = False,
+    _s3_server=None,
 ) -> Path:
     """Runs each engine over ``data_arg`` (a mirror dir or a JSON source list) in every memory scope in ``caps``
     (``None`` is uncapped) and writes the result JSON, even when a run raises."""
@@ -476,8 +512,15 @@ def run_remote_filter(
         raise ValueError(f"engines must be a non-empty subset of {', '.join(ENGINES)} (got {names})")
     if reps < 1:
         raise ValueError(f"reps must be at least 1 (got {reps})")
+    mirror_revision: str | None = None
     if not data_arg.strip().startswith("[") and Path(data_arg).is_dir():
         mirror_table_files(Path(data_arg))  # fail before the scopes when the mirror was never downloaded
+        mirror_revision = check_mirror_revision(Path(data_arg))
+    if s3:
+        if "krishiv" in names:
+            raise ValueError("--s3 serves DuckDB and Polars; Krishiv reads the local mirror (drop it from --engines)")
+        if data_arg.strip().startswith("[") or not (Path(data_arg) / TABLE).is_dir():
+            raise ValueError(f"--s3 serves the {TABLE}/ part files of a local mirror directory")
     scopes = list(caps) if caps else [None]
     cap_bytes = [parse_size(c) if c else None for c in scopes]
     expected: dict | None = None
@@ -493,12 +536,23 @@ def run_remote_filter(
         "cap_bytes": cap_bytes,
         "machine": machine_info(),
         "git": git_info(),
-        "dataset": {"name": f"{HF_DATASET} {HF_SUBDIR}", "expected": expected},
+        "dataset": {"name": f"{HF_DATASET} {HF_SUBDIR}", "expected": expected, "revision": mirror_revision},
+        "source": "s3" if s3 else "local",
         "scopes": {},
     }
     work_root = data_root() / "tmp" / f"remote-filter-{os.getpid()}"
+    server = None
+    if s3:
+        from .remote_filter_s3 import S3Server
+
+        server = _s3_server or S3Server(Path(data_arg) / TABLE)
     try:
-        with bench_lock() as waited:
+        with contextlib.ExitStack() as stack, bench_lock() as waited:
+            if server is not None:
+                stack.enter_context(server)  # removed on error, exit and SIGTERM
+                data_arg = server.input_arg()
+                stack.enter_context(_environ(server.env()))
+                record["input"] = data_arg
             record["bench_lock_wait_s"] = waited
             record["loadavg_start"] = loadavg()
             try:
