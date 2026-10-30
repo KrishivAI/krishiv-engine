@@ -331,7 +331,8 @@ fn run_suite(
     // The interpreter panics on constructs it does not run: those relations
     // are skipped (and counted), quietly.
     // Restores the panic hook on every exit, a panic included.
-    struct Hook(Option<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>>);
+    type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
+    struct Hook(Option<PanicHook>);
     impl Drop for Hook {
         fn drop(&mut self) {
             if let Some(h) = self.0.take() {
