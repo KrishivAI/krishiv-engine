@@ -185,6 +185,20 @@ fn for_each_int(a: &dyn Array, mut f: impl FnMut(Option<i64>)) -> bool {
     true
 }
 
+/// Whether [`for_each_int`] reads arrays of type `t`.
+fn int_keyed(t: &ArrowType) -> bool {
+    matches!(
+        t,
+        ArrowType::Int8
+            | ArrowType::Int16
+            | ArrowType::Int32
+            | ArrowType::Int64
+            | ArrowType::Date32
+            | ArrowType::Timestamp(..)
+            | ArrowType::Boolean
+    )
+}
+
 impl InSet {
     /// The set of `items` (constants) for `v`, or `None` when `v`'s type
     /// has no exact key or an element does not evaluate here (it then
@@ -229,6 +243,11 @@ impl InSet {
                 Keys::Decimals(set)
             }
             _ => {
+                // With every element NULL no element has been checked against
+                // the probe's type: only an integer-like probe has an exact key.
+                if !int_keyed(&t) {
+                    return None;
+                }
                 let mut set = fast_set(values.len());
                 for a in &values {
                     let ok = for_each_int(a.as_ref(), |v| {
@@ -1010,6 +1029,46 @@ mod tests {
             env,
         )
         .unwrap()
+    }
+
+    /// More than ten constant elements that are all NULL remove every key:
+    /// a probe type with no exact key (a float) keeps the per-element `IN`,
+    /// whose answer is NULL, instead of failing in the set lookup; the
+    /// integer-like probes still use the set and answer the same.
+    #[test]
+    fn an_all_null_long_in_list_keeps_in_list_answers_for_every_probe_type() {
+        let env = env(false);
+        let nulls =
+            || -> Vec<Arc<dyn PhysExpr>> { (0..11).map(|_| lit(&Literal::Null(None))).collect() };
+        let floats = Arc::new(Float64Array::from(vec![Some(1.5), None, Some(2.5)]));
+        let ints = Arc::new(Int64Array::from(vec![Some(1), None, Some(2)]));
+        let strs = Arc::new(StringArray::from(vec![Some("a"), None, Some("b")]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f", ArrowType::Float64, true),
+            Field::new("i", ArrowType::Int64, true),
+            Field::new("s", ArrowType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![floats, ints, strs]).unwrap();
+        for (index, t, is_set) in [
+            (0, ArrowType::Float64, false),
+            (1, ArrowType::Int64, true),
+            (2, ArrowType::Utf8, true),
+        ] {
+            let v = column(index, t, true);
+            let mut args = vec![Arc::clone(&v)];
+            args.extend(nulls());
+            let got = in_list(args, &env).unwrap();
+            assert_eq!(format!("{got:?}").starts_with("InSet"), is_set, "{got:?}");
+            let list: Arc<dyn PhysExpr> = Arc::new(InList {
+                v,
+                items: nulls(),
+                kernels: env.kernels,
+            });
+            let (got, want) = (values(&got, &batch), values(&list, &batch));
+            assert_eq!(got.as_boolean(), want.as_boolean());
+            // `x IN (NULL, ...)` is NULL for every row.
+            assert_eq!(got.as_boolean().null_count(), 3);
+        }
     }
 
     /// More than ten constant elements make a set lookup with the same
