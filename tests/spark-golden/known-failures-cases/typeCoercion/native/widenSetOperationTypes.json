@@ -2,13 +2,8 @@
   "cases": {
     "cast-matrix": [
       94,
-      95,
       116,
-      118,
-      128,
-      131,
-      132,
-      143
+      118
     ]
   },
   "file": "typeCoercion/native/widenSetOperationTypes",

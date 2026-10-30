@@ -1,9 +1,7 @@
 {
   "cases": {
     "query-features": [
-      18,
-      22,
-      23
+      18
     ]
   },
   "file": "inline-table",
