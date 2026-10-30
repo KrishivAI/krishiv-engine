@@ -1075,13 +1075,6 @@ impl TableProviderResolver for QueryCatalog {
 ///
 /// # Errors
 /// `INTERNAL_ERROR` for a view that reads itself.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the session expands stored views too: `expand_views`"
-    )
-)]
 pub(crate) fn expand_temp_views(
     catalog: &SessionCatalog,
     plan: &Arc<LogicalPlan>,
