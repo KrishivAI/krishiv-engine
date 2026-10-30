@@ -126,9 +126,9 @@ pub struct BindOptions {
     pub time_zone: Arc<dyn TimeZoneRules>,
     /// The session time zone id as Spark normalises it (`GMT+05:00` for
     /// `GMT+5`, `Z` for `+00:00`): what `VV`/`z` patterns print. Always
-    /// consistent with [`Self::time_zone`]; a region session zone cannot
-    /// cross the plan boundary yet, so functions that need one fail to
-    /// bind instead.
+    /// consistent with [`Self::time_zone`]; a region session zone's rules
+    /// cannot cross the plan boundary yet, so functions that need them fail
+    /// to bind instead.
     pub time_zone_name: Arc<str>,
     /// `spark.sql.session.timeZone` as configured: what `current_timezone`
     /// returns, not normalised.

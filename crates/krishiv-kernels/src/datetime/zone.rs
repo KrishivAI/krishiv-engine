@@ -41,7 +41,7 @@ pub fn zone_id(configured: &str) -> String {
     if !zone.contains(['+', '-']) {
         return zone.to_owned();
     }
-    let prefix = ["UTC", "GMT"]
+    let prefix = ["UTC", "GMT", "UT"]
         .into_iter()
         .find(|p| zone.starts_with(p))
         .unwrap_or("");
@@ -404,15 +404,15 @@ mod tests {
         assert_eq!(la.offset_at_utc(local(2024, 3, 10, 9, 59)), -8 * 3600);
     }
 
-    /// Asia/Kolkata (no DST since 1945) and Australia/Lord_Howe (a
-    /// 30-minute DST): winter and summer offsets, a gap and an overlap.
-    /// Unverified against a Spark run.
     /// Spark 4.2.0's `VV` for each session zone.
     #[test]
     fn zone_ids_follow_java_time() {
         for (configured, id) in [
             ("UTC", "UTC"),
             ("GMT", "GMT"),
+            ("UT", "UT"),
+            ("UT+5", "UT+05:00"),
+            ("UT+00:00", "UT"),
             ("Z", "Z"),
             ("Etc/UTC", "Etc/UTC"),
             ("+00:00", "Z"),
@@ -433,6 +433,9 @@ mod tests {
         }
     }
 
+    /// Asia/Kolkata (no DST since 1945) and Australia/Lord_Howe (a
+    /// 30-minute DST): winter and summer offsets, a gap and an overlap.
+    /// Unverified against a Spark run.
     #[test]
     fn kolkata_and_lord_howe_edges() {
         let utc = |y, mo, d, h, mi| {

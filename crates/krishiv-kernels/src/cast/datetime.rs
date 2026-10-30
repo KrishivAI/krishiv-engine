@@ -41,18 +41,19 @@ impl TimeZoneRules for FixedOffset {
 
 impl FixedOffset {
     /// The zone a `spark.sql.session.timeZone` value names, when it is a
-    /// fixed offset: `UTC`, `GMT`, `Z`, `Etc/UTC` or `[UTC|GMT][+-]hh[:mm]`
+    /// fixed offset: `UTC`, `GMT`, `UT`, `Z`, `Etc/UTC` or `[UTC|GMT|UT][+-]hh[:mm]`
     /// (hours up to 18). `None` for region ids, which need the time-zone
     /// database, and for malformed zones.
     #[must_use]
     pub fn parse(zone: &str) -> Option<Self> {
         let zone = zone.trim();
-        if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
+        if ["UTC", "GMT", "UT", "Z", "Etc/UTC"].contains(&zone) {
             return Some(Self(0));
         }
         let rest = zone
             .strip_prefix("UTC")
             .or_else(|| zone.strip_prefix("GMT"))
+            .or_else(|| zone.strip_prefix("UT"))
             .unwrap_or(zone);
         let (sign, hm) = match rest.as_bytes().first()? {
             b'+' => (1, &rest[1..]),
@@ -189,6 +190,8 @@ mod tests {
             ("+05:30", Some(19_800)),
             ("UTC-08:00", Some(-28_800)),
             ("GMT+1", Some(3600)),
+            ("UT", Some(0)),
+            ("UT-08:00", Some(-28_800)),
             ("-18:00", Some(-64_800)),
             ("+18:00", Some(64_800)),
         ] {

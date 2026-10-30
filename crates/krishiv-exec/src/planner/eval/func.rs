@@ -173,12 +173,15 @@ pub(super) fn compile(
     // `current_timezone()` returns the configured string; the patterns print
     // the zone id Spark normalises it to. A region session zone reaches the
     // patterns only for functions that do not read it, which see the UTC
-    // fallback.
+    // fallback, its id included.
     let configured: Arc<str> = match &input.env.zone_name {
         Some(name) => Arc::clone(name),
         None => Arc::from(rendered_zone(input.env.zone)),
     };
-    let zone_id: Arc<str> = Arc::from(krishiv_kernels::datetime::zone_id(&configured));
+    let zone_id: Arc<str> = match input.env.zone {
+        Some(_) => Arc::from(krishiv_kernels::datetime::zone_id(&configured)),
+        None => Arc::from("UTC"),
+    };
     let opts = BindOptions::new()
         .with_ansi(input.env.ansi)
         .with_kernel(input.env.kernels)

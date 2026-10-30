@@ -367,6 +367,7 @@ fn the_session_zone_name_is_the_configured_one() {
         ("UTC", "UTC", "UTC", "Coordinated Universal Time"),
         ("GMT", "GMT", "GMT", "Greenwich Mean Time"),
         ("Z", "Z", "Z", "Z"),
+        ("UT", "UT", "UT", "UT"),
         ("+00:00", "Z", "Z", "Z"),
         ("-00:00", "Z", "Z", "Z"),
         ("GMT+00:00", "GMT", "GMT", "Greenwich Mean Time"),

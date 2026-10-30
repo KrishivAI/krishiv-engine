@@ -300,6 +300,9 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         user: Arc::from(env.user.as_str()),
         map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
     };
+    if !env.zone_name_matches_zone() {
+        return Err(corrupt("a session zone name that is not its offset"));
+    }
     Ok(
         PhysicalPlan::new(root, schema_from(&m.schema)?, explain, env)
             .with_warnings(m.warnings.clone()),

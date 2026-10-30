@@ -263,6 +263,18 @@ pub struct ExprEnv {
     pub map_key_dedup_last_win: bool,
 }
 
+impl ExprEnv {
+    /// Whether the zone name, if any, names the zone's offset (a region or
+    /// malformed name has none). A plan that does not hold this would print
+    /// one zone and compute with another.
+    #[must_use]
+    pub fn zone_name_matches_zone(&self) -> bool {
+        self.zone_name.as_deref().is_none_or(|name| {
+            krishiv_kernels::cast::FixedOffset::parse(name).map(|o| o.0) == self.zone
+        })
+    }
+}
+
 /// A node of a physical plan. Children come first in each variant;
 /// expressions are resolved IR over the attribute ids `layout` lists for
 /// the input's columns.

@@ -231,6 +231,17 @@ fn a_reader_without_write_plan_refuses_the_plan_by_name() {
 }
 
 #[test]
+fn a_session_zone_name_that_is_not_its_offset_is_corrupt() {
+    for (zone, name) in [(Some(19_800), "GMT"), (Some(0), "+05:30"), (Some(0), "PST")] {
+        let mut m = message("session_zone_name");
+        let env = m.env.as_mut().unwrap();
+        env.zone = zone;
+        env.zone_name = Some(name.to_owned());
+        corrupt(&m, "a session zone name that is not its offset");
+    }
+}
+
+#[test]
 fn a_write_plan_without_a_format_job_id_or_store_is_corrupt() {
     let m = message("write_files_with_plan");
     let edit = |f: &dyn Fn(&mut pb::WritePlan)| {
