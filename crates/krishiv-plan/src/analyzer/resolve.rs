@@ -143,6 +143,13 @@ pub(super) struct Resolver<'a> {
     root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
     pub(super) folds: std::cell::RefCell<super::fold::Memo>,
+    /// The SQL function whose body is being resolved: what its parameters
+    /// stand for (see `sqlfn`).
+    pub(super) frame: Option<Arc<super::sqlfn::Frame>>,
+    /// The SQL functions open, outermost first, to catch recursion.
+    pub(super) fn_path: Vec<String>,
+    /// SQL function calls inlined so far in this analysis (a budget).
+    pub(super) sql_calls: usize,
 }
 
 type Resolved = (
@@ -172,6 +179,9 @@ pub(super) fn resolve(
         root_env: None,
         folds: std::cell::RefCell::default(),
         lambdas: Vec::new(),
+        frame: None,
+        fn_path: Vec::new(),
+        sql_calls: 0,
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).

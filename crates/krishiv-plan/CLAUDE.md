@@ -51,6 +51,10 @@ Paths are relative to this crate.
   operator); frames are resolved at bind time (names show them); select lists extract windows into
   `PlanNode::Window`s (Spark's `ExtractWindowExpressions`); a `HAVING` over an aggregate with windows filters
   below them. Window goldens: `tests/scripts/gen_window_goldens.py` → `tests/fixtures/spark-4.2.0/window-goldens.json`.
+- SQL-bodied functions (`analyzer/sqlfn.rs`) are inlined at analysis: the registry answers `FunctionLookup::Sql`, the
+  body resolves in its own scope with a `Frame` binding parameters to the cast arguments, and the resolved plan holds
+  no call of the function. Open functions are tracked in `Resolver::fn_path` (recursion is `CYCLIC_FUNCTION_REFERENCE`);
+  Bind adds the bodies as extra roots so their tables and functions are bound like the query's.
 - Analyzer goldens come from a real Spark run: `tests/scripts/gen_analyzer_goldens.py` →
   `tests/fixtures/spark-4.2.0/analyzer-goldens.json`; the constant-folding and ORDER BY-over-aggregate cases are a
   separate fixture (`--section folding --views`, safe on the shared oracle) `analyzer-folding-goldens.json`.

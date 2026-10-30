@@ -18,10 +18,12 @@
 
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
-    InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidStatementOrClause,
-    InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0035,
-    LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
-    UnclosedBracketedComment,
+    InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax,
+    InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
+    InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
+    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
+    LegacyErrorTemp0035, LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError,
+    SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -243,4 +245,26 @@ pub(crate) fn unsupported_set_time_zone(form: &str, span: Span) -> ParseError {
 /// (Spark's message names what the change needs).
 pub(crate) fn legacy_error_temp_0035(message: String, span: Span) -> ParseError {
     at(LegacyErrorTemp0035 { message }, span)
+}
+
+/// `INVALID_SQL_SYNTAX.CREATE_TEMP_FUNC_WITH_DATABASE`: a temporary
+/// function named with a database.
+pub(crate) fn create_temp_func_with_database(database: String, span: Span) -> ParseError {
+    at(
+        InvalidSqlSyntaxCreateTempFuncWithDatabase { database },
+        span,
+    )
+}
+
+/// `INVALID_SQL_SYNTAX.CREATE_TEMP_FUNC_WITH_IF_NOT_EXISTS`.
+pub(crate) fn create_temp_func_with_if_not_exists(span: Span) -> ParseError {
+    at(InvalidSqlSyntaxCreateTempFuncWithIfNotExists {}, span)
+}
+
+/// `INVALID_SQL_SYNTAX.CREATE_ROUTINE_WITH_IF_NOT_EXISTS_AND_REPLACE`.
+pub(crate) fn create_routine_with_if_not_exists_and_replace(span: Span) -> ParseError {
+    at(
+        InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace {},
+        span,
+    )
 }

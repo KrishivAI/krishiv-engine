@@ -60,6 +60,7 @@ use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
+use crate::sql_functions::{QueryFunctions, SqlFunctions};
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
@@ -109,15 +110,17 @@ pub(crate) struct SessionState {
     pub(crate) catalog: Arc<SessionCatalog>,
     pub(crate) cache: Arc<RelationCache>,
     pub(crate) variables: Arc<SessionVariables>,
-    profile: SparkProfile,
+    pub(crate) profile: SparkProfile,
     /// Fixed for the session's life: caches and fingerprints never mix
     /// identities (a new identity gets a new session).
     pub(crate) principal: Arc<Principal>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
-    functions: Arc<dyn FunctionRegistry>,
+    pub(crate) functions: Arc<dyn FunctionRegistry>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
     udfs: Arc<UdfLibrary>,
+    /// The SQL-bodied functions the session defines.
+    pub(crate) sql_functions: SqlFunctions,
     executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
@@ -322,6 +325,7 @@ impl SessionBuilder {
                 policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
                 functions,
                 udfs,
+                sql_functions: SqlFunctions::default(),
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
@@ -522,6 +526,8 @@ impl Session {
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
+            Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
+            Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => self.exec_create_table(&t, query).await,
             Statement::CreateTableLike(t) => self.exec_create_table_like(&t, query).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
@@ -978,13 +984,21 @@ impl Session {
         // One snapshot of the variables per query, like the configuration
         // snapshot: every reference in the query reads the same values.
         let variables = self.state.variables.snapshot();
+        let sql_functions = Arc::new(QueryFunctions::new(
+            Arc::clone(&self.state.functions),
+            self.state.sql_functions.snapshot(),
+            Arc::clone(&self.state.catalog),
+            resolution.case_sensitive,
+        ));
+        let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
+        let functions_version = functions.version();
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
             principal: Arc::clone(&self.state.principal),
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
-            functions: Arc::clone(&self.state.functions),
+            functions,
             table_functions: Arc::new(BuiltinTableFunctions::new()),
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
@@ -1003,6 +1017,8 @@ impl Session {
             variables_version: variables.version,
             cache_generation,
             cache_cap,
+            sql_functions,
+            functions_version,
         }
     }
 
@@ -1026,7 +1042,15 @@ impl Session {
         let analyzed = DefaultAnalyzer
             .analyze(&plan, &env.analysis)
             .await
-            .map_err(|e| attach_analysis(e, text));
+            .map_err(|e| {
+                // An error inside a SQL function's body points into the
+                // statement that defined the function.
+                let own = e
+                    .origin
+                    .sql
+                    .and_then(|(source, _)| env.sql_functions.source_text(source));
+                attach_analysis(e, own.as_ref().or(text))
+            });
         // Analysis checks every read: its denials are the reads' denials.
         crate::access::audit(self, StatementClass::Read, analyzed)
     }
@@ -1804,6 +1828,11 @@ pub(crate) struct QueryEnv {
     pub(crate) cache_generation: u64,
     /// `krishiv.cache.maxBytes` of the query's configuration snapshot.
     pub(crate) cache_cap: usize,
+    /// The registry in `analysis`, as itself: the function map the query
+    /// reads and the texts of function bodies.
+    pub(crate) sql_functions: Arc<QueryFunctions>,
+    /// [`FunctionRegistry::version`] of `analysis.functions`.
+    pub(crate) functions_version: u64,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

@@ -4,8 +4,8 @@
 //! [`parse_query`] parses a Spark 4.2 query statement (`SELECT`, `WITH`,
 //! `VALUES`, `TABLE`, `FROM ... SELECT`, set operations) into the syntax tree
 //! of [`ast`], whose nodes carry source spans; [`parse_statement`] also
-//! accepts commands (`SET`, `RESET`, `CREATE`/`DROP` views, tables and
-//! namespaces, `USE`) and `EXPLAIN`. [`parse_data_type`],
+//! accepts commands (`SET`, `RESET`, `CREATE`/`DROP` views, tables,
+//! namespaces and SQL-bodied functions, `USE`) and `EXPLAIN`. [`parse_data_type`],
 //! [`parse_table_schema`] and [`parse_ddl_type`] parse type strings with the
 //! same grammar. The parser is hand-written:
 //! a lexer ([`lexer`]) and a recursive-descent parser with precedence
