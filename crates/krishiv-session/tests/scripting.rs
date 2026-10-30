@@ -376,7 +376,8 @@ fn dropping_the_future_stops_a_script() {
 #[test]
 fn review_findings_stay_fixed() {
     let s = Session::new().unwrap();
-    // An empty loop body still yields: dropping the future stops it.
+    // An empty loop body still yields: dropping the future stops it (the process's CPU time shows
+    // whether a task keeps spinning on the executor).
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -388,6 +389,24 @@ fn review_findings_stay_fixed() {
         tokio::pin!(timeout);
         futures::future::select(work, timeout).await;
     });
+    #[cfg(target_os = "linux")]
+    {
+        // utime + stime of this process, in clock ticks (100 per second).
+        let ticks = || {
+            let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+            let rest = stat.rsplit_once(") ").unwrap().1;
+            let f: Vec<&str> = rest.split_whitespace().collect();
+            f[11].parse::<u64>().unwrap() + f[12].parse::<u64>().unwrap()
+        };
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let before = ticks();
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let spent = ticks() - before;
+        assert!(
+            spent < 20,
+            "{spent} ticks of CPU while idle: the dropped script still spins"
+        );
+    }
     // `DECLARE x;` has neither a type nor a default.
     assert_eq!(
         class(&s, "BEGIN DECLARE x; END"),
@@ -547,12 +566,8 @@ fn exit_handlers_catch_and_leave_their_compound() {
         ),
         ok(&[&["12"]])
     );
-    // The most specific condition wins; the class prefix and a SQLSTATE match too.
-    for (handler, expected) in [
-        ("DIVIDE_BY_ZERO", "name"),
-        ("SQLSTATE '22012'", "state"),
-        ("SQLEXCEPTION", "broad"),
-    ] {
+    // The most specific condition wins; a SQLSTATE matches too; one `SQLEXCEPTION` handler per compound.
+    for (handler, expected) in [("DIVIDE_BY_ZERO", "name"), ("SQLSTATE '22012'", "state")] {
         assert_eq!(
             rows(
                 &s,
@@ -562,14 +577,17 @@ fn exit_handlers_catch_and_leave_their_compound() {
                      SELECT 1 / 0; END"
                 )
             ),
-            ok(&[&[if handler == "SQLEXCEPTION" {
-                "broad"
-            } else {
-                expected
-            }]]),
+            ok(&[&[expected]]),
             "{handler}"
         );
     }
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION VALUES ('broad'); SELECT 1 / 0; END"
+        ),
+        ok(&[&["broad"]])
+    );
     assert_eq!(
         rows(
             &s,
@@ -685,4 +703,41 @@ fn a_for_loop_over_too_many_rows_is_refused() {
         ),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
+}
+
+#[test]
+fn nested_execute_immediate_and_row_assignment_follow_spark() {
+    let s = Session::new().unwrap();
+    // The text of a nested EXECUTE IMMEDIATE is dynamic: it does not see the script's locals either.
+    assert_eq!(
+        class(
+            &s,
+            "BEGIN DECLARE k INT DEFAULT 5; EXECUTE IMMEDIATE 'EXECUTE IMMEDIATE ''SELECT ?'' USING k'; END"
+        ),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+    // More than one row for a row assignment is ROW_SUBQUERY_TOO_MANY_ROWS.
+    assert_eq!(
+        class(
+            &s,
+            "BEGIN DECLARE a INT; DECLARE b INT; SET (a, b) = (SELECT id, id FROM range(2)); END"
+        ),
+        "ROW_SUBQUERY_TOO_MANY_ROWS"
+    );
+}
+
+#[test]
+fn a_result_of_a_type_literals_cannot_hold_fails_where_it_is_produced() {
+    let s = Session::new().unwrap();
+    rows(
+        &s,
+        "CREATE TEMPORARY VIEW arrays AS SELECT array(1, 2) AS a",
+    );
+    rows(&s, "DECLARE ran INT DEFAULT 0");
+    // The error comes from the query, before the statements that follow it.
+    assert_eq!(
+        class(&s, "BEGIN SELECT a FROM arrays; SET session.ran = 1; END"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(rows(&s, "SELECT ran"), ok(&[&["0"]]));
 }

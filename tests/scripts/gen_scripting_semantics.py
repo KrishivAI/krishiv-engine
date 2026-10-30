@@ -34,8 +34,14 @@ from pyspark.sql import SparkSession
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
+# The scratch database of the case being run: only its own name is normalised, never a user identifier
+# that happens to look like one (a column `c1`).
+SCRATCH_DB = ""
+
+
 def norm(v):
-    return re.sub(r"`c[0-9]+`", "`<db>`", UUID.sub("<scope>", str(v)))
+    text = UUID.sub("<scope>", str(v))
+    return text.replace(f"`{SCRATCH_DB}`", "`<db>`") if SCRATCH_DB else text
 
 
 def jsonable(v):
@@ -108,7 +114,9 @@ def parse(path: Path) -> list[Case]:
 
 
 def run_case(spark, n, case):
+    global SCRATCH_DB
     db = f"c{n}"
+    SCRATCH_DB = db
     spark.sql(f"CREATE DATABASE {db}")
     spark.sql(f"USE {db}")
     spark.sql("CREATE TABLE s (i INT)")

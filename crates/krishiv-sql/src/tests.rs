@@ -3402,7 +3402,12 @@ fn script_structure_is_checked_before_anything_runs() {
     let d = ParserOptions::default();
     let fails = |sql: &str| {
         let e = parse_statement(sql, &d).unwrap_err().error;
-        (e.error_class().name().to_owned(), e.to_string())
+        let params: Vec<String> = e
+            .message_parameters()
+            .iter()
+            .map(|(_, v)| v.clone())
+            .collect();
+        (e.error_class().name().to_owned(), e.to_string(), params)
     };
     let cases: &[(&str, &str, &str)] = &[
         ("BEGIN a: BEGIN END b; END", "LABELS_MISMATCH", "`a`"),
@@ -3538,9 +3543,13 @@ fn script_structure_is_checked_before_anything_runs() {
         ),
     ];
     for (sql, class, mentions) in cases {
-        let (got, message) = fails(sql);
+        let (got, message, params) = fails(sql);
         assert_eq!(got, *class, "{sql}: {message}");
-        assert!(message.contains(mentions), "{sql}: {message}");
+        // Exact: Spark's spelling of the parameter (quoting and case included), not a substring.
+        assert!(
+            mentions.is_empty() || params.iter().any(|p| p == mentions),
+            "{sql}: {params:?} lacks {mentions}"
+        );
     }
     // Names compare without case; a condition and an error class are both known to a handler.
     for ok in [

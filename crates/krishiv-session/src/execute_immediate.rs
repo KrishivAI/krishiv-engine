@@ -152,7 +152,9 @@ impl Session {
                     }
                     .into());
                 }
-                Box::pin(self.exec_execute_immediate(&inner, &bound, &inner_text, depth + 1))
+                // Its text and its arguments are the dynamic statement's: no running script's locals.
+                let plain = self.with_locals(Vec::new());
+                Box::pin(plain.exec_execute_immediate(&inner, &bound, &inner_text, depth + 1))
                     .await?
             }
             statement => {

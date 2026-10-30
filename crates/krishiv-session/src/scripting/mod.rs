@@ -21,8 +21,8 @@ use krishiv_common::error::{
     DuplicateAssignments, DuplicateVariableNameInsideDeclare, InvalidBooleanStatement,
     InvalidDefaultValueSubqueryExpression, InvalidVariableDeclarationQualifiedLocalVariable,
     InvalidVariableDeclarationReplaceLocalVariable, KrishivError, KrishivUnsupportedFeature,
-    ScalarSubqueryTooManyRows, UnsupportedFeatureSqlScriptingDropTemporaryVariable,
-    VariableAlreadyExists, VariableNotFound,
+    RowSubqueryTooManyRows, ScalarSubqueryTooManyRows,
+    UnsupportedFeatureSqlScriptingDropTemporaryVariable, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{LocalFrame, SessionVariable};
@@ -434,6 +434,11 @@ impl Run<'_> {
             Statement::Query(_) | Statement::ExecuteImmediate(_)
         ) {
             let schema = frame.schema().await?;
+            // A script's result is returned as literal rows: refuse a type they cannot hold now, not
+            // after the rest of the script has run.
+            for field in schema.fields() {
+                crate::command::arrow_krishiv_type(field.data_type())?;
+            }
             if !schema.fields().is_empty() {
                 // One row more than the cap shows that it was exceeded; no more is read.
                 let batches = frame.limit(MAX_RESULT_ROWS + 1).collect().await?;
@@ -835,7 +840,7 @@ impl Run<'_> {
                 let batches = handle.run_analyzed_variable_query(&wrapped).await?;
                 let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
                 if rows > 1 {
-                    return Err(ScalarSubqueryTooManyRows {}.into());
+                    return Err(RowSubqueryTooManyRows {}.into());
                 }
                 let values: Vec<Literal> = match batches.iter().find(|b| b.num_rows() > 0) {
                     Some(batch) => (0..types.len())

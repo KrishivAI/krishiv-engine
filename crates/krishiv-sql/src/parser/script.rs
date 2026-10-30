@@ -48,7 +48,8 @@ impl Parser<'_> {
             }
             let body = p.statement_list()?;
             p.expect_kw("END")?;
-            let end_label = p.end_label()?;
+            // Nothing after the `END` of the script itself is its label.
+            let end_label = if top_level { None } else { p.end_label()? };
             Ok(Compound {
                 label,
                 end_label,

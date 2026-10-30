@@ -117,6 +117,8 @@ class Runner:
             rec["rows"] = [[jsonable(c) for c in row] for row in df.collect()]
         except Exception as e:
             rec["error"] = error_of(e)
+        # The scratch database name differs per run: leave it out of what is compared and recorded.
+        rec = json.loads(json.dumps(rec).replace(f"`{db}`", "`<db>`").replace(f"{db}.", "<db>."))
         rec["tables"] = checksums(self.spark, db, self.tables)
         return rec
 

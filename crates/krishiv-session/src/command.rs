@@ -1531,7 +1531,7 @@ pub(crate) fn arrow_value(
 
 /// The Krishiv type of Arrow `data_type`: the single Arrow-to-Krishiv
 /// type map [`arrow_value`] reads, so NULL slots and values agree.
-fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, KrishivError> {
+pub(crate) fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, KrishivError> {
     match data_type {
         ArrowType::Null => Ok(DataType::Null),
         ArrowType::Boolean => Ok(DataType::Boolean),
