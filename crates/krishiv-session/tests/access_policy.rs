@@ -340,10 +340,10 @@ fn inverse_matrix_reads_pass_writes_fail() {
     assert_all(&writes(&s, &f), DENIED);
     assert_eq!(tree(&f.dir), files, "no file was written or removed");
     // `Drop` and `Create` are allowed: DDL passes the checks and runs (here
-    // the name is a temporary view, which `DROP TABLE` rejects).
+    // the name is a temporary view, which `DROP TABLE` drops).
     let ddl = ddl(&s);
     let drop = ddl.iter().find(|(n, _)| *n == "DROP TABLE").unwrap();
-    assert_eq!(drop.1, "WRONG_COMMAND_FOR_OBJECT_TYPE");
+    assert_eq!(drop.1, "OK");
 }
 
 #[test]

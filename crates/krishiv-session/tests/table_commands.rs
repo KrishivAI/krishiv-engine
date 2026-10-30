@@ -132,10 +132,17 @@ fn create_table_errors() {
         class(&s, "CREATE TABLE dup (a INT, A INT)"),
         "COLUMN_ALREADY_EXISTS"
     );
-    // OR REPLACE swaps the columns and empties the table.
+    // File-source tables cannot be replaced, as in Spark; nothing is written or lost.
     run(&s, "INSERT INTO t VALUES (1)");
-    run(&s, "CREATE OR REPLACE TABLE t (x STRING)");
-    assert_eq!(col0(&s, "SELECT x FROM t"), Vec::<String>::new());
+    assert_eq!(
+        class(&s, "CREATE OR REPLACE TABLE t (x STRING)"),
+        "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+    );
+    assert_eq!(
+        class(&s, "CREATE OR REPLACE TABLE t AS SELECT 'x' AS x"),
+        "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+    );
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM t"), ["1"]);
 }
 
 #[test]
@@ -173,7 +180,7 @@ fn insert_matches_columns_and_applies_defaults() {
     );
     assert_eq!(
         class(&s, "INSERT INTO t (a, nope) VALUES (1, 2)"),
-        "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS"
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
     );
     assert_eq!(
         class(&s, "INSERT INTO missing VALUES (1)"),
@@ -190,7 +197,9 @@ fn insert_into_a_view_and_other_wrong_targets() {
         class(&s, "INSERT INTO v VALUES (1)"),
         "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
     );
-    assert_eq!(class(&s, "DROP TABLE v"), "WRONG_COMMAND_FOR_OBJECT_TYPE");
+    // `DROP TABLE` drops a temporary view, as in Spark.
+    run(&s, "DROP TABLE v");
+    assert_eq!(class(&s, "SELECT * FROM v"), "TABLE_OR_VIEW_NOT_FOUND");
     run(&s, "CREATE TABLE t (a INT)");
     assert_eq!(
         class(&s, "INSERT INTO t PARTITION (a = 1) VALUES (1)"),
@@ -369,7 +378,7 @@ fn a_query_run_before_an_insert_still_sees_what_it_analysed_and_a_new_one_sees_t
 }
 
 #[test]
-fn insert_overwrite_is_atomic_for_a_concurrent_reader() {
+fn insert_overwrite_never_loses_the_old_rows_before_the_new_ones_are_complete() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE TABLE t (a INT)");
@@ -377,36 +386,139 @@ fn insert_overwrite_is_atomic_for_a_concurrent_reader() {
     let reader = {
         let s = s.clone();
         std::thread::spawn(move || {
-            let mut seen = std::collections::BTreeSet::new();
-            for _ in 0..40 {
-                if let Ok(batches) = block_on(async {
+            let mut seen = std::collections::BTreeMap::<String, usize>::new();
+            let mut errors = Vec::new();
+            for _ in 0..200 {
+                match block_on(async {
                     s.sql("SELECT CAST(count(*) AS STRING) FROM t")
                         .await?
                         .collect()
                         .await
                 }) {
-                    let c = batches[0].column(0);
-                    let v = match c.data_type() {
-                        ArrowType::Utf8View => c.as_string_view().value(0).to_owned(),
-                        _ => c.as_string::<i32>().value(0).to_owned(),
-                    };
-                    seen.insert(v);
+                    Ok(batches) => {
+                        let c = batches[0].column(0);
+                        let v = match c.data_type() {
+                            ArrowType::Utf8View => c.as_string_view().value(0).to_owned(),
+                            _ => c.as_string::<i32>().value(0).to_owned(),
+                        };
+                        *seen.entry(v).or_default() += 1;
+                    }
+                    Err(e) => errors.push(e.to_string()),
                 }
             }
-            seen
+            (seen, errors)
         })
     };
-    for _ in 0..10 {
+    for _ in 0..20 {
         run(&s, "INSERT OVERWRITE t VALUES (7), (8), (9), (10), (11)");
         run(&s, "INSERT OVERWRITE t VALUES (1), (2), (3)");
     }
-    let seen = reader.join().unwrap();
-    // Old rows or new rows, never a mix (and never a table without its files).
+    let (seen, errors) = reader.join().unwrap();
+    // A reader sees the old rows, the new rows, or (between the two steps of the writer's commit, until the
+    // manifest commit of P2-T082b) both: never fewer rows than either side. Until that commit a reader that
+    // listed the old files can also lose one to the overwrite's cleanup: that is the only error allowed.
     assert!(
-        seen.is_subset(&["3".to_owned(), "5".to_owned()].into()),
-        "{seen:?}"
+        errors.iter().all(|e| e.contains("FILE_NOT_EXIST")),
+        "{errors:?}"
+    );
+    let allowed: std::collections::BTreeSet<&str> = ["3", "5", "8"].into();
+    assert!(
+        seen.keys().all(|k| allowed.contains(k.as_str())),
+        "unexpected counts: {seen:?}"
     );
     assert!(!seen.is_empty());
+}
+
+#[test]
+fn overwriting_a_table_from_itself_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT)");
+    run(&s, "INSERT INTO t VALUES (1)");
+    assert_eq!(
+        class(&s, "INSERT OVERWRITE t SELECT a + 1 FROM t"),
+        "UNSUPPORTED_OVERWRITE.TABLE"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "INSERT OVERWRITE default.t SELECT * FROM (SELECT a FROM spark_catalog.default.t)"
+        ),
+        "UNSUPPORTED_OVERWRITE.TABLE"
+    );
+    // The data is untouched, and INSERT INTO from itself is fine.
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM t"), ["1"]);
+    run(&s, "INSERT INTO t SELECT a + 1 FROM t");
+    run(&s, "CREATE TABLE u (a INT)");
+    run(&s, "INSERT OVERWRITE u SELECT a FROM t");
+}
+
+#[test]
+fn names_that_could_be_paths_are_refused_and_nothing_outside_the_warehouse_is_touched() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("keep.txt"), "x").unwrap();
+    let s = session(&dir.path().join("wh"));
+    for sql in [
+        "CREATE TABLE `/etc` (a INT)".to_owned(),
+        format!("CREATE TABLE `{}` (a INT)", outside.path().display()),
+        "CREATE TABLE `a/b` (a INT)".to_owned(),
+        "CREATE TABLE `a b` (a INT)".to_owned(),
+        "CREATE TABLE `a-b` (a INT)".to_owned(),
+        "CREATE TABLE `x.y` (a INT)".to_owned(),
+        "CREATE TABLE `` (a INT)".to_owned(),
+        "CREATE TABLE default.`a/b` AS SELECT 1 AS a".to_owned(),
+        "CREATE TABLE `/etc` LIKE default.nope".to_owned(),
+    ] {
+        let c = class(&s, &sql);
+        assert!(
+            matches!(
+                c.as_str(),
+                "INVALID_SCHEMA_OR_RELATION_NAME"
+                    | "PARSE_SYNTAX_ERROR"
+                    | "TABLE_OR_VIEW_NOT_FOUND"
+            ),
+            "{sql}: {c}"
+        );
+    }
+    assert_eq!(
+        class(&s, "CREATE TABLE `..` (a INT)"),
+        "INVALID_ATTRIBUTE_NAME_SYNTAX"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE `.` (a INT)"),
+        "INVALID_ATTRIBUTE_NAME_SYNTAX"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE `/etc` (a INT)"),
+        "INVALID_SCHEMA_OR_RELATION_NAME"
+    );
+    assert_eq!(
+        class(&s, "CREATE TABLE d.`..` (a INT)"),
+        "INVALID_ATTRIBUTE_NAME_SYNTAX"
+    );
+    // No table was created, and neither the warehouse nor the other directory was touched.
+    assert_eq!(class(&s, "DROP TABLE `/etc`"), "TABLE_OR_VIEW_NOT_FOUND");
+    assert_eq!(class(&s, "TRUNCATE TABLE `..`"), "TABLE_OR_VIEW_NOT_FOUND");
+    assert!(outside.path().join("keep.txt").is_file());
+    assert!(dir.path().exists());
+}
+
+#[test]
+fn a_link_in_the_warehouse_is_never_followed_by_a_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("keep.txt"), "x").unwrap();
+    let wh = dir.path().join("wh");
+    let s = session(&wh);
+    run(&s, "CREATE TABLE t (a INT)");
+    run(&s, "INSERT INTO t VALUES (1)");
+    // The table's directory is swapped for a link to a directory outside the warehouse.
+    std::fs::remove_dir_all(wh.join("t")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), wh.join("t")).unwrap();
+    assert_eq!(class(&s, "TRUNCATE TABLE t"), "INTERNAL_ERROR");
+    assert_eq!(class(&s, "DROP TABLE t"), "INTERNAL_ERROR");
+    assert!(outside.path().join("keep.txt").is_file());
 }
 
 #[test]
@@ -506,7 +618,7 @@ fn insert_column_lists_by_name_and_conflicts() {
     );
     assert_eq!(
         class(&s, "INSERT INTO t BY NAME SELECT 1 AS zzz"),
-        "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS"
+        "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS"
     );
     assert_eq!(
         class(&s, "INSERT INTO t REPLACE WHERE a = 1 VALUES (1, 'x')"),

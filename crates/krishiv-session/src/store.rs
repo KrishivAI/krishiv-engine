@@ -68,7 +68,6 @@ pub(crate) struct CatalogTable {
 pub(crate) enum CreateMode {
     ErrorIfExists,
     IfNotExists,
-    Replace,
 }
 
 /// The contract of a permanent catalog (see the module docs).
@@ -79,27 +78,13 @@ pub(crate) trait CatalogStore: Send + Sync {
     fn has_namespace(&self, namespace: &str) -> bool;
     /// The table `namespace.name`.
     fn table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
-    /// Adds `table`. Returns the table it replaced (a `Replace`), or `None`
-    /// when nothing was added (`IfNotExists` on an existing table).
+    /// Adds `table`; `false` when nothing was added (`IfNotExists` on an existing table).
     ///
     /// # Errors
     /// `TABLE_OR_VIEW_ALREADY_EXISTS` for `ErrorIfExists`.
-    fn create_table(
-        &self,
-        table: CatalogTable,
-        mode: CreateMode,
-    ) -> Result<CreateOutcome, KrishivError>;
+    fn create_table(&self, table: CatalogTable, mode: CreateMode) -> Result<bool, KrishivError>;
     /// Removes the table, returning it.
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
-}
-
-/// The result of [`CatalogStore::create_table`].
-#[derive(Debug)]
-pub(crate) enum CreateOutcome {
-    /// The table was added; the previous table of a `Replace`, if any.
-    Created(Option<Arc<CatalogTable>>),
-    /// `IfNotExists` found the table: nothing changed.
-    Exists,
 }
 
 /// Spark's `in-memory` catalog: metadata in memory, per session.
@@ -155,16 +140,11 @@ impl CatalogStore for InMemoryCatalogStore {
             .cloned()
     }
 
-    fn create_table(
-        &self,
-        table: CatalogTable,
-        mode: CreateMode,
-    ) -> Result<CreateOutcome, KrishivError> {
+    fn create_table(&self, table: CatalogTable, mode: CreateMode) -> Result<bool, KrishivError> {
         let key = (table.namespace.clone(), table.name.clone());
         let mut state = self.lock();
-        let previous = state.tables.get(&key).cloned();
-        match (&previous, mode) {
-            (Some(_), CreateMode::ErrorIfExists) => {
+        match (state.tables.contains_key(&key), mode) {
+            (true, CreateMode::ErrorIfExists) => {
                 return Err(TableOrViewAlreadyExists {
                     relation_name: format!(
                         "`spark_catalog`.`{}`.`{}`",
@@ -173,12 +153,12 @@ impl CatalogStore for InMemoryCatalogStore {
                 }
                 .into());
             }
-            (Some(_), CreateMode::IfNotExists) => return Ok(CreateOutcome::Exists),
-            _ => {}
+            (true, CreateMode::IfNotExists) => return Ok(false),
+            (false, _) => {}
         }
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
-        Ok(CreateOutcome::Created(previous))
+        Ok(true)
     }
 
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>> {
@@ -275,34 +255,30 @@ mod tests {
     }
 
     #[test]
-    fn create_replace_and_drop_bump_the_epoch() {
+    fn create_and_drop_bump_the_epoch() {
         let s = InMemoryCatalogStore::default();
         assert!(s.has_namespace("default"));
         assert!(!s.has_namespace("other"));
         assert_eq!(s.epoch(), 0);
-        let created = s
-            .create_table(table("default", "t"), CreateMode::ErrorIfExists)
-            .unwrap();
-        assert!(matches!(created, CreateOutcome::Created(None)));
+        assert!(
+            s.create_table(table("default", "t"), CreateMode::ErrorIfExists)
+                .unwrap()
+        );
         assert_eq!(s.epoch(), 1);
         let err = s
             .create_table(table("default", "t"), CreateMode::ErrorIfExists)
             .unwrap_err();
         assert_eq!(err.error_class().name(), "TABLE_OR_VIEW_ALREADY_EXISTS");
         assert_eq!(s.epoch(), 1);
-        assert!(matches!(
-            s.create_table(table("default", "t"), CreateMode::IfNotExists)
-                .unwrap(),
-            CreateOutcome::Exists
-        ));
+        assert!(
+            !s.create_table(table("default", "t"), CreateMode::IfNotExists)
+                .unwrap()
+        );
         assert_eq!(s.epoch(), 1);
-        let replaced = s
-            .create_table(table("default", "t"), CreateMode::Replace)
-            .unwrap();
-        assert!(matches!(replaced, CreateOutcome::Created(Some(_))));
-        assert_eq!(s.epoch(), 2);
         assert!(s.table("default", "t").is_some());
         assert!(s.table("default", "u").is_none());
+        s.bump();
+        assert_eq!(s.epoch(), 2);
         assert!(s.drop_table("default", "t").is_some());
         assert_eq!(s.epoch(), 3);
         assert!(s.drop_table("default", "t").is_none());

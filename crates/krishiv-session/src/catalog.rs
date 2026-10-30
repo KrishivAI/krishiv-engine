@@ -707,6 +707,29 @@ async fn run_on<T: Send + 'static>(
     }
 }
 
+/// Whether the analyzed `plan` reads the permanent table `namespace.name` (directly, or through a view or a
+/// subquery): `INSERT OVERWRITE` of a table that is also read would delete what it reads.
+pub(crate) fn reads_stored_table(
+    plan: &LogicalPlan,
+    namespace: &str,
+    name: &str,
+    current: &str,
+) -> bool {
+    let mut scans = Vec::new();
+    collect_scans(plan, &mut scans);
+    scans.iter().any(|scan| {
+        let ReadSource::Table { name: parts, .. } = &scan.source else {
+            return false;
+        };
+        let (ns, table) = match parts.as_slice() {
+            [table] => (current, table),
+            [.., ns, table] => (ns.as_str(), table),
+            [] => return false,
+        };
+        ns.eq_ignore_ascii_case(namespace) && table.eq_ignore_ascii_case(name)
+    })
+}
+
 /// The scans of `plan` and of the subqueries in its expressions.
 fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
     fn in_expr<'a>(e: &'a Arc<krishiv_plan::Expr>, out: &mut Vec<&'a Scan>) {
@@ -828,9 +851,13 @@ impl QueryCatalog {
             known: true,
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
-        loaded.insert(format!("{namespace}.{name}"), Arc::clone(&entry));
+        // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
+        loaded.insert(
+            format!("{}.{}", namespace.to_lowercase(), name.to_lowercase()),
+            Arc::clone(&entry),
+        );
         if !form.qualified {
-            loaded.insert(name.clone(), entry);
+            loaded.insert(name.to_lowercase(), entry);
         }
         Some(TableMeta {
             ident: TableIdent {
@@ -1415,7 +1442,7 @@ fn quote(name: &str) -> String {
 }
 
 /// Spark's search path, as analysis reports it for a missing table.
-fn search_path() -> String {
+pub(crate) fn search_path() -> String {
     format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{NAMESPACE}`]")
 }
 

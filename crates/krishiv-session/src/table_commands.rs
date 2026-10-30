@@ -8,22 +8,34 @@
 //! deletes a managed table's directory. `INSERT` and `CREATE TABLE ... AS
 //! SELECT` are writes: the query is analysed, stored into the table's
 //! columns by Spark's ANSI store-assignment rules, and written as files to
-//! the table's directory with the session's writer (`INSERT OVERWRITE` is
-//! its atomic overwrite). A CTAS adds its metadata only after the commit.
+//! the table's directory with the session's writer. A failed or cancelled
+//! write keeps the old data; `INSERT OVERWRITE` deletes the old files only
+//! once every new file is complete, but a reader listing the directory in
+//! between sees old and new files together: atomic publication is the
+//! manifest commit's (P2-T082b), as `krishiv-io`'s commit module says. A
+//! CTAS adds its metadata only after the commit.
+//!
+//! Names of new tables and namespaces are checked as Spark checks them
+//! (letters, digits and `_`), so a name can never be a path; everything the
+//! commands delete lies inside the warehouse, is never a link, and is
+//! authorised against the session's policy first.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DataSourceNotFound, IncompatibleDataForTableCannotSafelyCast,
-    IncompatibleDataForTableExtraColumns, InsertColumnArityMismatchNotEnoughDataColumns,
-    InsertColumnArityMismatchTooManyDataColumns, InternalError, KrishivError,
-    KrishivUnsupportedFeature, LocationAlreadyExists, NotSupportedCommandWithoutHiveSupport,
-    SchemaNotFound, TableOrViewNotFound, WrongCommandForObjectType,
+    CastOverflowInTableInsert, DataSourceNotFound, ErrorClass,
+    IncompatibleDataForTableCannotSafelyCast, InsertColumnArityMismatchNotEnoughDataColumns,
+    InsertColumnArityMismatchTooManyDataColumns, InternalError, InvalidAttributeNameSyntax,
+    InvalidSchemaOrRelationName, KrishivError, KrishivUnsupportedFeature, LocationAlreadyExists,
+    NotSupportedCommandWithoutHiveSupport, SchemaNotFound, TableOrViewNotFound,
+    UnresolvedColumnWithSuggestion, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::TableColumn;
+use krishiv_common::secret::OptionValue;
+use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
+use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
     ColumnName, CreateTable, CreateTableLike, DdlName, DropTable, Insert, InsertClause, Query,
     TableElement, TableOption, Truncate,
@@ -34,12 +46,34 @@ use crate::dataframe::DataFrame;
 use crate::functions::{col, expr, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::store::{
-    CatalogStore, CatalogTable, CreateMode, CreateOutcome, DEFAULT_NAMESPACE, StoreColumn,
-    managed_location,
+    CatalogStore, CatalogTable, CreateMode, DEFAULT_NAMESPACE, StoreColumn, managed_location,
 };
 
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc"];
+
+/// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// `INVALID_SCHEMA_OR_RELATION_NAME` (and for `.` and `..`, which Spark's parser rejects as attribute names,
+/// `INVALID_ATTRIBUTE_NAME_SYNTAX`) unless `name` is a valid new table or namespace name.
+fn check_new_name(name: &str) -> Result<(), KrishivError> {
+    if valid_name(name) {
+        Ok(())
+    } else if name.chars().all(|c| c == '.') && !name.is_empty() {
+        Err(InvalidAttributeNameSyntax {
+            name: format!("`{name}`"),
+        }
+        .into())
+    } else {
+        Err(InvalidSchemaOrRelationName {
+            name: format!("`{name}`"),
+        }
+        .into())
+    }
+}
 
 /// `spark_catalog`.`ns`.`name`, as Spark prints a table.
 fn quoted(namespace: &str, name: &str) -> String {
@@ -63,6 +97,8 @@ fn internal(message: String) -> KrishivError {
 struct TableName {
     namespace: String,
     name: String,
+    /// The name as written, quoted part by part, for Spark's "not found" errors.
+    written: String,
     /// The name had no namespace part.
     bare: bool,
 }
@@ -97,12 +133,22 @@ impl TableName {
         Ok(Self {
             namespace,
             name,
+            written: format!("`{}`", parts.join("`.`")),
             bare,
         })
     }
 
     fn quoted(&self) -> String {
         quoted(&self.namespace, &self.name)
+    }
+
+    /// Spark's `TABLE_OR_VIEW_NOT_FOUND` for this name: as written, with the search path.
+    fn not_found(&self) -> KrishivError {
+        TableOrViewNotFound {
+            relation_name: self.written.clone(),
+            search_path: crate::catalog::search_path(),
+        }
+        .into()
     }
 }
 
@@ -161,11 +207,26 @@ impl Session {
                 .join(".")
         }))?;
         let name = self.table_name(&t.name, &env)?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
         self.check_namespace(&name)?;
-        let mode = match (t.or_replace, t.if_not_exists) {
-            (true, _) => CreateMode::Replace,
-            (false, true) => CreateMode::IfNotExists,
-            (false, false) => CreateMode::ErrorIfExists,
+        if t.or_replace {
+            // Spark's file-source tables cannot be replaced either.
+            return Err(UnsupportedFeatureTableOperation {
+                table_name: name.quoted(),
+                operation: if t.as_query.is_some() {
+                    "REPLACE TABLE AS SELECT"
+                } else {
+                    "REPLACE TABLE"
+                }
+                .to_owned(),
+            }
+            .into());
+        }
+        let mode = if t.if_not_exists {
+            CreateMode::IfNotExists
+        } else {
+            CreateMode::ErrorIfExists
         };
         if self
             .state
@@ -178,6 +239,12 @@ impl Session {
             // created beside it in its namespace, as in Spark.
         } else if mode == CreateMode::IfNotExists {
             return self.empty_frame().await;
+        } else {
+            // Before anything is written (a CTAS writes first).
+            return Err(krishiv_common::error::TableOrViewAlreadyExists {
+                relation_name: name.quoted(),
+            }
+            .into());
         }
         let mut options = options_of(&t.options, text);
         let properties = options_of(&t.tblproperties, text);
@@ -216,7 +283,7 @@ impl Session {
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
-                self.add_table(table, mode, false)?;
+                self.add_table(table, mode, false).await?;
             }
         }
         self.empty_frame().await
@@ -289,7 +356,7 @@ impl Session {
 
     /// Adds `table` to the store, creating its directory first. A replaced
     /// managed table's directory is deleted after the metadata changed.
-    fn add_table(
+    async fn add_table(
         &self,
         table: CatalogTable,
         mode: CreateMode,
@@ -298,6 +365,7 @@ impl Session {
         let name = TableName {
             namespace: table.namespace.clone(),
             name: table.name.clone(),
+            written: String::new(),
             bare: false,
         };
         if mode == CreateMode::ErrorIfExists
@@ -313,7 +381,7 @@ impl Session {
             }
             .into());
         }
-        if !written && table.managed && table.location.exists() && mode != CreateMode::Replace {
+        if !written && table.managed && table.location.exists() {
             return Err(LocationAlreadyExists {
                 identifier: name.quoted(),
                 location: table.location.display().to_string(),
@@ -321,21 +389,80 @@ impl Session {
             .into());
         }
         let location = table.location.clone();
+        self.authorize_path(&location, &[Privilege::Create], StatementClass::Ddl)
+            .await?;
         std::fs::create_dir_all(&location)
             .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
-        let outcome = self.state.catalog.store.create_table(table, mode)?;
-        if let CreateOutcome::Created(Some(old)) = &outcome
-            && old.managed
-        {
-            if old.location == location {
-                // `OR REPLACE` over a managed table of the same location:
-                // its old files are replaced by an empty table.
-                clear_dir(&old.location)?;
-            } else {
-                remove_dir(&old.location)?;
-            }
+        // Tables are never replaced, so nothing comes back from the store to clean up.
+        self.state.catalog.store.create_table(table, mode)?;
+        Ok(())
+    }
+
+    /// Asks the session's policy about `path` for each privilege (the writer does the same for its files).
+    async fn authorize_path(
+        &self,
+        path: &Path,
+        privileges: &[Privilege],
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
+        let securable = Securable::Path(OptionValue::from_user("path", path.display().to_string()));
+        for privilege in privileges {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                *privilege,
+            )
+            .await;
+            crate::access::audit(self, class, r)?;
         }
         Ok(())
+    }
+
+    /// Deletes the files of the managed `table` (all of its directory, or with `keep_dir` what is in it).
+    ///
+    /// The directory must lie inside the warehouse, must not be the warehouse and must not be a link: a name
+    /// can never reach outside it (names are checked at creation, and this is the second line). The policy is
+    /// asked about the directory before anything is removed.
+    async fn delete_table_files(
+        &self,
+        table: &CatalogTable,
+        keep_dir: bool,
+    ) -> Result<(), KrishivError> {
+        if !table.managed {
+            return Ok(());
+        }
+        let location = &table.location;
+        let meta = match location.symlink_metadata() {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(internal(format!(
+                    "cannot inspect {}: {e}",
+                    location.display()
+                )));
+            }
+        };
+        let root = self
+            .warehouse_dir()?
+            .canonicalize()
+            .map_err(|e| internal(format!("cannot resolve the warehouse: {e}")))?;
+        let canonical = location
+            .canonicalize()
+            .map_err(|e| internal(format!("cannot resolve {}: {e}", location.display())))?;
+        if meta.file_type().is_symlink() || !canonical.starts_with(&root) || canonical == root {
+            return Err(internal(format!(
+                "refusing to delete {}: it is not a directory inside the warehouse",
+                location.display()
+            )));
+        }
+        self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
+            .await?;
+        if keep_dir {
+            clear_dir(&canonical)
+        } else {
+            remove_dir(&canonical)
+        }
     }
 
     /// `CREATE TABLE ... AS SELECT`: writes the query to the table's
@@ -361,15 +488,16 @@ impl Session {
                 comment: None,
             })
             .collect();
-        if table.managed && table.location.exists() && mode != CreateMode::Replace {
+        if table.managed && table.location.exists() {
             return Err(LocationAlreadyExists {
                 identifier: quoted(&table.namespace, &table.name),
                 location: table.location.display().to_string(),
             }
             .into());
         }
-        self.write_table_rows(&table, &df, "overwrite").await?;
-        self.add_table(table, mode, true)
+        // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
+        self.write_table_rows(&table, &df, "errorifexists").await?;
+        self.add_table(table, mode, true).await
     }
 
     /// `CREATE TABLE target LIKE source`.
@@ -386,6 +514,8 @@ impl Session {
             .into());
         }
         let name = self.table_name(&t.name, &env)?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
         self.check_namespace(&name)?;
         let source = self.table_name(&t.source, &env)?;
         let (columns, source_provider) = if let Some(s) = self
@@ -420,11 +550,7 @@ impl Session {
                 "parquet".to_owned(),
             )
         } else {
-            return Err(TableOrViewNotFound {
-                relation_name: source.quoted(),
-                search_path: "[]".to_owned(),
-            }
-            .into());
+            return Err(source.not_found());
         };
         let provider = match &t.using {
             Some(u) => self.provider_of(Some(
@@ -462,7 +588,7 @@ impl Session {
         } else {
             CreateMode::ErrorIfExists
         };
-        self.add_table(table, mode, false)?;
+        self.add_table(table, mode, false).await?;
         self.empty_frame().await
     }
 
@@ -470,35 +596,18 @@ impl Session {
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
-        match self
+        if self.temp_entry_of(&name, &env) {
+            // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
+            self.state.catalog.drop_table(&name.name);
+        } else if let Some(table) = self
             .state
             .catalog
             .store
             .drop_table(&name.namespace, &name.name)
         {
-            Some(table) => {
-                if table.managed {
-                    remove_dir(&table.location)?;
-                }
-            }
-            None if self.temp_entry_of(&name, &env) => {
-                return Err(WrongCommandForObjectType {
-                    operation: "DROP TABLE".to_owned(),
-                    required_type: "EXTERNAL or MANAGED".to_owned(),
-                    object_name: name.quoted(),
-                    found_type: "VIEW".to_owned(),
-                    alternative: "DROP VIEW".to_owned(),
-                }
-                .into());
-            }
-            None if d.if_exists => {}
-            None => {
-                return Err(TableOrViewNotFound {
-                    relation_name: name.quoted(),
-                    search_path: "[]".to_owned(),
-                }
-                .into());
-            }
+            self.delete_table_files(&table, false).await?;
+        } else if !d.if_exists {
+            return Err(name.not_found());
         }
         self.empty_frame().await
     }
@@ -518,7 +627,7 @@ impl Session {
             }
             .into());
         }
-        clear_dir(&table.location)?;
+        self.delete_table_files(&table, true).await?;
         self.state.catalog.store.bump();
         self.empty_frame().await
     }
@@ -542,11 +651,7 @@ impl Session {
             }
             .into());
         }
-        Err(TableOrViewNotFound {
-            relation_name: name.quoted(),
-            search_path: "[]".to_owned(),
-        }
-        .into())
+        Err(name.not_found())
     }
 
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`.
@@ -573,6 +678,19 @@ impl Session {
         let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let analysis = source.analyzed_in(self.query_env()).await?;
+        if c.overwrite
+            && crate::catalog::reads_stored_table(
+                analysis.analyzed.plan.root(),
+                &name.namespace,
+                &name.name,
+                crate::catalog::NAMESPACE,
+            )
+        {
+            return Err(UnsupportedOverwriteTable {
+                table: name.quoted(),
+            }
+            .into());
+        }
         let output: Vec<TableColumn> = analysis
             .analyzed
             .output
@@ -610,11 +728,12 @@ impl Session {
                     if output[*i].data_type == column.data_type {
                         value
                     } else {
-                        value.cast(column.data_type.clone())
+                        // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says.
+                        value.cast_ansi(column.data_type.clone())
                     }
                 }
                 Source::Default => match &column.default {
-                    Some(text) => expr(text)?.cast(column.data_type.clone()),
+                    Some(text) => expr(text)?.cast_ansi(column.data_type.clone()),
                     None => lit_null().cast(column.data_type.clone()),
                 },
             };
@@ -622,9 +741,10 @@ impl Session {
         }
         let df = base.select(select);
         let mode = if c.overwrite { "overwrite" } else { "append" };
-        self.write_table_rows(&table, &df, mode).await?;
+        let written = self.write_table_rows(&table, &df, mode).await;
+        // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
-        Ok(())
+        written.map_err(|e| overflow_in_table_insert(e, &table, &output, &assignment))
     }
 
     /// Writes `df` to the files of `table` with the writer's save `mode`.
@@ -681,9 +801,11 @@ fn assign(
     if by_name {
         for (i, o) in output.iter().enumerate() {
             let Some(at) = table.columns.iter().position(|c| eq(&c.name, &o.name)) else {
-                return Err(IncompatibleDataForTableExtraColumns {
+                // A data column the table does not have: Spark counts the table's columns against the data's.
+                return Err(InsertColumnArityMismatchTooManyDataColumns {
                     table_name,
-                    extra_columns: format!("`{}`", o.name),
+                    table_columns: table_cols(),
+                    data_columns: data_cols(),
                 }
                 .into());
             };
@@ -713,9 +835,9 @@ fn assign(
         }
         for (i, name) in listed.iter().enumerate() {
             let Some(at) = table.columns.iter().position(|c| eq(&c.name, name)) else {
-                return Err(IncompatibleDataForTableExtraColumns {
-                    table_name,
-                    extra_columns: format!("`{name}`"),
+                return Err(UnresolvedColumnWithSuggestion {
+                    object_name: format!("`{name}`"),
+                    proposal: table_cols(),
                 }
                 .into());
             };
@@ -788,14 +910,66 @@ fn can_store(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         (T::Null, _) => true,
         (a, b) if (numeric(a) && numeric(b)) || to_string => true,
-        // Binary from a string, dates and timestamps among themselves.
-        (T::String, T::Binary)
-        | (T::Date, T::Timestamp | T::TimestampNtz)
-        | (T::Timestamp, T::TimestampNtz)
-        | (T::TimestampNtz, T::Timestamp) => true,
-        (T::Array(a), T::Array(b)) => can_store(a.element_type(), b.element_type()),
+        // Dates and timestamps among themselves.
+        (T::Date, T::Timestamp | T::TimestampNtz)
+        | (T::Timestamp | T::TimestampNtz, T::Date | T::Timestamp | T::TimestampNtz) => true,
+        (T::Array(a), T::Array(b)) => {
+            can_store(a.element_type(), b.element_type())
+                && (b.contains_null() || !a.contains_null())
+        }
+        (T::Map(a), T::Map(b)) => {
+            can_store(a.key_type(), b.key_type())
+                && can_store(a.value_type(), b.value_type())
+                && (b.value_contains_null() || !a.value_contains_null())
+        }
+        (T::Struct(a), T::Struct(b)) => {
+            a.fields().len() == b.fields().len()
+                && a.fields().iter().zip(b.fields()).all(|(x, y)| {
+                    can_store(x.data_type(), y.data_type()) && (y.nullable() || !x.nullable())
+                })
+        }
         _ => false,
     }
+}
+
+/// A `CAST_OVERFLOW` raised while a column is written is `CAST_OVERFLOW_IN_TABLE_INSERT`, naming the column,
+/// whatever `spark.sql.ansi.enabled` is; any other error is returned as it came.
+fn overflow_in_table_insert(
+    e: KrishivError,
+    table: &CatalogTable,
+    output: &[TableColumn],
+    assignment: &[Source],
+) -> KrishivError {
+    if e.error_class() != ErrorClass::CastOverflow {
+        return e;
+    }
+    let params = e.message_parameters();
+    let param = |key: &str| {
+        params
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, v)| v.clone())
+    };
+    let (Some(source_type), Some(target_type)) = (param("sourceType"), param("targetType")) else {
+        return e;
+    };
+    let sql = |t: &DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
+    let column = table
+        .columns
+        .iter()
+        .zip(assignment)
+        .find(|(c, from)| {
+            matches!(from, Source::Position(i)
+                if sql(&c.data_type) == target_type && sql(&output[*i].data_type) == source_type)
+        })
+        .map(|(c, _)| c.name.clone())
+        .unwrap_or_default();
+    CastOverflowInTableInsert {
+        source_type,
+        target_type,
+        column_name: format!("`{column}`"),
+    }
+    .into()
 }
 
 /// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
@@ -887,11 +1061,11 @@ mod tests {
         assert!(can_store(&T::Integer, &T::String));
         assert!(can_store(&T::Date, &T::String));
         assert!(can_store(&T::Date, &T::Timestamp));
-        assert!(can_store(&T::String, &T::Binary));
+        assert!(!can_store(&T::String, &T::Binary));
         assert!(!can_store(&T::String, &T::Integer));
         assert!(!can_store(&T::String, &T::Date));
         assert!(!can_store(&T::Boolean, &T::Integer));
-        assert!(!can_store(&T::Timestamp, &T::Date));
+        assert!(can_store(&T::Timestamp, &T::Date));
         let a = |t: T| T::Array(Arc::new(ArrayType::new(t, true)));
         assert!(can_store(&a(T::Integer), &a(T::Long)));
         assert!(!can_store(&a(T::String), &a(T::Long)));
