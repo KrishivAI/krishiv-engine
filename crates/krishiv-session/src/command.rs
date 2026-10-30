@@ -1323,7 +1323,7 @@ pub(crate) fn unresolved_variable(
 
 /// The duplicate targets of one assignment, as Spark reports them: the
 /// lower-case name quoted, like `` `var1` ``.
-fn duplicate_targets(keys: &[String]) -> Result<(), KrishivError> {
+pub(crate) fn duplicate_targets(keys: &[String]) -> Result<(), KrishivError> {
     let mut seen = HashSet::new();
     for key in keys {
         if !seen.insert(key) {
@@ -1372,7 +1372,7 @@ impl Session {
     /// The analysis of `sql` (a synthesized variable query): the row
     /// assignment's arity check needs the static output even when the
     /// query returns no rows.
-    async fn analyze_variable_query(
+    pub(crate) async fn analyze_variable_query(
         &self,
         sql: &str,
     ) -> Result<Arc<crate::dataframe::Analysis>, KrishivError> {
@@ -1391,7 +1391,7 @@ impl Session {
     /// Runs analyzed `analysis` (from [`Self::analyze_variable_query`])
     /// through the physical planner and the executor, collecting its
     /// batches.
-    async fn run_analyzed_variable_query(
+    pub(crate) async fn run_analyzed_variable_query(
         &self,
         analysis: &Arc<crate::dataframe::Analysis>,
     ) -> Result<Vec<RecordBatch>, KrishivError> {
@@ -1402,6 +1402,27 @@ impl Session {
             out.push(batch?);
         }
         Ok(out)
+    }
+
+    /// As [`Self::run_analyzed_variable_query`], but stops reading at the first row beyond
+    /// `max_rows` and returns `None`: a caller that holds the rows never holds more.
+    pub(crate) async fn run_analyzed_variable_query_capped(
+        &self,
+        analysis: &Arc<crate::dataframe::Analysis>,
+        max_rows: usize,
+    ) -> Result<Option<Vec<RecordBatch>>, KrishivError> {
+        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
+        let mut stream = self.run(&physical, &analysis.env).await?;
+        let (mut out, mut rows) = (Vec::new(), 0_usize);
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            rows = rows.saturating_add(batch.num_rows());
+            if rows > max_rows {
+                return Ok(None);
+            }
+            out.push(batch);
+        }
+        Ok(Some(out))
     }
 
     /// The value of `sql` (a synthesized one-row `SELECT`): its single
@@ -1553,7 +1574,7 @@ pub(crate) fn arrow_value(
 
 /// The Krishiv type of Arrow `data_type`: the single Arrow-to-Krishiv
 /// type map [`arrow_value`] reads, so NULL slots and values agree.
-fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, KrishivError> {
+pub(crate) fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, KrishivError> {
     match data_type {
         ArrowType::Null => Ok(DataType::Null),
         ArrowType::Boolean => Ok(DataType::Boolean),
@@ -1595,7 +1616,7 @@ fn decimal_type(precision: u8, scale: i8) -> Result<DecimalType, KrishivError> {
 
 /// Whether `e` is exactly the bare `DEFAULT` keyword (through
 /// parentheses): `SET var = DEFAULT` reads the variable's default.
-fn is_bare_default(e: &Expr) -> bool {
+pub(crate) fn is_bare_default(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Nested(inner) => is_bare_default(inner),
         ExprKind::Column(parts) => {
@@ -1623,13 +1644,13 @@ fn expr_any(e: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
 
 /// Whether the top-level expression tree holds a bare `DEFAULT` that is
 /// not the whole value: there it cannot read a default, as in Spark.
-fn contains_default(e: &Expr) -> bool {
+pub(crate) fn contains_default(e: &Expr) -> bool {
     expr_any(e, &is_bare_default)
 }
 
 /// Whether the top-level expression tree holds a subquery: a default
 /// cannot hold one, as in Spark.
-fn contains_subquery(e: &Expr) -> bool {
+pub(crate) fn contains_subquery(e: &Expr) -> bool {
     expr_any(e, &|node| {
         matches!(
             node.kind,

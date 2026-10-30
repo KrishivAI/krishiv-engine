@@ -108,6 +108,9 @@ pub struct ParserOptions {
     /// default): `|` followed by a pipe operator keyword is the pipe
     /// operator `|>`, never a bitwise or.
     pub single_character_pipe_operator: bool,
+    /// `spark.sql.caseSensitive`: names in a script (labels, `FOR` variables, conditions) compare
+    /// exactly instead of after lower-casing.
+    pub case_sensitive: bool,
 }
 
 impl Default for ParserOptions {
@@ -147,6 +150,7 @@ impl ParserOptions {
                 "spark.sql.parser.singleCharacterPipeOperator.enabled",
                 true,
             ),
+            case_sensitive: on("spark.sql.caseSensitive", false),
         }
     }
 }

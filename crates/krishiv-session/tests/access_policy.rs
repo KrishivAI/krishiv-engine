@@ -1319,3 +1319,34 @@ fn a_new_policy_version_invalidates_cached_analysis() {
     policy.version.store(2, SeqCst);
     assert_eq!(class(block_on(df.collect())), DENIED);
 }
+
+fn no_modifying(_: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Modify {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// A script is asked about everything any of its statements writes before the first one runs, also
+/// in a handler body that may never run; nothing the earlier statements did is undone for a denial
+/// later on.
+#[test]
+fn a_script_is_authorized_by_its_strongest_statement() {
+    let s = session(Policy::new(no_modifying));
+    for sql in [
+        "BEGIN DECLARE x INT DEFAULT 1; INSERT INTO t VALUES (x); END",
+        "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION INSERT INTO t VALUES (1); SELECT 1; END",
+        "BEGIN IF TRUE THEN SELECT 1; ELSE INSERT INTO t VALUES (2); END IF; END",
+        "BEGIN FOR r AS SELECT 1 DO INSERT INTO t VALUES (3); END FOR; END",
+    ] {
+        assert_eq!(class(block_on(s.sql(sql))), DENIED, "{sql}");
+    }
+    // Reads and session state alone are fine.
+    for sql in [
+        "BEGIN DECLARE x INT DEFAULT 1; SET x = 2; SELECT x; END",
+        "BEGIN SELECT * FROM t; END",
+    ] {
+        assert_eq!(class(block_on(s.sql(sql))), "OK", "{sql}");
+    }
+}
