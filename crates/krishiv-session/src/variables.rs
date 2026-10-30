@@ -74,6 +74,7 @@ impl SessionVariables {
         Arc::new(VariableSnapshot {
             variables,
             version: self.version.load(Ordering::Acquire),
+            locals: Vec::new(),
         })
     }
 

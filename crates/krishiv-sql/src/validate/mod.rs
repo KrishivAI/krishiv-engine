@@ -42,6 +42,7 @@ pub(crate) mod literal;
 mod pipe;
 mod relation;
 mod sample;
+mod script;
 mod transform;
 mod types;
 
@@ -58,9 +59,10 @@ use krishiv_common::error::{
     InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxShowFunctionsInvalidPattern,
     InvalidSqlSyntaxUnresolvedWindowReference, InvalidSqlSyntaxVariableTypeOrDefaultRequired,
     InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
-    LegacyErrorTemp0064, LegacyErrorTemp1292, UnsupportedFeatureDescTableColumnJson,
-    UnsupportedFeatureDescTableColumnPartition, UnsupportedFeatureLateralJoinUsing,
-    UnsupportedFeatureSchemaLevelCollations, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
+    LegacyErrorTemp0064, LegacyErrorTemp1292, UnsupportedFeatureContinueExceptionHandler,
+    UnsupportedFeatureDescTableColumnJson, UnsupportedFeatureDescTableColumnPartition,
+    UnsupportedFeatureLateralJoinUsing, UnsupportedFeatureSchemaLevelCollations,
+    UnsupportedFeatureSqlCursor, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
 };
 
 pub(crate) use self::types::data_type;
@@ -201,6 +203,10 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                     Checker { sql, opts }.expr(e)?;
                 }
                 return Ok(());
+            }
+            Statement::Script(c) => {
+                script::check(c, opts)?;
+                return script(c, sql, opts);
             }
             Statement::ExecuteImmediate(e) => {
                 let checker = Checker { sql, opts };
@@ -1615,4 +1621,82 @@ fn ddl_label(name: &DdlName, sql: &str) -> String {
             .join("."),
         DdlName::Dynamic(name) => name.span.text(sql).to_owned(),
     }
+}
+
+/// The checks `AstBuilder` makes on a script, in source order: the refusals of `CONTINUE` handlers
+/// and cursors, and the checks of every expression, query and statement inside.
+fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
+    use crate::ast::{HandlerBody, ScriptStatement as S};
+    fn list(items: &[S], sql: &str, opts: ParserOptions) -> R {
+        items
+            .iter()
+            .try_for_each(|item| item_checks(item, sql, opts))
+    }
+    fn item_checks(item: &S, sql: &str, opts: ParserOptions) -> R {
+        let checker = Checker { sql, opts };
+        match item {
+            S::Sql(s) => statement(s, sql, opts),
+            S::Declare(d) => {
+                // Neither a type nor a default: refused before anything runs, as for a session variable.
+                if d.data_type.is_none() && d.default.is_none() {
+                    return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, d.span));
+                }
+                if let Some(t) = &d.data_type {
+                    data_type(t)?;
+                }
+                d.default.as_ref().map_or(Ok(()), |e| checker.expr(e))
+            }
+            S::Condition(_) | S::Leave(_) | S::Iterate(_) => Ok(()),
+            S::Cursor(span) => Err(at(UnsupportedFeatureSqlCursor {}, *span)),
+            S::Handler(h) => {
+                if h.continue_handler {
+                    return Err(at(UnsupportedFeatureContinueExceptionHandler {}, h.span));
+                }
+                match &h.body {
+                    HandlerBody::Compound(c) => script(c, sql, opts),
+                    HandlerBody::Sql(s) => statement(s, sql, opts),
+                    HandlerBody::Assign(a) => {
+                        statement(&Statement::SetVariable(a.clone()), sql, opts)
+                    }
+                }
+            }
+            S::Assign(a) => statement(&Statement::SetVariable(a.clone()), sql, opts),
+            S::If(i) => {
+                for b in &i.branches {
+                    checker.expr(&b.condition)?;
+                    list(&b.body, sql, opts)?;
+                }
+                i.else_body
+                    .as_deref()
+                    .map_or(Ok(()), |e| list(e, sql, opts))
+            }
+            S::Case(c) => {
+                if let Some(subject) = &c.subject {
+                    checker.expr(subject)?;
+                }
+                for b in &c.branches {
+                    checker.expr(&b.condition)?;
+                    list(&b.body, sql, opts)?;
+                }
+                c.else_body
+                    .as_deref()
+                    .map_or(Ok(()), |e| list(e, sql, opts))
+            }
+            S::While(w) => {
+                checker.expr(&w.condition)?;
+                list(&w.body, sql, opts)
+            }
+            S::Repeat(r) => {
+                list(&r.body, sql, opts)?;
+                checker.expr(&r.condition)
+            }
+            S::Loop(l) => list(&l.body, sql, opts),
+            S::For(f) => {
+                query(&f.query, sql, opts)?;
+                list(&f.body, sql, opts)
+            }
+            S::Compound(c) => script(c, sql, opts),
+        }
+    }
+    list(&c.body, sql, opts)
 }
