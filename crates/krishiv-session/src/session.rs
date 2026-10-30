@@ -489,8 +489,12 @@ impl Session {
             .await
     }
 
-    async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
+        // run with the names they stand for.
+        let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
@@ -522,7 +526,7 @@ impl Session {
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
-            Statement::Cache(c) => self.exec_cache(&c).await,
+            Statement::Cache(c) => Box::pin(self.exec_cache(&c, query)).await,
             Statement::Refresh(r) => self.exec_refresh(&r).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,

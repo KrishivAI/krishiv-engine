@@ -298,11 +298,10 @@ fn deny_all_matrix() {
     assert_all(&reads(&s, &f), DENIED);
     assert_all(&writes(&s, &f), DENIED);
     assert_all(&ddl(&s), DENIED);
-    // `IDENTIFIER('t')` in a query is not lowered yet: it fails before
-    // anything is read.
+    // `IDENTIFIER('t')` is evaluated first, so the read is checked as `t`.
     assert_eq!(
         class(rows(&s, "SELECT * FROM IDENTIFIER('t')")),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "KRISHIV_INSUFFICIENT_PERMISSIONS"
     );
     // Session-state statements need no privilege.
     block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
@@ -484,10 +483,10 @@ fn names_are_checked_as_written_and_folded() {
     );
     assert_eq!(asked("REFRESH TABLE t"), ["MONITOR system `cluster`"]);
     assert_eq!(asked("SET a = b"), Vec::<String>::new());
-    // A computed name the checks cannot place fails closed.
+    // A computed name is evaluated first and checked as the name it gives (`ab`, which is absent).
     assert_eq!(
         class(block_on(s.sql("DROP TABLE IDENTIFIER('a' || 'b')"))),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "TABLE_OR_VIEW_NOT_FOUND"
     );
 }
 

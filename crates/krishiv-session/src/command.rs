@@ -52,6 +52,7 @@ use crate::dataframe::DataFrame;
 use crate::functions::{col, lit, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::{Entry, one_row_project};
+use crate::store::CatalogStore;
 use crate::variables::{
     DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
     variable_key,
@@ -346,25 +347,49 @@ impl Session {
         self.empty_frame().await
     }
 
-    /// Whether the table or view `parts` names exists: temporary tables and
-    /// views have single-part names, so a qualified name never matches.
-    fn cache_target_exists(&self, parts: &[String]) -> bool {
+    /// The name the cache knows the table `parts` by: a temporary view or table by its name, a
+    /// permanent table as `namespace.name`. `None` when there is no such relation.
+    fn cache_key(&self, parts: &[String]) -> Option<String> {
         let env = self.query_env();
-        matches!(parts, [only] if self
-            .state
-            .catalog
-            .exists(only, env.analysis.conf.case_sensitive))
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let fold = |s: &str| {
+            if case_sensitive {
+                s.to_owned()
+            } else {
+                s.to_lowercase()
+            }
+        };
+        let store = &self.state.catalog.store;
+        match parts {
+            [only] => {
+                if self.state.catalog.exists(only, case_sensitive) {
+                    return Some(only.clone());
+                }
+                let namespace = self.state.catalog.current_namespace();
+                store
+                    .table(&namespace, &fold(only))
+                    .map(|_| format!("{namespace}.{}", fold(only)))
+            }
+            [namespace, name] => store
+                .table(&fold(namespace), &fold(name))
+                .map(|_| format!("{}.{}", fold(namespace), fold(name))),
+            _ => None,
+        }
     }
 
-    /// Runs `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`: both drop
-    /// cached relations and return an empty frame, as in Spark. `CACHE
-    /// TABLE ...` stays `KRISHIV_UNSUPPORTED_FEATURE`: caching through SQL
-    /// is not supported, only `DataFrame.cache` and `persist`.
+    /// Runs `CACHE [LAZY] TABLE name [AS query]`, `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`,
+    /// all returning an empty frame as in Spark. `CACHE TABLE` reads the relation once into the
+    /// cache (`LAZY` and `OPTIONS` change nothing observable here); with `AS query` it first creates
+    /// the temporary view `name`.
     ///
     /// # Errors
     /// `TABLE_OR_VIEW_NOT_FOUND` for `UNCACHE TABLE` of a missing table
     /// without `IF EXISTS`; `KRISHIV_UNSUPPORTED_FEATURE` for `CACHE TABLE`.
-    pub(crate) async fn exec_cache(&self, c: &Cache) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn exec_cache(
+        &self,
+        c: &Cache,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         match &c.kind {
             CacheKind::Clear => {
                 self.clear_cache();
@@ -378,17 +403,35 @@ impl Session {
                     }
                     .into());
                 };
-                if self.cache_target_exists(&parts) {
-                    self.uncache_table(&parts[0]);
+                if let Some(key) = self.cache_key(&parts) {
+                    self.uncache_table(&key);
                 } else if !if_exists {
                     return Err(table_not_found(&parts));
                 }
             }
-            CacheKind::Cache { .. } => {
-                return Err(KrishivUnsupportedFeature {
-                    feature: "CACHE TABLE in sessions".to_owned(),
+            CacheKind::Cache { name, query, .. } => {
+                let Some(parts) = ddl_table_parts(name) else {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: "CACHE TABLE with a dynamic table name".to_owned(),
+                    }
+                    .into());
+                };
+                // `CACHE TABLE t AS query` first makes the temporary view `t`.
+                if let Some(q) = query {
+                    let [view] = parts.as_slice() else {
+                        return Err(table_not_found(&parts));
+                    };
+                    let body = original.get(q.span.start..q.span.end).unwrap_or_default();
+                    let create = format!(
+                        "CREATE TEMPORARY VIEW `{}` AS {body}",
+                        view.replace('`', "``")
+                    );
+                    Box::pin(self.sql_here(&create)).await?;
                 }
-                .into());
+                // The relation is cached by reading it once: `LAZY` is the same here, since a
+                // snapshot is taken the first time anything reads it either way.
+                let frame = self.table(&parts.join(".")).cache();
+                frame.collect().await?;
             }
             _ => {
                 return Err(crate::session::internal("unknown CACHE form".to_owned()));
@@ -415,10 +458,10 @@ impl Session {
                     }
                     .into());
                 };
-                if !self.cache_target_exists(&parts) {
+                let Some(key) = self.cache_key(&parts) else {
                     return Err(table_not_found(&parts));
-                }
-                self.refresh_table(&parts[0]);
+                };
+                self.refresh_table(&key);
             }
             RefreshKind::Function { .. } => {}
             RefreshKind::Path { .. } => {

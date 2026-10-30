@@ -702,10 +702,6 @@ fn what_is_not_supported_is_named() {
             "LANGUAGE python functions",
         ),
         (
-            "CREATE TEMPORARY FUNCTION p(IDENTIFIER('x') INT) RETURNS INT RETURN 1",
-            "IDENTIFIER(...) as a parameter name",
-        ),
-        (
             "CREATE TEMPORARY FUNCTION p() RETURNS TABLE(a INT) RETURN SELECT 1",
             "SQL table functions: RETURNS TABLE",
         ),
