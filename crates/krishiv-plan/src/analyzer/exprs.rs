@@ -5173,10 +5173,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             // one; any `WITHIN GROUP` ordering keys follow it.
             let mut rest = k.get(n.min(k.len())..).unwrap_or_default().iter();
             let filter = filter.as_ref().and_then(|_| rest.next());
-            let mut text = match filter {
-                Some(filter) => format!("{text} FILTER (WHERE {filter})"),
-                None => text,
-            };
+            let mut text = text;
             if !within_group.is_empty() {
                 let orders: Vec<String> = within_group
                     .iter()
@@ -5185,7 +5182,11 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
                     .collect();
                 text = format!("{text} WITHIN GROUP (ORDER BY {})", orders.join(", "));
             }
-            text
+            // Spark appends the filter after the whole function text.
+            match filter {
+                Some(filter) => format!("{text} FILTER (WHERE {filter})"),
+                None => text,
+            }
         }
         // Spark's `lag`/`lead` show `input, offset, default`, and
         // `nth_value` `input, offset` then ` ignore nulls` when set.
@@ -5249,10 +5250,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             // one; any `WITHIN GROUP` ordering keys follow it.
             let mut rest = k.get(n.min(k.len())..).unwrap_or_default().iter();
             let filter = f.filter.as_ref().and_then(|_| rest.next());
-            let mut text = match filter {
-                Some(filter) => format!("{text} FILTER (WHERE {filter})"),
-                None => text,
-            };
+            let mut text = text;
             if !f.within_group.is_empty() {
                 // `mode` keeps Spark's `Mode.sql` form: the ordering is
                 // the tie-break and takes no arguments.
@@ -5275,7 +5273,11 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
                     text = format!("{text} WITHIN GROUP (ORDER BY {})", orders.join(", "));
                 }
             }
-            text
+            // Spark appends the filter after the whole function text.
+            match filter {
+                Some(filter) => format!("{text} FILTER (WHERE {filter})"),
+                None => text,
+            }
         }
     }
 }

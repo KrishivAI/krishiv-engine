@@ -585,8 +585,7 @@ async fn distinct_collects_skip_nulls_and_repeats() {
 }
 
 /// Rows with weights other than 1 are refused, as for the other
-/// order-sensitive aggregates (the planner keeps `FILTER (WHERE ...)`
-/// out: it never reaches the accumulator).
+/// order-sensitive aggregates.
 #[tokio::test]
 async fn collect_and_vector_reject_non_unit_weights() {
     use arrow_array::Int64Array;

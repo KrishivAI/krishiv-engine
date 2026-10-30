@@ -74,12 +74,19 @@ impl ListAggAcc {
         orders: Vec<(bool, bool)>,
         value_type: DataType,
         key_types: Vec<DataType>,
-    ) -> Self {
+    ) -> Result<Self> {
+        // Only keys with a value ordering here sort: the others would
+        // compare equal and leave the values unsorted without an error.
+        if let Some(t) = key_types.iter().find(|t| !orderable(t)) {
+            return Err(super::unsupported(format!(
+                "listagg ordered by a key of type {t}"
+            )));
+        }
         let binary = matches!(
             value_type,
             DataType::Binary | DataType::BinaryView | DataType::LargeBinary
         );
-        Self {
+        Ok(Self {
             delimiter,
             binary,
             orders,
@@ -87,7 +94,7 @@ impl ListAggAcc {
             key_types,
             groups: Vec::new(),
             heap: 0,
-        }
+        })
     }
 
     /// Every per-group vector as (length, capacity, element size).
@@ -450,9 +457,31 @@ fn key_cmp(
         DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::BinaryView => {
             byte_key(x, xr).cmp(byte_key(y, yr))
         }
-        // Nested keys have no value ordering here (see `flat_key`).
+        // `ListAggAcc::new` refuses every other key type.
         _ => Ordering::Equal,
     }
+}
+
+/// Whether `key_cmp` orders keys of type `t`.
+fn orderable(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Date32
+            | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Boolean
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Utf8
+            | DataType::Utf8View
+            | DataType::Binary
+            | DataType::BinaryView
+    )
 }
 
 /// `a[i]` as an `i128` (integral, boolean, decimal, date, timestamp).
@@ -492,5 +521,49 @@ fn byte_key(a: &ArrayRef, i: usize) -> &[u8] {
         DataType::BinaryView => a.as_binary_view().value(i),
         DataType::Binary => a.as_binary::<i32>().value(i),
         _ => &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_schema::{Field, Fields, TimeUnit};
+    use krishiv_common::error::ErrorClass;
+
+    use super::*;
+
+    fn new(key: DataType) -> Result<ListAggAcc> {
+        ListAggAcc::new(
+            Vec::new(),
+            vec![(false, false)],
+            DataType::Utf8View,
+            vec![key],
+        )
+    }
+
+    /// Keys without a value ordering are refused rather than left unsorted.
+    #[test]
+    fn unorderable_keys_are_refused() {
+        for key in [
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+            DataType::List(Arc::new(Field::new("e", DataType::Int32, true))),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Duration(TimeUnit::Microsecond),
+        ] {
+            let e = new(key.clone()).err().map(|e| e.error_class());
+            assert_eq!(e, Some(ErrorClass::KrishivUnsupportedFeature), "{key}");
+        }
+    }
+
+    #[test]
+    fn orderable_keys_are_accepted() {
+        for key in [
+            DataType::Int8,
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Float64,
+            DataType::Utf8View,
+            DataType::Decimal128(10, 2),
+        ] {
+            assert!(new(key.clone()).is_ok(), "{key}");
+        }
     }
 }

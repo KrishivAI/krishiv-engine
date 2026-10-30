@@ -939,9 +939,17 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
     if ignore && !takes_ignore {
         return Err(corrupt("`ignore_nulls` on a function without it"));
     }
+    let args = usizes(&a.args)?;
+    if let AggregateFunction::ListAgg { orders, .. } = &function
+        && args.len() != orders.len() + 1
+    {
+        return Err(corrupt(
+            "a listagg with another argument count than its orders",
+        ));
+    }
     Ok(AggregateExpr {
         function,
-        args: usizes(&a.args)?,
+        args,
         input: enum_map!(pb::AggregateInput, a.input, "aggregate input", {
             Raw => AggInput::Raw,
             State => AggInput::State,

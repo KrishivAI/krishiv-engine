@@ -676,6 +676,13 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                     }
                 }
                 out.push(Piece::Str(")"));
+                if let Some(e) = filter {
+                    out.extend([
+                        Piece::Str(" FILTER (WHERE "),
+                        Piece::Expr(e),
+                        Piece::Str(")"),
+                    ]);
+                }
                 return;
             }
             let op = match id {
@@ -957,13 +964,6 @@ fn call<'a>(
             out.push(Piece::Str(")"));
         }
     }
-    if let Some(e) = filter {
-        out.extend([
-            Piece::Str(" FILTER (WHERE "),
-            Piece::Expr(e),
-            Piece::Str(")"),
-        ]);
-    }
     if !within_group.is_empty() {
         out.push(Piece::Str(" WITHIN GROUP (ORDER BY "));
         for (i, o) in within_group.iter().enumerate() {
@@ -974,6 +974,14 @@ fn call<'a>(
             out.push(Piece::Str(order_suffix(o)));
         }
         out.push(Piece::Str(")"));
+    }
+    // Spark appends the filter after the whole function text.
+    if let Some(e) = filter {
+        out.extend([
+            Piece::Str(" FILTER (WHERE "),
+            Piece::Expr(e),
+            Piece::Str(")"),
+        ]);
     }
 }
 

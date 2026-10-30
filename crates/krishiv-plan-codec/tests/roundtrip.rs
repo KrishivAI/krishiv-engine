@@ -570,6 +570,36 @@ fn a_loose_null_of_item_still_needs_the_expand_feature() {
 }
 
 #[test]
+fn a_corrupt_listagg_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::AggregateExpr)| {
+        let mut m = message("aggregate_listagg");
+        for node in &mut m.nodes {
+            if let Some(Kind::Aggregate(a)) = &mut node.kind {
+                a.aggregates.iter_mut().for_each(f);
+            }
+        }
+        m
+    };
+    // More orders than ordering-key arguments would index past the keys.
+    corrupt(
+        &edit(&|a| {
+            a.listagg_desc.push(false);
+            a.listagg_nulls_first.push(false);
+        }),
+        "another argument count than its orders",
+    );
+    corrupt(
+        &edit(&|a| a.listagg_nulls_first.clear()),
+        "another shape than its orders",
+    );
+    corrupt(
+        &edit(&|a| a.args.clear()),
+        "another argument count than its orders",
+    );
+}
+
+#[test]
 fn a_corrupt_expand_is_refused() {
     use pb::node::Kind;
     let edit = |f: &dyn Fn(&mut pb::ExpandNode)| {

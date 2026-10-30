@@ -6,9 +6,12 @@
 //! counts and first-seen samples (the input chunks shared, as the collect
 //! accumulator shares its). Merging adds the counts, so partial states
 //! merge associatively and a partial phase, an exchange and a final phase
-//! compose. Partitions merge in partition-index order (see
-//! [`is_order_sensitive`](super::is_order_sensitive)), so a deterministic
-//! mode is independent of thread timing.
+//! compose. Partitions merge in partition-index order where the merge
+//! knows them (see [`is_order_sensitive`](super::is_order_sensitive)): the
+//! in-memory driver tables and the runs spilled from them. The row-table
+//! and repartitioned runs carry no partition label and merge after the
+//! labelled ones, so a tie-break that depends on first-seen order can
+//! still vary with spill timing on those paths.
 //!
 //! # Tie-breaking
 //! Where several values share the greatest count, Spark's `Mode` keeps
@@ -23,10 +26,14 @@
 //!
 //! The accumulator counts by the shared grouping-key encoding (so `NaN`
 //! equals `NaN` and `-0.0` equals `0.0`, as for grouping keys) and, for an
-//! arbitrary tie-break, replays Spark's table over the distinct keys in
+//! arbitrary tie-break, replays Spark's table over the tied keys in
 //! first-seen order at evaluation: for key sets without collisions the
 //! slot order (and the pick) does not depend on insertion order at all,
-//! and the golden models never rehash. The ordered forms (`ModeMin`,
+//! and the golden models never rehash. Only the tied keys are replayed,
+//! so a tie in an input with more than 44 distinct values (where Spark's
+//! table has grown) may pick another key than Spark; decimal keys hash
+//! by their unscaled value, not by `Decimal.hashCode`. No golden covers
+//! either case yet. The ordered forms (`ModeMin`,
 //! `ModeMax`) pick the smallest or largest among the most frequent by
 //! Spark's value ordering instead, and never touch the hash order.
 //!

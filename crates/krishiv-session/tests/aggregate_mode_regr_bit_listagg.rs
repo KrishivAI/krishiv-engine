@@ -11,19 +11,17 @@
 //!
 //! Claimed: the `mode.sql` statements over `basic_pays` (global, grouped,
 //! the `DISTINCT` and deterministic errors, the ordered forms and the
-//! window forms; not the `FILTER` ones, which stay in
-//! `known-failures-cases`, nor the interval ones, which need interval literals) and the
+//! window forms and the `FILTER` ones; not the interval ones, which need
+//! interval literals) and the
 //! `VALUES`-based ones but the map inputs (no `map` constructor); every
-//! `linear-regression.sql` statement but the `FILTER` ones and the view
-//! setup; every `listagg.sql` statement but the interval one (no
+//! `linear-regression.sql` statement but the view setup; every `listagg.sql` statement but the interval one (no
 //! interval literals; the `string_agg` ones resolve as `listagg`); the
 //! `bitwise.sql` aggregate statements over `bitwise_test`; the `try_aggregates.sql` statements over integers,
 //! decimals and doubles, in both ANSI modes (not the interval ones, which
 //! need interval literals); the `postgreSQL/aggregates_part2.sql` bit
 //! aggregate statements.
 //!
-//! Not claimed (they stay in `known-failures-cases`): the `FILTER`
-//! statements (the golden files do not yet run through this test); the interval statements
+//! Not claimed (they stay in `known-failures-cases`): the interval statements
 //! (`INTERVAL` literals are unsupported); the map inputs (no `map`
 //! constructor); the `try_avg` statements over
 //! `(9223372036854775807L, 1L)` (the file renders doubles with Rust
@@ -574,8 +572,6 @@ fn postgres_bitwise_test(s: &Session) -> R {
     )
 }
 
-/// `mode.sql`: the `VALUES`-based statements (no view needed), except
-/// the `map` inputs (the `map` constructor is unsupported).
 /// `FILTER (WHERE ...)` drops rows before every new aggregate folds them.
 #[test]
 fn filter_restricts_the_new_aggregates() -> R {
@@ -589,9 +585,21 @@ fn filter_restricts_the_new_aggregates() -> R {
          mode(b1) FILTER (WHERE b1 = 2) FROM bitwise_test",
     )?;
     assert_eq!(rows, ["2\t3\t5\t2\t2,7\t2"]);
+    // Grouped: each group folds only its own passing rows.
+    let (_, rows) = run(
+        &s,
+        "SELECT b1 > 1 AS big, bit_or(b1) FILTER (WHERE b1 < 7), \
+         listagg(CAST(b1 AS STRING), ',') WITHIN GROUP (ORDER BY b1) FILTER (WHERE b1 > 1), \
+         size(collect_list(b1) FILTER (WHERE b1 > 1)), \
+         mode() WITHIN GROUP (ORDER BY b1) FILTER (WHERE b1 > 1) \
+         FROM bitwise_test GROUP BY b1 > 1 ORDER BY big",
+    )?;
+    assert_eq!(rows, ["false\t1\tNULL\t0\tNULL", "true\t2\t2,7\t2\t2"]);
     Ok(())
 }
 
+/// `mode.sql`: the `VALUES`-based statements (no view needed), except
+/// the `map` inputs (the `map` constructor is unsupported).
 #[test]
 fn mode_forms_match_spark() -> R {
     let cases = load("mode.sql.out")?;
@@ -617,20 +625,19 @@ fn mode_goldens_match_spark() -> R {
     let mut bad = Vec::new();
     let mut claimed = 0;
     for (i, case) in cases.iter().enumerate() {
-        // 16 and 17 use `FILTER`, which the engine refuses; 25 is the
-        // `intervals` setup and 26-27 need interval literals.
-        if [1, 2, 3, 14, 15, 18, 19, 20, 21, 22, 23, 24].contains(&i) {
+        // 25 is the `intervals` setup and 26-27 need interval literals.
+        if [1, 2, 3, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].contains(&i) {
             claimed += 1;
             let s = Session::builder().build()?;
             basic_pays(&s)?;
             bad.extend(check(&s, case, false)?);
         }
     }
-    check_count(&bad, claimed, 12)
+    check_count(&bad, claimed, 14)
 }
 
 /// `linear-regression.sql` over `testRegression`: every statement but the
-/// view setup and the `FILTER` ones (aggregate `FILTER` is refused). The
+/// view setup. The
 /// floating values compare within `1e-9` relative.
 #[test]
 fn linear_regression_matches_spark() -> R {
@@ -638,14 +645,14 @@ fn linear_regression_matches_spark() -> R {
     let mut bad = Vec::new();
     let mut claimed = 0;
     for (i, case) in cases.iter().enumerate() {
-        if i != 0 && ![4, 8, 12].contains(&i) {
+        if i != 0 {
             claimed += 1;
             let s = Session::builder().build()?;
             test_regression(&s)?;
             bad.extend(check(&s, case, true)?);
         }
     }
-    check_count(&bad, claimed, 31)
+    check_count(&bad, claimed, 34)
 }
 
 /// `listagg.sql`: every statement but the interval one (no interval

@@ -184,8 +184,9 @@ pub enum AggregateFunction {
     CollectList,
     /// `collect_set(x)`: the distinct non-NULL values in first-seen order;
     /// `[]` for no values, never NULL. Element identity is the grouping
-    /// key encoding (`crate::hash::KeyEncoder`), so NaN equals NaN and
-    /// `-0.0` equals `0.0`, as for grouping keys.
+    /// key encoding (`crate::hash::KeyEncoder`), which treats NaN as equal
+    /// to NaN and `-0.0` as equal to `0.0` as grouping keys do (not yet
+    /// checked against a Spark golden).
     CollectSet,
     /// `vector_sum(x)`: element-wise sums over `ARRAY<FLOAT>` (NULL vectors
     /// skipped); NULL for no non-NULL vector.

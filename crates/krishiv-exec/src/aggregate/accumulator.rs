@@ -1077,12 +1077,19 @@ impl Accumulator {
                         expr.arg_type
                     ))
                 })?;
+                if keys.len() != orders.len() {
+                    return Err(internal(format!(
+                        "listagg has {} ordering keys for {} orders",
+                        keys.len(),
+                        orders.len()
+                    )));
+                }
                 Kind::ListAgg(ListAggAcc::new(
                     delimiter.clone(),
                     orders.clone(),
                     value.clone(),
                     keys.into_iter().cloned().collect(),
-                ))
+                )?)
             }
         };
         let sum_bound = match (&expr.function, expr.avg_sum_type()) {
@@ -1494,6 +1501,7 @@ impl Accumulator {
                     | Kind::Pick { .. }
                     | Kind::By { .. }
                     | Kind::Moments(_)
+                    | Kind::TrySumInt { .. }
                     | Kind::Collect(_)
                     | Kind::Vector(_)
                     | Kind::Bit { .. }
