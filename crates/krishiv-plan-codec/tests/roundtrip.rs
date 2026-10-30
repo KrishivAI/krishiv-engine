@@ -437,7 +437,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "lambda_functions"
             | "map_key_dedup_policy"
             | "aggregate_filter"
-            | "range" => 6,
+            | "range"
+            | "write_files_partitioned" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
             n if n.starts_with("time_") || n.starts_with("geo_") => 6,

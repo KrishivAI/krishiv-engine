@@ -364,7 +364,37 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
-    assert_eq!(Feature::LimitOffset.to_string(), "limit_offset");
+    // A plain write plan is the `write_plan` feature; a layout (partitions,
+    // the dynamic overwrite) is the `partitioned_writes` feature.
+    use krishiv_exec::physical::WritePlan;
+    let base = inventory::write_plan();
+    let node_of = |write: WritePlan| PhysNode::WriteFiles {
+        input: Box::new(PhysNode::OneRow),
+        write: Some(write),
+    };
+    assert_eq!(
+        feature_of(Construct::Node(&node_of(base.clone()))),
+        Some(Feature::WritePlan)
+    );
+    for write in [
+        WritePlan {
+            partition_by: vec![0],
+            ..base.clone()
+        },
+        WritePlan {
+            dynamic_overwrite: true,
+            ..base
+        },
+    ] {
+        let node = node_of(write);
+        assert_eq!(
+            feature_of(Construct::Node(&node)),
+            Some(Feature::PartitionedWrites),
+            "{node:?}"
+        );
+    }
+    assert_eq!(Feature::PartitionedWrites.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::PartitionedWrites.to_string(), "partitioned_writes");
     assert_eq!(Feature::from_id("no_such_feature"), None);
 }
 
@@ -445,6 +475,40 @@ fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
         CodecError::UnsupportedFeatures {
             missing: vec!["aggregate_filter".to_owned()]
         }
+    );
+}
+
+#[test]
+fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "write_files_partitioned")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    // The unpartitioned write needs no such feature.
+    let plain = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "write_files_with_plan")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::WritePlan]);
+    assert!(!reader.contains(Feature::PartitionedWrites));
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["partitioned_writes".to_owned()]
+        }
+    );
+    assert_eq!(
+        decode_with(&plain, &Limits::default(), &reader).unwrap(),
+        decode(&plain).unwrap()
     );
 }
 

@@ -129,6 +129,7 @@ registry! {
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout) or with the dynamic partition overwrite."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
@@ -284,7 +285,16 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
-            PhysNode::WriteFiles { write, .. } => write.is_some().then_some(Feature::WritePlan),
+            // A partitioned or dynamic-overwrite write needs a reader that
+            // lays files out by partition (the older fields would be
+            // ignored and the rows written flat).
+            PhysNode::WriteFiles { write, .. } => write.as_ref().map(|w| {
+                if w.partition_by.is_empty() && !w.dynamic_overwrite {
+                    Feature::WritePlan
+                } else {
+                    Feature::PartitionedWrites
+                }
+            }),
             PhysNode::Scan(_)
             | PhysNode::OneRow
             | PhysNode::Filter { .. }

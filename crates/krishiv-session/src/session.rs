@@ -16,9 +16,10 @@ use arrow_schema::SchemaRef;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED};
+use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
 use krishiv_common::error::{
-    ColumnAlreadyExists, ErrorQueryContext, InternalError, KrishivError, KrishivUnsupportedFeature,
+    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
+    KrishivError, KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
@@ -1413,12 +1414,6 @@ impl Session {
             partition_by,
         } = target;
         let mode = SaveMode::parse(&mode)?;
-        if !partition_by.is_empty() {
-            return Err(KrishivUnsupportedFeature {
-                feature: "writing partitioned output".to_owned(),
-            }
-            .into());
-        }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
         let format = match self.state.formats.get(&format) {
             Ok(format) => format,
@@ -1439,6 +1434,14 @@ impl Session {
             }
             .into());
         };
+        let schema = Arc::clone(physical.schema());
+        let partitions =
+            resolve_partitions(&schema, &partition_by, env.analysis.conf.case_sensitive)?;
+        if !partitions.is_empty() && partitions.len() == schema.fields().len() {
+            return Err(AllPartitionColumnsNotAllowed {}.into());
+        }
+        let dynamic = !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config);
+        let max_records = max_records_per_file(&options, format.name())?;
         // Cloud stores are built from the query snapshot with the write's
         // per-relation `fs.*` options overriding it (Spark's per-relation
         // Hadoop configuration).
@@ -1474,23 +1477,30 @@ impl Session {
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
         let job = job_uuid();
-        let Some(write) =
-            DirectoryWrite::begin(&io, at.store.clone(), at.path.clone(), mode, job.clone())
-                .await?
+        let Some(write) = DirectoryWrite::begin(
+            &io,
+            at.store.clone(),
+            at.path.clone(),
+            mode,
+            job.clone(),
+            dynamic,
+        )
+        .await?
         else {
             // `ignore` found the path: nothing is written.
             return Ok(());
         };
-        let schema = Arc::clone(physical.schema());
         let plan = physical.into_write(WritePlan {
             format: format.name().to_owned(),
             options: options.clone(),
             store: at.store.to_string(),
             dir: at.path.as_ref().to_owned(),
             job_uuid: job,
-            max_records_per_file: max_records_per_file(&options, format.name())?,
+            max_records_per_file: max_records,
             target_file_bytes: 0,
-        });
+            partition_by: partitions.iter().map(|(i, _)| *i).collect(),
+            dynamic_overwrite: dynamic,
+        })?;
         let worker = self.worker(env);
         let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
         let mut batches = Vec::new();
@@ -1509,6 +1519,14 @@ impl Session {
         self.refresh_files();
         Ok(())
     }
+}
+
+/// Whether `spark.sql.sources.partitionOverwriteMode` is `DYNAMIC`.
+fn partition_overwrite_is_dynamic(config: &Config) -> bool {
+    config
+        .get(&PARTITION_OVERWRITE_MODE)
+        .and_then(ConfigValue::as_str)
+        == Some("DYNAMIC")
 }
 
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
@@ -1587,6 +1605,60 @@ fn committed_files(
         }
     }
     Ok(out)
+}
+
+/// The `partitionBy` columns as `(index, name)` pairs in `partitionBy`
+/// order, deduplicated.
+///
+/// # Errors
+/// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA` for a name the schema has no
+/// column for.
+fn resolve_partitions(
+    schema: &SchemaRef,
+    partition_by: &[String],
+    case_sensitive: bool,
+) -> Result<Vec<(usize, String)>, KrishivError> {
+    let mut out = Vec::new();
+    for name in partition_by {
+        let mut matches = schema.fields().iter().enumerate().filter(|(_, f)| {
+            if case_sensitive {
+                f.name() == name
+            } else {
+                f.name().eq_ignore_ascii_case(name)
+            }
+        });
+        let Some((index, field)) = matches.next() else {
+            return Err(PartitionColumnNotFoundInSchema {
+                column: format!("`{}`", name.replace('`', "``")),
+                schema: schema_simple_string(schema),
+            }
+            .into());
+        };
+        if matches.next().is_some() {
+            return Err(internal(format!(
+                "partition column `{name}` matches several columns"
+            )));
+        }
+        if !out.iter().any(|(i, _)| *i == index) {
+            out.push((index, field.name().clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// `schema` as Spark prints one (`struct<id:int,...>`).
+fn schema_simple_string(schema: &SchemaRef) -> String {
+    let fields: Vec<String> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let ty = DataType::from_arrow(f.data_type())
+                .map(|t| t.simple_string())
+                .unwrap_or_else(|_| f.data_type().to_string());
+            format!("{}:{ty}", f.name())
+        })
+        .collect();
+    format!("struct<{}>", fields.join(","))
 }
 
 impl Session {

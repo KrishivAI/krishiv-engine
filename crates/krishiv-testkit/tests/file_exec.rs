@@ -118,6 +118,8 @@ fn write_options(dir: &str, task: u32, max_records_per_file: u64) -> WriteOption
         job_uuid: "u".into(),
         max_records_per_file,
         target_file_bytes: 0,
+        partition_by: Vec::new(),
+        partition_names: Vec::new(),
     }
 }
 
@@ -917,6 +919,7 @@ fn write_directory(
         Path::from(dir),
         mode,
         uuid,
+        false,
     ))?
     else {
         return Ok(Vec::new());
@@ -1030,7 +1033,7 @@ fn a_bad_write_setting_fails_when_the_write_is_planned() {
     let e = krishiv_io::FileWriter::new(
         &env.io,
         Arc::new(ParquetFormat),
-        schema(),
+        &schema(),
         parquet_options(&[("compression", "lzo")]),
         write_options("x", 0, 0),
         env.reservation("w"),

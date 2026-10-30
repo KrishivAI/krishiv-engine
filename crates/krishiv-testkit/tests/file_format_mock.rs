@@ -295,7 +295,7 @@ fn inverted_ranges_and_failed_finishes_are_handled() {
     let mut w = FileWriter::new(
         &env.io,
         fx.format(),
-        Arc::clone(&schema),
+        &schema,
         env.options(&fx, &[]).unwrap(),
         WriteOptions {
             store: StoreId::new("memory://suite"),
@@ -304,6 +304,8 @@ fn inverted_ranges_and_failed_finishes_are_handled() {
             job_uuid: "j".into(),
             max_records_per_file: 20,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
+            partition_names: Vec::new(),
         },
         env.reservation("w"),
     )

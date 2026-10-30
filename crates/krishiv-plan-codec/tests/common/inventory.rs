@@ -14,7 +14,7 @@ use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind,
+    SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
@@ -124,6 +124,8 @@ pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
         job_uuid: "job-1".to_owned(),
         max_records_per_file: 600,
         target_file_bytes: 1 << 20,
+        partition_by: Vec::new(),
+        dynamic_overwrite: false,
     }
 }
 
@@ -790,6 +792,17 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::WriteFiles {
                 input: boxed(scan()),
                 write: Some(write_plan()),
+            },
+        ),
+        (
+            "write_files_partitioned",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(WritePlan {
+                    partition_by: vec![1, 0],
+                    dynamic_overwrite: true,
+                    ..write_plan()
+                }),
             },
         ),
         (

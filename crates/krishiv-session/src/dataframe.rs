@@ -1524,8 +1524,7 @@ impl DataFrame {
     /// Writes this DataFrame's rows to the directory `path` in `format`
     /// with `mode` (PySpark's `DataFrameWriter.save` collected as one
     /// call): `options` pairs and the `partition_by` columns. The engine
-    /// futures run is the same as [`DataFrameWriter::save`]; a partitioned
-    /// write fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+    /// futures run is the same as [`DataFrameWriter::save`].
     ///
     /// # Errors
     /// As [`DataFrameWriter::save`].
@@ -1825,9 +1824,9 @@ impl DataFrameWriter {
 
     /// Partition the output by `cols` (PySpark's `partitionBy`); each call
     /// replaces the columns of the one before, so an empty call clears them.
-    /// The engine writes no partitioned layout yet: any column fails the
-    /// write with `KRISHIV_UNSUPPORTED_FEATURE`, rather than silently
-    /// ignoring it.
+    /// Rows land in `<col>=<value>/` directories (Spark's Hive-style
+    /// layout), ordered by the partition columns, holding only the other
+    /// columns.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -1859,7 +1858,9 @@ impl DataFrameWriter {
     /// partitioning, so a bad mode wins over a partitioned write);
     /// `PATH_ALREADY_EXISTS` (`errorifexists` on an existing path, or an
     /// append to a file); the format's option errors; write failures;
-    /// `KRISHIV_UNSUPPORTED_FEATURE` when partitioning was requested.
+    /// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA` for a `partition_by` column
+    /// the output has not; `ALL_PARTITION_COLUMNS_NOT_ALLOWED` when every
+    /// output column is a partition column.
     pub async fn save(self, path: &str) -> Result<(), KrishivError> {
         let target = WriteTarget {
             format: self.format,
