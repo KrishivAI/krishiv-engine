@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "try_to_date#26f45d058add/ansi_on",
+      "reason": "SELECT try_to_date(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#26f45d058add/ansi_off",
+      "reason": "SELECT try_to_date(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#2cbb913863ee/ansi_on",
+      "reason": "SELECT try_to_date(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#2cbb913863ee/ansi_off",
+      "reason": "SELECT try_to_date(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#70477ff57ced/ansi_on",
+      "reason": "SELECT try_to_date(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#70477ff57ced/ansi_off",
+      "reason": "SELECT try_to_date(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#aeb877631215/ansi_on",
+      "reason": "SELECT try_to_date(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#aeb877631215/ansi_off",
+      "reason": "SELECT try_to_date(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#e84ccbdafe75/ansi_on",
+      "reason": "SELECT try_to_date('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#e84ccbdafe75/ansi_off",
+      "reason": "SELECT try_to_date('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#ea459ef83348/ansi_on",
+      "reason": "SELECT try_to_date('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_to_date#ea459ef83348/ansi_off",
+      "reason": "SELECT try_to_date('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "try_to_date"
+}

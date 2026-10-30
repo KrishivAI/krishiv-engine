@@ -6,9 +6,9 @@
 //! `to_timestamp_ntz` and the CSV reader's date and strict
 //! `TIMESTAMP_NTZ` parsing (`from_csv`) of formatted, hand-written and mutated
 //! strings. A pattern Spark rejects must fail with Spark's error class.
-//! Strings naming a region zone (`America/Los_Angeles`, `PST`) need the tz
-//! database: they must fail with `KRISHIV_UNSUPPORTED_FEATURE`, never
-//! differ.
+//! Strings naming a region zone resolve against the bundled database and
+//! compare as values; an unresolvable one reads as no match, as in Spark's
+//! lenient readers.
 #![forbid(unsafe_code)]
 
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -155,7 +155,8 @@ fn parsing_matches_spark() -> R {
         failures.join("\n")
     );
     assert!(checked > 3000, "only {checked} values checked");
-    // Region zones are the only gap (America/Los_Angeles, PST, Foo/Bar).
-    assert!(regions < 150, "{regions} strings needed the tz database");
+    // Region zones resolve against the bundled database, so nothing should
+    // need it counted out anymore.
+    assert_eq!(regions, 0, "{regions} strings needed the tz database");
     Ok(())
 }

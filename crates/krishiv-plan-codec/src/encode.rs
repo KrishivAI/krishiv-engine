@@ -128,6 +128,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
     pb::ExprEnv {
         ansi: env.ansi,
         zone: env.zone,
+        zone_name: env.zone_name.as_deref().map(str::to_owned),
         query_start_micros: env.query_start_micros,
         user: env.user.to_string(),
         legacy_statistical_aggregate: env.legacy_statistical_aggregate,

@@ -38,6 +38,7 @@ _HAND_WRITTEN = [
     "expr",
     "lit",
     "log",
+    "unix_timestamp",
     "when",
 ]
 
@@ -94,6 +95,16 @@ def log(arg1: ColumnOrName | float, arg2: ColumnOrName | None = None) -> Column:
     if arg2 is None:
         return _call("ln", _named(arg1, "arg1"))
     return _call("log", _num_or_col(arg1, "arg1"), _named(arg2, "arg2"))
+
+
+def unix_timestamp(timestamp: ColumnOrName | None = None, format: str = "yyyy-MM-dd HH:mm:ss") -> Column:
+    """The current Unix time in seconds, or ``timestamp`` parsed with ``format``.
+
+    Without ``timestamp`` the call has no arguments (as in PySpark): the default ``format`` is not a timestamp.
+    """
+    if timestamp is None:
+        return _call("unix_timestamp")
+    return _call("unix_timestamp", _named(timestamp, "timestamp"), _lit(format, "format"))
 
 
 def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: ColumnOrName) -> Column:

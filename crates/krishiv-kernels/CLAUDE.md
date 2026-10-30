@@ -75,9 +75,15 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   one per row with `None` for a NULL zone; `DATETIME_OVERFLOW` under ANSI, NULL without, like `next_day`'s bad name and
   `make_date`'s bad field). `last_day`/`next_day` int-wrap at the range ends is assumed, unverified against a Spark run
   (no golden or matrix cell reaches it). Field accessors (`dayofweek`, `weekday`, `hour`, ...) are `extract_date`/
-  `extract_timestamp` with a `DatePart` (`extract_timestamp` keeps its pre-existing always-raise convention). Zones come in as `TimeZoneRules`, never as names. The cast module also
-  parses `string -> TIMESTAMP[_NTZ]` (`cast/timestamp.rs`: the full Spark grammar; a region id in the text and a bare
-  time of day are `KRISHIV_UNSUPPORTED_FEATURE` until the tz database / query clock reach the kernels).
+  `extract_timestamp` with a `DatePart` (`extract_timestamp` keeps its pre-existing always-raise convention). Zones come in as `TimeZoneRules`, resolved by the
+  caller through `datetime/zone.rs` (`resolve_zone`: fixed offsets without the database, region and short ids against
+  `jiff`'s bundled TZDB; unknown ids are `INVALID_TIMEZONE`). The pattern batch functions live in `datetime/format.rs`
+  (`format_timestamps`, `parse_timestamps`/`parse_dates`/`parse_ntz` over Arrow arrays, `seconds_to_timestamps` for
+  numeric `to_timestamp` input): NULL rows are skipped, parse failures are `CANNOT_PARSE_TIMESTAMP` with `fail_on_error`
+  and NULL without (`DATETIME_OVERFLOW` past the microsecond range either way, as Java's `ArithmeticException`
+  escapes even `try_to_*`), pattern errors always raise. The cast module also
+  parses `string -> TIMESTAMP[_NTZ]` (`cast/timestamp.rs`: the full Spark grammar, region ids resolved against the bundled database; a bare
+  time of day is `KRISHIV_UNSUPPORTED_FEATURE` until the query clock reaches the kernels).
 - `math` (P2-T026): the `double` functions (`UnaryFn`/`BinaryFn`: `sqrt` .. `signum`, `pow`, `atan2`, `hypot`, `log`; pure-Rust `libm`
   plus the fdlibm ports of `math/fdlibm.rs` for `cbrt`/`log10`/`hypot`/`acosh`/`tanh`, so results do not depend on the CPU or libc;
   `asinh`/`acosh` follow the `SparkVersion`), `round`/`bround`/`ceil`/`floor` (`math/round.rs`: integral with ANSI overflow, `double` through
@@ -122,3 +128,6 @@ Paths are relative to this crate.
 `KRISHIV_REQUIRE_TARGETS=baseline,x86_64v3` makes a skipped CPU target a test failure (set in CI) ·
 `cargo +nightly miri test -p krishiv-kernels` · `cargo bench -p krishiv-kernels` ·
 `(cd crates/krishiv-kernels/fuzz && cargo +nightly fuzz run differential -- -max_total_time=60)`
+
+## Time zones and datetime patterns
+`datetime::resolve_zone` resolves fixed offsets without a database and region ids against `jiff-tzdb` 0.1.9 (pinned in `Cargo.lock`; the crate does not record its IANA release), caching each id per thread. A region *session* zone is still refused by the CLI; only function arguments and pattern zone fields use regions. Known gaps: the `z` pattern letter does not parse daylight-saving short names (`PDT`, `EDT`, `CEST`, ...), and `spark.sql.legacy.timeParserPolicy=LEGACY` is unsupported (the pattern functions refuse it).

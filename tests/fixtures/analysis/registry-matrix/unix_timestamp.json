@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "unix_timestamp#00b280afcb8c/ansi_on",
+      "reason": "SELECT unix_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unix_timestamp#00b280afcb8c/ansi_off",
+      "reason": "SELECT unix_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unix_timestamp#2d9f6e5da6a7/ansi_on",
+      "reason": "SELECT unix_timestamp('2016-04-08', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unix_timestamp#2d9f6e5da6a7/ansi_off",
+      "reason": "SELECT unix_timestamp('2016-04-08', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unix_timestamp#7d9052acc3af/ansi_on",
+      "reason": "SELECT unix_timestamp('2016-04-08', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unix_timestamp#7d9052acc3af/ansi_off",
+      "reason": "SELECT unix_timestamp('2016-04-08', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unix_timestamp#97ec66c208d5/ansi_on",
+      "reason": "SELECT unix_timestamp(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unix_timestamp#97ec66c208d5/ansi_off",
+      "reason": "SELECT unix_timestamp(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "unix_timestamp"
+}

@@ -1,6 +1,11 @@
 {
   "cases": {
     "datetime": [
+      31,
+      32,
+      33
+    ],
+    "depends-on-command": [
       1,
       2,
       3,
@@ -30,13 +35,7 @@
       27,
       28,
       29,
-      30,
-      31,
-      32,
-      33
-    ],
-    "sql-commands": [
-      0
+      30
     ]
   },
   "file": "datetime-formatting",

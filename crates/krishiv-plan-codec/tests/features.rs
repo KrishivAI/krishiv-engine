@@ -59,6 +59,7 @@ fn the_header_lists_exactly_the_features_in_use() {
     });
     assert!(plan_features(&zero).is_empty());
     assert_eq!(message("aggregate_filter").features, ["aggregate_filter"]);
+    assert_eq!(message("session_zone_name").features, ["session_zone_name"]);
     // Every registered feature occurs in some inventory case, except
     // `legacy_statistical_aggregate`: it fires only around a moment
     // aggregate, and the encoder refuses every moment aggregate (pinned by

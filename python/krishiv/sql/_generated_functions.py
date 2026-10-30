@@ -76,9 +76,11 @@ __all__ = [
     "current_date",
     "current_schema",
     "current_timestamp",
+    "current_timezone",
     "current_user",
     "date_add",
     "date_diff",
+    "date_format",
     "date_part",
     "date_sub",
     "date_trunc",
@@ -106,6 +108,7 @@ __all__ = [
     "floor",
     "format_number",
     "from_json",
+    "from_unixtime",
     "from_utc_timestamp",
     "get_json_object",
     "getbit",
@@ -251,8 +254,13 @@ __all__ = [
     "toRadians",
     "to_binary",
     "to_char",
+    "to_date",
     "to_json",
     "to_number",
+    "to_timestamp",
+    "to_timestamp_ltz",
+    "to_timestamp_ntz",
+    "to_unix_timestamp",
     "to_utc_timestamp",
     "to_varchar",
     "translate",
@@ -265,7 +273,9 @@ __all__ = [
     "try_parse_url",
     "try_subtract",
     "try_to_binary",
+    "try_to_date",
     "try_to_number",
+    "try_to_timestamp",
     "try_url_decode",
     "try_validate_utf8",
     "typeof",
@@ -543,6 +553,11 @@ def current_timestamp() -> Column:
     return _call("current_timestamp")
 
 
+def current_timezone() -> Column:
+    """Calls the registry function ``current_timezone``."""
+    return _call("current_timezone")
+
+
 def current_user() -> Column:
     """Calls the registry function ``current_user``."""
     return _call("current_user")
@@ -556,6 +571,11 @@ def date_add(start: ColumnOrName, days: ColumnOrName | int) -> Column:
 def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column:
     """Calls the registry function ``date_diff``."""
     return _call("date_diff", _named(end, "end"), _named(start, "start"))
+
+
+def date_format(date: ColumnOrName, format: str) -> Column:
+    """Calls the registry function ``date_format``."""
+    return _call("date_format", _named(date, "date"), _lit(format, "format"))
 
 
 def date_part(field: Column, source: ColumnOrName) -> Column:
@@ -691,6 +711,11 @@ def format_number(col: ColumnOrName, d: int) -> Column:
 def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``from_json``."""
     return _call("from_json", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
+
+
+def from_unixtime(timestamp: ColumnOrName, format: str = "yyyy-MM-dd HH:mm:ss") -> Column:
+    """Calls the registry function ``from_unixtime``."""
+    return _call("from_unixtime", _named(timestamp, "timestamp"), _lit(format, "format"))
 
 
 def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
@@ -1450,6 +1475,11 @@ def to_char(col: ColumnOrName, format: ColumnOrName) -> Column:
     return _call("to_char", _named(col, "col"), _named(format, "format"))
 
 
+def to_date(col: ColumnOrName, format: str | None = None) -> Column:
+    """Calls the registry function ``to_date``."""
+    return _call("to_date", _named(col, "col"), *_opt(_lit, format, "format"))
+
+
 def to_json(col: ColumnOrName, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``to_json``."""
     return _call("to_json", _named(col, "col"), *_opt(_opts, options, "options"))
@@ -1458,6 +1488,26 @@ def to_json(col: ColumnOrName, options: dict[str, str] | None = None) -> Column:
 def to_number(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``to_number``."""
     return _call("to_number", _named(col, "col"), _named(format, "format"))
+
+
+def to_timestamp(col: ColumnOrName, format: str | None = None) -> Column:
+    """Calls the registry function ``to_timestamp``."""
+    return _call("to_timestamp", _named(col, "col"), *_opt(_lit, format, "format"))
+
+
+def to_timestamp_ltz(timestamp: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``to_timestamp_ltz``."""
+    return _call("to_timestamp_ltz", _named(timestamp, "timestamp"), *_opt(_named, format, "format"))
+
+
+def to_timestamp_ntz(timestamp: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``to_timestamp_ntz``."""
+    return _call("to_timestamp_ntz", _named(timestamp, "timestamp"), *_opt(_named, format, "format"))
+
+
+def to_unix_timestamp(timestamp: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``to_unix_timestamp``."""
+    return _call("to_unix_timestamp", _named(timestamp, "timestamp"), *_opt(_named, format, "format"))
 
 
 def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
@@ -1520,9 +1570,19 @@ def try_to_binary(col: ColumnOrName, format: ColumnOrName | None = None) -> Colu
     return _call("try_to_binary", _named(col, "col"), *_opt(_named, format, "format"))
 
 
+def try_to_date(col: ColumnOrName, format: str | None = None) -> Column:
+    """Calls the registry function ``try_to_date``."""
+    return _call("try_to_date", _named(col, "col"), *_opt(_lit, format, "format"))
+
+
 def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``try_to_number``."""
     return _call("try_to_number", _named(col, "col"), _named(format, "format"))
+
+
+def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``try_to_timestamp``."""
+    return _call("try_to_timestamp", _named(col, "col"), *_opt(_named, format, "format"))
 
 
 def try_url_decode(str: ColumnOrName) -> Column:

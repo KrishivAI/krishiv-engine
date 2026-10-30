@@ -946,15 +946,27 @@ fn from_string<O: OffsetSizeTrait>(
         }
         DataType::Timestamp(TimeUnit::Microsecond, zone) => {
             let ntz = zone.is_none();
-            let region = || {
-                KernelError::unsupported(
-                    "a time zone region id in a timestamp string (needs the tz database)",
-                )
-            };
             let out = map_rows::<TimestampMicrosecondType>(s, |i| {
                 use timestamp::{Parsed, Zone};
                 match timestamp::parse(s.value(i).as_bytes()) {
-                    Parsed::At(_, Zone::Region) => Err(region()),
+                    // A region id resolves against the bundled database. An
+                    // unknown one is malformed input, like a bad offset
+                    // (`CAST_INVALID_INPUT` with ANSI on, NULL without):
+                    // Spark's `stringToTimestamp` reads what the database
+                    // cannot as no timestamp at all. A zone in the text is
+                    // ignored for `TIMESTAMP_NTZ` once it resolves.
+                    Parsed::At(local, Zone::Region(id)) => {
+                        let Ok(zone) = crate::datetime::resolve_zone(&id) else {
+                            return fail(mode, None, || invalid(i));
+                        };
+                        if ntz {
+                            return Ok(Some(local));
+                        }
+                        match datetime::local_to_utc(local, &zone) {
+                            Some(v) => Ok(Some(v)),
+                            None => fail(mode, None, || invalid(i)),
+                        }
+                    }
                     // A zone in the text is ignored for TIMESTAMP_NTZ.
                     Parsed::At(local, _) if ntz => Ok(Some(local)),
                     Parsed::At(local, zone) => {

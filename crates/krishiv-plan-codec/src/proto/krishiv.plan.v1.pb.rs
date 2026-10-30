@@ -77,6 +77,13 @@ pub struct ExprEnv {
     /// feature: map_key_dedup_policy
     #[prost(bool, optional, tag = "6")]
     pub map_key_dedup_last_win: ::core::option::Option<bool>,
+    /// `spark.sql.session.timeZone` as configured, when it differs from what
+    /// `zone` renders (`UTC`, `+05:30`): `current_timezone()` returns it and
+    /// `VV`/`z` print its zone id; a worker without the feature would show the
+    /// rendered offset instead.
+    /// feature: session_zone_name
+    #[prost(string, optional, tag = "7")]
+    pub zone_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

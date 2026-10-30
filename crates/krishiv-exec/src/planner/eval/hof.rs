@@ -2268,6 +2268,7 @@ mod tests {
             ansi: true,
             legacy_statistical_aggregate: false,
             zone: None,
+            zone_name: None,
             kernels: KernelCtx::new(),
             query_start_micros: 0,
             user: Arc::from("test"),

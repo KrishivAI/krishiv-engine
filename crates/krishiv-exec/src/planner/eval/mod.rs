@@ -180,6 +180,9 @@ pub(crate) struct EvalEnv {
     /// The session time zone as a fixed offset in seconds, when it is one
     /// (`UTC`, `+hh:mm`); region zones need the tz database (P2-T021b).
     pub(crate) zone: Option<i32>,
+    /// `spark.sql.session.timeZone` as configured, when it differs from what
+    /// `zone` renders; see [`ExprEnv::zone_name`].
+    pub(crate) zone_name: Option<Arc<str>>,
     /// The kernels' dispatch target.
     pub(crate) kernels: KernelCtx,
     /// The query's clock (microseconds since the epoch, UTC), read once at
@@ -210,10 +213,12 @@ impl EvalEnv {
             .get(&LEGACY_STATISTICAL_AGGREGATE)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
-        let zone = config
-            .get(&SESSION_TIME_ZONE)
-            .and_then(|v| v.as_str())
-            .and_then(|z| krishiv_kernels::cast::FixedOffset::parse(z).map(|o| o.0));
+        let configured_zone = config.get(&SESSION_TIME_ZONE).and_then(|v| v.as_str());
+        let zone =
+            configured_zone.and_then(|z| krishiv_kernels::cast::FixedOffset::parse(z).map(|o| o.0));
+        let zone_name = configured_zone
+            .filter(|z| *z != rendered_zone(zone))
+            .map(Arc::from);
         let map_key_dedup_last_win = config
             .get(&MAP_KEY_DEDUP_POLICY)
             .and_then(|v| v.as_str())
@@ -227,6 +232,7 @@ impl EvalEnv {
             ansi,
             legacy_statistical_aggregate,
             zone,
+            zone_name,
             kernels: KernelCtx::new(),
             query_start_micros,
             user,
@@ -245,6 +251,7 @@ impl EvalEnv {
             ansi: env.ansi,
             legacy_statistical_aggregate: env.legacy_statistical_aggregate,
             zone: env.zone,
+            zone_name: env.zone_name.clone(),
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
@@ -260,9 +267,26 @@ impl EvalEnv {
             ansi: self.ansi,
             legacy_statistical_aggregate: self.legacy_statistical_aggregate,
             zone: self.zone,
+            zone_name: self.zone_name.clone(),
             query_start_micros: self.query_start_micros,
             user: Arc::clone(&self.user),
             map_key_dedup_last_win: self.map_key_dedup_last_win,
+        }
+    }
+}
+
+/// The name a session zone has when the plan carries none: `UTC`, or the
+/// offset as `+05:30`. A region zone is the UTC fallback here.
+pub(crate) fn rendered_zone(zone: Option<i32>) -> String {
+    match zone {
+        None | Some(0) => "UTC".to_owned(),
+        Some(offset) => {
+            let (sign, abs) = if offset < 0 {
+                ("-", offset.unsigned_abs())
+            } else {
+                ("+", offset.unsigned_abs())
+            };
+            format!("{sign}{:02}:{:02}", abs / 3600, abs / 60 % 60)
         }
     }
 }
@@ -789,12 +813,32 @@ mod tests {
             ansi: true,
             legacy_statistical_aggregate: false,
             zone: None,
+            zone_name: None,
             kernels: krishiv_kernels::KernelCtx::new(),
             query_start_micros: 0,
             user: Arc::from("test"),
             udfs,
             map_key_dedup_last_win: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// A plan names the session zone only where its offset would show
+    /// another name, so the common zones need no codec feature.
+    #[test]
+    fn the_plan_carries_a_zone_name_only_when_the_offset_does_not_render_it() {
+        let name = |zone: Option<&str>| {
+            let mut config = krishiv_common::config::Config::new();
+            if let Some(zone) = zone {
+                config.set("spark.sql.session.timeZone", zone).unwrap();
+            }
+            EvalEnv::new(&config, Arc::from("test")).zone_name
+        };
+        for rendered in [None, Some("UTC"), Some("+05:30"), Some("-08:00")] {
+            assert_eq!(name(rendered), None, "{rendered:?}");
+        }
+        for configured in ["GMT", "+00:00", "+5:30", "GMT+5", "America/Los_Angeles"] {
+            assert_eq!(name(Some(configured)).as_deref(), Some(configured));
         }
     }
 

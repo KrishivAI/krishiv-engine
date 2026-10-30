@@ -25,8 +25,8 @@ use arrow_array::{
 use arrow_buffer::NullBuffer;
 
 use super::{
-    FixedOffset, MICROS_PER_DAY, TimeZoneRules, as_days, civil_from_days, days_from_civil,
-    iso_weekday, local_to_utc, local_to_utc_keeping, month_length, utc_to_local,
+    MICROS_PER_DAY, TimeZoneRules, ZoneRef, as_days, civil_from_days, days_from_civil, iso_weekday,
+    local_to_utc, local_to_utc_keeping, month_length, utc_to_local,
 };
 use crate::dispatch::KernelCtx;
 use crate::error::KernelError;
@@ -444,8 +444,9 @@ pub fn months_between(
 }
 
 /// The message of the `DateTimeException` `LocalDate.of(year, month, day)`
-/// throws, or `None` for a valid date.
-fn invalid_date(year: i32, month: i32, day: i32) -> Option<String> {
+/// throws, or `None` for a valid date. Shared by `make_date` and the
+/// pattern parser, which must raise the same text.
+pub(crate) fn invalid_date(year: i32, month: i32, day: i32) -> Option<String> {
     if !(-999_999_999..=999_999_999).contains(&year) {
         return Some(format!(
             "Invalid value for Year (valid values -999999999 - 999999999): {year}"
@@ -544,12 +545,12 @@ pub fn make_date(
 
 /// The zone of each row of a call: one zone for every row, or one per row
 /// (`None` is a NULL zone, which gives a NULL result).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Zones<'a> {
     /// Every row reads this zone.
     One(&'a dyn TimeZoneRules),
     /// Row `i` reads the zone at `i`.
-    PerRow(&'a [Option<FixedOffset>]),
+    PerRow(&'a [Option<ZoneRef>]),
 }
 
 impl Zones<'_> {

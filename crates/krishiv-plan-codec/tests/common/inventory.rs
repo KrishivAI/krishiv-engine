@@ -35,6 +35,7 @@ pub(crate) fn env() -> ExprEnv {
         ansi: true,
         legacy_statistical_aggregate: false,
         zone: Some(-28_800),
+        zone_name: None,
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
         map_key_dedup_last_win: false,
@@ -1266,6 +1267,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
+    out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.extend(
         typed()
             .into_iter()
@@ -1278,6 +1280,17 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
 fn map_key_dedup_policy() -> PhysicalPlan {
     let env = ExprEnv {
         map_key_dedup_last_win: true,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose session zone name is not what its offset renders.
+fn session_zone_name() -> PhysicalPlan {
+    let env = ExprEnv {
+        zone: Some(0),
+        zone_name: Some(Arc::from("GMT")),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);

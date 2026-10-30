@@ -1,10 +1,6 @@
 {
   "cases": {
-    "datetime": [
-      11
-    ],
     "fn-string": [
-      13,
       20,
       21,
       22,
