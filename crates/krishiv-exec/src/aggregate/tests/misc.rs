@@ -649,6 +649,11 @@ async fn listagg_partitions_agree() {
     ];
     let multi: Vec<Vec<ArrayRef>> = (0..4).map(|_| one.clone()).collect();
     let plan = |orders: Vec<(bool, bool)>| {
+        let (keys, key_types) = if orders.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            (vec![0], vec![DataType::Utf8View])
+        };
         let e = AggregateExpr::listagg(
             AggregateFunction::ListAgg {
                 delimiter: b"|".to_vec(),
@@ -656,8 +661,8 @@ async fn listagg_partitions_agree() {
             },
             1,
             DataType::Utf8View,
-            vec![0],
-            vec![DataType::Utf8View],
+            keys,
+            key_types,
             "x",
         );
         node(scan(&s, multi.clone()), spec(&s, vec![], vec![e]))
