@@ -58,6 +58,26 @@ enum Mode {
     FailFast,
 }
 
+/// XML source options (lower case) that Spark defines and this module does not
+/// implement.
+const UNIMPLEMENTED: &[&str] = &[
+    "samplingratio",
+    "excludeattribute",
+    "treatemptyvaluesasnulls",
+    "columnnameofcorruptrecord",
+    "charset",
+    "wildcardcolname",
+    "rowvalidationxsdpath",
+    "ignorenamespace",
+    "locale",
+    "arrayelementname",
+    "nanvalue",
+    "positiveinf",
+    "negativeinf",
+    "compression",
+    "validatename",
+];
+
 /// Options of both functions, resolved once at bind.
 struct Opts {
     mode: Mode,
@@ -70,6 +90,10 @@ struct Opts {
     ignore_surrounding_spaces: bool,
     /// `to_xml` indent: `None` is the default (four spaces).
     indent: Option<String>,
+    /// `schema_of_xml`: infer types from the text (default) or read strings.
+    infer_schema: bool,
+    /// `schema_of_xml`: infer decimals for numbers with a fraction.
+    prefers_decimal: bool,
     date: Option<DateTimePattern>,
     timestamp: Option<DateTimePattern>,
     ntz: Option<DateTimePattern>,
@@ -85,6 +109,8 @@ impl Opts {
             null_value: None,
             ignore_surrounding_spaces: true,
             indent: None,
+            infer_schema: true,
+            prefers_decimal: false,
             date: None,
             timestamp: None,
             ntz: None,
@@ -136,8 +162,16 @@ impl Opts {
                 "timestampntzformat" => o.ntz = Some(pattern(v, "timestampNTZFormat")?),
                 // Accepted and ignored: they select or label input this
                 // function does not read, or change nothing it writes.
-                "declaration" | "charset" | "encoding" => {}
-                _ => return Err(unsupported(func, &format!("option {k}"))),
+                "declaration" | "encoding" => {}
+                "inferschema" => o.infer_schema = !v.eq_ignore_ascii_case("false"),
+                "prefersdecimal" => o.prefers_decimal = v.eq_ignore_ascii_case("true"),
+                // Names Spark's XML source defines and this module does not
+                // implement: refused, not silently ignored.
+                name if UNIMPLEMENTED.contains(&name) => {
+                    return Err(unsupported(func, &format!("option {k}")));
+                }
+                // Spark ignores names it does not know.
+                _ => {}
             }
         }
         Ok(o)
@@ -965,6 +999,222 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         }
         Ok(Arc::new(out.finish()) as ArrayRef)
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Schema inference (`schema_of_xml`).
+// ---------------------------------------------------------------------------
+
+/// An inferred type; `Null` is the type of an empty element.
+#[derive(Debug, Clone, PartialEq)]
+enum T {
+    Null,
+    Long,
+    Double,
+    Decimal(u32, u32),
+    Date,
+    Timestamp,
+    Bool,
+    Str,
+    Array(Box<T>),
+    Struct(Vec<(String, T)>),
+}
+
+/// The type of a text, by Spark's ladder: long, double (finite), date,
+/// timestamp, boolean, else string.
+fn infer_leaf(raw: &str, o: &Opts) -> T {
+    let text = if o.ignore_surrounding_spaces {
+        raw.trim()
+    } else {
+        raw
+    };
+    if text.is_empty() || o.null_value.as_deref() == Some(text) {
+        return T::Null;
+    }
+    if !o.infer_schema {
+        return T::Str;
+    }
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && text.parse::<i64>().is_ok()
+    {
+        return T::Long;
+    }
+    // Java's double parser trims; text read untrimmed that has spaces is not a number.
+    let numeric = (text.trim() == text)
+        .then(|| krishiv_kernels::text::java_parse_double(text))
+        .flatten()
+        .filter(|d| d.is_finite());
+    if numeric.is_some() && !text.eq_ignore_ascii_case("nan") {
+        if o.prefers_decimal
+            && let Some((p, sc)) = decimal_shape(text)
+        {
+            return T::Decimal(p, sc);
+        }
+        return T::Double;
+    }
+    let date = match &o.date {
+        Some(p) => p.parse_date(text).ok().flatten().is_some(),
+        None => DateTimePattern::new("yyyy-MM-dd", Purpose::Parse)
+            .ok()
+            .and_then(|p| p.parse_date(text).ok().flatten())
+            .is_some(),
+    };
+    if date {
+        return T::Date;
+    }
+    let timestamp = match &o.timestamp {
+        Some(p) => p
+            .parse_timestamp(text, &krishiv_kernels::cast::FixedOffset(0))
+            .ok()
+            .flatten()
+            .is_some(),
+        None => spark_string_to_timestamp(text, &krishiv_kernels::cast::FixedOffset(0), 0)
+            .ok()
+            .flatten()
+            .is_some(),
+    };
+    if timestamp {
+        return T::Timestamp;
+    }
+    if text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("false") {
+        return T::Bool;
+    }
+    T::Str
+}
+
+/// `(precision, scale)` of a plain decimal text (`1.5`, `-.25`), else `None`.
+fn decimal_shape(text: &str) -> Option<(u32, u32)> {
+    let body = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let (int, frac) = body.split_once('.')?;
+    if !int.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let scale = u32::try_from(frac.len()).ok()?;
+    let unscaled = format!("{int}{frac}");
+    let significant = unscaled.trim_start_matches('0').len().max(1);
+    let precision = u32::try_from(significant).ok()?.max(scale);
+    (precision <= 38).then_some((precision, scale))
+}
+
+/// The type both `a` and `b` can be read as.
+fn merge(a: T, b: T) -> T {
+    match (a, b) {
+        (T::Null, x) | (x, T::Null) => x,
+        (x, y) if x == y => x,
+        // A decimal that meets another number is read as a double.
+        (T::Long, T::Double)
+        | (T::Double, T::Long)
+        | (T::Decimal(..), T::Long | T::Double | T::Decimal(..))
+        | (T::Long | T::Double, T::Decimal(..)) => T::Double,
+        (T::Date, T::Timestamp) | (T::Timestamp, T::Date) => T::Timestamp,
+        (T::Array(x), T::Array(y)) => T::Array(Box::new(merge(*x, *y))),
+        (T::Array(x), y) | (y, T::Array(x)) => T::Array(Box::new(merge(*x, y))),
+        (T::Struct(x), T::Struct(y)) => T::Struct(merge_fields(x, y)),
+        _ => T::Str,
+    }
+}
+
+/// The union of two field lists; names match without regard to case and the
+/// first spelling stays.
+fn merge_fields(mut a: Vec<(String, T)>, b: Vec<(String, T)>) -> Vec<(String, T)> {
+    for (name, t) in b {
+        match a.iter().position(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+            Some(i) => {
+                let old = std::mem::replace(&mut a[i].1, T::Null);
+                a[i].1 = merge(old, t);
+            }
+            None => a.push((name, t)),
+        }
+    }
+    a
+}
+
+/// The type of an element: a leaf, or a struct of its attributes, text and
+/// children (repeated children are arrays).
+fn infer_elem(e: &Elem, o: &Opts, root: bool) -> T {
+    let text_blank = e.text.trim().is_empty();
+    if e.attrs.is_empty() && e.children.is_empty() && !root {
+        return infer_leaf(&e.text, o);
+    }
+    let mut fields: Vec<(String, T)> = Vec::new();
+    for (k, v) in &e.attrs {
+        fields = merge_fields(
+            fields,
+            vec![(format!("{}{k}", o.attribute_prefix), infer_leaf(v, o))],
+        );
+    }
+    if !text_blank {
+        fields = merge_fields(fields, vec![(o.value_tag.clone(), infer_leaf(&e.text, o))]);
+    }
+    let mut seen: Vec<(String, T, usize)> = Vec::new();
+    for c in &e.children {
+        let t = infer_elem(c, o, false);
+        match seen
+            .iter()
+            .position(|(n, _, _)| n.eq_ignore_ascii_case(&c.name))
+        {
+            Some(i) => {
+                let old = std::mem::replace(&mut seen[i].1, T::Null);
+                seen[i].1 = merge(old, t);
+                seen[i].2 += 1;
+            }
+            None => seen.push((c.name.clone(), t, 1)),
+        }
+    }
+    for (name, t, n) in seen {
+        let t = if n > 1 { T::Array(Box::new(t)) } else { t };
+        fields = merge_fields(fields, vec![(name, t)]);
+    }
+    T::Struct(fields)
+}
+
+/// `name` as Spark's `StructType.sql` spells it: quoted unless it is a word.
+fn ddl_name(name: &str) -> String {
+    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        name.to_owned()
+    } else {
+        format!("`{}`", name.replace('`', "``"))
+    }
+}
+
+fn ddl(t: &T) -> String {
+    match t {
+        T::Null | T::Str => "STRING".to_owned(),
+        T::Long => "BIGINT".to_owned(),
+        T::Double => "DOUBLE".to_owned(),
+        T::Decimal(p, s) => format!("DECIMAL({p},{s})"),
+        T::Date => "DATE".to_owned(),
+        T::Timestamp => "TIMESTAMP".to_owned(),
+        T::Bool => "BOOLEAN".to_owned(),
+        T::Array(x) => format!("ARRAY<{}>", ddl(x)),
+        T::Struct(fields) => {
+            let mut sorted: Vec<&(String, T)> = fields.iter().collect();
+            sorted.sort_by(|x, y| x.0.cmp(&y.0));
+            let parts: Vec<String> = sorted
+                .iter()
+                .map(|(n, t)| format!("{}: {}", ddl_name(n), ddl(t)))
+                .collect();
+            format!("STRUCT<{}>", parts.join(", "))
+        }
+    }
+}
+
+/// The DDL `schema_of_xml(xml[, options])` returns (Spark's
+/// `StructType.sql`): the document read as one record, fields sorted by
+/// name, `STRUCT<_corrupt_record: STRING>` for text that is not a document.
+///
+/// # Errors
+/// `PARSE_MODE_UNSUPPORTED` for `DROPMALFORMED`, `KRISHIV_UNSUPPORTED_FEATURE`
+/// for an option this module does not implement, and the pattern errors of
+/// `dateFormat` and `timestampFormat`.
+pub fn schema_of_xml_ddl(xml: &str, pairs: &[(String, String)]) -> Result<String, KrishivError> {
+    let opts = Opts::parse(pairs, "schema_of_xml")?;
+    Ok(match parse_document(xml) {
+        Some(root) => ddl(&infer_elem(&root, &opts, true)),
+        None => "STRUCT<_corrupt_record: STRING>".to_owned(),
+    })
 }
 
 /// Binds the XML function `name`.

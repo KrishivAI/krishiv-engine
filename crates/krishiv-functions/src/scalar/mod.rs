@@ -50,6 +50,7 @@ mod url;
 mod xml;
 
 pub use regex::{extract_all_pieces, split_regex};
+pub use xml::schema_of_xml_ddl;
 
 use std::fmt;
 use std::sync::Arc;

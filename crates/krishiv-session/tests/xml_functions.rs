@@ -330,9 +330,14 @@ fn from_xml_modes_and_errors() {
     assert_eq!(
         class_of(
             &s,
-            "select from_xml('<p/>', 'a INT', map('unknownOption', 'x'))"
+            "select from_xml('<p/>', 'a INT', map('excludeAttribute', 'true'))"
         ),
         ErrorClass::KrishivUnsupportedFeature
+    );
+    // Names Spark does not know are ignored.
+    assert_eq!(
+        read(&s, "<p><a>1</a></p>", "a INT", "'unknownOption', 'x'"),
+        r#"{"a":1}"#
     );
 }
 
@@ -428,5 +433,173 @@ fn to_xml_writes_documents() {
             "select cast(to_xml(cast(null as struct<a:int>)) is null as string)"
         ),
         ["true"]
+    );
+}
+
+fn schema(s: &Session, xml: &str, options: &str) -> String {
+    let opts = if options.is_empty() {
+        String::new()
+    } else {
+        format!(", map({options})")
+    };
+    run(s, &format!("select schema_of_xml('{xml}'{opts})")).remove(0)
+}
+
+#[test]
+fn schema_of_xml_infers_like_spark() {
+    let s = session();
+    let cases = [
+        (
+            "<p><a>1</a><b>\"2\"</b></p>",
+            "STRUCT<a: BIGINT, b: STRING>",
+        ),
+        ("<p><a>1</a><a>2.5</a></p>", "STRUCT<a: ARRAY<DOUBLE>>"),
+        ("<p><a>1</a><a>x</a></p>", "STRUCT<a: ARRAY<STRING>>"),
+        ("<p><a></a></p>", "STRUCT<a: STRING>"),
+        ("<p><a/></p>", "STRUCT<a: STRING>"),
+        (
+            "<p><a>2020-01-02</a><b>2020-01-02 03:04:05</b><c>2020-01-02T03:04:05Z</c></p>",
+            "STRUCT<a: DATE, b: TIMESTAMP, c: TIMESTAMP>",
+        ),
+        ("<p><a>true</a><a>1</a></p>", "STRUCT<a: ARRAY<STRING>>"),
+        ("<p><a>12345678901234567890</a></p>", "STRUCT<a: DOUBLE>"),
+        (
+            "<p><a>1.0</a><b>1e3</b><c>-5</c><d>.5</d></p>",
+            "STRUCT<a: DOUBLE, b: DOUBLE, c: BIGINT, d: DOUBLE>",
+        ),
+        (
+            "<p><b><y>1</y><x>2</x></b></p>",
+            "STRUCT<b: STRUCT<x: BIGINT, y: BIGINT>>",
+        ),
+        (
+            "<p><b><y>1</y></b><b><x>2</x></b></p>",
+            "STRUCT<b: ARRAY<STRUCT<x: BIGINT, y: BIGINT>>>",
+        ),
+        ("<p><a x=\"1\"/></p>", "STRUCT<a: STRUCT<_x: BIGINT>>"),
+        (
+            "<p><a x=\"1\">t</a></p>",
+            "STRUCT<a: STRUCT<_VALUE: STRING, _x: BIGINT>>",
+        ),
+        ("<p><b>1</b>text</p>", "STRUCT<_VALUE: STRING, b: BIGINT>"),
+        ("<p><B>1</B><b>2</b></p>", "STRUCT<B: ARRAY<BIGINT>>"),
+        ("<p><a>NaN</a></p>", "STRUCT<a: STRING>"),
+        ("<p><a>Infinity</a></p>", "STRUCT<a: STRING>"),
+        ("<p><a> 1 </a></p>", "STRUCT<a: BIGINT>"),
+        ("<p>text</p>", "STRUCT<_VALUE: STRING>"),
+        ("<p/>", "STRUCT<>"),
+        ("<p x=\"5\"/>", "STRUCT<_x: BIGINT>"),
+        ("<p><a><b/></a></p>", "STRUCT<a: STRUCT<b: STRING>>"),
+        ("<p><a>1</a><a><b>2</b></a></p>", "STRUCT<a: ARRAY<STRING>>"),
+        (
+            "<p><a>1</a><b>x</b></p><q><z>1</z></q>",
+            "STRUCT<a: BIGINT, b: STRING>",
+        ),
+        ("not xml", "STRUCT<_corrupt_record: STRING>"),
+        ("", "STRUCT<_corrupt_record: STRING>"),
+        ("<p><a>0123</a></p>", "STRUCT<a: BIGINT>"),
+        ("<p><a>+7</a></p>", "STRUCT<a: BIGINT>"),
+        (
+            "<p><a>9223372036854775807</a><b>9223372036854775808</b></p>",
+            "STRUCT<a: BIGINT, b: DOUBLE>",
+        ),
+    ];
+    for (xml, want) in cases {
+        assert_eq!(schema(&s, xml, ""), want, "{xml:?}");
+    }
+    assert_eq!(
+        names(
+            &s,
+            "select schema_of_xml('<p><a>1</a></p>', map('inferSchema', 'true'))"
+        ),
+        ["schema_of_xml(<p><a>1</a></p>)"]
+    );
+}
+
+#[test]
+fn schema_of_xml_options() {
+    let s = session();
+    let one = "<p><a>1</a></p>";
+    assert_eq!(
+        schema(&s, "<p><a>1.5</a></p>", "'prefersDecimal', 'true'"),
+        "STRUCT<a: DECIMAL(2,1)>"
+    );
+    assert_eq!(
+        schema(&s, one, "'prefersDecimal', 'true'"),
+        "STRUCT<a: BIGINT>"
+    );
+    assert_eq!(
+        schema(&s, "<p><a>2020-01-02</a></p>", "'inferSchema', 'false'"),
+        "STRUCT<a: STRING>"
+    );
+    assert_eq!(
+        schema(&s, "<p x=\"1\"><a>1</a></p>", "'attributePrefix', '@'"),
+        "STRUCT<`@x`: BIGINT, a: BIGINT>"
+    );
+    assert_eq!(
+        schema(&s, "<p>t<a>1</a></p>", "'valueTag', 'v'"),
+        "STRUCT<a: BIGINT, v: STRING>"
+    );
+    assert_eq!(
+        schema(&s, "<p><a> 1</a></p>", "'ignoreSurroundingSpaces', 'false'"),
+        "STRUCT<a: STRING>"
+    );
+    assert_eq!(
+        schema(
+            &s,
+            "<p><a>26/08/2015</a></p>",
+            "'timestampFormat', 'dd/MM/yyyy'"
+        ),
+        "STRUCT<a: TIMESTAMP>"
+    );
+    assert_eq!(
+        schema(&s, "<p><a>26/08/2015</a></p>", "'dateFormat', 'dd/MM/yyyy'"),
+        "STRUCT<a: DATE>"
+    );
+    // Names Spark does not know are ignored.
+    assert_eq!(schema(&s, one, "'sep', 'x'"), "STRUCT<a: BIGINT>");
+    assert_eq!(schema(&s, one, "'mode', 'FAILFAST'"), "STRUCT<a: BIGINT>");
+}
+
+#[test]
+fn schema_of_xml_errors_and_from_xml_of_it() {
+    let s = session();
+    assert_eq!(
+        class_of(&s, "select schema_of_xml(null)"),
+        ErrorClass::DatatypeMismatchUnexpectedNull
+    );
+    assert_eq!(
+        class_of(&s, "select schema_of_xml(42)"),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert_eq!(
+        class_of(&s, "select schema_of_xml('<p/>', named_struct('a', 1))"),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    assert_eq!(
+        class_of(&s, "select schema_of_xml('<p/>', map('a', 1))"),
+        ErrorClass::InvalidOptionsNonStringType
+    );
+    assert_eq!(
+        class_of(
+            &s,
+            "select schema_of_xml('<p/>', map('samplingRatio', '0.5'))"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    let s2 = session();
+    block_on(s2.sql("create temporary view xmlTable(xmlField, a) as select * from values ('<p><a>1</a></p>', 'a')"))
+        .expect("view");
+    assert_eq!(
+        class_of(&s2, "select schema_of_xml(xmlField) from xmlTable"),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    // The schema it returns feeds `from_xml`.
+    assert_eq!(
+        run(
+            &s,
+            "select to_json(from_xml('<p><a>1</a><a>2</a><a>3</a></p>', \
+             schema_of_xml('<p><a>1</a><a>2</a></p>')))"
+        ),
+        [r#"{"a":[1,2,3]}"#]
     );
 }
