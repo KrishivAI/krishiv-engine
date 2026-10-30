@@ -140,6 +140,8 @@ pub(crate) struct Parser<'s> {
     markers: Vec<usize>,
     /// How many script bodies the cursor is inside: a statement there ends at its `;`.
     in_script: usize,
+    /// How many script statements enclose the cursor (compounds, branches and loop bodies).
+    script_depth: usize,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
     /// the tree cannot carry; reported if the statement parses.
     deferred: Option<ParseError>,
@@ -646,6 +648,7 @@ impl<'s> Parser<'s> {
             closers,
             markers,
             in_script: 0,
+            script_depth: 0,
             deferred: None,
             cast_types: vec![],
             force_bare,

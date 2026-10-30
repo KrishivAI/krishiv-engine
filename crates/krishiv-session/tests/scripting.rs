@@ -345,14 +345,6 @@ fn errors_follow_spark() {
         class(&s, "BEGIN SELECT 1; SELECT 1 / 0; END"),
         "DIVIDE_BY_ZERO"
     );
-    // Handlers and FOR wait for unit 3.
-    assert_eq!(
-        class(
-            &s,
-            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; SELECT 1 / 0; END"
-        ),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
 }
 
 #[test]
@@ -378,5 +370,290 @@ fn dropping_the_future_stops_a_script() {
         rows(&s, "SELECT counter"),
         first,
         "the script kept running after it was dropped"
+    );
+}
+
+#[test]
+fn review_findings_stay_fixed() {
+    let s = Session::new().unwrap();
+    // An empty loop body still yields: dropping the future stops it.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let work = s.sql("BEGIN LOOP END LOOP; END");
+        let timeout = tokio::time::sleep(std::time::Duration::from_millis(200));
+        tokio::pin!(work);
+        tokio::pin!(timeout);
+        futures::future::select(work, timeout).await;
+    });
+    // `DECLARE x;` has neither a type nor a default.
+    assert_eq!(
+        class(&s, "BEGIN DECLARE x; END"),
+        "INVALID_SQL_SYNTAX.VARIABLE_TYPE_OR_DEFAULT_REQUIRED"
+    );
+    // Duplicate targets are named as written, also in the row form.
+    let (c, m) = run(
+        &s,
+        "BEGIN DECLARE a INT; DECLARE b INT; SET a = 1, A = 2; END",
+    )
+    .unwrap_err();
+    assert_eq!(c, "DUPLICATE_ASSIGNMENTS");
+    assert!(m.contains("`A`") && !m.contains("0."), "{m}");
+    assert_eq!(
+        class(&s, "BEGIN DECLARE a INT; SET (a, a) = (SELECT 1, 2); END"),
+        "DUPLICATE_ASSIGNMENTS"
+    );
+    // EXECUTE IMMEDIATE ... INTO reaches a local, and leaves a same-named session variable alone.
+    rows(&s, "DECLARE k INT DEFAULT 1");
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE k INT; EXECUTE IMMEDIATE 'SELECT 41 + 1' INTO k; SELECT k; END"
+        ),
+        ok(&[&["42"]])
+    );
+    assert_eq!(rows(&s, "SELECT k"), ok(&[&["1"]]));
+    // Names are one local whatever the case, with caseSensitive on too.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        rows(&s, "BEGIN DECLARE Abc INT DEFAULT 3; SELECT abc; END").len(),
+        1
+    );
+    s.conf().set("spark.sql.caseSensitive", "false").unwrap();
+    // A result over the cap is refused, not truncated, and not read in full.
+    assert_eq!(
+        class(&s, "BEGIN SELECT id FROM range(100000); END"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(rows(&s, "BEGIN SELECT id FROM range(256); END").len(), 256);
+}
+
+/// Scripts nest at most 32 levels (a divergence: Spark has no limit), at parse time, so neither
+/// the parser nor the interpreter can run out of stack.
+fn nest(n: usize) -> String {
+    format!("{}SELECT 1 AS a;{}", "BEGIN ".repeat(n), " END;".repeat(n))
+}
+
+#[test]
+fn script_nesting_is_bounded_at_the_limit() {
+    let s = Session::new().unwrap();
+    assert_eq!(rows(&s, &nest(32)), ok(&[&["1"]]));
+    assert_eq!(class(&s, &nest(33)), "FAILED_TO_PARSE_TOO_COMPLEX");
+}
+
+#[test]
+fn script_nesting_is_bounded_for_branches_and_loops() {
+    let s = Session::new().unwrap();
+    let deep = format!(
+        "BEGIN {} SELECT 1; {} END",
+        "IF TRUE THEN WHILE TRUE DO ".repeat(40),
+        "END WHILE; END IF;".repeat(40)
+    );
+    assert_eq!(class(&s, &deep), "FAILED_TO_PARSE_TOO_COMPLEX");
+}
+
+#[test]
+fn script_nesting_is_bounded_on_a_small_stack() {
+    let handle = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let s = Session::new().unwrap();
+            run(&s, &nest(1000)).unwrap_err().0
+        })
+        .unwrap();
+    assert_eq!(handle.join().unwrap(), "FAILED_TO_PARSE_TOO_COMPLEX");
+}
+
+#[test]
+fn for_loops_run_the_query_once_and_expose_each_row() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE total INT DEFAULT 0; \
+             FOR r AS SELECT id, id * 10 AS tens FROM VALUES (1), (2), (3) AS t(id) DO \
+               SET total = total + r.tens + id; \
+             END FOR; SELECT total; END"
+        ),
+        ok(&[&["66"]])
+    );
+    // No variable name: the columns are plain locals. Zero rows run the body zero times.
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE n INT DEFAULT 0; FOR SELECT id FROM VALUES (1), (2) AS t(id) DO SET n = n + id; END FOR; \
+             FOR SELECT id FROM VALUES (1) AS t(id) WHERE id > 5 DO SET n = 99; END FOR; SELECT n; END"
+        ),
+        ok(&[&["3"]])
+    );
+    // A loop variable is assignable for the pass, and gone after the loop.
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE seen INT DEFAULT 0; FOR r AS SELECT 5 AS v DO SET v = 10; SET seen = r.v; END FOR; SELECT seen; END"
+        ),
+        ok(&[&["10"]])
+    );
+    assert_eq!(
+        class(
+            &s,
+            "BEGIN FOR r AS SELECT 5 AS v DO SELECT 1; END FOR; SELECT v; END"
+        ),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "BEGIN FOR r AS SELECT 1 AS a, 2 AS a DO SELECT 1; END FOR; END"
+        ),
+        "VARIABLE_ALREADY_EXISTS"
+    );
+    // LEAVE and ITERATE address the loop's label.
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE n INT DEFAULT 0; \
+             lp: FOR r AS SELECT id FROM VALUES (1), (2), (3), (4) AS t(id) DO \
+               IF r.id = 2 THEN ITERATE lp; END IF; \
+               IF r.id = 4 THEN LEAVE lp; END IF; \
+               SET n = n + r.id; \
+             END FOR lp; SELECT n; END"
+        ),
+        ok(&[&["4"]])
+    );
+}
+
+#[test]
+fn exit_handlers_catch_and_leave_their_compound() {
+    let s = Session::new().unwrap();
+    // The handler's result is the script's.
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN VALUES ('caught'); END; SELECT 1 / 0; END"
+        ),
+        ok(&[&["caught"]])
+    );
+    // After an EXIT handler execution goes on after the compound that declared it; variables of the
+    // handler's own compound, as they were, are visible to the body.
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE x INT DEFAULT 0; \
+             c: BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SET x = x + 10; SET x = 2; SELECT 1 / 0; SET x = 100; END c; \
+             SELECT x; END"
+        ),
+        ok(&[&["12"]])
+    );
+    // The most specific condition wins; the class prefix and a SQLSTATE match too.
+    for (handler, expected) in [
+        ("DIVIDE_BY_ZERO", "name"),
+        ("SQLSTATE '22012'", "state"),
+        ("SQLEXCEPTION", "broad"),
+    ] {
+        assert_eq!(
+            rows(
+                &s,
+                &format!(
+                    "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION VALUES ('broad'); \
+                     DECLARE EXIT HANDLER FOR {handler} VALUES ('{expected}'); \
+                     SELECT 1 / 0; END"
+                )
+            ),
+            ok(&[&[if handler == "SQLEXCEPTION" {
+                "broad"
+            } else {
+                expected
+            }]]),
+            "{handler}"
+        );
+    }
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR UNRESOLVED_COLUMN VALUES ('prefix'); SELECT nope; END"
+        ),
+        ok(&[&["prefix"]])
+    );
+    // A handler of an outer compound catches what an inner one lets through; one that does not match
+    // lets the error out.
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION VALUES ('outer'); \
+             BEGIN DECLARE EXIT HANDLER FOR UNRESOLVED_COLUMN VALUES ('inner'); SELECT 1 / 0; END; END"
+        ),
+        ok(&[&["outer"]])
+    );
+    assert_eq!(
+        class(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR UNRESOLVED_COLUMN VALUES ('x'); SELECT 1 / 0; END"
+        ),
+        "DIVIDE_BY_ZERO"
+    );
+    // It covers a declaration's default, and an error in the body leaves for the outer scopes.
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE y INT DEFAULT 1 / 0; DECLARE EXIT HANDLER FOR SQLEXCEPTION VALUES ('default'); SELECT 'no'; END"
+        ),
+        ok(&[&["default"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION VALUES ('outer'); \
+             BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1 / 0; SELECT nope; END; END"
+        ),
+        ok(&[&["outer"]])
+    );
+    // The handler sees its compound's variables, not those of the inner compounds being left.
+    assert_eq!(
+        class(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT y; BEGIN DECLARE y INT DEFAULT 5; SELECT 1 / 0; END; END"
+        ),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+}
+
+#[test]
+fn krishiv_only_errors_are_never_caught() {
+    let s = Session::new().unwrap();
+    // A statement Krishiv cannot run must not read as an error the script handled.
+    assert_eq!(
+        class(
+            &s,
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION VALUES ('handled'); \
+             DECLARE c CURSOR FOR SELECT 1; END"
+        ),
+        "UNSUPPORTED_FEATURE.SQL_CURSOR"
+    );
+}
+
+/// `datediff(unit, start, end)` is `timestampdiff`; that function is not implemented yet, so the call
+/// reads as an unknown routine rather than as a two-parameter `datediff` given three arguments.
+#[test]
+fn datediff_with_a_unit_is_timestampdiff() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "SELECT datediff(DAY, DATE '2020-01-01', DATE '2020-01-11')"
+        ),
+        class(
+            &s,
+            "SELECT timestampdiff(DAY, DATE '2020-01-01', DATE '2020-01-11')"
+        )
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(datediff(DATE '2020-01-11', DATE '2020-01-01') AS STRING)"
+        ),
+        ok(&[&["10"]])
     );
 }

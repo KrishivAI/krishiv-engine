@@ -113,7 +113,8 @@ impl Driver for Direct {
         fail: bool,
     ) -> BoxFuture<'a, Result<Vec<WrittenFileInfo>, KrishivError>> {
         Box::pin(async move {
-            let mut w = FileWriter::new(&env.io, format, schema, o, options, env.reservation("w"))?;
+            let mut w =
+                FileWriter::new(&env.io, format, &schema, o, options, env.reservation("w"))?;
             for b in &batches {
                 w.write(b).await?;
             }

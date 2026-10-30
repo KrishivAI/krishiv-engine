@@ -644,6 +644,11 @@ pub struct WritePlan {
     /// Roll over to a new file once this many bytes were produced; 0 means
     /// never.
     pub target_file_bytes: u64,
+    /// Partition column indices into the writer's input, in `partitionBy`
+    /// order (Spark's directory layout); empty for unpartitioned output.
+    /// A partitioned write sorts its input by these columns directly
+    /// below the writer.
+    pub partition_by: Vec<usize>,
 }
 
 impl WritePlan {
@@ -732,7 +737,8 @@ plan_data!(struct WritePlan {
     dir,
     job_uuid,
     max_records_per_file,
-    target_file_bytes
+    target_file_bytes,
+    partition_by
 });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
 plan_data!(struct RangeNode { start, end, step, num_slices, output });
@@ -880,10 +886,59 @@ impl PhysicalPlan {
     /// attempt)` with its own I/O context. The caller starts the write
     /// before (`DirectoryWrite::begin`) and commits it from the plan's
     /// result rows once the plan has run.
-    pub fn into_write(self, write: WritePlan) -> Self {
-        let explain = ExplainNode::new("WriteFiles", write.describe(), vec![self.explain]);
-        let root = Arc::unwrap_or_clone(self.root);
-        Self {
+    ///
+    /// A partitioned write (`write.partition_by`) sorts the rows by the
+    /// partition columns directly below the writer (Spark's required
+    /// ordering, in the existing spillable local sort), so each task keeps
+    /// exactly one open file however many partitions it sees.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if a partition column is out of range.
+    pub fn into_write(self, write: WritePlan) -> Result<Self> {
+        let fields = self.schema.fields();
+        let mut names = Vec::with_capacity(write.partition_by.len());
+        for &c in &write.partition_by {
+            let Some(field) = fields.get(c) else {
+                return Err(crate::error::internal(format!(
+                    "partition column {c} is out of range"
+                )));
+            };
+            names.push(field.name().as_str());
+        }
+        let (root, explain) = if names.is_empty() {
+            (
+                Arc::unwrap_or_clone(self.root),
+                ExplainNode::new("WriteFiles", write.describe(), vec![self.explain]),
+            )
+        } else {
+            let keys: Vec<SortKey> = write
+                .partition_by
+                .iter()
+                .map(|&c| SortKey::asc(c))
+                .collect();
+            let detail = format!(
+                "[{}]",
+                names
+                    .iter()
+                    .map(|n| format!("{n} ASC NULLS FIRST"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let sort = ExplainNode::new("Sort", detail, vec![self.explain]);
+            let explain = ExplainNode::new(
+                "WriteFiles",
+                format!("{} partitioned by [{}]", write.describe(), names.join(", ")),
+                vec![sort],
+            );
+            (
+                PhysNode::Sort {
+                    input: Box::new(Arc::unwrap_or_clone(self.root)),
+                    keys,
+                },
+                explain,
+            )
+        };
+        Ok(Self {
             schema: WritePlan::result_schema(),
             root: Arc::new(PhysNode::WriteFiles {
                 input: Box::new(root),
@@ -892,7 +947,7 @@ impl PhysicalPlan {
             explain,
             warnings: self.warnings,
             env: self.env,
-        }
+        })
     }
 
     /// The same plan with `warnings` added.

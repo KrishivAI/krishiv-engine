@@ -84,6 +84,28 @@ fn quoted(namespace: &str, name: &str) -> String {
     format!("`spark_catalog`.`{namespace}`.`{name}`")
 }
 
+/// What a `DELETE`, `UPDATE` or `MERGE` asks of a table, for the checks that come before Spark finds
+/// that the table cannot change.
+pub(crate) struct RowChanges<'a> {
+    /// The columns assigned.
+    pub(crate) targets: &'a [&'a krishiv_sql::ast::ObjectName],
+    /// The new values.
+    pub(crate) values: &'a [&'a krishiv_sql::ast::Expr],
+    /// The `WHERE` condition.
+    pub(crate) condition: Option<&'a krishiv_sql::ast::Expr>,
+}
+
+/// The scalar subqueries anywhere in the expression.
+fn scalar_subqueries<'a>(
+    e: &'a krishiv_sql::ast::Expr,
+    out: &mut Vec<&'a krishiv_sql::ast::Query>,
+) {
+    if let krishiv_sql::ast::ExprKind::Subquery(q) = &e.kind {
+        out.push(q);
+    }
+    e.for_each_child(&mut |c| scalar_subqueries(c, out));
+}
+
 fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
@@ -1066,12 +1088,24 @@ impl Session {
     /// location, then adds the metadata (so a failed write leaves none).
     async fn create_table_as(
         &self,
-        mut table: CatalogTable,
+        table: CatalogTable,
         query: &Query,
         mode: CreateMode,
     ) -> Result<(), KrishivError> {
         let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        self.create_table_from(table, &df, mode).await
+    }
+
+    /// Writes `df` to the location of the new `table` (whose columns are
+    /// the frame's), then adds the metadata: the shared tail of `CREATE
+    /// TABLE ... AS SELECT` and `writeTo(..).create()`.
+    async fn create_table_from(
+        &self,
+        mut table: CatalogTable,
+        df: &DataFrame,
+        mode: CreateMode,
+    ) -> Result<(), KrishivError> {
         let analysis = df.analyzed_in(self.query_env()).await?;
         table.columns = analysis
             .analyzed
@@ -1093,7 +1127,7 @@ impl Session {
             .into());
         }
         // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        self.write_table_rows(&table, &df, "errorifexists").await?;
+        self.write_table_rows(&table, df, "errorifexists").await?;
         self.add_table(table, mode, true).await
     }
 
@@ -1328,14 +1362,63 @@ impl Session {
 
     /// `DELETE FROM`, `UPDATE` and `MERGE INTO` a file-source table: Spark's
     /// v1 tables support none of them, and says so once the table resolves.
-    pub(crate) fn exec_row_level_change(
+    pub(crate) async fn exec_row_level_change(
         &self,
         table: &DdlName,
+        alias: Option<&krishiv_sql::ast::Ident>,
         operation: &str,
+        changes: &RowChanges<'_>,
+        original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(table, &env)?;
-        self.table_for_write(&name, operation, &env)?;
+        let stored = self.table_for_write(&name, operation, &env)?;
+        // Spark analyzes the condition and the new values against the table before it finds that the
+        // table cannot change: an unknown column is the error then.
+        let same = |x: &str, y: &str| {
+            if env.analysis.conf.case_sensitive {
+                x == y
+            } else {
+                x.eq_ignore_ascii_case(y)
+            }
+        };
+        for target in changes.targets {
+            let written = target.parts.last().map_or("", |p| p.value.as_str());
+            if !stored.columns.iter().any(|c| same(&c.name, written)) {
+                return Err(UnresolvedColumnWithSuggestion {
+                    object_name: format!("`{written}`"),
+                    proposal: stored
+                        .columns
+                        .iter()
+                        .map(|c| format!("`{}`", c.name))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                }
+                .into());
+            }
+        }
+        let slice = |e: &krishiv_sql::ast::Expr| {
+            original
+                .get(e.span.start..e.span.end)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let mut select: Vec<String> = changes.values.iter().map(|e| slice(e)).collect();
+        if select.is_empty() {
+            select.push("1".to_owned());
+        }
+        let mut sql = format!("SELECT {} FROM {}", select.join(", "), name.quoted());
+        if let Some(alias) = alias {
+            sql.push_str(&format!(" AS `{}`", alias.value.replace('`', "``")));
+        }
+        if let Some(condition) = changes.condition {
+            sql.push_str(&format!(" WHERE {}", slice(condition)));
+        }
+        // Spark 4.2 does not resolve a running script's local variables in these statements (the
+        // record shows `UNRESOLVED_COLUMN` for one), so the analysis does not see them either.
+        self.with_locals(Vec::new())
+            .analyze_variable_query(&sql)
+            .await?;
         Err(UnsupportedFeatureTableOperation {
             table_name: name.quoted(),
             operation: operation.to_owned(),
@@ -1400,10 +1483,57 @@ impl Session {
         }
         let name = self.table_name(&c.name, &env)?;
         let table = self.table_for_write(&name, "INSERT", &env)?;
+        // Spark resolves a scalar subquery in the rows of `INSERT ... VALUES` (an unknown column is
+        // the error then) and refuses it afterwards (a plain `VALUES` table reports the cell it
+        // cannot evaluate instead).
+        if let krishiv_sql::ast::SetExprKind::Values(values) = &c.query.body.kind {
+            let mut subqueries = Vec::new();
+            values
+                .rows
+                .iter()
+                .for_each(|r| scalar_subqueries(r, &mut subqueries));
+            for query in &subqueries {
+                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                DataFrame::new(self.clone(), Arc::clone(plan.root()))
+                    .analyzed_in(self.query_env())
+                    .await?;
+            }
+            if !subqueries.is_empty() {
+                return Err(
+                    krishiv_common::error::UnsupportedSubqueryExpressionCategoryScalarSubqueryInValues {}
+                        .into(),
+                );
+            }
+        }
         let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let listed: Vec<String> = c
+            .columns
+            .iter()
+            .map(|n| match n {
+                ColumnName::Ident(i) => Ok(i.value.clone()),
+                _ => Err(unsupported("IDENTIFIER() column names")),
+            })
+            .collect::<Result<_, _>>()?;
+        self.insert_rows(&name, &table, &source, &listed, c.by_name, c.overwrite)
+            .await
+    }
+
+    /// Inserts the rows of `source` into `table` (`INSERT INTO|OVERWRITE`,
+    /// `writeTo(..).append()`): `listed` names the target columns (empty:
+    /// all, by position, or by name with `by_name`).
+    async fn insert_rows(
+        &self,
+        name: &TableName,
+        table: &Arc<CatalogTable>,
+        source: &DataFrame,
+        listed: &[String],
+        by_name: bool,
+        overwrite: bool,
+    ) -> Result<(), KrishivError> {
+        let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
-        if c.overwrite
+        if overwrite
             && crate::catalog::reads_stored_table(
                 analysis.analyzed.plan.root(),
                 &name.namespace,
@@ -1426,18 +1556,10 @@ impl Session {
                 nullable: c.nullable,
             })
             .collect();
-        let listed: Vec<String> = c
-            .columns
-            .iter()
-            .map(|n| match n {
-                ColumnName::Ident(i) => Ok(i.value.clone()),
-                _ => Err(unsupported("IDENTIFIER() column names")),
-            })
-            .collect::<Result<_, _>>()?;
         let assignment = assign(
-            &table,
-            &listed,
-            c.by_name,
+            table,
+            listed,
+            by_name,
             &output,
             env.analysis.conf.case_sensitive,
         )?;
@@ -1465,12 +1587,96 @@ impl Session {
             select.push(value.alias(&column.name));
         }
         let df = base.select(select);
-        let mode = if c.overwrite { "overwrite" } else { "append" };
-        let written = self.write_table_rows(&table, &df, mode).await;
+        let mode = if overwrite { "overwrite" } else { "append" };
+        let written = self.write_table_rows(table, &df, mode).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
-        self.forget_cached(&name);
-        written.map_err(|e| overflow_in_table_insert(e, &table, &output, &assignment))
+        self.forget_cached(name);
+        written.map_err(|e| overflow_in_table_insert(e, table, &output, &assignment))
+    }
+
+    /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`
+    /// is `CREATE TABLE name AS SELECT` over `df` (one code path, a failed
+    /// write leaves no table), `Append` is `INSERT INTO name` by position.
+    /// `Replace` and `CreateOrReplace` fail as `REPLACE TABLE AS SELECT` does
+    /// on file-source tables; overwrites and partitioned or clustered tables
+    /// are unsupported, as in `INSERT` and `CREATE TABLE`.
+    pub(crate) async fn exec_write_v2(
+        &self,
+        df: &DataFrame,
+        spec: V2WriteSpec,
+        mode: V2Mode,
+    ) -> Result<(), KrishivError> {
+        let env = self.query_env();
+        let parsed = krishiv_sql::parse_multipart_identifier(&spec.table, &self.parser_options())
+            .map_err(|e| e.error)?;
+        let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
+        let name = TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?;
+        match mode {
+            // An append ignores the layout the builder was given: the
+            // existing table's layout rules.
+            V2Mode::Append => {
+                let table = self.table_for_write(&name, "INSERT", &env)?;
+                return self.insert_rows(&name, &table, df, &[], false, false).await;
+            }
+            V2Mode::Replace | V2Mode::CreateOrReplace => {
+                return Err(UnsupportedFeatureTableOperation {
+                    table_name: name.quoted(),
+                    operation: "REPLACE TABLE AS SELECT".to_owned(),
+                }
+                .into());
+            }
+            V2Mode::Create => {}
+        }
+        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+            return Err(unsupported("partitioned tables"));
+        }
+        let warehouse = self.warehouse_dir()?;
+        let provider = self.provider_of(spec.provider)?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
+        self.check_namespace(&name)?;
+        if self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some()
+        {
+            return Err(krishiv_common::error::TableOrViewAlreadyExists {
+                relation_name: name.quoted(),
+            }
+            .into());
+        }
+        let mut options = BTreeMap::new();
+        for (k, v) in &spec.options {
+            // Table metadata is stored as plain text: a secret never is.
+            let Some(text) = v.as_plain() else {
+                return Err(unsupported("secret table options"));
+            };
+            options.insert(k.clone(), text.to_owned());
+        }
+        if provider == "csv" {
+            options
+                .entry("header".to_owned())
+                .or_insert_with(|| "true".to_owned());
+        }
+        let table = CatalogTable {
+            namespace: name.namespace.clone(),
+            name: name.name.clone(),
+            managed: true,
+            provider,
+            location: managed_location(&warehouse, &name.namespace, &name.name),
+            columns: Vec::new(),
+            options,
+            properties: spec.properties,
+            comment: None,
+            created_ms: now_ms(),
+            root: warehouse,
+            view: None,
+        };
+        self.create_table_from(table, df, CreateMode::ErrorIfExists)
+            .await
     }
 
     /// Writes `df` to the files of `table` with the writer's save `mode`.
@@ -1486,6 +1692,37 @@ impl Session {
         }
         writer.save(&table.location.display().to_string()).await
     }
+}
+
+/// What [`Session::exec_write_v2`] writes: the table name as written and
+/// the builder state of [`DataFrameWriterV2`](crate::DataFrameWriterV2).
+/// Tables are managed (the writer has no `LOCATION`).
+pub(crate) struct V2WriteSpec {
+    /// The table name as written (`t`, `db.t` or `spark_catalog.db.t`).
+    pub table: String,
+    /// `using`: `None` for `spark.sql.sources.default`.
+    pub provider: Option<String>,
+    /// `option`/`options`: the table's options and its read options.
+    pub options: BTreeMap<String, OptionValue>,
+    /// `tableProperty`: the `TBLPROPERTIES`.
+    pub properties: BTreeMap<String, String>,
+    /// `partitionedBy` columns.
+    pub partitioned_by: Vec<String>,
+    /// `clusterBy` columns.
+    pub cluster_by: Vec<String>,
+}
+
+/// What [`Session::exec_write_v2`] does with the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V2Mode {
+    /// Create it; an existing table fails with `TABLE_OR_VIEW_ALREADY_EXISTS`.
+    Create,
+    /// Replace it (unsupported for file-source tables).
+    Replace,
+    /// Create or replace it (unsupported for file-source tables).
+    CreateOrReplace,
+    /// Append the rows to the existing table.
+    Append,
 }
 
 /// Where a table column's value comes from.

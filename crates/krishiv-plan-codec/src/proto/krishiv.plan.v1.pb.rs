@@ -588,6 +588,10 @@ pub struct WritePlan {
     pub max_records_per_file: u64,
     #[prost(uint64, tag = "7")]
     pub target_file_bytes: u64,
+    /// feature: partitioned_writes
+    /// Input column indices the files are partitioned by (Spark directory layout).
+    #[prost(uint64, repeated, tag = "8")]
+    pub partition_by: ::prost::alloc::vec::Vec<u64>,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]
