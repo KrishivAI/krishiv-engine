@@ -28,6 +28,18 @@ const COMPARE_CASES: u32 = 2000;
 #[cfg(miri)]
 const COMPARE_CASES: u32 = 2;
 
+fn config(cases: u32) -> ProptestConfig {
+    // Miri has no current directory, so failure persistence is off there.
+    ProptestConfig {
+        failure_persistence: if cfg!(miri) {
+            None
+        } else {
+            ProptestConfig::default().failure_persistence
+        },
+        ..ProptestConfig::with_cases(cases)
+    }
+}
+
 const ALPHABET: &[&str] = &[
     "a", "b", "é", "😀", "\n", "%", "_", "\\", "$", "A", " ", ".", "*", "(",
 ];
@@ -48,7 +60,7 @@ fn oracle_like(col: &[Option<String>], pat: &str, esc: char) -> BooleanArray {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(LIKE_CASES))]
+    #![proptest_config(config(LIKE_CASES))]
 
     #[test]
     fn like_literal_pattern_matches_the_matcher(
@@ -114,7 +126,7 @@ fn null_literal_and_all_null_column() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(COMPARE_CASES))]
+    #![proptest_config(config(COMPARE_CASES))]
 
     #[test]
     fn compare_columns_matches_the_reference(l in values(), seed in proptest::collection::vec(proptest::option::of(text()), 0..40)) {
@@ -156,6 +168,10 @@ fn a_literal_that_is_not_utf8_falls_back_to_the_row_loop() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "20-50 KB patterns are too slow to interpret; no unsafe code runs here"
+)]
 fn a_pattern_over_arrow_strings_regex_limit_still_matches() {
     // ~20 KB of `_%`: arrow-string's regex exceeds its size limit, the matcher does not.
     let pat = format!("a{}%", "_%".repeat(10_000));
