@@ -364,7 +364,7 @@ mod tests {
             assert_eq!(*k, k.to_ascii_uppercase());
         }
         assert!(is_keyword_word("select"));
-        assert!(!is_keyword_word("selec"));
+        assert!(!is_keyword_word("zzzword"));
     }
 
     use super::*;

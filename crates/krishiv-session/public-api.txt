@@ -47,6 +47,18 @@ impl core::fmt::Debug for krishiv_session::agent::AgentStatus
 pub fn krishiv_session::agent::AgentStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::agent::AgentStatus
 impl core::marker::StructuralPartialEq for krishiv_session::agent::AgentStatus
+pub enum krishiv_session::agent::AgentStop
+pub krishiv_session::agent::AgentStop::Cancelled
+pub krishiv_session::agent::AgentStop::TimeCap
+impl core::clone::Clone for krishiv_session::agent::AgentStop
+pub fn krishiv_session::agent::AgentStop::clone(&self) -> krishiv_session::agent::AgentStop
+impl core::cmp::Eq for krishiv_session::agent::AgentStop
+impl core::cmp::PartialEq for krishiv_session::agent::AgentStop
+pub fn krishiv_session::agent::AgentStop::eq(&self, &krishiv_session::agent::AgentStop) -> bool
+impl core::fmt::Debug for krishiv_session::agent::AgentStop
+pub fn krishiv_session::agent::AgentStop::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::agent::AgentStop
+impl core::marker::StructuralPartialEq for krishiv_session::agent::AgentStop
 pub struct krishiv_session::agent::AgentLimits
 pub krishiv_session::agent::AgentLimits::max_bytes: usize
 pub krishiv_session::agent::AgentLimits::max_cell_chars: usize
@@ -63,10 +75,10 @@ pub fn krishiv_session::agent::AgentLimits::fmt(&self, &mut core::fmt::Formatter
 impl core::marker::Copy for krishiv_session::agent::AgentLimits
 impl core::marker::StructuralPartialEq for krishiv_session::agent::AgentLimits
 pub struct krishiv_session::agent::AgentRender<'a>
-pub krishiv_session::agent::AgentRender::cancelled: bool
 pub krishiv_session::agent::AgentRender::elapsed_ms: u64
 pub krishiv_session::agent::AgentRender::limits: &'a krishiv_session::agent::AgentLimits
 pub krishiv_session::agent::AgentRender::query_id: core::option::Option<&'a str>
+pub krishiv_session::agent::AgentRender::stop: core::option::Option<krishiv_session::agent::AgentStop>
 pub krishiv_session::agent::AgentRender::tables: &'a [alloc::string::String]
 pub krishiv_session::agent::AgentRender::tz_micros: i64
 impl<'a> core::clone::Clone for krishiv_session::agent::AgentRender<'a>
@@ -92,12 +104,20 @@ pub fn krishiv_session::agent::AgentResult::eq(&self, &krishiv_session::agent::A
 impl core::fmt::Debug for krishiv_session::agent::AgentResult
 pub fn krishiv_session::agent::AgentResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::agent::AgentResult
+pub struct krishiv_session::agent::ErrorSource<'a>
+pub krishiv_session::agent::ErrorSource::first_line: usize
+pub krishiv_session::agent::ErrorSource::text: &'a str
+impl<'a> core::clone::Clone for krishiv_session::agent::ErrorSource<'a>
+pub fn krishiv_session::agent::ErrorSource<'a>::clone(&self) -> krishiv_session::agent::ErrorSource<'a>
+impl<'a> core::fmt::Debug for krishiv_session::agent::ErrorSource<'a>
+pub fn krishiv_session::agent::ErrorSource<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for krishiv_session::agent::ErrorSource<'a>
 pub const krishiv_session::agent::DEFAULT_MAX_BYTES: usize
 pub const krishiv_session::agent::DEFAULT_MAX_CELL_CHARS: usize
 pub const krishiv_session::agent::DEFAULT_MAX_ROWS: usize
 pub fn krishiv_session::agent::cell(&dyn arrow_array::array::Array, usize, &str, i64) -> alloc::string::String
 pub fn krishiv_session::agent::render_batches(&arrow_schema::schema::Schema, &[arrow_array::record_batch::RecordBatch], &krishiv_session::agent::AgentRender<'_>) -> krishiv_session::agent::AgentResult
-pub fn krishiv_session::agent::render_error(&krishiv_common::error::KrishivError, core::option::Option<&krishiv_common::redact::RedactedSql>, core::option::Option<&str>) -> alloc::string::String
+pub fn krishiv_session::agent::render_error(&krishiv_common::error::KrishivError, core::option::Option<&krishiv_session::agent::ErrorSource<'_>>, core::option::Option<&str>) -> alloc::string::String
 pub fn krishiv_session::agent::render_estimate(u64, u64, u64, &[alloc::string::String]) -> alloc::string::String
 pub fn krishiv_session::agent::session_tz_micros(core::option::Option<&str>) -> core::result::Result<i64, alloc::string::String>
 pub fn krishiv_session::agent::spark_float(f64) -> alloc::string::String

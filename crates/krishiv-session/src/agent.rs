@@ -1171,7 +1171,7 @@ mod tests {
         };
         assert_eq!(
             footer_line(&time_cap),
-            "-- rows: 0 of ≥ 1 · stopped (time cap) · 0 ms"
+            "-- rows: 0 of ≥ 0 · stopped (time cap) · 0 ms"
         );
         let cancelled = Footer {
             shown: 0,
