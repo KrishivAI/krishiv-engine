@@ -580,7 +580,8 @@ impl Rewriter {
 
     /// The `EXISTS` / `IN` subqueries of `exprs` that [`Self::existential`]
     /// finds, each a left existence join of `base` with it (one per
-    /// distinct subquery expression, and per `NOT IN` form); `exprs` read
+    /// distinct subquery expression, and one more when the same `IN` is also
+    /// wrapped directly by `NOT`); `exprs` read
     /// the joins' `exists` columns. A `NOT` that directly wraps an `IN`
     /// reads `NOT exists` over a null-aware join, as Spark plans it.
     fn existence(

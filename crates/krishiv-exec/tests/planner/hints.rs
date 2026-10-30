@@ -163,6 +163,14 @@ fn unsupported_build_sides_warn() {
             "Hint (strategy=shuffle_hash) is not supported in the query: build left for EXISTENCE join."
         ]
     );
+    let (_, _, w) = join(
+        "SELECT /*+ BROADCAST(x) */ x.s FROM t x \
+         WHERE EXISTS (SELECT 1 FROM t y WHERE y.a = x.a AND y.b > 50) OR x.s = 's0'",
+    );
+    assert_eq!(
+        w,
+        ["Hint (strategy=broadcast) is not supported in the query: build left for EXISTENCE join."]
+    );
     // A nested loop builds either side in Spark.
     let (j, y, w) = join(
         "SELECT /*+ BROADCAST(x) */ x.s FROM t x LEFT JOIN (SELECT * FROM t WHERE b > 50) y \

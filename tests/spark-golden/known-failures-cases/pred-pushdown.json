@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "subqueries": [
-      3
-    ]
-  },
-  "file": "pred-pushdown",
-  "format_version": 1
-}

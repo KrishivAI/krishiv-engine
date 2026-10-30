@@ -88,3 +88,20 @@ fn tpcds_plans_round_trip() {
         "the TPC-DS queries that do not plan changed: update TPCDS_NOT_PLANNED (it may only shrink)"
     );
 }
+
+/// TPC-DS q10 and q35 (`EXISTS (store) AND (EXISTS (web) OR EXISTS
+/// (catalog))`): a semi join and two existence joins, which encode and
+/// decode (P2-T115 unit 2a).
+#[test]
+fn q10_and_q35_run_two_existence_joins() {
+    let suite = Suite::tpcds();
+    let all = queries("tpcds");
+    for q in ["q10", "q35"] {
+        let sql = &all.iter().find(|(n, _)| n == q).unwrap().1;
+        let plan = suite.plan(sql).unwrap_or_else(|e| panic!("{q}: {e}"));
+        let text = format!("{plan:?}");
+        assert_eq!(text.matches("Existence").count(), 2, "{q}");
+        assert_eq!(text.matches("LeftSemi").count(), 1, "{q}");
+        assert_round_trips(q, &plan);
+    }
+}
