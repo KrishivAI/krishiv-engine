@@ -343,6 +343,23 @@ impl Interp<'_> {
                         .collect(),
                 }
             }
+            // `SELECT` without `FROM`: one row of no columns.
+            PlanNode::OneRowRelation => Rel {
+                cols: Vec::new(),
+                rows: vec![Vec::new()],
+            },
+            // `UNION ALL`: every input's rows, positionally, under the first
+            // input's columns.
+            PlanNode::Union { inputs, .. } => {
+                let mut rels = inputs.iter().map(|i| self.plan(i, outer));
+                let Some(mut first) = rels.next() else {
+                    panic!("a union without inputs");
+                };
+                for r in rels {
+                    first.rows.extend(r.rows);
+                }
+                first
+            }
             PlanNode::Shift { input, offset } => {
                 let mut rel = self.plan(input, outer);
                 rel.cols = rel.cols.iter().map(|c| AttrId(c.0 + offset)).collect();

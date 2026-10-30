@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT a FROM u WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t UNION ALL SELECT a FROM t) x WHERE x.a = u.a AND x.a > 2)
+---
+Join LeftSemi, (a#2 == a#0)
+:- Scan spark_catalog.default.u [a#0]
++- Union
+   :- Filter (a#2 > 2)
+   :  +- Scan spark_catalog.default.t [a#2] (shared #1)
+   +- Filter (a#2 > 2)
+      +- Shared #1, printed above

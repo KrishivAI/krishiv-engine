@@ -124,6 +124,31 @@ fn distinct(rows: f64) -> Col {
     }
 }
 
+/// The statistics of a union column from its inputs' columns (each with
+/// the input's rows): see the `Union` estimate.
+fn union_col(parts: &[(&Col, f64)], rows: f64) -> Col {
+    let ndv = parts
+        .iter()
+        .map(|(c, _)| c.ndv)
+        .fold(1.0, f64::max)
+        .min(rows.max(1.0));
+    let nulls = if rows > 0.0 {
+        parts.iter().map(|(c, r)| c.nulls * r).sum::<f64>() / rows
+    } else {
+        0.0
+    };
+    let range = parts.iter().try_fold(None::<(f64, f64)>, |acc, (c, _)| {
+        let (lo, hi) = c.range?;
+        Some(Some(acc.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi)))))
+    });
+    Col {
+        ndv,
+        ndv_known: parts.iter().all(|(c, _)| c.ndv_known),
+        nulls,
+        range: range.flatten(),
+    }
+}
+
 /// A literal as a number on the scale its type compares on.
 #[expect(clippy::cast_precision_loss, reason = "estimates only")]
 fn number(l: &Literal) -> Option<f64> {
@@ -356,8 +381,36 @@ impl<'a> Estimator<'a> {
                 Est { rows, cols }
             }
             PlanNode::Union { inputs, .. } => {
-                let rows = inputs.iter().map(|i| self.plan(i).rows).sum();
-                Est::unknown(rows, ids())
+                let ests: Vec<Rc<Est>> = inputs.iter().map(|i| self.plan(i)).collect();
+                let rows: f64 = ests.iter().map(|e| e.rows).sum();
+                let outs: Option<Vec<Vec<AttrId>>> = inputs
+                    .iter()
+                    .map(|i| i.resolved_output().map(|o| o.iter().map(|c| c.id).collect()))
+                    .collect();
+                let Some(outs) = outs else {
+                    return Est::unknown(rows, ids());
+                };
+                // Column by column, the inputs' columns at that position:
+                // the most distinct values of any input (union branches
+                // usually share a key domain: the store key of sales and of
+                // returns), nulls weighted by rows, the hull of the ranges.
+                // Without every input's statistics, a column has none.
+                let cols = ids()
+                    .enumerate()
+                    .map(|(k, id)| {
+                        let parts: Option<Vec<(&Col, f64)>> = outs
+                            .iter()
+                            .zip(&ests)
+                            .map(|(o, e)| o.get(k).and_then(|a| e.cols.get(a)).map(|c| (c, e.rows)))
+                            .collect();
+                        let col = parts.map_or_else(
+                            || distinct(rows),
+                            |parts| union_col(&parts, rows),
+                        );
+                        (id, col)
+                    })
+                    .collect();
+                Est { rows: rows.max(1.0), cols }
             }
             PlanNode::Limit { input, limit } => {
                 let est = Est::clone(&self.plan(input));

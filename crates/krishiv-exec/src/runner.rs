@@ -400,6 +400,7 @@ fn start_group(
     };
     let (sink_id, sink) = &first.sink;
     let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
+    let sink = Arc::clone(sink);
     let mut started = Vec::with_capacity(members.len());
     // Scheduler-assigned globally unique partition ids: the drivers of
     // every member share one id space, in pipeline order, so two drivers
@@ -440,6 +441,19 @@ fn start_group(
             drivers,
             base_partition: base,
         });
+    }
+    // The members whose rows have a source order (an ordered source, and
+    // no operator that emits after a cross-driver flush, where a driver
+    // held back to keep the order could stall the others) ask the sink to
+    // keep it: by member, then by the source's position.
+    for (member, m) in started.iter().enumerate() {
+        let ops_stream = m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush());
+        if m.pipeline.source.1.reports_positions() && ops_stream {
+            let member = u32::try_from(member)
+                .map_err(|_| internal("too many fan-in members for u32 ids".to_owned()))?;
+            let end = m.base_partition + u32::try_from(m.drivers).unwrap_or(u32::MAX);
+            sink.expect_ordered(&sink_global, member, m.base_partition..end);
+        }
     }
     // One barrier per operator, over the drivers of every pipeline it is in.
     let mut barrier_drivers: HashMap<OperatorId, usize> = HashMap::new();
