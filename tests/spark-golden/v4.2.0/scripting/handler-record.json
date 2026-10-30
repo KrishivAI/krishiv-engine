@@ -1,0 +1,7583 @@
+{
+ "scripts": [
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 1,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Geo error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 2,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Orders processing error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 4,
+      "hash": 453160320,
+      "stable_hash": -1692245526
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 3,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 4,
+     "hash": -1388827944,
+     "stable_hash": -1692245526
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 4,
+      "hash": -2777484940,
+      "stable_hash": -546933976
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 7,
+      "hash": 4387304653,
+      "stable_hash": 4297703226
+     }
+    }
+   },
+   "deterministic": false,
+   "fired": "none",
+   "script": 4,
+   "without_handler_tables": {
+    "customers": {
+     "count": 4,
+     "hash": 151242517,
+     "stable_hash": 2381793481
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 7,
+     "hash": 4387304653,
+     "stable_hash": 4297703226
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 5,
+      "hash": 1357189618,
+      "stable_hash": 3401487510
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 5,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 5,
+     "hash": 4706102631,
+     "stable_hash": 3401487510
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 6,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order status analysis error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`status`.`order_status`",
+     "proposal": "`orders`.`order_status`, `orders`.`order_date`, `orders`.`order_tax`, `orders`.`order_total`, `orders`.`order_id`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 7,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 6,
+      "hash": -2062833043,
+      "stable_hash": 317645712
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 8,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 6,
+     "hash": 2161880525,
+     "stable_hash": 317645712
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Commission calculation error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_employee_id`",
+     "proposal": "`employee_id`, `employee_zip`, `employee_city`, `employee_email`, `employee_name`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 9,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Customer order calculation error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 10,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 15,
+      "hash": 5979896741,
+      "stable_hash": 2117480138
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 11,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 15,
+     "hash": -2952268767,
+     "stable_hash": 2117480138
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Shipping analysis error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_shipping_city`",
+     "proposal": "`order_shipping_city`, `order_shipping_zip`, `order_shipping`, `order_shipping_country`, `order_shipping_state`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 12,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Supplier contact error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_supplier_rating_change`",
+     "proposal": "`supplier_rating`, `supplier_region`, `supplier_active`, `supplier_contact`, `supplier_contact_email`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 13,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Tenure analysis error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`emp`.`employee_id`",
+     "proposal": "`employees`.`employee_id`, `employees`.`employee_zip`, `employees`.`employee_city`, `employees`.`employee_email`, `employees`.`employee_name`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 14,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order source analysis error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 15,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Customer profitability error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 16,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Supplier region analysis error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "INSERT_COLUMN_ARITY_MISMATCH.NOT_ENOUGH_DATA_COLUMNS",
+    "params": {
+     "dataColumns": "`col1`, `col2`, `col3`, `col4`, `col5`, `col6`, `col7`, `col8`, `col9`, `col10`, `col11`, `col12`, `col13`, `col14`",
+     "tableColumns": "`supplier_id`, `supplier_name`, `supplier_contact`, `supplier_contact_role`, `supplier_contact_email`, `supplier_contact_phone_1`, `supplier_contact_phone_2`, `supplier_address_1`, `supplier_address_2`, `supplier_address_3`, `supplier_city`, `supplier_state`, `supplier_zip`, `supplier_country`, `supplier_region`, `supplier_main_products`, `supplier_website`, `supplier_pricing_agreement_date`, `supplier_last_order_date`, `supplier_last_contact_date`, `supplier_rating`, `supplier_active`",
+     "tableName": "`spark_catalog`.`r51`.`suppliers`"
+    },
+    "sqlstate": "21S01"
+   },
+   "script": 17,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Employee demographics error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": false,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 18,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product cohort error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 19,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Cost adjustment error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_product_cost_change`",
+     "proposal": "`product_cost`, `product_discount`, `product_last_update`, `product_rating`, `product_category`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 20,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Shipping region logic error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`order_shipping_region`",
+     "proposal": "`order_shipping_zip`, `order_shipping_city`, `order_shipping_state`, `order_shipping`, `order_shipping_address_1`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 21,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product color error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 22,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order tax logic error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 23,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product size error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 24,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Department error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_salary_decrease`",
+     "proposal": "`employee_name`, `employee_state`, `employee_city`, `employee_email`, `employee_gender`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 25,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product review analysis error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`product`.`product_id`",
+     "proposal": "`products`.`product_id`, `products`.`product_size`, `products`.`product_vat`, `products`.`product_cost`, `products`.`product_name`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 26,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "City shipping error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 27,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 28,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order backlog error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 29,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order item error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_order_item_id`",
+     "proposal": "`order_item_id`, `order_id`, `product_id`, `item_status`, `item_tax`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 30,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Supplier contact error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`supplier`.`supplier_contact_email`",
+     "proposal": "`suppliers`.`supplier_contact_email`, `suppliers`.`supplier_contact_role`, `suppliers`.`supplier_contact`, `suppliers`.`supplier_contact_phone_1`, `suppliers`.`supplier_contact_phone_2`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 31,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product price error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 32,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Employee diversity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 33,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 34,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Customer type error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 35,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Zip code analysis error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 36,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Shipping region error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`order_shipping_region`",
+     "proposal": "`order_shipping_zip`, `order_shipping_city`, `order_shipping_state`, `order_shipping`, `order_shipping_address_1`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 37,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 38,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 5,
+      "hash": 3300937599,
+      "stable_hash": 60587955
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 39,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 5,
+     "hash": 405728886,
+     "stable_hash": 60587955
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order status error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_order_status`",
+     "proposal": "`order_status`, `order_date`, `order_tax`, `order_total`, `order_id`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 40,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Department diversity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 41,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Supplier product error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 42,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Customer zip order error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 43,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 44,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product margin error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`product`.`product_id`",
+     "proposal": "`products`.`product_id`, `products`.`product_size`, `products`.`product_vat`, `products`.`product_cost`, `products`.`product_name`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 45,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 46,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order payment error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`payment_row`.`order_id`",
+     "proposal": "`orders`.`order_id`, `orders`.`order_tax`, `orders`.`order_date`, `orders`.`customer_id`, `orders`.`order_device`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 47,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Supplier region error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 48,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Color diversity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 49,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product origin error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 50,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "City order diversity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_customer_city`",
+     "proposal": "`customer_city`, `customer_id`, `customer_zip`, `customer_country`, `customer_email`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 51,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product size error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 52,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 53,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Category weight error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 54,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 55,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Customer age diversity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`customer_birth_date`",
+     "proposal": "`customer_state`, `customer_city`, `customer_id`, `customer_membership_date`, `customer_name`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 56,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 57,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Description diversity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_new_description`",
+     "proposal": "`product_description`, `product_id`, `product_price`, `supplier_id`, `product_color`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 58,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 59,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Prime customer error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`customer_is_prime_member`",
+     "proposal": "`customer_vat_number`, `customer_last_order_date`, `customer_last_payment_date`, `customer_active_status`, `customer_address_1`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 60,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Department commission error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_employee_department`",
+     "proposal": "`employee_department`, `employee_dependents`, `employee_name`, `employee_state`, `employee_email`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 61,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Customizable item error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`item_customization`",
+     "proposal": "`item_status`, `item_discount`, `item_quantity`, `item_total`, `item_return_date`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 62,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": false,
+   "fired": "none",
+   "script": 63,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 64,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Inventory movement error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 65,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Supplier-product match error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 66,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Tenure salary error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`v_salary_differential`",
+     "proposal": "`employee_dependents`, `employee_email`, `employee_id`, `employee_zip`, `employee_address_1`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 67,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Region isolation error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`order_shipping_region`",
+     "proposal": "`order_shipping_zip`, `order_shipping_city`, `order_shipping_state`, `order_shipping`, `order_shipping_address_1`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 68,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 69,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Review coverage error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 70,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Active status error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 71,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Type order diversity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 72,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": false,
+   "fired": "none",
+   "script": 73,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Dept stagnation error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 74,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 6,
+      "hash": 1185103455,
+      "stable_hash": -178747334
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 75,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 6,
+     "hash": 3459109681,
+     "stable_hash": -178747334
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Discount balancing error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 76,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product timestamp error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`product_stale`.`product_id`",
+     "proposal": "`products`.`product_id`, `products`.`product_size`, `products`.`product_vat`, `products`.`product_cost`, `products`.`product_name`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 77,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order value error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 78,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 79,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 80,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Bulk item error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 81,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Company customer error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_ROUTINE",
+    "params": {
+     "routineName": "`JSON_EXTRACT`",
+     "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`r246`]"
+    },
+    "sqlstate": "42883"
+   },
+   "script": 82,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order item comment error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`item_notes`",
+     "proposal": "`item_total`, `item_status`, `item_tax`, `item_quantity`, `item_discount`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 83,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Product tag error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_ROUTINE",
+    "params": {
+     "routineName": "`JSON_EXTRACT`",
+     "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`r252`]"
+    },
+    "sqlstate": "42883"
+   },
+   "script": 84,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Order workflow error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`order_workflow_type`",
+     "proposal": "`order_discount`, `order_shipping_zip`, `order_total`, `order_completion_date`, `order_date`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 85,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Supplier inactivity error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 86,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Return item error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "params": {
+     "objectName": "`oi`.`order_item_id`",
+     "proposal": "`order_items`.`order_id`, `order_items`.`order_item_id`, `order_items`.`item_tax`, `order_items`.`product_id`, `order_items`.`item_total`"
+    },
+    "sqlstate": "42703"
+   },
+   "script": 87,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Discount logic error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 88,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Critical category error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 89,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Status workflow error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 90,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": false,
+   "fired": "none",
+   "script": 91,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 92,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 93,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [
+     [
+      "Bundle error"
+     ]
+    ],
+    "schema": "struct<col1:string>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES",
+    "params": {},
+    "sqlstate": "0A000"
+   },
+   "script": 94,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  },
+  {
+   "as_is": {
+    "rows": [],
+    "schema": "struct<>",
+    "tables": {
+     "customers": {
+      "count": 3,
+      "hash": -1954746599,
+      "stable_hash": 275804365
+     },
+     "employees": {
+      "count": 3,
+      "hash": 103777372,
+      "stable_hash": -1208772259
+     },
+     "order_items": {
+      "count": 3,
+      "hash": -3224383081,
+      "stable_hash": 49807638
+     },
+     "orders": {
+      "count": 3,
+      "hash": 264465331,
+      "stable_hash": -1610305344
+     },
+     "products": {
+      "count": 3,
+      "hash": 1651004805,
+      "stable_hash": 1379099222
+     },
+     "suppliers": {
+      "count": 3,
+      "hash": -395829380,
+      "stable_hash": -485430807
+     }
+    }
+   },
+   "deterministic": true,
+   "fired": "none",
+   "script": 95,
+   "without_handler_tables": {
+    "customers": {
+     "count": 3,
+     "hash": -1954746599,
+     "stable_hash": 275804365
+    },
+    "employees": {
+     "count": 3,
+     "hash": 103777372,
+     "stable_hash": -1208772259
+    },
+    "order_items": {
+     "count": 3,
+     "hash": -3224383081,
+     "stable_hash": 49807638
+    },
+    "orders": {
+     "count": 3,
+     "hash": 264465331,
+     "stable_hash": -1610305344
+    },
+    "products": {
+     "count": 3,
+     "hash": 1651004805,
+     "stable_hash": 1379099222
+    },
+    "suppliers": {
+     "count": 3,
+     "hash": -395829380,
+     "stable_hash": -485430807
+    }
+   }
+  }
+ ],
+ "spark": "4.2.0",
+ "tables": [
+  "products",
+  "customers",
+  "orders",
+  "order_items",
+  "employees",
+  "suppliers"
+ ]
+}
