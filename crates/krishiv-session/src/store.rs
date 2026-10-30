@@ -135,6 +135,9 @@ pub(crate) trait CatalogStore: Send + Sync {
     /// # Errors
     /// `TABLE_OR_VIEW_ALREADY_EXISTS` for `ErrorIfExists`.
     fn create_table(&self, table: CatalogTable, mode: CreateMode) -> Result<bool, KrishivError>;
+    /// Replaces the entry `expected` was read as with `table`; `false` when that entry was dropped or replaced
+    /// since, so a concurrent `DROP` or `ALTER` is never undone by a stale copy.
+    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool;
     /// Removes the table, returning it.
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
 }
@@ -265,6 +268,18 @@ impl CatalogStore for InMemoryCatalogStore {
         Ok(true)
     }
 
+    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool {
+        let key = (table.namespace.clone(), table.name.clone());
+        let mut state = self.lock();
+        match state.tables.get(&key) {
+            Some(current) if Arc::ptr_eq(current, expected) => {}
+            _ => return false,
+        }
+        state.tables.insert(key, Arc::new(table));
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>> {
         let removed = self
             .lock()
@@ -358,6 +373,24 @@ mod tests {
             root: PathBuf::new(),
             view: None,
         }
+    }
+
+    #[test]
+    fn replace_table_refuses_a_stale_copy() {
+        let s = InMemoryCatalogStore::default();
+        s.create_table(table("default", "t"), CreateMode::ErrorIfExists)
+            .unwrap();
+        let read = s.table("default", "t").unwrap();
+        let epoch = s.epoch();
+        assert!(s.replace_table(&read, table("default", "t")));
+        assert_eq!(s.epoch(), epoch + 1);
+        // `read` is stale now.
+        assert!(!s.replace_table(&read, table("default", "t")));
+        // And so is a copy of a dropped table: it is not recreated.
+        let current = s.table("default", "t").unwrap();
+        s.drop_table("default", "t");
+        assert!(!s.replace_table(&current, table("default", "t")));
+        assert!(s.table("default", "t").is_none());
     }
 
     #[test]

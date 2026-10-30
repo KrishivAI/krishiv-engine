@@ -157,7 +157,19 @@ fn view_errors() {
     );
     assert_eq!(
         class(&s, "CREATE VIEW c (a, b) AS SELECT 1"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "CREATE_VIEW_COLUMN_ARITY_MISMATCH.NOT_ENOUGH_DATA_COLUMNS"
+    );
+    assert_eq!(
+        class(&s, "CREATE VIEW c (a) AS SELECT 1, 2"),
+        "CREATE_VIEW_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS"
+    );
+    assert_eq!(
+        class(&s, "CREATE VIEW c AS SELECT 1 AS a, 2 AS A"),
+        "COLUMN_ALREADY_EXISTS"
+    );
+    assert_eq!(
+        class(&s, "CREATE VIEW c (x, X) AS SELECT 1, 2"),
+        "COLUMN_ALREADY_EXISTS"
     );
     assert_eq!(
         class(&s, "CREATE VIEW sb WITH SCHEMA BINDING AS SELECT 1"),
@@ -320,5 +332,31 @@ fn a_view_column_named_with_a_dot_or_star_reads_back() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE VIEW dv AS SELECT 1 AS `a.b`, 2 AS `x*`");
-    run(&s, "SELECT `a.b`, `x*` FROM dv");
+    assert_eq!(
+        col0(
+            &s,
+            "SELECT concat(CAST(`a.b` AS STRING), '|', CAST(`x*` AS STRING)) FROM dv"
+        ),
+        ["1|2"]
+    );
+}
+
+#[test]
+fn a_temporary_view_shadows_a_permanent_one_of_the_same_bare_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE VIEW pv AS SELECT 7 AS x");
+    run(&s, "CREATE TEMPORARY VIEW pv AS SELECT 5 AS x");
+    assert_eq!(col0(&s, "SELECT CAST(x AS STRING) FROM pv"), ["5"]);
+    assert_eq!(col0(&s, "SELECT CAST(x AS STRING) FROM default.pv"), ["7"]);
+}
+
+#[test]
+fn a_dropped_namespace_is_left_even_when_a_directory_cannot_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE gone");
+    run(&s, "USE gone");
+    run(&s, "DROP DATABASE gone");
+    assert_eq!(col0(&s, "SELECT current_database()"), ["default"]);
 }
