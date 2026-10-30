@@ -47,6 +47,7 @@ pub const FILE_SOURCE_OPTIONS: &[&str] = &[
     "ignoreMissingFiles",
     "ignoreInvalidPartitionPaths",
     "maxRecordsPerFile",
+    "partitionOverwriteMode",
     "timeZone",
 ];
 
