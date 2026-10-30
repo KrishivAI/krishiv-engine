@@ -202,6 +202,7 @@ fn null_aware_and_weighted_inputs_are_refused() {
         JoinType::RightSemi,
         JoinType::RightAnti,
         JoinType::RightOuter,
+        JoinType::FullOuter,
     ] {
         let e = NestedLoopJoin::try_new(NestedLoopSpec {
             join_type,

@@ -21,8 +21,8 @@ use suites::{Suite, queries};
 /// fails when a query on it plans, so its entry is removed in the change
 /// that makes it plan.
 const TPCDS_NOT_PLANNED: &[&str] = &[
-    "q10", "q16", "q30", "q32", "q35", "q41", "q45", "q50", "q51", "q62", "q70", "q72", "q86",
-    "q92", "q94", "q95", "q97", "q99",
+    "q10", "q16", "q30", "q32", "q35", "q41", "q45", "q50", "q62", "q72", "q92", "q94", "q95",
+    "q99",
 ];
 
 /// TPC-DS queries that plan but use a moment aggregate (`stddev_samp`),

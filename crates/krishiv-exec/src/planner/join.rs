@@ -33,8 +33,8 @@ use krishiv_plan::{
 use super::build::{Planned, Planner, internal, unsupported};
 use super::eval::canonical_carrier;
 use super::explain::ExplainNode;
-use super::orient::{InputStats, StatsSource, orient};
-use super::properties::Distribution;
+use super::orient::{InputStats, StatsSource, builds_left, orient};
+use super::properties::{Distribution, Placement};
 use crate::error::Result;
 use crate::join::JoinType;
 use crate::physical::{
@@ -55,9 +55,6 @@ impl Planner<'_> {
             JoinCondition::None => None,
             _ => return Err(unsupported("JOIN ... USING in physical plans")),
         };
-        if kind == JoinKind::FullOuter {
-            return Err(unsupported("FULL OUTER JOIN"));
-        }
         let hints = (self.side_hint(left), self.side_hint(right));
         let logical = (Arc::clone(left), Arc::clone(right));
         let left = self.plan(left)?;
@@ -115,6 +112,7 @@ impl Planner<'_> {
         let build_left = choice.build_left || kind == JoinKind::RightOuter;
         let join_type = match kind {
             JoinKind::LeftOuter | JoinKind::RightOuter => JoinType::LeftOuter,
+            JoinKind::FullOuter => JoinType::FullOuter,
             JoinKind::LeftSemi => JoinType::LeftSemi,
             JoinKind::LeftAnti if null_aware => JoinType::NullAwareAnti,
             JoinKind::LeftAnti => JoinType::LeftAnti,
@@ -167,7 +165,9 @@ impl Planner<'_> {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
             let other = orient(join_type, single_match, &probe_stats, &build_stats);
-            (other != join_type).then_some((other, probe_stats, build_stats))
+            let flips = other != join_type
+                || (join_type == JoinType::FullOuter && builds_left(&probe_stats, &build_stats));
+            flips.then_some((other, probe_stats, build_stats))
         } else {
             None
         };
@@ -231,8 +231,7 @@ impl Planner<'_> {
         // runtime filters to the probe side's scans.
         let mut published = Vec::new();
         let mut runtime_filters = Vec::new();
-        if matches!(join_type, JoinType::Inner | JoinType::LeftSemi) || join_type.builds_preserved()
-        {
+        if join_type.drops_unmatched_probe() {
             let key_types: Vec<_> = probe_keys
                 .iter()
                 .map(|&k| probe.schema.field(k).data_type().clone())
@@ -245,7 +244,7 @@ impl Planner<'_> {
         let mut sites = probe.sites.clone();
         if matches!(
             join_type,
-            JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter
+            JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter | JoinType::FullOuter
         ) {
             layout.extend(&build.layout);
         }
@@ -260,6 +259,10 @@ impl Planner<'_> {
             // join's probe columns may be NULL).
             sites.clone_from(&build.sites);
         }
+        if join_type == JoinType::FullOuter {
+            // Neither side may be filtered at its scan.
+            sites.clear();
+        }
         // Rows stay where the probe placed them (the build for the joins
         // that return build rows); an inner join's matched rows are
         // equally placed by the build's keys.
@@ -267,6 +270,9 @@ impl Planner<'_> {
             (JoinDistribution::Partitioned, JoinType::Inner) => {
                 probe.placement.clone().union(build.placement.clone())
             }
+            // Either side's key may be NULL in a row of the other: nothing
+            // is placed by a key.
+            (_, JoinType::FullOuter) => Placement::Unknown,
             (_, t) if t.builds_preserved() => build.placement.clone(),
             _ => probe.placement.clone(),
         }

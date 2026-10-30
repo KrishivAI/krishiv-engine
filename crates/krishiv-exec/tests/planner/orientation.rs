@@ -98,6 +98,16 @@ fn a_much_larger_right_input_builds_the_left_one() {
         "{outer:?}"
     );
     assert!(outer[0].contains("builds left (left: 10 rows"), "{outer:?}");
+    // A full outer join is symmetric: it builds the smaller input, and no
+    // runtime filter reaches either side.
+    let full = joins(
+        &env,
+        "SELECT t.b, big.a FROM t FULL JOIN big ON t.b = big.b",
+    );
+    assert_eq!(full.len(), 1, "{full:?}");
+    assert!(full[0].starts_with("HashJoin FullOuter, [b#"), "{full:?}");
+    assert!(full[0].contains("builds left (left: 10 rows"), "{full:?}");
+    assert!(!full[0].contains("RuntimeFilter"), "{full:?}");
     // Nullable keys flip too: build rows with a NULL `=` key are stored
     // (and spill) with their partition, never indexed.
     let anti = joins(

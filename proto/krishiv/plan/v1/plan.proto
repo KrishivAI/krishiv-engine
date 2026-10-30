@@ -462,6 +462,9 @@ enum JoinType {
   // boolean `exists` (some build row matched).
   // feature: existence_join
   JOIN_TYPE_EXISTENCE = 9;
+  // Both sides preserved: unmatched rows of either side, padded with NULLs.
+  // feature: join_full_outer
+  JOIN_TYPE_FULL_OUTER = 10;
 }
 
 message Residual {
