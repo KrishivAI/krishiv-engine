@@ -337,7 +337,7 @@ fn series_do_not_grow_with_principals_or_tables() {
 /// the future finishes first (a fast machine) there is nothing to check.
 #[test]
 fn dropping_the_action_future_while_submitting_folds_the_query() {
-    use std::task::{Context, Poll};
+    use std::task::Context;
     let s = enabled();
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let batch = RecordBatch::try_new(
