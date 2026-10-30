@@ -390,8 +390,14 @@ impl Window {
         // Frames other than whole, running and peer frames, and the offset
         // functions, are evaluated from disk with a later part of P2-T055.
         for f in &self.env.plan.functions {
+            // A running frame over a growing state (`collect_list`, `mode`,
+            // `listagg`) snapshots a copy per row, quadratic in the
+            // partition, which no per-partition headroom covers.
             let framed = match &f.function {
-                super::WindowFunction::Aggregate(_) => f.shape()? == super::Shape::Frame,
+                super::WindowFunction::Aggregate(a) => {
+                    let shape = f.shape()?;
+                    shape == super::Shape::Frame || super::eval::snapshots_grow(a, shape)
+                }
                 super::WindowFunction::Offset { .. } | super::WindowFunction::NthValue { .. } => {
                     true
                 }

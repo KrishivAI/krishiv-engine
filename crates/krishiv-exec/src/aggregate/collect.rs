@@ -1024,5 +1024,6 @@ mod tests {
         assert!(acc.update(&[0], &col, &|_| true, None).is_err());
         let nulls: ArrayRef = arrow_array::new_null_array(&DataType::Null, 2);
         acc.update(&[0, 0], &nulls, &|_| true, None).unwrap();
+        assert!(acc.values[0].is_empty());
     }
 }

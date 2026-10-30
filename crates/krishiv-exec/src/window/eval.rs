@@ -600,18 +600,25 @@ pub(super) fn picks_bytes(a: &AggregateExpr) -> bool {
 /// of a partition copies the whole state so far, which is quadratic in the
 /// partition's rows (`collect_list`, `collect_set`, `mode`, `listagg`).
 /// `held` is the number of elements all snapshots hold (see
-/// [`snapshot_slots`]), exact for any partition sizes; each is counted at 16
-/// bytes (a lower bound for long strings and key tables).
+/// [`snapshot_slots`]), an upper bound for any partition sizes (distinct
+/// keys and peer groups snapshot less); each is counted at 16 bytes (a
+/// lower bound for long strings and key tables).
 fn snapshot_heap(a: &AggregateExpr, shape: Shape, held: usize) -> usize {
-    use AggregateFunction as F;
-    let grows = matches!(
-        a.function,
-        F::CollectList | F::CollectSet | F::Mode | F::ModeMin | F::ModeMax | F::ListAgg { .. }
-    );
-    if !grows || shape == Shape::Whole {
+    if !snapshots_grow(a, shape) {
         return 0;
     }
     held.saturating_mul(16)
+}
+
+/// Whether a running frame of `a` snapshots a state that grows with the
+/// partition (`collect_list`, `collect_set`, `mode`, `listagg`).
+pub(super) fn snapshots_grow(a: &AggregateExpr, shape: Shape) -> bool {
+    use AggregateFunction as F;
+    shape != Shape::Whole
+        && matches!(
+            a.function,
+            F::CollectList | F::CollectSet | F::Mode | F::ModeMin | F::ModeMax | F::ListAgg { .. }
+        )
 }
 
 /// The elements the snapshots of a growing state hold for the rows of one

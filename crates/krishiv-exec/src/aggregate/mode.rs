@@ -716,9 +716,9 @@ mod tests {
         Arc::new(Int64Array::from(v))
     }
 
-    /// Spark's slot order decides ties, including after the table grows
-    /// past 44 keys (70% of 64 slots) and rehashes; the pick is stable and
-    /// has no winner for no keys.
+    /// The pick has no winner for no keys, returns a key of 200 (more than
+    /// the 44 a 64-slot table holds before it grows), and a strictly larger
+    /// count wins whatever the slot order.
     #[test]
     fn spark_pick_survives_table_growth() {
         assert_eq!(spark_pick(&[], &[]), None);
@@ -766,6 +766,7 @@ mod tests {
         assert!(a.fold(&[0, 0], &ints(vec![1]), &|_| true).is_err());
         let nulls: ArrayRef = arrow_array::new_null_array(&DataType::Null, 1);
         a.fold(&[0], &nulls, &|_| true).unwrap();
+        assert!(a.evaluate(&[0]).unwrap().is_null(0));
         assert!(a.fold_chunk(0, &ints(vec![1, 2]), &[1]).is_err());
         let one = ints(vec![1]);
         assert!(a.merge(&[0], &[&one]).is_err());

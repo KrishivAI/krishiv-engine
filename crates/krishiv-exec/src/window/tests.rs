@@ -2055,15 +2055,33 @@ fn trees_larger_than_a_chunk_match_the_reference() {
 /// short.
 #[tokio::test]
 async fn a_frame_over_a_partition_on_disk_is_refused() {
+    refused_on_disk(
+        agg(AggregateFunction::Sum, Some(3)),
+        WindowFrame {
+            units: FrameUnits::Rows,
+            lower: FrameBound::Offset(-1),
+            upper: FrameBound::Offset(1),
+        },
+    )
+    .await;
+}
+
+/// A running `collect_list` snapshots a growing copy per row: over a
+/// partition larger than memory it is refused too.
+#[tokio::test]
+async fn a_growing_running_state_over_a_partition_on_disk_is_refused() {
+    refused_on_disk(
+        agg(AggregateFunction::CollectList, Some(3)),
+        WindowFrame::running(FrameUnits::Rows),
+    )
+    .await;
+}
+
+async fn refused_on_disk(function: WindowFunction, frame: WindowFrame) {
     let rows: Vec<Row> = (0..3_000)
         .map(|i| (Some(0), Some(i), i, Some(i % 7)))
         .collect();
-    let around = WindowFrame {
-        units: FrameUnits::Rows,
-        lower: FrameBound::Offset(-1),
-        upper: FrameBound::Offset(1),
-    };
-    let window = plan(vec![(agg(AggregateFunction::Sum, Some(3)), around)], true);
+    let window = plan(vec![(function, frame)], true);
     let (_dir, scope) = spill_scope();
     let op = Window::new(schema(), window, true, Some(scope)).unwrap();
     let limit = 1 << 30;
@@ -2314,10 +2332,9 @@ fn snapshot_slots_follow_partition_sizes_across_batches() {
     let whole = snapshot_slots(&[true, false, false, false, false, false], 0);
     let (a, open) = snapshot_slots(&[true, false, false, false], 0);
     let (b, open) = snapshot_slots(&[false, false], open);
-    assert_eq!((whole.0, whole.1), (21, 6));
+    assert_eq!(whole, (21, 6));
     assert_eq!((a + b, open), (21, 6));
-    // The average-partition estimate of two partitions of 100 and 2
-    // rows would have been far lower than the skewed truth.
+    // Skew is priced exactly: partitions of 100 and 2 rows.
     let mut flags = vec![false; 102];
     flags[0] = true;
     flags[100] = true;
