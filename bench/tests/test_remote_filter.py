@@ -848,6 +848,25 @@ def test_the_http_readiness_probe_reports_a_closed_port_as_not_ready(tmp_path):
     from krishiv_bench.remote_filter_s3 import S3Server
 
     assert S3Server(tmp_path)._http_ready("127.0.0.1:1") is False
+    # A server that answers 403 to unsigned requests is up.
+    import http.server
+    import threading
+
+    class Refuse(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(403)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Refuse)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        assert S3Server(tmp_path)._http_ready(f"127.0.0.1:{httpd.server_port}") is True
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_the_sigterm_handler_stops_the_container(tmp_path):
@@ -923,3 +942,55 @@ def test_a_mirror_revision_that_differs_from_expected_json_is_refused(tmp_path):
     write_expected(mirror, 1, 2, [], "r0")
     with pytest.raises(ValueError, match=r"commit r1 but expected\.json was recorded at r0"):
         rf.check_mirror_revision(mirror)
+
+
+def test_fetch_adds_the_commit_to_an_old_expected_json_and_recording_counts_keeps_it(monkeypatch, tmp_path):
+    from krishiv_bench import remote_filter as rf
+
+    monkeypatch.setattr(rf.subprocess, "run", lambda cmd, check: Path(cmd[cmd.index("-o") + 1]).write_bytes(b"x"))
+    monkeypatch.setattr(rf, "list_remote_files", lambda: [("https://h/datasets/x/resolve/r9/a.parquet", "a.parquet")])
+    mirror = tmp_path / "m"
+    write_expected(mirror, 7, 70, ["a.parquet"])  # written before commits were recorded
+    rf.fetch_remote_filter(mirror, yes=True)
+    assert json.loads((mirror / "expected.json").read_text()) == {
+        "rows": 7,
+        "sum_tokens": 70,
+        "files": ["a.parquet"],
+        "revision": "r9",
+    }
+    write_expected(mirror, 8, 80, ["a.parquet"])  # recording counts keeps the commit
+    assert json.loads((mirror / "expected.json").read_text())["revision"] == "r9"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("KRISHIV_BENCH_DOCKER_SMOKE"), reason="set KRISHIV_BENCH_DOCKER_SMOKE=1 (needs docker)"
+)
+def test_a_real_container_serves_a_parquet_file_to_polars_and_duckdb(tmp_path):
+    from krishiv_bench import remote_filter_child as child
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    table = tmp_path / "fw"
+    table.mkdir()
+    pq.write_table(
+        pa.table(
+            {
+                "id": ["a", "b"],
+                "int_score": [4, 5],
+                "token_count": [5000, 10],
+                "language_score": [0.99, 0.5],
+                "text": ["x", "y"],
+            }
+        ),
+        table / "p.parquet",
+    )
+    with S3Server(table) as srv:
+        os.environ.update(srv.env())
+        try:
+            for run in (child.run_polars, child.run_duckdb):
+                out = tmp_path / run.__name__
+                out.mkdir()
+                run(srv.urls(), out)
+                assert child.output_stats(out)[:2] == (1, 5000)
+        finally:
+            for k in srv.env():
+                os.environ.pop(k, None)

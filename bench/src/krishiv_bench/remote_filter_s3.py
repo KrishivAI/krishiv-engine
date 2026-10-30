@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A throw-away S3-compatible server (MinIO in ``docker run --rm``) that serves a remote-filter mirror read-only.
+"""A throw-away S3-compatible server (``rclone serve s3`` in ``docker run --rm``) over a remote-filter mirror.
+
+rclone serves a plain directory (each top-level directory is a bucket), so the 28 GB mirror is read in place; MinIO
+cannot do that .
 
 The container is named ``krishiv-bench-rf-<pid>`` and is always removed on exit, error or interrupt; the long-lived
 ``bench-minio`` / ``krishiv-bench-minio`` containers are never touched. Engines read ``s3://fw/<file>`` through the
@@ -14,11 +17,11 @@ import os
 import signal
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Same image as bench/baselines/docker-compose.yml (RELEASE.2025-09-07).
-IMAGE = "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+IMAGE = "rclone/rclone:1.68.2"
 BUCKET = "fw"
 ACCESS_KEY = "krishiv"
 SECRET_KEY = "krishiv-bench-secret"
@@ -46,8 +49,10 @@ class S3Server:
 
     def _http_ready(self, endpoint: str) -> bool:
         try:
-            with urllib.request.urlopen(f"http://{endpoint}/minio/health/ready", timeout=2) as r:
-                return r.status == 200
+            with urllib.request.urlopen(f"http://{endpoint}/{BUCKET}/", timeout=2):
+                return True
+        except urllib.error.HTTPError:
+            return True  # the server answers (unsigned requests are refused): it is up
         except OSError:
             return False
 
@@ -57,8 +62,8 @@ class S3Server:
             "run", "--rm", "-d", "--name", self.name,
             "-p", "127.0.0.1::9000",
             "-v", f"{self.table_dir.resolve()}:/data/{BUCKET}:ro",
-            "-e", f"MINIO_ROOT_USER={ACCESS_KEY}", "-e", f"MINIO_ROOT_PASSWORD={SECRET_KEY}",
-            IMAGE, "server", "/data",
+            IMAGE, "serve", "s3", "/data", "--addr", ":9000", "--read-only",
+            "--auth-key", f"{ACCESS_KEY},{SECRET_KEY}",
         )  # fmt: skip
         mapping = self._docker("port", self.name, "9000/tcp").splitlines()[0]
         self.endpoint = mapping.replace("0.0.0.0", "127.0.0.1")
@@ -79,6 +84,7 @@ class S3Server:
         # Interrupts and exits remove the container too; the previous SIGTERM handler is restored on exit.
         self._atexit = atexit.register(self.stop)
         self._old_term = signal.signal(signal.SIGTERM, self._on_term)
+        self._old_hup = signal.signal(signal.SIGHUP, self._on_term)  # the terminal closing mid-run
         try:
             return self.start()
         except BaseException:
@@ -93,6 +99,7 @@ class S3Server:
         self.stop()
         atexit.unregister(self.stop)
         signal.signal(signal.SIGTERM, self._old_term)
+        signal.signal(signal.SIGHUP, self._old_hup)
 
     def urls(self) -> list[str]:
         return [f"s3://{BUCKET}/{p.name}" for p in sorted(self.table_dir.glob("*.parquet"))]

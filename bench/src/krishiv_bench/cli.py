@@ -191,7 +191,7 @@ def main(argv=None) -> None:
     rf.add_argument(
         "--s3",
         action="store_true",
-        help="serve the mirror from a throw-away MinIO container (docker run --rm) and read it over s3:// "
+        help="serve the mirror from a throw-away rclone container (docker run --rm) and read it over s3:// "
         "(DuckDB and Polars; Krishiv reads the local mirror)",
     )
     rf.add_argument("--reps", type=int, default=5, help="timed repetitions per scope (after one validation pass)")

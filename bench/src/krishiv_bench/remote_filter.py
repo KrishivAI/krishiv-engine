@@ -99,6 +99,7 @@ def write_expected(
     f = directory / EXPECTED_FILE
     f.parent.mkdir(parents=True, exist_ok=True)
     doc: dict = {"rows": rows, "sum_tokens": sum_tokens, "files": files}
+    revision = revision or (load_expected(directory) or {}).get("revision")  # recording counts keeps the commit
     if revision:
         doc["revision"] = revision
     f.write_text(json.dumps(doc, indent=2) + "\n")
@@ -232,10 +233,14 @@ def fetch_remote_filter(
     from .datasets import write_manifest
 
     print("manifest:", write_manifest(dest, "remote-filter-sample-10BT"))
-    if not (dest / EXPECTED_FILE).is_file():
-        marker = table_dir / REVISION_FILE
-        revision = marker.read_text().strip() if marker.is_file() else None
+    marker = table_dir / REVISION_FILE
+    revision = marker.read_text().strip() if marker.is_file() else None
+    known = load_expected(dest)
+    if known is None:
         write_expected(dest, None, None, sorted(f.name for f in table_dir.glob("*.parquet")), revision)
+    elif revision and not known.get("revision"):
+        # A mirror downloaded before commits were recorded: add the commit, keep the counts.
+        write_expected(dest, known.get("rows"), known.get("sum_tokens"), known.get("files", []), revision)
     return dest
 
 
