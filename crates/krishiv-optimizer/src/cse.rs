@@ -805,14 +805,24 @@ fn replace(e: &Arc<Expr>, map: &[(Arc<Expr>, BoundColumn)]) -> Arc<Expr> {
 }
 
 /// `e` with `map` applied inside its aggregate calls only (their arguments
-/// and `FILTER`): a post-aggregation scalar over the grouping keys is
-/// evaluated above the aggregate, where a `cse_*` column is not available.
-fn replace_in_calls(e: &Arc<Expr>, map: &[(Arc<Expr>, BoundColumn)]) -> Arc<Expr> {
+/// and `FILTER`), and each grouping key in `keys` (old, rewritten) swapped
+/// wherever `e` spells it. Anything else above the aggregate stays: a
+/// post-aggregation scalar is evaluated over the grouping keys, where a
+/// `cse_*` column of the input is not available, and the executor matches
+/// such an output to the computed key by its text.
+fn replace_above(
+    e: &Arc<Expr>,
+    map: &[(Arc<Expr>, BoundColumn)],
+    keys: &[(Arc<Expr>, Arc<Expr>)],
+) -> Arc<Expr> {
     if map.is_empty() {
         return Arc::clone(e);
     }
     let out = Arc::clone(e).transform_up(&mut |x| {
-        Ok::<_, std::convert::Infallible>(match &x.node {
+        if let Some((_, new)) = keys.iter().find(|(old, _)| same(&x, old)) {
+            return Ok::<_, std::convert::Infallible>(Arc::clone(new));
+        }
+        Ok(match &x.node {
             ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
                 let mut g = f.clone();
                 g.args = f.args.iter().map(|a| replace(a, map)).collect();
@@ -1137,9 +1147,15 @@ fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan
     };
     let map: Vec<(Arc<Expr>, BoundColumn)> = unique.iter().cloned().zip(cols).collect();
     let keys_out: Vec<Arc<Expr>> = normalized_keys.iter().map(|k| replace(k, &map)).collect();
+    let rewritten_keys: Vec<(Arc<Expr>, Arc<Expr>)> = normalized_keys
+        .iter()
+        .zip(&keys_out)
+        .filter(|(old, new)| !Arc::ptr_eq(old, new))
+        .map(|(old, new)| (Arc::clone(old), Arc::clone(new)))
+        .collect();
     let aggs_out: Vec<Arc<Expr>> = normalized_aggs
         .iter()
-        .map(|a| replace_in_calls(a, &map))
+        .map(|a| replace_above(a, &map, &rewritten_keys))
         .collect();
     let mut read: Vec<Arc<Expr>> = keys_out.clone();
     read.extend(aggs_out.iter().cloned());

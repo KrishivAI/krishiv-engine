@@ -255,7 +255,7 @@ fn post_aggregation_scalars_stay_above_the_aggregate() {
     assert_eq!(
         occurrences(on.root(), "c#2 + 1L"),
         2,
-        "the key expression and the extraction's definition:\n{text}"
+        "the output `c + 1 AS k` and the extraction's definition:\n{text}"
     );
     for seed in 1..=8 {
         assert_same_rows(

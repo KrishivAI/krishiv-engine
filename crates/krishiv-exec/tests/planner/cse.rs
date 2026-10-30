@@ -235,16 +235,28 @@ fn post_aggregation_scalars_plan_and_match() {
 /// plan.
 #[test]
 fn in_items_never_hoist_a_division_that_raises() {
-    let rows = vec![
-        (Some(0), Some(0)),
-        (Some(0), Some(2)),
-        (None, Some(0)),
-        (Some(1), Some(0)),
-    ];
+    // Every row matches the first item (`a = 0`, `b = 0`), so no row
+    // evaluates `1 / b` (the executor short-circuits a batch only when all
+    // its rows matched).
+    let rows = vec![(Some(0), Some(0)); 4];
     let sql = "SELECT a IN (0, 1 / b) AS p, b IN (0, 1 / b) AS q FROM t";
     for ansi in [false, true] {
         let db = make_db(&rows, 2, ansi);
         let (want, got, text) = db.both(sql);
+        assert!(want.is_ok(), "ansi={ansi}: {want:?}");
+        assert_eq!(got, want, "ansi={ansi}: {text}");
+    }
+}
+
+/// A grouping key that is extracted is swapped in the outputs that spell it:
+/// the executor matches an output to its computed key by text.
+#[test]
+fn an_extracted_grouping_key_is_swapped_in_the_outputs() {
+    let sql = "SELECT a + b AS k, sum(a + b) AS s, count(a + b) AS n FROM t GROUP BY a + b";
+    for ansi in [false, true] {
+        let db = make_db(&rows(), 2, ansi);
+        let (want, got, text) = db.both(sql);
+        assert!(want.is_ok(), "{want:?}");
         assert_eq!(got, want, "ansi={ansi}: {text}");
     }
 }
