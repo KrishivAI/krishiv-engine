@@ -1419,7 +1419,7 @@ impl Session {
         let parsed = krishiv_sql::parse_multipart_identifier(&spec.table, &self.parser_options())
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
-        let name = TableName::resolve(&parts, &env)?;
+        let name = TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?;
         match mode {
             // An append ignores the layout the builder was given: the
             // existing table's layout rules.
@@ -1481,6 +1481,7 @@ impl Session {
             comment: None,
             created_ms: now_ms(),
             root: warehouse,
+            view: None,
         };
         self.create_table_from(table, df, CreateMode::ErrorIfExists)
             .await
