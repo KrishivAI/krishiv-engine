@@ -387,7 +387,17 @@ fn run(
             let after = cse::eliminate(root);
             let after = restore_output(after, &output, origin);
             t.step("Cse", 1, "CommonSubexpressionElimination", &before, &after);
-            after
+            // Reading a `cse_*` column in place of the expression it names
+            // can leave a column unread (an aggregate output, a join side's
+            // column): prune again so that a second optimization finds
+            // nothing to remove.
+            let pruned = prune::prune(&after);
+            t.step("Cse", 1, "Prune", &after, &pruned);
+            if Arc::ptr_eq(&pruned, &after) {
+                after
+            } else {
+                batch(pruned, "Tidy", &mut t)?
+            }
         } else {
             root
         };
