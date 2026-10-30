@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `from_xml` and `to_xml` end to end. Expected values come from the Spark
 //! 4.2.0 oracle (the statements of `xml-functions.sql` that need neither
-//! `schema_of_xml`, `TIME` nor a region session zone, plus the edge cases
-//! probed beside them).
+//! `TIME` nor a region session zone, plus the edge cases probed beside them;
+//! `schema_of_xml` has its own tests below).
 #![cfg(test)]
 
 use arrow_array::cast::AsArray;
@@ -601,5 +601,149 @@ fn schema_of_xml_errors_and_from_xml_of_it() {
              schema_of_xml('<p><a>1</a><a>2</a></p>')))"
         ),
         [r#"{"a":[1,2,3]}"#]
+    );
+}
+
+fn nested(depth: usize) -> String {
+    format!("{}{}", "<a>".repeat(depth), "</a>".repeat(depth))
+}
+
+/// The element depth is bounded: Spark has no limit, but a deep document
+/// must not exhaust the stack or the memory of the process.
+#[test]
+fn deep_documents_are_malformed_not_fatal() {
+    let s = session();
+    for depth in [1_001usize, 100_000] {
+        let doc = nested(depth);
+        assert_eq!(
+            read(&s, &doc, "a STRING", ""),
+            r#"{"a":null}"#,
+            "depth {depth}"
+        );
+        assert_eq!(
+            schema(&s, &doc, ""),
+            "STRUCT<_corrupt_record: STRING>",
+            "depth {depth}"
+        );
+    }
+    // Inside the bound the document reads and infers as usual.
+    let ok = nested(500);
+    assert!(read(&s, &ok, "a STRING", "").starts_with(r#"{"a":"<a>"#));
+    assert!(schema(&s, &ok, "").starts_with("STRUCT<a: STRUCT<a: STRUCT<"));
+}
+
+#[test]
+fn to_xml_checks_names_and_values() {
+    let s = session();
+    for value in [
+        "named_struct('a b', 1)",
+        "named_struct('', 1)",
+        "named_struct('1a', 1)",
+        "named_struct('a:b', 1)",
+        "named_struct('a', map('x>y', 1))",
+        "named_struct('_a b', 1)",
+    ] {
+        assert_eq!(
+            class_of(&s, &format!("select to_xml({value})")),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{value}"
+        );
+    }
+    assert_eq!(
+        write(
+            &s,
+            "named_struct('a b', 1)",
+            "'indent', '', 'validateName', 'false'"
+        ),
+        "<ROW><a b>1</a b></ROW>\n"
+    );
+    assert_eq!(
+        class_of(
+            &s,
+            "select to_xml(named_struct('a', 1), map('rowTag', 'a b'))"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // A character XML 1.0 cannot hold is refused; `>` is escaped after `]]` only.
+    assert_eq!(
+        class_of(&s, "select to_xml(named_struct('a', concat('x', chr(1))))"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        write(&s, "named_struct('a', 'x]]>y')", "'indent', ''"),
+        "<ROW><a>x]]&gt;y</a></ROW>\n"
+    );
+}
+
+#[test]
+fn to_xml_wraps_inner_arrays_in_item_elements() {
+    let s = session();
+    assert_eq!(
+        write(
+            &s,
+            "named_struct('a', array(array(1, 2), array(3)))",
+            "'indent', ''"
+        ),
+        "<ROW><a><item>1</item><item>2</item></a><a><item>3</item></a></ROW>\n"
+    );
+}
+
+#[test]
+fn option_values_and_schemas() {
+    let s = session();
+    // Spark refuses a flag that is not true or false; an unknown mode reads as PERMISSIVE.
+    for options in [
+        "'ignoreSurroundingSpaces', 'maybe'",
+        "'inferSchema', 'maybe'",
+        "'prefersDecimal', 'maybe'",
+        "'validateName', 'maybe'",
+    ] {
+        assert_eq!(
+            class_of(
+                &s,
+                &format!("select schema_of_xml('<p><a>1</a></p>', map({options}))")
+            ),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{options}"
+        );
+    }
+    assert_eq!(
+        read(&s, "<p><a>1</a></p>", "a INT", "'mode', 'bogus'"),
+        r#"{"a":1}"#
+    );
+    // The keys of a map read from XML are names: only STRING keys.
+    assert_eq!(
+        class_of(&s, "select from_xml('<p/>', 'a map<int,string>')"),
+        ErrorClass::DatatypeMismatchInvalidXmlMapKeyType
+    );
+    assert_eq!(
+        class_of(&s, "select from_xml('<p/>', 'a array<array<int>>')"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // A DTD is never read: a custom entity makes the document malformed.
+    assert_eq!(
+        read(
+            &s,
+            "<!DOCTYPE p [<!ENTITY e \"zz\">]><p><a>&e;</a></p>",
+            "a STRING",
+            ""
+        ),
+        r#"{"a":null}"#
+    );
+}
+
+#[test]
+fn to_xml_formats_timestamps_in_the_session_zone() {
+    let s = Session::builder()
+        .config("spark.sql.session.timeZone", "+05:00")
+        .build()
+        .unwrap();
+    assert_eq!(
+        write(
+            &s,
+            "named_struct('a', timestamp'2020-01-02 03:04:05')",
+            "'indent', '', 'timestampFormat', 'yyyy-MM-dd HH:mm VV XXX'"
+        ),
+        "<ROW><a>2020-01-02 03:04 +05:00 +05:00</a></ROW>\n"
     );
 }

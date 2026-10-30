@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `from_xml` and `to_xml` analysis signatures.
+//! `from_xml`, `to_xml` and `schema_of_xml` analysis signatures.
 //!
 //! `from_xml(xmlStr, schema[, options])`: Spark's `XmlToStructs`. The first
 //! argument is a `STRING` (no implicit cast); the schema is a foldable `STRING`
@@ -12,8 +12,8 @@
 //! `MAP<STRING, STRING>`. The result is a nullable `STRING`.
 
 use krishiv_common::error::{
-    DatatypeMismatchUnexpectedInputType, InvalidOptionsNonMapFunction,
-    InvalidSchemaNonStringLiteral, KrishivError,
+    DatatypeMismatchInvalidXmlMapKeyType, DatatypeMismatchUnexpectedInputType,
+    InvalidOptionsNonMapFunction, InvalidSchemaNonStringLiteral, KrishivError,
 };
 use krishiv_types::DataType;
 
@@ -35,6 +35,24 @@ fn check_options(c: &CallTypes<'_>, at: usize) -> Result<(), KrishivError> {
     Ok(())
 }
 
+/// Whether `t` holds a map whose keys are not strings (the XML source reads
+/// keys from element and attribute names).
+fn has_non_string_map_key(t: &DataType) -> bool {
+    match t {
+        DataType::Map(m) => {
+            m.key_type() != &DataType::String
+                || has_non_string_map_key(m.key_type())
+                || has_non_string_map_key(m.value_type())
+        }
+        DataType::Array(a) => has_non_string_map_key(a.element_type()),
+        DataType::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| has_non_string_map_key(f.data_type())),
+        _ => false,
+    }
+}
+
 /// `from_xml(xmlStr, schema[, options])`.
 fn from_xml(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     // Options first, as Spark checks them before the schema.
@@ -51,6 +69,13 @@ fn from_xml(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         Some(Constant::Error(e)) => Err(e.clone()),
         Some(Constant::String(s)) => {
             let struct_type = struct_of_ddl(s)?;
+            if has_non_string_map_key(&struct_type) {
+                return Err(DatatypeMismatchInvalidXmlMapKeyType {
+                    sql_expr: format!("\"from_xml({})\"", c.sql(0).unwrap_or_default()),
+                    schema: format!("\"{}\"", struct_type.sql()),
+                }
+                .into());
+            }
             // Spark's `XmlToStructs` is always nullable (a document that
             // does not parse is a row of NULLs, but the node stays nullable).
             Ok(ArgType::new(struct_type, true))

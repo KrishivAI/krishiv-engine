@@ -14,8 +14,21 @@
 //! NULL fields are left out, an array writes one element per item, and
 //! `indent` (default four spaces) pretty-prints.
 //!
-//! Options this module does not implement are
-//! `KRISHIV_UNSUPPORTED_FEATURE` naming the function and option.
+//! `schema_of_xml` infers the type of every element (see [`schema_of_xml_ddl`]).
+//!
+//! Where this differs from Spark, on purpose:
+//! * A document nested deeper than `MAX_DEPTH` (1,000 elements) is not read:
+//!   it is malformed (a row of NULLs, or the `_corrupt_record` schema). Spark
+//!   has no limit; here every pass over a document recurses, so the bound
+//!   keeps a hostile column value from overflowing the stack.
+//! * `to_xml` refuses a name that is not an XML name or a character XML 1.0
+//!   cannot hold with `KRISHIV_UNSUPPORTED_FEATURE` (Spark raises a raw
+//!   `XMLStreamException`); `validateName=false` writes names unchecked.
+//! * Options of Spark's XML source that this module does not implement are
+//!   `KRISHIV_UNSUPPORTED_FEATURE` naming the function and option; names
+//!   Spark does not know are ignored, as in Spark, and so are `declaration`
+//!   and `encoding`, which only matter when files are written.
+//! * A DTD is never read: a custom entity makes the document malformed.
 
 use std::sync::Arc;
 
@@ -45,7 +58,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use super::args::{Inputs, is_string};
-use super::csv::{datetime_option, literal_string, map_pairs, struct_fields};
+use super::csv::{datetime_option_as, literal_string, map_pairs, struct_fields};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
@@ -75,7 +88,6 @@ const UNIMPLEMENTED: &[&str] = &[
     "positiveinf",
     "negativeinf",
     "compression",
-    "validatename",
 ];
 
 /// Options of both functions, resolved once at bind.
@@ -94,6 +106,8 @@ struct Opts {
     infer_schema: bool,
     /// `schema_of_xml`: infer decimals for numbers with a fraction.
     prefers_decimal: bool,
+    /// `to_xml`: refuse element and attribute names that are not XML names.
+    validate_name: bool,
     date: Option<DateTimePattern>,
     timestamp: Option<DateTimePattern>,
     ntz: Option<DateTimePattern>,
@@ -111,6 +125,7 @@ impl Opts {
             indent: None,
             infer_schema: true,
             prefers_decimal: false,
+            validate_name: true,
             date: None,
             timestamp: None,
             ntz: None,
@@ -121,23 +136,12 @@ impl Opts {
             Purpose::Parse
         };
         let pattern = |v: &str, name: &str| -> Result<DateTimePattern, KrishivError> {
-            // `datetime_option` picks the purpose from the function name.
-            let _ = purpose;
-            datetime_option(
-                v,
-                if func == "to_xml" {
-                    "to_csv"
-                } else {
-                    "from_csv"
-                },
-                name,
-            )
+            datetime_option_as(v, func, name, purpose)
         };
         for (k, v) in pairs {
             match k.to_ascii_lowercase().as_str() {
                 "mode" => {
                     o.mode = match v.to_ascii_uppercase().as_str() {
-                        "PERMISSIVE" => Mode::Permissive,
                         "FAILFAST" => Mode::FailFast,
                         "DROPMALFORMED" => {
                             return Err(krishiv_common::error::ParseModeUnsupported {
@@ -146,7 +150,9 @@ impl Opts {
                             }
                             .into());
                         }
-                        _ => return Err(unsupported(func, &format!("mode={v}"))),
+                        // PERMISSIVE, and a name Spark does not know (it logs a
+                        // warning and reads PERMISSIVE).
+                        _ => Mode::Permissive,
                     };
                 }
                 "attributeprefix" => o.attribute_prefix = v.clone(),
@@ -154,7 +160,7 @@ impl Opts {
                 "rowtag" => o.row_tag = v.clone(),
                 "nullvalue" => o.null_value = Some(v.clone()),
                 "ignoresurroundingspaces" => {
-                    o.ignore_surrounding_spaces = !v.eq_ignore_ascii_case("false");
+                    o.ignore_surrounding_spaces = flag(v, func, "ignoreSurroundingSpaces")?;
                 }
                 "indent" => o.indent = Some(v.clone()),
                 "dateformat" => o.date = Some(pattern(v, "dateFormat")?),
@@ -163,8 +169,9 @@ impl Opts {
                 // Accepted and ignored: they select or label input this
                 // function does not read, or change nothing it writes.
                 "declaration" | "encoding" => {}
-                "inferschema" => o.infer_schema = !v.eq_ignore_ascii_case("false"),
-                "prefersdecimal" => o.prefers_decimal = v.eq_ignore_ascii_case("true"),
+                "inferschema" => o.infer_schema = flag(v, func, "inferSchema")?,
+                "prefersdecimal" => o.prefers_decimal = flag(v, func, "prefersDecimal")?,
+                "validatename" => o.validate_name = flag(v, func, "validateName")?,
                 // Names Spark's XML source defines and this module does not
                 // implement: refused, not silently ignored.
                 name if UNIMPLEMENTED.contains(&name) => {
@@ -175,6 +182,20 @@ impl Opts {
             }
         }
         Ok(o)
+    }
+}
+
+/// A `true` / `false` option value (Spark refuses anything else).
+fn flag(v: &str, func: &str, name: &str) -> Result<bool, KrishivError> {
+    if v.eq_ignore_ascii_case("true") {
+        Ok(true)
+    } else if v.eq_ignore_ascii_case("false") {
+        Ok(false)
+    } else {
+        Err(unsupported(
+            func,
+            &format!("option {name}={v} (it must be true or false)"),
+        ))
     }
 }
 
@@ -202,8 +223,13 @@ struct Elem {
     /// The element's own text (character data and entity references).
     text: String,
     /// The raw text between the start and end tags.
-    inner: String,
+    inner: (usize, usize),
 }
+
+/// The deepest element nesting read. Spark has no limit; a deeper document is
+/// treated as not well-formed so that no recursion over it can overflow the
+/// stack.
+const MAX_DEPTH: usize = 1000;
 
 /// The root element of `text`, or `None` when it is not a well-formed
 /// document with an element.
@@ -217,7 +243,12 @@ fn parse_document(text: &str) -> Option<Elem> {
         let event = reader.read_event().ok()?;
         let after = usize::try_from(reader.buffer_position()).ok()?;
         match event {
-            Event::Start(e) => stack.push((start_elem(&e)?, after)),
+            Event::Start(e) => {
+                if stack.len() >= MAX_DEPTH {
+                    return None;
+                }
+                stack.push((start_elem(&e)?, after));
+            }
             Event::Empty(e) => {
                 let elem = start_elem(&e)?;
                 match stack.last_mut() {
@@ -230,7 +261,8 @@ fn parse_document(text: &str) -> Option<Elem> {
             }
             Event::End(_) => {
                 let (mut elem, start) = stack.pop()?;
-                elem.inner = text.get(start..before)?.to_owned();
+                text.get(start..before)?;
+                elem.inner = (start, before);
                 match stack.last_mut() {
                     Some((parent, _)) => parent.children.push(elem),
                     None => {
@@ -373,9 +405,9 @@ impl Reading<'_> {
     }
 
     /// An element as a value of `dt`.
-    fn value(&self, dt: &DataType, e: &Elem, bad: &mut bool) -> Result<V, KrishivError> {
+    fn value(&self, doc: &str, dt: &DataType, e: &Elem, bad: &mut bool) -> Result<V, KrishivError> {
         match dt {
-            DataType::Struct(fields) => self.row(fields, e, bad),
+            DataType::Struct(fields) => self.row(doc, fields, e, bad),
             DataType::Map(entries, _) => {
                 let DataType::Struct(kv) = entries.data_type() else {
                     return Err(internal("a map without entries".to_owned()));
@@ -389,13 +421,18 @@ impl Reading<'_> {
                     out.push((key, self.leaf(&vt, v, bad)?));
                 }
                 for c in &e.children {
-                    out.push((c.name.clone(), self.value(&vt, c, bad)?));
+                    out.push((c.name.clone(), self.value(doc, &vt, c, bad)?));
                 }
                 Ok(V::Map(out))
             }
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 if !e.children.is_empty() => {
                 // An element with children read as text is its raw content.
-                Ok(V::Leaf(Val::Text(e.inner.trim().to_owned())))
+                Ok(V::Leaf(Val::Text(
+                    doc.get(e.inner.0..e.inner.1)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned(),
+                )))
             }
             DataType::List(_) | DataType::LargeList(_) => {
                 Err(unsupported("from_xml", "an array inside an array"))
@@ -405,7 +442,7 @@ impl Reading<'_> {
     }
 
     /// An element as a struct of `fields`.
-    fn row(&self, fields: &Fields, e: &Elem, bad: &mut bool) -> Result<V, KrishivError> {
+    fn row(&self, doc: &str, fields: &Fields, e: &Elem, bad: &mut bool) -> Result<V, KrishivError> {
         let find = |name: &str| {
             fields
                 .iter()
@@ -444,7 +481,7 @@ impl Reading<'_> {
                         continue;
                     }
                     let mut item_bad = false;
-                    let v = self.value(item.data_type(), c, &mut item_bad)?;
+                    let v = self.value(doc, item.data_type(), c, &mut item_bad)?;
                     if item_bad {
                         // The items before the first bad one are kept.
                         *bad = true;
@@ -454,7 +491,7 @@ impl Reading<'_> {
                         lists[i].get_or_insert_with(Vec::new).push(v);
                     }
                 }
-                dt => vals[i] = self.value(dt, c, bad)?,
+                dt => vals[i] = self.value(doc, dt, c, bad)?,
             }
         }
         for (i, l) in lists.into_iter().enumerate() {
@@ -711,7 +748,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
             }
             let mut bad = false;
             let row = match parse_document(docs.value(i)) {
-                Some(root) => reading.row(&fields, &root, &mut bad)?,
+                Some(root) => reading.row(docs.value(i), &fields, &root, &mut bad)?,
                 None => {
                     // Not a document, or an empty one: a row of NULLs.
                     bad = !docs.value(i).trim().is_empty();
@@ -758,22 +795,48 @@ fn check_read_type(dt: &DataType) -> Result<(), KrishivError> {
 struct Writing<'a> {
     o: &'a Opts,
     zone: &'a dyn TimeZoneRules,
+    /// The session zone's id, for the `VV` and `z` pattern letters.
+    zone_id: &'a str,
     date: &'a DateTimePattern,
     timestamp: &'a DateTimePattern,
     ntz: &'a DateTimePattern,
 }
 
-fn escape(text: &str, attribute: bool) -> String {
+/// `text` escaped for element content (or an attribute value). `>` is only
+/// escaped after `]]`, as Spark's writer does; a character XML 1.0 cannot
+/// hold is refused, as Spark's writer refuses it.
+fn escape(text: &str, attribute: bool) -> Result<String, KrishivError> {
     let mut out = String::with_capacity(text.len());
+    let mut prev = ['\0'; 2];
     for c in text.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
+            '>' if prev == [']', ']'] => out.push_str("&gt;"),
             '"' if attribute => out.push_str("&quot;"),
+            c if (c < ' ' && !matches!(c, '\t' | '\n' | '\r'))
+                || matches!(c, '\u{FFFE}' | '\u{FFFF}') =>
+            {
+                return Err(unsupported(
+                    "to_xml",
+                    &format!(
+                        "the character U+{:04X} in a value (XML 1.0 cannot hold it)",
+                        u32::from(c)
+                    ),
+                ));
+            }
             c => out.push(c),
         }
+        prev = [prev[1], c];
     }
-    out
+    Ok(out)
+}
+
+/// Whether `name` is an XML name without a colon (what Spark's writer accepts).
+fn is_xml_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '\u{B7}'))
 }
 
 /// The text of a string-carrier value.
@@ -812,7 +875,7 @@ impl Writing<'_> {
                 self.timestamp.format_timestamp(
                     a.as_primitive::<TimestampMicrosecondType>().value(i),
                     Zone {
-                        id: "UTC",
+                        id: self.zone_id,
                         rules: self.zone,
                     },
                 )?
@@ -822,6 +885,20 @@ impl Writing<'_> {
                 .format_local(a.as_primitive::<TimestampMicrosecondType>().value(i))?,
             _ => return Ok(None),
         }))
+    }
+
+    /// Refuses a name that is not an XML name (unless `validateName=false`),
+    /// as Spark's writer does: an unchecked name would break the markup.
+    fn check_name(&self, name: &str) -> Result<(), KrishivError> {
+        if self.o.validate_name && !is_xml_name(name) {
+            return Err(unsupported(
+                "to_xml",
+                &format!(
+                    "the name {name:?}, which is not an XML name (option validateName=false writes it anyway)"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn newline(&self, out: &mut String, depth: usize) {
@@ -853,8 +930,10 @@ impl Writing<'_> {
     ) -> Result<(), KrishivError> {
         if a.is_null(i) {
             if let Some(n) = &self.o.null_value {
+                self.check_name(name)?;
+                let text = escape(n, false)?;
                 self.newline(out, depth);
-                out.push_str(&format!("<{name}>{}</{name}>", escape(n, false)));
+                out.push_str(&format!("<{name}>{text}</{name}>"));
             }
             return Ok(());
         }
@@ -864,7 +943,21 @@ impl Writing<'_> {
                 let list = a.as_list::<i32>();
                 let items = list.value(i);
                 for j in 0..items.len() {
-                    self.element(out, name, &items, j, depth)?;
+                    if matches!(items.data_type(), DataType::List(_)) {
+                        // An array inside an array: each inner array is an
+                        // element `name` holding `item` elements.
+                        if items.is_null(j) {
+                            continue;
+                        }
+                        self.check_name(name)?;
+                        self.newline(out, depth);
+                        out.push_str(&format!("<{name}>"));
+                        self.element(out, "item", &items, j, depth + 1)?;
+                        self.newline(out, depth);
+                        out.push_str(&format!("</{name}>"));
+                    } else {
+                        self.element(out, name, &items, j, depth)?;
+                    }
                 }
                 Ok(())
             }
@@ -876,6 +969,7 @@ impl Writing<'_> {
                     usize::try_from(range[i]).unwrap_or(0),
                     usize::try_from(range[i + 1]).unwrap_or(0),
                 );
+                self.check_name(name)?;
                 self.newline(out, depth);
                 out.push_str(&format!("<{name}>"));
                 for j in from..to {
@@ -892,8 +986,10 @@ impl Writing<'_> {
                 let text = self.scalar(a, i)?.ok_or_else(|| {
                     unsupported("to_xml", &format!("a field of type {}", a.data_type()))
                 })?;
+                self.check_name(name)?;
+                let text = escape(&text, false)?;
                 self.newline(out, depth);
-                out.push_str(&format!("<{name}>{}</{name}>", escape(&text, false)));
+                out.push_str(&format!("<{name}>{text}</{name}>"));
                 Ok(())
             }
         }
@@ -907,6 +1003,7 @@ impl Writing<'_> {
         i: usize,
         depth: usize,
     ) -> Result<(), KrishivError> {
+        self.check_name(name)?;
         let prefix = self.o.attribute_prefix.as_str();
         let mut attributes = String::new();
         let mut text = String::new();
@@ -920,12 +1017,13 @@ impl Writing<'_> {
             if f.name() == &self.o.value_tag
                 && let Some(v) = self.scalar(col, i)?
             {
-                text.push_str(&escape(&v, false));
+                text.push_str(&escape(&v, false)?);
             } else if let Some(attr) = f.name().strip_prefix(prefix)
                 && !prefix.is_empty()
                 && let Some(v) = self.scalar(col, i)?
             {
-                attributes.push_str(&format!(" {attr}=\"{}\"", escape(&v, true)));
+                self.check_name(attr)?;
+                attributes.push_str(&format!(" {attr}=\"{}\"", escape(&v, true)?));
             } else {
                 self.element(&mut body, f.name(), col, i, depth + 1)?;
             }
@@ -973,12 +1071,14 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         .clone()
         .map_or_else(|| default("yyyy-MM-dd'T'HH:mm:ss.SSS"), Ok)?;
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
+    let zone_name: Arc<str> = Arc::clone(&opts.time_zone_name);
     Ok(Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
         let col = x.plain_column(0)?;
         let rows = col.as_struct();
         let writing = Writing {
             o: &parsed,
             zone: zone.as_ref(),
+            zone_id: &zone_name,
             date: &date,
             timestamp: &timestamp,
             ntz: &ntz,

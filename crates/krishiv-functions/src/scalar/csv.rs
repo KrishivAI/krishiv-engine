@@ -259,6 +259,16 @@ pub(super) fn datetime_option(
     } else {
         Purpose::Parse
     };
+    datetime_option_as(pattern, func, option, purpose)
+}
+
+/// [`datetime_option`] for an explicit `purpose` (the XML functions).
+pub(super) fn datetime_option_as(
+    pattern: &str,
+    func: &str,
+    option: &str,
+    purpose: Purpose,
+) -> Result<DateTimePattern, KrishivError> {
     DateTimePattern::new(pattern, purpose).map_err(|e| {
         if e.error_class() == ErrorClass::KrishivUnsupportedFeature {
             KrishivUnsupportedFeature {
