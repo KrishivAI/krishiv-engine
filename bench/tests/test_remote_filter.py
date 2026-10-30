@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -566,7 +567,7 @@ def test_listing_pins_the_commit_and_fetch_resumes_through_a_part_file(monkeypat
     assert len(calls) == 1
 
 
-def test_uncapped_peak_rss_comes_from_the_child_and_a_timeout_kills_the_group(tmp_path):
+def test_uncapped_peak_rss_comes_from_the_child(tmp_path):
     line = 'RESULT {"engine": "duckdb", "rows_out": 1, "sum_tokens": 2, "peak_rss_bytes": 4096, "query_s": 1.0}'
     rec = run_one(
         "duckdb",
@@ -578,6 +579,36 @@ def test_uncapped_peak_rss_comes_from_the_child_and_a_timeout_kills_the_group(tm
         _monitor=lambda proc, cg, _x, _t: obs_of(0, rss=0),
     )
     assert rec["peak_rss_bytes"] == 4096
+
+
+def test_a_timeout_kills_a_grandchild_in_the_real_process_group(monkeypatch, tmp_path):
+    import time
+
+    from krishiv_bench import remote_filter as rf
+
+    mods = tmp_path / "mods"
+    mods.mkdir()
+    (mods / "sleeper_child.py").write_text(
+        "import subprocess, sys, time\n"
+        "g = subprocess.Popen(['sleep', '300'])\n"
+        "open(sys.argv[2], 'w').write(str(g.pid))\n"
+        "time.sleep(300)\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(mods))
+    monkeypatch.setattr(rf, "CHILD", "sleeper_child")
+    pid_file = tmp_path / "grandchild.pid"
+    rec = rf.run_one("duckdb", str(pid_file), None, 1, tmp_path / "w")
+    assert rec["status"] == "timeout"
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
 
 
 def test_krishiv_memory_limit_is_75_percent_of_the_cap(tmp_path):
@@ -722,3 +753,32 @@ def test_the_cli_commands_forward_and_report_errors(monkeypatch, tmp_path):
     monkeypatch.setattr(rf, "fetch_remote_filter", broken)
     with pytest.raises(SystemExit, match="cannot list"):
         datasets.main(["remote-filter", "--yes"])
+
+
+def test_a_new_revision_clears_the_old_mirror_and_the_same_one_keeps_it(monkeypatch, tmp_path):
+    from krishiv_bench import remote_filter as rf
+
+    def listing(sha):
+        return [(f"https://h/datasets/x/resolve/{sha}/a.parquet", "a.parquet")]
+
+    def fake_run(cmd, check):
+        Path(cmd[cmd.index("-o") + 1]).write_bytes(b"x")
+
+    monkeypatch.setattr(rf.subprocess, "run", fake_run)
+    monkeypatch.setattr(rf, "list_remote_files", lambda: listing("r1"))
+    dest = rf.fetch_remote_filter(tmp_path / "m", yes=True)
+    assert (dest / "fw" / ".revision").read_text() == "r1\n"
+    (dest / "fw" / "a.parquet").write_bytes(b"old")
+    (dest / "fw" / "b.parquet.part").write_bytes(b"partial")
+    rf.fetch_remote_filter(tmp_path / "m", yes=True)  # same revision: the finished file is kept
+    assert (dest / "fw" / "a.parquet").read_bytes() == b"old"
+    assert (dest / "fw" / "b.parquet.part").exists()
+    monkeypatch.setattr(rf, "list_remote_files", lambda: listing("r2"))
+    rf.fetch_remote_filter(tmp_path / "m", yes=True)  # a new revision: old files go, the new one is fetched
+    assert (dest / "fw" / "a.parquet").read_bytes() == b"x"
+    assert not (dest / "fw" / "b.parquet.part").exists()
+    assert (dest / "fw" / ".revision").read_text() == "r2\n"
+    # Several revisions in one listing cannot be pinned: nothing is cleared.
+    mixed = [*listing("r2"), *listing("r3")]
+    rf._pin_revision(dest, dest / "fw", mixed)
+    assert (dest / "fw" / ".revision").read_text() == "r2\n"

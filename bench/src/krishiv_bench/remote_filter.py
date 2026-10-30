@@ -51,7 +51,7 @@ ENGINES = ["krishiv", "duckdb", "polars"]
 TABLE = "fw"
 FILTER_SQL = "int_score >= 4 AND token_count >= 4000 AND language_score >= 0.95"
 HF_DATASET = "HuggingFaceFW/fineweb-edu"
-HF_REVISION = "main"  # the revision a listing is requested at; the pinned sha is what a mirror records
+REVISION_FILE = ".revision"  # the commit a mirror was downloaded at
 HF_SUBDIR = "sample/10BT"
 APPROX_SIZE = "~28 GB"
 EXPECTED_FILE = "expected.json"
@@ -150,6 +150,20 @@ def list_remote_files(timeout_s: float = 60) -> list[tuple[str, str]]:
     return sorted(out)
 
 
+def _pin_revision(dest: Path, table_dir: Path, pairs: list[tuple[str, str]]) -> None:
+    """Records the listing's commit; files of an older commit (and its ``expected.json``) are cleared first, so a
+    mirror never mixes revisions. The marker is written before any download, so an interrupted run resumes."""
+    revisions = {u.split("/resolve/", 1)[1].split("/", 1)[0] for u, _ in pairs if "/resolve/" in u}
+    if len(revisions) != 1:
+        return
+    (revision,) = revisions
+    marker = table_dir / REVISION_FILE
+    if marker.is_file() and marker.read_text().strip() != revision:
+        for stale in [*table_dir.glob("*.parquet"), *table_dir.glob("*.part"), dest / EXPECTED_FILE]:
+            stale.unlink(missing_ok=True)
+    marker.write_text(revision + "\n")
+
+
 def fetch_remote_filter(
     out: Path | None = None,
     yes: bool = False,
@@ -168,6 +182,8 @@ def fetch_remote_filter(
     pairs = files if files is not None else list_remote_files()
     if not pairs:
         raise ValueError("no files to download")
+    if files is None:
+        _pin_revision(dest, table_dir, pairs)
     for url, rel in pairs:
         target = table_dir / Path(rel).name
         if target.exists():
