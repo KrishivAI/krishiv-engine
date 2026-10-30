@@ -26,7 +26,10 @@
 //! of its member (it may still claim any of them): every batch of the
 //! member waits until each of its drivers has started. Once the caller
 //! drops the stream, held batches are dropped and their memory returned at
-//! once.
+//! once. A released batch keeps its memory reserved while it waits in the
+//! channel: the reservation travels with it and is returned when the caller
+//! reads the batch (or drops the stream), so a slow caller cannot let
+//! released batches pile up unaccounted.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::pin::Pin;
@@ -47,7 +50,9 @@ use crate::sync::{Mutex, lock, register, wake_all};
 
 #[derive(Debug, Default)]
 struct State {
-    queue: VecDeque<Batch>,
+    /// The batches, each with the memory an ordered release left reserved
+    /// for it (returned when it leaves the queue).
+    queue: VecDeque<(Batch, Option<Reservation>)>,
     /// Set by the query's coordinator once every task has ended.
     end: Option<Option<KrishivError>>,
     receiver_gone: bool,
@@ -83,21 +88,22 @@ impl Channel {
 
     /// Accepts `batch`: `Some(full)`, or `None` if the receiver is gone.
     fn send(&self, batch: Batch) -> Option<bool> {
-        self.push(batch, false)
+        self.push(batch, None, false)
     }
 
-    /// As [`send`](Self::send), for a batch an ordered release sends.
-    fn send_released(&self, batch: Batch) -> Option<bool> {
-        self.push(batch, true)
+    /// As [`send`](Self::send), for a batch an ordered release sends, with
+    /// the memory it holds (kept reserved until the caller reads it).
+    fn send_released(&self, batch: Batch, memory: Option<Reservation>) -> Option<bool> {
+        self.push(batch, memory, true)
     }
 
-    fn push(&self, batch: Batch, released: bool) -> Option<bool> {
+    fn push(&self, batch: Batch, memory: Option<Reservation>, released: bool) -> Option<bool> {
         let (full, waker) = {
             let mut s = lock(&self.state);
             if s.receiver_gone {
                 return None;
             }
-            s.queue.push_back(batch);
+            s.queue.push_back((batch, memory));
             s.released += usize::from(released);
             (s.full(self.capacity), s.receiver.take())
         };
@@ -138,9 +144,9 @@ impl Channel {
     }
 
     pub(crate) fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Batch>>> {
-        let (out, senders) = {
+        let (out, senders, memory) = {
             let mut s = lock(&self.state);
-            if let Some(b) = s.queue.pop_front() {
+            if let Some((b, memory)) = s.queue.pop_front() {
                 // Released batches count down as any batch leaves: either
                 // way the queue is bounded by the capacity plus what the
                 // releases sent.
@@ -149,15 +155,22 @@ impl Channel {
                 // have been cancelled (its waker is stale), and waking only
                 // it would strand the others. There are at most as many
                 // senders as worker slots.
-                (Poll::Ready(Some(Ok(b))), std::mem::take(&mut s.senders))
+                (
+                    Poll::Ready(Some(Ok(b))),
+                    std::mem::take(&mut s.senders),
+                    memory,
+                )
             } else if let Some(end) = s.end.as_mut() {
                 // An error is reported once, then the stream ends.
-                (Poll::Ready(end.take().map(Err)), Vec::new())
+                (Poll::Ready(end.take().map(Err)), Vec::new(), None)
             } else {
                 s.receiver = Some(cx.waker().clone());
-                (Poll::Pending, Vec::new())
+                (Poll::Pending, Vec::new(), None)
             }
         };
+        // The batch left the queue: its memory goes back to the pool, outside
+        // the state lock.
+        drop(memory);
         wake_all(senders);
         out
     }
@@ -173,13 +186,14 @@ impl Channel {
     }
 
     pub(crate) fn drop_receiver(&self) {
-        let senders = {
+        let (senders, queued) = {
             let mut s = lock(&self.state);
             s.receiver_gone = true;
-            s.queue.clear();
             s.released = 0;
-            std::mem::take(&mut s.senders)
+            (std::mem::take(&mut s.senders), std::mem::take(&mut s.queue))
         };
+        // Dropping the queue returns the released batches' memory.
+        drop(queued);
         wake_all(senders);
     }
 }
@@ -261,14 +275,21 @@ impl Order {
                 break;
             }
             for (partition, batch, bytes, reserved) in entry.remove() {
+                // The batch's memory leaves the driver's reservation with it
+                // and stays reserved until the caller reads the batch.
+                let memory = if reserved {
+                    self.drivers
+                        .get_mut(&partition)
+                        .and_then(|t| t.memory.as_mut())
+                        .map(|m| m.split(bytes.min(m.size())))
+                } else {
+                    None
+                };
                 // A receiver that is gone takes nothing: the batch is dropped.
-                let _ = channel.send_released(batch);
+                let _ = channel.send_released(batch, memory);
                 if let Some(t) = self.drivers.get_mut(&partition) {
                     t.held = t.held.saturating_sub(1);
                     t.bytes = t.bytes.saturating_sub(bytes);
-                    if reserved && let Some(m) = t.memory.as_mut() {
-                        m.shrink(bytes.min(m.size()));
-                    }
                     if t.held == 0 {
                         t.short = false;
                         if t.ended {
@@ -757,6 +778,44 @@ mod tests {
         ok(sink.combine(l0, &g));
         assert_eq!(received(&sink).len(), 2);
         ok(sink.combine(l1, &g));
+    }
+
+    /// A released batch stays reserved in the pool while it waits in the
+    /// channel and is returned when the caller reads it (or drops the stream).
+    #[test]
+    fn released_batches_stay_reserved_until_the_caller_reads_them() {
+        let (sink, g, ctx) = setup(Some(1 << 20), 2);
+        let pool = Arc::clone(ctx[0].query().pool());
+        sink.expect_ordered(&g, 0, 0..2);
+        let mut l0 = ok(sink.local_state(&ctx[0], &g));
+        let mut l1 = ok(sink.local_state(&ctx[1], &g));
+        sink.position(&mut l0, &g, 0);
+        sink.position(&mut l1, &g, 1);
+        let base = pool.reserved();
+        let big = |v: i64| {
+            let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+            Batch::new(ok(RecordBatch::try_new(
+                schema,
+                vec![Arc::new(Int64Array::from(vec![v; 4 * 1024]))],
+            )))
+        };
+        // Driver 1 is ahead: its batch is held, reserved.
+        assert_eq!(status(&ok(sink.sink(big(2), &mut l1, &g))), "more");
+        let held = pool.reserved();
+        assert!(held > base, "{held} <= {base}");
+        // Driver 0 ends: the batch is released into the channel. The caller
+        // has not read it, so the memory is still reserved.
+        ok(sink.combine(l0, &g));
+        assert_eq!(pool.reserved(), held);
+        assert_eq!(received(&sink).len(), 1);
+        assert_eq!(pool.reserved(), base);
+        // A stream dropped with released batches still queued gives them back.
+        let mut l1 = l1;
+        assert_eq!(status(&ok(sink.sink(big(3), &mut l1, &g))), "more");
+        assert!(pool.reserved() >= base);
+        sink.channel.drop_receiver();
+        ok(sink.combine(l1, &g));
+        assert_eq!(pool.reserved(), base);
     }
 
     /// A view column is charged its views and its long values' bytes, not

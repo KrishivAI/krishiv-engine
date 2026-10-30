@@ -105,9 +105,10 @@ fn a_multi_split_parquet_scan_returns_split_by_split() {
     }
     let path = dir.path().to_str().unwrap().to_owned();
     let sql = format!("SELECT id FROM parquet.`{path}` WHERE id % 3 != 1");
-    let one = session(1);
-    let want = collect_in_order(&one, &sql);
-    assert_eq!(want.len(), (0..80_000).filter(|i| i % 3 != 1).count());
+    // The files hold 0..10_000, 10_000..20_000, ... and are listed by name:
+    // the rows come back ascending, split by split.
+    let want: Vec<i64> = (0..80_000).filter(|i| i % 3 != 1).collect();
+    assert_eq!(collect_in_order(&session(1), &sql), want);
     for threads in [2, 8] {
         let s = session(threads);
         repeat_under_load(&s, &sql, &want);
@@ -133,8 +134,13 @@ fn an_empty_split_keeps_the_order() {
     }
     let path = dir.path().to_str().unwrap().to_owned();
     let sql = format!("SELECT id FROM parquet.`{path}`");
-    let want = collect_in_order(&session(1), &sql);
+    // Files 0, 1, 3, 4, 5 hold 5_000 rows each; file 2 is empty.
+    let want: Vec<i64> = (0..6_i64)
+        .filter(|f| *f != 2)
+        .flat_map(|f| f * 5_000..(f + 1) * 5_000)
+        .collect();
     assert_eq!(want.len(), 25_000);
+    assert_eq!(collect_in_order(&session(1), &sql), want);
     repeat_under_load(&session(8), &sql, &want);
 }
 
