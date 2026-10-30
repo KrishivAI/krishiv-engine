@@ -38,10 +38,10 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
-    AlterTable, AlterTableAction, AlterView, AlterViewAction, ColumnName, CreateNamespace,
-    CreatePermanentView, CreateTable, CreateTableLike, DdlName, DropBehavior, DropNamespace,
-    DropPermanentView, DropTable, Insert, InsertClause, Query, TableElement, TableOption, Truncate,
-    Use,
+    AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, ColumnName,
+    CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, DdlName, DropBehavior,
+    DropNamespace, DropPermanentView, DropTable, Insert, InsertClause, Query, TableElement,
+    TableOption, Truncate, Use,
 };
 use krishiv_types::DataType;
 
@@ -1250,6 +1250,57 @@ impl Session {
         self.forget_cached(&name);
         deleted?;
         self.empty_frame().await
+    }
+
+    /// `ANALYZE TABLE name COMPUTE STATISTICS [NOSCAN | FOR COLUMNS ...]`.
+    ///
+    /// The table (and the listed columns) must exist, as in Spark. The engine
+    /// keeps no table statistics, so nothing is computed or stored: the
+    /// command only validates its target.
+    pub(crate) async fn exec_analyze(&self, a: &Analyze) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.table_name(&a.table, &env)?;
+        let table = self.table_for_write(&name, "ANALYZE TABLE", &env)?;
+        if a.partition.is_some() {
+            return Err(unsupported("ANALYZE TABLE ... PARTITION"));
+        }
+        if let AnalyzeColumns::ForColumns(columns) = &a.columns {
+            let case_sensitive = env.analysis.conf.case_sensitive;
+            let same = |x: &str, y: &str| {
+                if case_sensitive {
+                    x == y
+                } else {
+                    x.eq_ignore_ascii_case(y)
+                }
+            };
+            for c in columns {
+                if !table.columns.iter().any(|t| same(&t.name, &c.value)) {
+                    return Err(krishiv_common::error::ColumnNotFound {
+                        col_name: format!("`{}`", c.value.replace('`', "``")),
+                        case_sensitive_config: "\"spark.sql.caseSensitive\"".to_owned(),
+                    }
+                    .into());
+                }
+            }
+        }
+        self.empty_frame().await
+    }
+
+    /// `DELETE FROM`, `UPDATE` and `MERGE INTO` a file-source table: Spark's
+    /// v1 tables support none of them, and says so once the table resolves.
+    pub(crate) fn exec_row_level_change(
+        &self,
+        table: &DdlName,
+        operation: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.table_name(table, &env)?;
+        self.table_for_write(&name, operation, &env)?;
+        Err(UnsupportedFeatureTableOperation {
+            table_name: name.quoted(),
+            operation: operation.to_owned(),
+        }
+        .into())
     }
 
     /// Drops the cached relations that read the permanent table `name`: its data or existence changed.

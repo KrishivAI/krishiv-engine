@@ -713,3 +713,71 @@ fn insert_column_lists_by_name_and_conflicts() {
     // A string literal cannot be stored into an INT column under ANSI store assignment; a wider integer can.
     run(&s, "INSERT INTO t VALUES (CAST(5 AS BIGINT), 7)");
 }
+
+/// `DELETE`, `UPDATE` and `MERGE` need the table to exist and then fail as Spark's v1 tables do.
+#[test]
+fn row_level_changes_are_unsupported_on_file_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT, b INT) USING parquet");
+    for (sql, operation) in [
+        ("DELETE FROM t WHERE a = 1", "DELETE"),
+        ("UPDATE t SET b = 1 WHERE a = 1", "UPDATE TABLE"),
+        (
+            "MERGE INTO t USING t AS s ON t.a = s.a WHEN MATCHED THEN DELETE",
+            "MERGE INTO TABLE",
+        ),
+    ] {
+        let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+            "{sql}"
+        );
+        let message = e.to_string();
+        assert!(message.contains(operation), "{message}");
+        assert!(
+            message.contains("`spark_catalog`.`default`.`t`"),
+            "{message}"
+        );
+    }
+    assert_eq!(
+        class(&s, "DELETE FROM missing WHERE a = 1"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    run(&s, "CREATE TEMPORARY VIEW v AS SELECT 1 AS a");
+    assert_eq!(
+        class(&s, "DELETE FROM v WHERE a = 1"),
+        "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
+    );
+}
+
+/// `ANALYZE TABLE` validates its target and stores nothing; resource commands are refused.
+#[test]
+fn analyze_validates_and_resource_commands_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT, b INT) USING parquet");
+    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS");
+    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS NOSCAN");
+    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS FOR ALL COLUMNS");
+    run(
+        &s,
+        "ANALYZE TABLE default.t COMPUTE STATISTICS FOR COLUMNS A, b",
+    );
+    assert_eq!(
+        class(&s, "ANALYZE TABLE missing COMPUTE STATISTICS"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, "ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS nope"),
+        "COLUMN_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, "ANALYZE TABLE t PARTITION (a = 1) COMPUTE STATISTICS"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    for sql in ["ADD JAR '/tmp/x.jar'", "LIST FILES", "ADD FILE '/tmp/f'"] {
+        assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
+}

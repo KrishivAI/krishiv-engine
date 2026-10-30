@@ -545,6 +545,12 @@ impl Session {
             Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
+            Statement::Analyze(a) => self.exec_analyze(&a).await,
+            Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
+            Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
+            Statement::Delete(d) => self.exec_row_level_change(&d.table, "DELETE"),
+            Statement::Update(u) => self.exec_row_level_change(&u.table, "UPDATE TABLE"),
+            Statement::Merge(m) => self.exec_row_level_change(&m.target, "MERGE INTO TABLE"),
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
