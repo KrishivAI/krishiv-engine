@@ -2,10 +2,6 @@
   "cases": {
     "depends-on-command": [
       4
-    ],
-    "sql-commands": [
-      2,
-      3
     ]
   },
   "file": "explain-cbo",

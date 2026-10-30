@@ -725,12 +725,13 @@ fn merge_sources_are_never_read_unchecked() {
         DENIED
     );
     // A query source is read only through analysis, which asks the policy;
-    // the session does not run MERGE yet, so nothing is read at all.
+    // the session does not run MERGE, so nothing is read at all: `t` is a
+    // temporary table, which MERGE refuses as Spark does.
     assert_eq!(
         class(block_on(s.sql(
             "MERGE INTO t USING (SELECT * FROM s) x ON t.a = x.a WHEN MATCHED THEN DELETE"
         ))),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
     );
     // Its reads, as analysis finds them, are denied.
     let e = block_on(s.statement_info(

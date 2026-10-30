@@ -26,20 +26,20 @@ use crate::ast::{
     Alias, BucketOn, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
     ConstraintCharacteristic, CreateNamespace, CreateTable, CreateTableLike, CreateView, Cte,
     DataTypeSpec, DdlName, DeclareVariable, DropBehavior, DropNamespace, DropTable, DropVariable,
-    DropView, DynamicName, Explain, ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind,
-    ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement, GeneratedColumn, GeneratedKind,
-    GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, IdentityColumn,
-    IdentityHow, Join, JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow,
-    NamespaceKind, NearestBy, NearestDirection, NumKind, ObjectName, OptionKey, OrderedIdent,
-    PartitionColumn, PartitionField, PartitionFieldKind, PartitionTransform, Pipe, PipeAggregate,
-    PipeAssignment, PipeOp, PipeOpKind, PipeSelect, PipeWhere, Pivot, Query, QueryOrganization,
-    Relation, RelationExt, Reset, RowDelimited, RowFormat, RowFormatKind, RowSerde, SampleMethod,
-    SampleMethodKind, SampleType, Select, SelectItem, Set, SetAssignment, SetExpr, SetExprKind,
-    SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind, SkewSpec, SortItem, Span,
-    Statement, StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement,
-    TableFactor, TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone,
-    TransformKind, TransformOutput, TransformSelect, Unpivot, UnpivotColumns, Use, Values,
-    ViewColumn, With,
+    DropView, DynamicName, ExecuteImmediate, Explain, ExplainMode, Expr, ExprKind, FileFormat,
+    FileFormatKind, ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement,
+    GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet,
+    Hint, Ident, IdentityColumn, IdentityHow, Join, JoinConstraint, JoinKind, LateralView, Limit,
+    Literal, NamedWindow, NamespaceKind, NearestBy, NearestDirection, NumKind, ObjectName,
+    OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
+    PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp, PipeOpKind, PipeSelect,
+    PipeWhere, Pivot, Query, QueryOrganization, Relation, RelationExt, Reset, RowDelimited,
+    RowFormat, RowFormatKind, RowSerde, SampleMethod, SampleMethodKind, SampleType, Select,
+    SelectItem, Set, SetAssignment, SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier,
+    SetVariable, SetVariableKind, SkewSpec, SortItem, Span, Statement, StructField, TableAlias,
+    TableConstraint, TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption,
+    TableSample, TemporalClause, TemporalKind, TimeZone, TransformKind, TransformOutput,
+    TransformSelect, Unpivot, UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -1356,6 +1356,22 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// A session variable name: any keyword names one unless keywords are
+    /// enforced (`DECLARE all = 1`), as in Spark's grammar.
+    #[inline(never)]
+    fn variable_name(&mut self) -> PR<ObjectName> {
+        let start = self.start();
+        let mut parts = vec![self.name_part(true)?];
+        while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
+            self.bump();
+            parts.push(self.name_part(true)?);
+        }
+        Ok(ObjectName {
+            parts,
+            span: self.span_from(start),
+        })
+    }
+
     /// A table name. Unless keywords are enforced, any keyword names a
     /// table here (`FROM order`, `FROM from t`), as Spark's grammar allows.
     fn table_name(&mut self) -> PR<ObjectName> {
@@ -1559,6 +1575,8 @@ impl<'s> Parser<'s> {
             } else {
                 self.set_command()?
             }
+        } else if self.kw_at(0, "EXECUTE") && self.kw_at(1, "IMMEDIATE") {
+            self.execute_immediate_command()?
         } else if self.kw_at(0, "DECLARE") {
             self.declare_command()?
         } else if self.kw_at(0, "RESET") {
@@ -1851,9 +1869,9 @@ impl<'s> Parser<'s> {
                 p.pos += 2;
                 return p.fail();
             }
-            let mut names = vec![p.object_name()?];
+            let mut names = vec![p.variable_name()?];
             while p.eat_sym(Sym::Comma) {
-                names.push(p.object_name()?);
+                names.push(p.variable_name()?);
             }
             // A type follows unless the names end here: `DEFAULT`, `=`,
             // `;` or the end of input (anything else fails after the
@@ -1880,6 +1898,72 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// `EXECUTE IMMEDIATE query [INTO v, ...] [USING [(]arg [AS alias], ...[)]]`.
+    /// The query is any expression; the parenthesized argument list is
+    /// tried first and read as one parenthesized argument when it does not
+    /// end the statement (`USING (SELECT 1) AS a`).
+    #[inline(never)]
+    fn execute_immediate_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("EXECUTE")?;
+            p.expect_kw("IMMEDIATE")?;
+            let query = p.expr()?;
+            let into = if p.eat_kw("INTO") {
+                p.comma_sep(Self::variable_name)?
+            } else {
+                Vec::new()
+            };
+            let mut using = Vec::new();
+            if p.eat_kw("USING") {
+                let mut parsed = false;
+                if p.sym_at(0, Sym::LParen) {
+                    let save = p.checkpoint();
+                    p.bump();
+                    let args = p.comma_sep(Self::using_argument);
+                    if let Ok(args) = args
+                        && p.eat_sym(Sym::RParen)
+                        && (p.pos >= p.toks.len() || p.sym_at(0, Sym::Semi))
+                    {
+                        using = args;
+                        parsed = true;
+                        p.commit(save);
+                    } else {
+                        p.restore(save);
+                    }
+                }
+                if !parsed {
+                    using = p.comma_sep(Self::using_argument)?;
+                }
+            }
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::ExecuteImmediate(ExecuteImmediate {
+                query,
+                into,
+                using,
+                span,
+            }))
+        })
+    }
+
+    /// One `USING` argument: `expr [[AS] alias]`.
+    #[inline(never)]
+    fn using_argument(&mut self) -> PR<UsingArgument> {
+        let start = self.start();
+        let value = self.expr()?;
+        let alias = match self.select_alias()? {
+            Some(Alias::Name(id)) => Some(id),
+            Some(Alias::List(_)) => return self.fail(),
+            None => None,
+        };
+        Ok(UsingArgument {
+            value,
+            alias,
+            span: self.span_from(start),
+        })
+    }
+
     /// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
     /// (query)` (`VAR` for `VARIABLE`), dispatched from [`Self::explainable`]
     /// when `VAR` or `VARIABLE` follows `SET`.
@@ -1900,7 +1984,7 @@ impl<'s> Parser<'s> {
                 p.bump();
                 let mut targets = Vec::new();
                 if !p.sym_at(0, Sym::RParen) {
-                    targets = p.comma_sep(Self::object_name)?;
+                    targets = p.comma_sep(Self::variable_name)?;
                 }
                 p.expect_sym(Sym::RParen)?;
                 p.expect_sym(Sym::Eq)?;
@@ -1916,7 +2000,7 @@ impl<'s> Parser<'s> {
             }
             let assignments = p.comma_sep(|q| {
                 let element = q.start();
-                let name = q.object_name()?;
+                let name = q.variable_name()?;
                 q.expect_sym(Sym::Eq)?;
                 let value = q.expr()?;
                 Ok(SetAssignment {
@@ -2243,17 +2327,21 @@ impl<'s> Parser<'s> {
         if self.kw_at(0, "TABLE") {
             return self.drop_table_command(start);
         }
-        if self.kw_at(0, "TEMPORARY") {
+        if self.kw_at(0, "TEMPORARY")
+            || (self.kw_at(0, "TEMP") && (self.kw_at(1, "VAR") || self.kw_at(1, "VARIABLE")))
+        {
             return self.drop_variable_command(start);
         }
         self.drop_namespace_command(start)
     }
 
-    /// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name` (`VAR` for
+    /// `DROP TEMP|TEMPORARY VAR[IABLE] [IF EXISTS] name` (`VAR` for
     /// `VARIABLE`), after the `DROP` at `start`. Any other word after
     /// `TEMPORARY` fails there, as Spark reports `DROP TEMPORARY`.
     fn drop_variable_command(&mut self, start: usize) -> PR<Statement> {
-        self.expect_kw("TEMPORARY")?;
+        if !self.eat_kw("TEMP") {
+            self.expect_kw("TEMPORARY")?;
+        }
         if !(self.eat_kw("VAR") || self.eat_kw("VARIABLE")) {
             return self.fail();
         }
@@ -2263,7 +2351,7 @@ impl<'s> Parser<'s> {
         } else {
             false
         };
-        let name = self.object_name()?;
+        let name = self.variable_name()?;
         let span = self.span_from(start);
         self.command_end()?;
         Ok(Statement::DropVariable(DropVariable {

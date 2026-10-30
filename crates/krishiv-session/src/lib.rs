@@ -48,6 +48,7 @@ mod column;
 mod command;
 mod conf;
 mod dataframe;
+mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;

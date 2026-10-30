@@ -39,6 +39,7 @@ mod keywords;
 pub use keywords::{SQL_KEYWORDS, sql_keywords};
 pub mod lexer;
 mod lower;
+mod params;
 mod parser;
 mod redact;
 mod types;
@@ -53,6 +54,7 @@ pub use frontend::Frontend;
 pub use lower::{
     lower, lower_expression, lower_select_item, parse_and_lower, parse_and_lower_named_expression,
 };
+pub use params::{ParameterMarker, parameter_markers};
 pub use redact::redact_sql;
 
 /// The deepest tree the parser builds, counted in nested expressions,
