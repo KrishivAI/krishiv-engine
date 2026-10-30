@@ -140,8 +140,15 @@ fn java_float(v: f32) -> String {
         "NaN".to_owned()
     } else if v.is_infinite() {
         if v > 0.0 { "Infinity" } else { "-Infinity" }.to_owned()
-    } else {
+    } else if v == 0.0 || (1e-3..1e7).contains(&v.abs()) {
         format!("{v:?}")
+    } else {
+        // Java switches to computerized scientific notation outside
+        // [1e-3, 1e7): `1.0E7`, `1.5E-4`.
+        let text = format!("{v:e}");
+        let (mantissa, exponent) = text.split_once('e').unwrap_or((&text, "0"));
+        let point = if mantissa.contains('.') { "" } else { ".0" };
+        format!("{mantissa}{point}E{exponent}")
     }
 }
 

@@ -5,8 +5,11 @@
 //! `array.sql` goldens and a Spark 4.2.0 run.
 //!
 //! The item must meet the array's element type (`Inputs::ArrayItem` casts
-//! both to it); a first argument that is not an array, or an item that does
-//! not meet it, is `DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES`. The result
+//! both to it). A first argument that is not an array is
+//! `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` for `array_append` and
+//! `array_prepend` and `DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES` for
+//! `array_insert`, which also gives the latter for an item that does not meet
+//! the element type. The result
 //! array may hold NULL when the array or the item may.
 
 use krishiv_common::error::{

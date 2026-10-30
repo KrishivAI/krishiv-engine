@@ -105,6 +105,12 @@ fn a_degree_other_than_one_two_or_infinity_is_refused() {
         (-1.0, "-1.0"),
         (f32::NEG_INFINITY, "-Infinity"),
         (f32::NAN, "NaN"),
+        // Java's `Float.toString` leaves plain notation outside [1e-3, 1e7).
+        (1e7, "1.0E7"),
+        (1.5e-4, "1.5E-4"),
+        (-2.5e10, "-2.5E10"),
+        (0.001, "0.001"),
+        (9_999_999.0, "9999999.0"),
     ] {
         for name in ["vector_norm", "vector_normalize"] {
             let (class, message) = error(name, &[&v, &floats(&[Some(degree)])]);

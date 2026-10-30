@@ -121,6 +121,16 @@ fn span(list: &ListArray, row: usize) -> (usize, usize) {
     )
 }
 
+/// `COLLECTION_SIZE_LIMIT_EXCEEDED.FUNCTION` for a result of `elements`.
+fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
+    CollectionSizeLimitExceededFunction {
+        function_name: format!("`{name}`"),
+        number_of_elements: elements.to_string(),
+        max_rounded_array_length: MAX_ARRAY_LENGTH.to_string(),
+    }
+    .into()
+}
+
 fn index(i: usize) -> Result<u32, KrishivError> {
     u32::try_from(i).map_err(|_| internal("an array past 2^32 elements".to_owned()))
 }
@@ -141,12 +151,7 @@ fn rebuild(
     for row in rows {
         if let Some(pieces) = row {
             if pieces.len() > limit {
-                return Err(CollectionSizeLimitExceededFunction {
-                    function_name: format!("`{name}`"),
-                    number_of_elements: pieces.len().to_string(),
-                    max_rounded_array_length: MAX_ARRAY_LENGTH.to_string(),
-                }
-                .into());
+                return Err(too_long(name, pieces.len()));
             }
             picked.extend_from_slice(pieces);
         }
@@ -212,6 +217,15 @@ fn edit_rows(
                 }
                 let len = i64::try_from(len).unwrap_or(i64::MAX);
                 let at = if p > 0 { p - 1 } else { len + p + 1 };
+                // The result length, known before any padding is allocated.
+                let total = if at < 0 {
+                    len + 1 - at
+                } else {
+                    len.max(at) + 1
+                };
+                if usize::try_from(total).map_or(true, |t| t > MAX_ARRAY_LENGTH) {
+                    return Err(too_long(name, total));
+                }
                 if at < 0 {
                     // Reaches past the front: the item, NULL padding, the array.
                     let pad = usize::try_from(-at).unwrap_or(0);

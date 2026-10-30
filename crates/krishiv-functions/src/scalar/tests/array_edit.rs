@@ -201,3 +201,25 @@ fn only_matching_element_types_bind() {
     );
     assert!(bind_scalar("array_compact", &[DataType::Int32.into()], &opts).is_err());
 }
+
+/// A position that would pad past the size limit fails before any padding is
+/// built (a 2^31 position would otherwise allocate gigabytes).
+#[test]
+fn insert_past_the_size_limit_is_refused_without_allocating() {
+    let a = lists(&[Some(&[Some(1)])]);
+    for position in [i32::MAX, i32::MIN, 2_147_483_633] {
+        let err = run(
+            "array_insert",
+            &[&a, &ints(&[Some(position)]), &ints(&[Some(0)])],
+        )
+        .expect_err("past the limit");
+        assert!(
+            err.starts_with("COLLECTION_SIZE_LIMIT_EXCEEDED.FUNCTION"),
+            "{position}: {err}"
+        );
+    }
+    // The largest position that still fits is not refused by the size check,
+    // so only the cheap boundary just under the limit is exercised here.
+    let ok = run("array_insert", &[&a, &ints(&[Some(3)]), &ints(&[Some(0)])]).expect("fits");
+    assert_eq!(rows(&ok), vec![Some(vec![Some(1), None, Some(0)])]);
+}
