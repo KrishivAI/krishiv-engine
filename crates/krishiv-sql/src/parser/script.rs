@@ -290,17 +290,6 @@ impl Parser<'_> {
         if self.any_kw_at(1, &["EXIT", "CONTINUE"]) && self.kw_at(2, "HANDLER") {
             return self.handler(start);
         }
-        // A qualified condition name is a syntax error.
-        if self.is_ident_at(1, false) && self.sym_at(2, Sym::Dot) {
-            let save = self.checkpoint();
-            self.bump();
-            let named = self.object_name().is_ok();
-            let condition = named && self.kw_at(0, "CONDITION");
-            if condition {
-                return self.fail();
-            }
-            self.restore(save);
-        }
         // `DECLARE name CONDITION ...` and `DECLARE name CURSOR ...`.
         if self.is_ident_at(1, false) && self.kw_at(2, "CONDITION") {
             self.bump();

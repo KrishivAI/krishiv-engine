@@ -3281,7 +3281,7 @@ fn script_statements() {
            DECLARE x INT DEFAULT 1;
            DECLARE VARIABLE a, b STRING;
            DECLARE oops CONDITION FOR SQLSTATE '22012';
-           DECLARE EXIT HANDLER FOR SQLEXCEPTION, NOT FOUND, SQLSTATE VALUE '42000', oops
+           DECLARE EXIT HANDLER FOR SQLSTATE VALUE '42000', oops
              BEGIN SELECT 'e'; END;
            SET x = x + 1;
            SET (a, b) = (SELECT 'p', 'q');
@@ -3338,9 +3338,9 @@ fn script_statements() {
         ]
     );
     let S::Handler(h) = &c.body[3] else { panic!() };
-    assert!(!h.continue_handler && h.conditions.len() == 4);
-    assert!(matches!(h.conditions[0], HandlerCondition::SqlException(_)));
-    assert!(matches!(&h.conditions[2], HandlerCondition::SqlState(s, _) if s == "42000"));
+    assert!(!h.continue_handler && h.conditions.len() == 2);
+    assert!(matches!(&h.conditions[0], HandlerCondition::SqlState(s, _) if s == "42000"));
+    assert!(matches!(&h.conditions[1], HandlerCondition::Name(n) if n.value == "oops"));
     assert!(matches!(h.body, HandlerBody::Compound(_)));
     let S::While(w) = &c.body[9] else { panic!() };
     assert_eq!(w.label.as_ref().map(|l| l.value.as_str()), Some("l1"));
@@ -3373,7 +3373,6 @@ fn script_syntax_errors_and_refusals() {
         "BEGIN RESET; END",
         "BEGIN SET VAR x = 1; END",
         "BEGIN IF 1 THEN SELECT 1; END; END",
-        "BEGIN DECLARE a.c CONDITION; END",
         "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION IF 1 THEN SELECT 1; END IF; END",
         "BEGIN END trailing",
     ] {
@@ -3395,4 +3394,175 @@ fn script_syntax_errors_and_refusals() {
             "{cursor}"
         );
     }
+}
+
+/// The structural errors of a script (design note T196, section 2.5), by class and a parameter.
+#[test]
+fn script_structure_is_checked_before_anything_runs() {
+    let d = ParserOptions::default();
+    let fails = |sql: &str| {
+        let e = parse_statement(sql, &d).unwrap_err().error;
+        (e.error_class().name().to_owned(), e.to_string())
+    };
+    let cases: &[(&str, &str, &str)] = &[
+        ("BEGIN a: BEGIN END b; END", "LABELS_MISMATCH", "`a`"),
+        (
+            "BEGIN BEGIN END b; END",
+            "END_LABEL_WITHOUT_BEGIN_LABEL",
+            "`b`",
+        ),
+        (
+            "BEGIN a: BEGIN a: BEGIN END; END; END",
+            "LABEL_OR_FOR_VARIABLE_ALREADY_EXISTS",
+            "`a`",
+        ),
+        (
+            "BEGIN a: BEGIN FOR a AS SELECT 1 DO SELECT 1; END FOR; END; END",
+            "LABEL_OR_FOR_VARIABLE_ALREADY_EXISTS",
+            "`a`",
+        ),
+        (
+            "BEGIN session: BEGIN END; END",
+            "LABEL_OR_FOR_VARIABLE_NAME_FORBIDDEN",
+            "`session`",
+        ),
+        (
+            "BEGIN FOR system AS SELECT 1 DO SELECT 1; END FOR; END",
+            "LABEL_OR_FOR_VARIABLE_NAME_FORBIDDEN",
+            "`system`",
+        ),
+        (
+            "BEGIN LEAVE nowhere; END",
+            "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
+            "LEAVE",
+        ),
+        (
+            "BEGIN ITERATE nowhere; END",
+            "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
+            "ITERATE",
+        ),
+        (
+            "BEGIN c: BEGIN ITERATE c; END; END",
+            "INVALID_LABEL_USAGE.ITERATE_IN_COMPOUND",
+            "`c`",
+        ),
+        (
+            "BEGIN SELECT 1; DECLARE x INT; END",
+            "INVALID_VARIABLE_DECLARATION.ONLY_AT_BEGINNING",
+            "`x`",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; DECLARE x INT; END",
+            "INVALID_VARIABLE_DECLARATION.ONLY_AT_BEGINNING",
+            "`x`",
+        ),
+        (
+            "BEGIN IF 1 = 1 THEN DECLARE x INT; END IF; END",
+            "INVALID_VARIABLE_DECLARATION.NOT_ALLOWED_IN_SCOPE",
+            "`x`",
+        ),
+        (
+            "BEGIN SELECT 1; DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION",
+            "",
+        ),
+        (
+            "BEGIN IF 1 = 1 THEN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; END IF; END",
+            "INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION",
+            "",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR nosuch SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.CONDITION_NOT_FOUND",
+            "`nosuch`",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION, SQLSTATE '42000' SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.INVALID_CONDITION_COMBINATION",
+            "",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR NOT FOUND, DIVIDE_BY_ZERO SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.INVALID_CONDITION_COMBINATION",
+            "",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION; DECLARE EXIT HANDLER FOR c, c SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.DUPLICATE_CONDITION_IN_HANDLER_DECLARATION",
+            "`c`",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '42000', SQLSTATE '42000' SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.DUPLICATE_SQLSTATE_IN_HANDLER_DECLARATION",
+            "42000",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 1; DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 2; END",
+            "DUPLICATE_EXCEPTION_HANDLER.CONDITION",
+            "DIVIDE_BY_ZERO",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '42000' SELECT 1; DECLARE EXIT HANDLER FOR SQLSTATE '42000' SELECT 2; END",
+            "DUPLICATE_EXCEPTION_HANDLER.SQLSTATE",
+            "42000",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION; DECLARE c CONDITION; END",
+            "DUPLICATE_CONDITION_IN_SCOPE",
+            "`c`",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; DECLARE c CONDITION; END",
+            "INVALID_ERROR_CONDITION_DECLARATION.NOT_AT_START_OF_COMPOUND_STATEMENT",
+            "`c`",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION FOR SQLSTATE '0A000x'; END",
+            "INVALID_SQLSTATE",
+            "0A000x",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION FOR SQLSTATE '01000'; END",
+            "INVALID_SQLSTATE",
+            "01000",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE 'XX000' SELECT 1; END",
+            "INVALID_SQLSTATE",
+            "XX000",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '4200' SELECT 1; END",
+            "INVALID_SQLSTATE",
+            "4200",
+        ),
+    ];
+    for (sql, class, mentions) in cases {
+        let (got, message) = fails(sql);
+        assert_eq!(got, *class, "{sql}: {message}");
+        assert!(message.contains(mentions), "{sql}: {message}");
+    }
+    // Names compare without case; a condition and an error class are both known to a handler.
+    for ok in [
+        "BEGIN Lbl: BEGIN LEAVE LBL; END LBL; END",
+        "BEGIN l: WHILE 1 = 1 DO ITERATE L; END WHILE; END",
+        "BEGIN DECLARE c CONDITION; DECLARE EXIT HANDLER FOR C SELECT 1; END",
+        "BEGIN DECLARE EXIT HANDLER FOR UNRESOLVED_COLUMN, DIVIDE_BY_ZERO SELECT 1; END",
+        "BEGIN DECLARE c CONDITION FOR SQLSTATE '42000'; DECLARE EXIT HANDLER FOR NOT FOUND SELECT 1; END",
+        "BEGIN a: BEGIN DECLARE c CONDITION; END; b: BEGIN DECLARE c CONDITION; END; END",
+        "BEGIN i: LOOP j: LOOP LEAVE i; END LOOP; END LOOP; END",
+        // Spark accepts these (design note T196, unit 0 record).
+        "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION, NOT FOUND SELECT 1; END",
+        "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE 'abc12' SELECT 1; END",
+        "BEGIN DECLARE OR REPLACE x INT; DECLARE a.y INT; END",
+    ] {
+        parse_statement(ok, &d).unwrap_or_else(|e| panic!("{ok}: {e:?}"));
+    }
+    // Case-sensitive names differ by case.
+    let strict = ParserOptions {
+        case_sensitive: true,
+        ..d
+    };
+    assert!(parse_statement("BEGIN a: BEGIN END A; END", &strict).is_err());
+    assert!(parse_statement("BEGIN a: BEGIN A: BEGIN END; END; END", &strict).is_ok());
 }

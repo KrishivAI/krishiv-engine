@@ -545,6 +545,18 @@ impl Session {
             Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
+            Statement::Script(_) => {
+                let off =
+                    crate::conf::get(&self.state.conf.snapshot(), "spark.sql.scripting.enabled")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("false"));
+                if off {
+                    return Err(krishiv_common::error::UnsupportedFeatureSqlScripting {
+                        sql_scripting_enabled: "\"spark.sql.scripting.enabled\"".to_owned(),
+                    }
+                    .into());
+                }
+                Err(unsupported_statement("SQL scripts"))
+            }
             Statement::Analyze(a) => self.exec_analyze(&a).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),

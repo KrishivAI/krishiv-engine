@@ -112,6 +112,13 @@ impl Session {
         let env = self.query_env();
         let statement = krishiv_sql::parse_statement(&bound, &env.parser)
             .map_err(|err| sql_context(err.error, &inner_text, err.span.start, err.span.end))?;
+        if matches!(statement, Statement::Script(_)) {
+            let shown = krishiv_sql::redact_sql(&statement_text);
+            return Err(krishiv_common::error::SqlScriptInExecuteImmediate {
+                sql_string: shown.fragment(0..statement_text.len()).to_owned(),
+            }
+            .into());
+        }
         if !e.into.is_empty() && !matches!(statement, Statement::Query(_)) {
             // Spark shows the statement as the user wrote it; text reaches errors redacted.
             let shown = krishiv_sql::redact_sql(&statement_text);

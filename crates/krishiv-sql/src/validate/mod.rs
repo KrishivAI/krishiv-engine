@@ -42,6 +42,7 @@ pub(crate) mod literal;
 mod pipe;
 mod relation;
 mod sample;
+mod script;
 mod transform;
 mod types;
 
@@ -203,7 +204,10 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                 }
                 return Ok(());
             }
-            Statement::Script(c) => return script(c, sql, opts),
+            Statement::Script(c) => {
+                script::check(c, opts)?;
+                return script(c, sql, opts);
+            }
             Statement::ExecuteImmediate(e) => {
                 let checker = Checker { sql, opts };
                 checker.expr(&e.query)?;
