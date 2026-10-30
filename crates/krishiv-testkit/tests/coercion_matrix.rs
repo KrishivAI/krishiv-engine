@@ -199,8 +199,9 @@ fn coercion_matrix_analyzes_as_spark_does() {
         }
     }
     let (total, passed) = (rows.len(), rows.len() - failures.len());
-    // Of 15,038 matrix rows, 9,111 resolve as Spark resolves them.
-    assert_eq!((total, passed), (15038, 9111));
+    // Of 15,038 matrix rows, 9,129 resolve as Spark resolves them (18 more
+    // since `date + int` became `date_add`).
+    assert_eq!((total, passed), (15038, 9129));
     let dir = root.join(MANIFEST_DIR);
     if std::env::var_os("KRISHIV_UPDATE_MANIFEST").is_some() {
         let mut by_form: BTreeMap<&str, Vec<Value>> = BTreeMap::new();

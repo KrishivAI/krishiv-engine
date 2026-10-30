@@ -6019,6 +6019,26 @@ fn is_pattern_function(name: &str, args: &[Bound]) -> bool {
     }
 }
 
+/// The function Spark rewrites `+`/`-` to when one operand is a date and
+/// the other a byte, short or int (`date_add`, `date_sub`), and whether the
+/// operands swap (`int + date`). Other mixes of dates and numbers stay
+/// refused by the coercion.
+fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static str, bool)> {
+    let days = |t: &ArgType| {
+        matches!(
+            t.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer)
+        )
+    };
+    let date = |t: &ArgType| matches!(t.data_type, Some(DataType::Date));
+    match op {
+        "+" if date(left) && days(right) => Some(("date_add", false)),
+        "+" if days(left) && date(right) => Some(("date_add", true)),
+        "-" if date(left) && days(right) => Some(("date_sub", false)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -6275,25 +6295,5 @@ mod tests {
             assert_eq!(ty.data_type, None);
             assert!(ty.nullable);
         }
-    }
-}
-
-/// The function Spark rewrites `+`/`-` to when one operand is a date and
-/// the other a byte, short or int (`date_add`, `date_sub`), and whether the
-/// operands swap (`int + date`). Other mixes of dates and numbers stay
-/// refused by the coercion.
-fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static str, bool)> {
-    let days = |t: &ArgType| {
-        matches!(
-            t.data_type,
-            Some(DataType::Byte | DataType::Short | DataType::Integer)
-        )
-    };
-    let date = |t: &ArgType| matches!(t.data_type, Some(DataType::Date));
-    match op {
-        "+" if date(left) && days(right) => Some(("date_add", false)),
-        "+" if days(left) && date(right) => Some(("date_add", true)),
-        "-" if date(left) && days(right) => Some(("date_sub", false)),
-        _ => None,
     }
 }
