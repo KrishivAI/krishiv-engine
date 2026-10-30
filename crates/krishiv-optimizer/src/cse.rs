@@ -1302,6 +1302,23 @@ mod tests {
     /// `WHEN` arm but the first condition, lambda bodies, and aggregate
     /// arguments under `FILTER (WHERE ...)`.
     #[test]
+    fn cse_columns_survive_a_shift_and_user_names_do_not() {
+        let col = |name: &str, id: u64| BoundColumn {
+            id: AttrId(id),
+            name: name.to_owned(),
+            data_type: krishiv_types::DataType::Boolean,
+            nullable: true,
+        };
+        assert!(is_cse_column(&col("cse_9", 9)));
+        // A self-join's `Shift` renumbers upward and keeps the name.
+        assert!(is_cse_column(&col("cse_9", 11)));
+        assert!(!is_cse_column(&col("cse_9", 3)));
+        assert!(!is_cse_column(&col("cse_x", 9)));
+        assert!(!is_cse_column(&col("cse_", 9)));
+        assert!(!is_cse_column(&col("total", 9)));
+    }
+
+    #[test]
     fn conditional_positions() {
         let (a, b, c) = (col(0), col(1), col(2));
         let flags = |e: &Expr| {
