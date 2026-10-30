@@ -1,5 +1,10 @@
 {
   "cases": {
+    "datetime": [
+      100,
+      101,
+      127
+    ],
     "depends-on-command": [
       1,
       2,
@@ -99,10 +104,7 @@
       96,
       97,
       98,
-      99,
-      100,
-      101,
-      127
+      99
     ],
     "nested-interval-types": [
       102,

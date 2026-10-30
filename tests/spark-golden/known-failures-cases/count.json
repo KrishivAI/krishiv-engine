@@ -1,15 +1,14 @@
 {
   "cases": {
     "depends-on-command": [
-      1,
-      2,
-      4,
+      4
+    ],
+    "fn-aggregate": [
       12
     ],
-    "legacy-configs": [
-      14,
-      16,
-      20
+    "nested-interval-types": [
+      1,
+      2
     ]
   },
   "file": "count",

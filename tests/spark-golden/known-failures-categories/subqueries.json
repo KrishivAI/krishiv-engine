@@ -10,6 +10,14 @@
     {
       "detail": "The feature correlated scalar subqueries",
       "order": 320
+    },
+    {
+      "detail": "outer references|correlated|self-join of a correlated",
+      "order": 510
+    },
+    {
+      "file": "^subquery/",
+      "order": 700
     }
   ],
   "summary": "general subquery unnesting (correlated shapes beyond TPC-H)",
