@@ -10,10 +10,18 @@ publish = false
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "tokio"] }
+krishiv-exec = { path = "../krishiv-exec", optional = true }
 krishiv-ui-assets = { path = "../krishiv-ui-assets" }
 tokio = { workspace = true, features = ["rt-multi-thread", "net"] }
 
+[features]
+# Prometheus exposition of the engine metrics snapshot (`GET /metrics`).
+# Additive and off by default: nothing in the default embedded build
+# enables it, and the route additionally needs `krishiv.metrics.enabled`.
+metrics-prometheus = ["dep:krishiv-exec"]
+
 [dev-dependencies]
+krishiv-exec = { path = "../krishiv-exec" }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
 
 [lints]

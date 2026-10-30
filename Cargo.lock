@@ -2137,6 +2137,7 @@ name = "krishiv-server"
 version = "0.1.0-alpha"
 dependencies = [
  "axum",
+ "krishiv-exec",
  "krishiv-ui-assets",
  "tokio",
 ]
@@ -4534,6 +4535,7 @@ name = "xtask"
 version = "0.1.0-alpha"
 dependencies = [
  "krishiv-common",
+ "krishiv-exec",
  "serde",
  "serde_json",
  "tempfile",

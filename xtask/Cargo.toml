@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 krishiv-common = { path = "../crates/krishiv-common" }
+krishiv-exec = { path = "../crates/krishiv-exec" }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
