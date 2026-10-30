@@ -83,6 +83,17 @@ impl Column {
         Self::new(self.expr.cast(to))
     }
 
+    /// `CAST(self AS to)` in ANSI mode whatever `spark.sql.ansi.enabled` says: an invalid value or an overflow fails.
+    /// Store assignment is ANSI under Spark's default policy even when the session's own casts are not.
+    #[must_use]
+    pub(crate) fn cast_ansi(self, to: DataType) -> Self {
+        Self::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(self.expr),
+            to,
+            mode: CastMode::Ansi,
+        }))
+    }
+
     /// `TRY_CAST(self AS to)`: invalid input becomes `NULL`, even under ANSI.
     ///
     /// ```

@@ -2,10 +2,6 @@
   "cases": {
     "depends-on-command": [
       15
-    ],
-    "sql-commands": [
-      2,
-      22
     ]
   },
   "file": "union",

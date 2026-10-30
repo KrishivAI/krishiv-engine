@@ -1,8 +1,6 @@
 {
   "cases": {
     "depends-on-command": [
-      14,
-      15,
       33
     ],
     "query-features": [
@@ -17,10 +15,6 @@
       38,
       40,
       41
-    ],
-    "sql-commands": [
-      1,
-      13
     ]
   },
   "file": "selectExcept",
