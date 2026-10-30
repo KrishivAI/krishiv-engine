@@ -306,15 +306,12 @@ impl Session {
         if v.temporary || v.global {
             return Err(unsupported("global and qualified temporary views"));
         }
-        if v.using.is_some() || v.query.is_none() {
+        let (None, Some(query)) = (&v.using, &v.query) else {
             return Err(unsupported("datasource views"));
-        }
+        };
         if v.schema_binding.is_some() {
             return Err(unsupported("WITH SCHEMA binding modes of views"));
         }
-        let Some(query) = &v.query else {
-            return Err(unsupported("datasource views"));
-        };
         let name = self.table_name(&v.name, &env)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -457,7 +454,7 @@ impl Session {
             Some(t) => Err(WrongCommandForObjectType {
                 operation: "DROP VIEW".to_owned(),
                 required_type: "VIEW".to_owned(),
-                object_name: name.quoted(),
+                object_name: format!("{}.{}", name.namespace, name.name),
                 found_type: if t.managed { "MANAGED" } else { "EXTERNAL" }.to_owned(),
                 alternative: "DROP TABLE".to_owned(),
             }
@@ -1123,12 +1120,22 @@ impl Session {
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
-        // A permanent view drops here too, as in Spark 4.2.
+        // `DROP TABLE` on a permanent view is refused as Spark's `DropTableCommand` does.
         if self.temp_entry_of(&name, &env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
             self.state.cache.invalidate_table(&name.name);
         } else if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) {
+            if table.view.is_some() {
+                return Err(WrongCommandForObjectType {
+                    operation: "DROP TABLE".to_owned(),
+                    required_type: "EXTERNAL or MANAGED".to_owned(),
+                    object_name: format!("{}.{}", name.namespace, name.name),
+                    found_type: "VIEW".to_owned(),
+                    alternative: "DROP VIEW".to_owned(),
+                }
+                .into());
+            }
             // Checked before the metadata goes: a refused delete must not orphan the files.
             let dir = self.deletable_dir(&table).await?;
             self.forget_cached(&name);

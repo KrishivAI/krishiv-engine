@@ -134,8 +134,14 @@ fn view_errors() {
         class(&s, "ALTER TABLE v SET TBLPROPERTIES ('a' = 'b')"),
         "EXPECT_TABLE_NOT_VIEW.USE_ALTER_VIEW"
     );
-    // DROP TABLE drops a permanent view, as Spark 4.2 does.
-    run(&s, "DROP TABLE v");
+    // DROP TABLE refuses a permanent view, as Spark's DropTableCommand does.
+    let e = block_on(s.sql("DROP TABLE v")).unwrap_err();
+    assert!(
+        e.to_string().contains("WRONG_COMMAND_FOR_OBJECT_TYPE"),
+        "{e}"
+    );
+    assert!(e.to_string().contains("default.v"), "{e}");
+    run(&s, "DROP VIEW v");
     assert_eq!(class(&s, "SELECT * FROM v"), "TABLE_OR_VIEW_NOT_FOUND");
     assert_eq!(
         class(&s, "CREATE VIEW nodb.x AS SELECT 1"),
@@ -307,4 +313,12 @@ fn a_view_keeps_its_columns_when_its_base_table_gains_one() {
     let n = block_on(async { s.sql("SELECT * FROM v").await?.collect().await }).unwrap()[0]
         .num_columns();
     assert_eq!(n, 2);
+}
+
+#[test]
+fn a_view_column_named_with_a_dot_or_star_reads_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE VIEW dv AS SELECT 1 AS `a.b`, 2 AS `x*`");
+    run(&s, "SELECT `a.b`, `x*` FROM dv");
 }

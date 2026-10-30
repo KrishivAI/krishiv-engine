@@ -1292,8 +1292,13 @@ impl Expander<'_> {
                 .iter()
                 .zip(&entry.columns)
                 .map(|(q, c)| {
+                    // The name is one part: `col(q)` would split a dot or read a trailing `*`.
+                    let stored = Expr::new(ExprNode::Column(krishiv_plan::ColumnRef {
+                        name: vec![q.clone()],
+                        plan_id: None,
+                    }));
                     Arc::new(
-                        crate::functions::col(q)
+                        crate::column::Column::new(stored)
                             .cast_ansi(c.data_type.clone())
                             .alias(&c.name)
                             .expr,
