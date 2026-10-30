@@ -2317,7 +2317,7 @@ fn written_files_are_seeded_by_their_job() {
             let mut writer = crate::FileWriter::new(
                 &env.io,
                 Arc::new(AvroFormat),
-                Arc::clone(&schema),
+                &schema,
                 o.clone(),
                 crate::WriteOptions {
                     store: StoreId::new(STORE),
@@ -2326,6 +2326,9 @@ fn written_files_are_seeded_by_their_job() {
                     job_uuid: job.to_owned(),
                     max_records_per_file: 0,
                     target_file_bytes: 0,
+                    partition_by: Vec::new(),
+                    partition_names: Vec::new(),
+                    zone: Some(0),
                 },
                 krishiv_memory::Reservation::new(pool, id),
             )
@@ -3968,7 +3971,7 @@ fn avro_target_file_bytes_rolls_files() {
         let mut writer = crate::FileWriter::new(
             &env.io,
             Arc::new(AvroFormat),
-            Arc::clone(&schema),
+            &schema,
             o,
             crate::WriteOptions {
                 store: StoreId::new(STORE),
@@ -3977,6 +3980,9 @@ fn avro_target_file_bytes_rolls_files() {
                 job_uuid: "job-roll".to_owned(),
                 max_records_per_file: 0,
                 target_file_bytes: 1000,
+                partition_by: Vec::new(),
+                partition_names: Vec::new(),
+                zone: Some(0),
             },
             krishiv_memory::Reservation::new(pool, id),
         )

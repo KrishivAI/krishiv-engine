@@ -453,7 +453,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_collects"
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"
-            | "aggregate_listagg" => 6,
+            | "aggregate_listagg"
+            | "write_files_partitioned" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
             n if n.starts_with("time_") || n.starts_with("geo_") => 6,

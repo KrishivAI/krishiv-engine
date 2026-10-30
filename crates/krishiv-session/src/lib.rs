@@ -66,7 +66,8 @@ pub use access::{PathPrefixPolicy, StatementInfo};
 pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
-    DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType, StorageLevel,
+    DataFrame, DataFrameReader, DataFrameWriter, DataFrameWriterV2, ExplainMode, GroupedData,
+    JoinType, StorageLevel,
 };
 pub use explain_graph::{
     GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,

@@ -33,7 +33,7 @@ from krishiv.sql.types import StructType, _struct_from_columns
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
-    from krishiv.sql.readwriter import DataFrameWriter
+    from krishiv.sql.readwriter import DataFrameWriter, DataFrameWriterV2
     from krishiv.sql.session import SparkSession
 
 _HOW = {
@@ -1910,3 +1910,12 @@ class DataFrame:
         from krishiv.sql.readwriter import DataFrameWriter
 
         return DataFrameWriter(self)
+
+    def writeTo(self, table: str) -> DataFrameWriterV2:
+        """Writes this :class:`DataFrame`'s rows to the table ``table``, as
+        ``pyspark.sql.DataFrame.writeTo``."""
+        from krishiv.sql.readwriter import DataFrameWriterV2
+
+        if not isinstance(table, str):
+            raise not_expected_type("table", "str", table)
+        return DataFrameWriterV2(self, table)

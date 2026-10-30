@@ -132,6 +132,7 @@ registry! {
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
@@ -290,7 +291,16 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
-            PhysNode::WriteFiles { write, .. } => write.is_some().then_some(Feature::WritePlan),
+            // A partitioned write needs a reader that
+            // lays files out by partition (the older fields would be
+            // ignored and the rows written flat).
+            PhysNode::WriteFiles { write, .. } => write.as_ref().map(|w| {
+                if w.partition_by.is_empty() {
+                    Feature::WritePlan
+                } else {
+                    Feature::PartitionedWrites
+                }
+            }),
             PhysNode::Scan(_)
             | PhysNode::OneRow
             | PhysNode::Filter { .. }

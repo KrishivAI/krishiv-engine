@@ -268,18 +268,17 @@ fn options_plural_and_format_csv_write_csv() {
 }
 
 #[test]
-fn partition_by_fails_with_unsupported_feature() {
+fn partition_by_writes_spark_partition_directories() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();
     let path = out(&dir, "t");
-    let err = block_on(s.table("people").write().partition_by(["name"]).save(&path)).unwrap_err();
-    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    assert!(
-        err.to_string().contains("writing partitioned output"),
-        "{err}"
-    );
-    // The failed write leaves nothing behind.
-    assert!(!dir.path().join("t").exists());
+    block_on(s.table("people").write().partition_by(["name"]).save(&path)).unwrap();
+    let parts: Vec<String> = std::fs::read_dir(dir.path().join("t"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("name="))
+        .collect();
+    assert!(!parts.is_empty(), "no name=<value> directories");
 }
 
 #[test]
@@ -341,15 +340,15 @@ fn write_to_collects_format_mode_options_and_partitions() {
         3,
         "the options reach the writer"
     );
-    let err = block_on(df.write_to(
+    block_on(df.write_to(
         "parquet",
         "error",
         &out(&dir, "p"),
         Vec::new(),
         vec!["name".to_owned()],
     ))
-    .unwrap_err();
-    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    .unwrap();
+    assert!(dir.path().join("p").is_dir());
 }
 
 #[test]
