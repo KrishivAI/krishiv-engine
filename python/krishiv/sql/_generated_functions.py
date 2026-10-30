@@ -46,11 +46,16 @@ __all__ = [
     "avg",
     "base64",
     "bin",
+    "bit_and",
     "bit_count",
     "bit_get",
     "bit_length",
+    "bit_or",
+    "bit_xor",
     "bitwiseNOT",
     "bitwise_not",
+    "bool_and",
+    "bool_or",
     "bround",
     "btrim",
     "cbrt",
@@ -69,6 +74,7 @@ __all__ = [
     "cos",
     "cosh",
     "cot",
+    "count_if",
     "covar_pop",
     "covar_samp",
     "crc32",
@@ -148,6 +154,7 @@ __all__ = [
     "left",
     "length",
     "levenshtein",
+    "listagg",
     "ln",
     "localtimestamp",
     "locate",
@@ -172,6 +179,7 @@ __all__ = [
     "mean",
     "min",
     "minute",
+    "mode",
     "monotonically_increasing_id",
     "month",
     "monthname",
@@ -211,6 +219,15 @@ __all__ = [
     "regexp_like",
     "regexp_replace",
     "regexp_substr",
+    "regr_avgx",
+    "regr_avgy",
+    "regr_count",
+    "regr_intercept",
+    "regr_r2",
+    "regr_slope",
+    "regr_sxx",
+    "regr_sxy",
+    "regr_syy",
     "repeat",
     "replace",
     "reverse",
@@ -274,12 +291,14 @@ __all__ = [
     "trim",
     "trunc",
     "try_add",
+    "try_avg",
     "try_divide",
     "try_element_at",
     "try_mod",
     "try_multiply",
     "try_parse_url",
     "try_subtract",
+    "try_sum",
     "try_to_binary",
     "try_to_date",
     "try_to_number",
@@ -345,9 +364,9 @@ def array_compact(col: ColumnOrName) -> Column:
     return _call("array_compact", _named(col, "col"))
 
 
-def array_insert(arr: ColumnOrName, pos: Any, value: Any) -> Column:
+def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column:
     """Calls the registry function ``array_insert``."""
-    return _call("array_insert", _named(arr, "arr"), _lit(pos, "pos"), _lit(value, "value"))
+    return _call("array_insert", _named(arr, "arr"), _int_or_col(pos, "pos"), _lit(value, "value"))
 
 
 def array_prepend(col: ColumnOrName, value: Any) -> Column:
@@ -410,6 +429,11 @@ def bin(col: ColumnOrName) -> Column:
     return _call("bin", _named(col, "col"))
 
 
+def bit_and(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bit_and``."""
+    return _call("bit_and", _named(col, "col"))
+
+
 def bit_count(col: ColumnOrName) -> Column:
     """Calls the registry function ``bit_count``."""
     return _call("bit_count", _named(col, "col"))
@@ -425,6 +449,16 @@ def bit_length(col: ColumnOrName) -> Column:
     return _call("bit_length", _named(col, "col"))
 
 
+def bit_or(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bit_or``."""
+    return _call("bit_or", _named(col, "col"))
+
+
+def bit_xor(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bit_xor``."""
+    return _call("bit_xor", _named(col, "col"))
+
+
 def bitwiseNOT(col: ColumnOrName) -> Column:
     """Deprecated alias; calls the registry function ``~``."""
     _deprecated("Deprecated in 3.2, use bitwise_not instead.")
@@ -434,6 +468,16 @@ def bitwiseNOT(col: ColumnOrName) -> Column:
 def bitwise_not(col: ColumnOrName) -> Column:
     """Calls the registry function ``~``."""
     return _call("~", _named(col, "col"))
+
+
+def bool_and(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bool_and``."""
+    return _call("bool_and", _named(col, "col"))
+
+
+def bool_or(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bool_or``."""
+    return _call("bool_or", _named(col, "col"))
 
 
 def bround(col: ColumnOrName, scale: Column | int | None = None) -> Column:
@@ -524,6 +568,11 @@ def cosh(col: ColumnOrName) -> Column:
 def cot(col: ColumnOrName) -> Column:
     """Calls the registry function ``cot``."""
     return _call("cot", _named(col, "col"))
+
+
+def count_if(col: ColumnOrName) -> Column:
+    """Calls the registry function ``count_if``."""
+    return _call("count_if", _named(col, "col"))
 
 
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column:
@@ -761,9 +810,9 @@ def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
     return _call("from_utc_timestamp", _named(timestamp, "timestamp"), _lit(tz, "tz"))
 
 
-def get(col: ColumnOrName, index: Any) -> Column:
+def get(col: ColumnOrName, index: ColumnOrName | int) -> Column:
     """Calls the registry function ``get``."""
-    return _call("get", _named(col, "col"), _lit(index, "index"))
+    return _call("get", _named(col, "col"), _int_or_col(index, "index"))
 
 
 def get_json_object(col: ColumnOrName, path: str) -> Column:
@@ -923,6 +972,11 @@ def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column
     return _call("levenshtein", _named(left, "left"), _named(right, "right"), *_opt(_lit, threshold, "threshold"))
 
 
+def listagg(col: ColumnOrName, delimiter: Column | str | None = None) -> Column:
+    """Calls the registry function ``listagg``."""
+    return _call("listagg", _named(col, "col"), *_opt(_lit, delimiter, "delimiter"))
+
+
 def ln(col: ColumnOrName) -> Column:
     """Calls the registry function ``ln``."""
     return _call("ln", _named(col, "col"))
@@ -1054,6 +1108,11 @@ def min(col: ColumnOrName) -> Column:
 def minute(col: ColumnOrName) -> Column:
     """Calls the registry function ``minute``."""
     return _call("minute", _named(col, "col"))
+
+
+def mode(col: ColumnOrName, deterministic: bool = False) -> Column:
+    """Calls the registry function ``mode``."""
+    return _call("mode", _named(col, "col"), _lit(deterministic, "deterministic"))
 
 
 def monotonically_increasing_id() -> Column:
@@ -1251,6 +1310,51 @@ def regexp_replace(string: ColumnOrName, pattern: str | Column, replacement: str
 def regexp_substr(str: ColumnOrName, regexp: ColumnOrName) -> Column:
     """Calls the registry function ``regexp_substr``."""
     return _call("regexp_substr", _named(str, "str"), _named(regexp, "regexp"))
+
+
+def regr_avgx(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_avgx``."""
+    return _call("regr_avgx", _named(y, "y"), _named(x, "x"))
+
+
+def regr_avgy(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_avgy``."""
+    return _call("regr_avgy", _named(y, "y"), _named(x, "x"))
+
+
+def regr_count(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_count``."""
+    return _call("regr_count", _named(y, "y"), _named(x, "x"))
+
+
+def regr_intercept(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_intercept``."""
+    return _call("regr_intercept", _named(y, "y"), _named(x, "x"))
+
+
+def regr_r2(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_r2``."""
+    return _call("regr_r2", _named(y, "y"), _named(x, "x"))
+
+
+def regr_slope(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_slope``."""
+    return _call("regr_slope", _named(y, "y"), _named(x, "x"))
+
+
+def regr_sxx(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_sxx``."""
+    return _call("regr_sxx", _named(y, "y"), _named(x, "x"))
+
+
+def regr_sxy(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_sxy``."""
+    return _call("regr_sxy", _named(y, "y"), _named(x, "x"))
+
+
+def regr_syy(y: ColumnOrName, x: ColumnOrName) -> Column:
+    """Calls the registry function ``regr_syy``."""
+    return _call("regr_syy", _named(y, "y"), _named(x, "x"))
 
 
 def repeat(col: ColumnOrName, n: ColumnOrName | int) -> Column:
@@ -1583,14 +1687,19 @@ def try_add(left: ColumnOrName, right: ColumnOrName) -> Column:
     return _call("try_add", _named(left, "left"), _named(right, "right"))
 
 
+def try_avg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``try_avg``."""
+    return _call("try_avg", _named(col, "col"))
+
+
 def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_divide``."""
     return _call("try_divide", _named(left, "left"), _named(right, "right"))
 
 
-def try_element_at(col: ColumnOrName, extraction: Any) -> Column:
+def try_element_at(col: ColumnOrName, extraction: ColumnOrName) -> Column:
     """Calls the registry function ``try_element_at``."""
-    return _call("try_element_at", _named(col, "col"), _lit(extraction, "extraction"))
+    return _call("try_element_at", _named(col, "col"), _named(extraction, "extraction"))
 
 
 def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column:
@@ -1611,6 +1720,11 @@ def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrN
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_subtract``."""
     return _call("try_subtract", _named(left, "left"), _named(right, "right"))
+
+
+def try_sum(col: ColumnOrName) -> Column:
+    """Calls the registry function ``try_sum``."""
+    return _call("try_sum", _named(col, "col"))
 
 
 def try_to_binary(col: ColumnOrName, format: ColumnOrName | None = None) -> Column:
