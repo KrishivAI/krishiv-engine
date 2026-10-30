@@ -4,10 +4,11 @@
 
 use std::sync::LazyLock;
 
-use super::tokenizer::{Eol, Unescaped};
 use crate::error::Result;
 use crate::options::{FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec};
 use crate::text::{Charset, LineSep, check_write_codec, invalid_option};
+use krishiv_kernels::csv::{Eol, Unescaped};
+pub(crate) use krishiv_kernels::csv::{ParseMode as Mode, Syntax};
 
 fn string(name: &'static str, doc: &'static str) -> OptionSpec {
     OptionSpec {
@@ -157,31 +158,6 @@ fn mode_spec() -> OptionSpec {
         metadata_key: false,
         doc: "How malformed records are handled.",
     }
-}
-
-/// How malformed records are handled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Mode {
-    Permissive,
-    DropMalformed,
-    FailFast,
-}
-
-/// The tokenizer's settings.
-#[derive(Debug, Clone)]
-pub(crate) struct Syntax {
-    pub sep: String,
-    pub quote: Option<char>,
-    pub escape: Option<char>,
-    pub escape_escape: Option<char>,
-    pub comment: Option<char>,
-    pub ltrim: bool,
-    pub rtrim: bool,
-    pub empty_value: String,
-    pub unescaped: Unescaped,
-    pub max_columns: usize,
-    pub max_chars: Option<usize>,
-    pub eol: Eol,
 }
 
 /// The parsed options of a read or write.

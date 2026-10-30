@@ -88,6 +88,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "schema_of_csv",
         "PySpark's `options` map parameter has no wrapper support yet; SQL only",
     ),
+    (
+        "from_csv",
+        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
+    ),
+    (
+        "to_csv",
+        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
+    ),
     ("space", "no PySpark function"),
     (
         "mean",
@@ -468,6 +476,7 @@ pub(super) fn rows() -> Vec<Row> {
             "concat_ws",
             "sep: str, *cols: ColumnOrName",
         ),
+        Row::new("json_tuple", "col: ColumnOrName, *fields: str"),
         Row::new("decode", "col: ColumnOrName, charset: str"),
         Row::new("elt", "*inputs: ColumnOrName"),
         Row::new("encode", "col: ColumnOrName, charset: str"),

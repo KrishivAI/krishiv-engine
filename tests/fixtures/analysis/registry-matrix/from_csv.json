@@ -1,0 +1,102 @@
+{
+  "entries": [
+    {
+      "id": "from_csv#06ad44e6ff8b/ansi_on",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "from_csv#06ad44e6ff8b/ansi_off",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "from_csv#127899b82682/ansi_on",
+      "reason": "SELECT from_csv(INTERVAL '1-2' YEAR TO MONTH, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#127899b82682/ansi_off",
+      "reason": "SELECT from_csv(INTERVAL '1-2' YEAR TO MONTH, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#4a9adabb81ad/ansi_on",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', CAST(NULL AS map<string,string>)) | resolves to struct<time:timestamp> where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "from_csv#4a9adabb81ad/ansi_off",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', CAST(NULL AS map<string,string>)) | resolves to struct<time:timestamp> where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "from_csv#4c498c42e082/ansi_on",
+      "reason": "SELECT from_csv('26/08/2015', INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#4c498c42e082/ansi_off",
+      "reason": "SELECT from_csv('26/08/2015', INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#5ad42ffdde7c/ansi_on",
+      "reason": "SELECT from_csv('1, 0.8', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#5ad42ffdde7c/ansi_off",
+      "reason": "SELECT from_csv('1, 0.8', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#5e629d04d625/ansi_on",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', CAST(map() AS map<string,string>)) | resolves to struct<time:timestamp> where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "from_csv#5e629d04d625/ansi_off",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', CAST(map() AS map<string,string>)) | resolves to struct<time:timestamp> where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "from_csv#79a41ed78b55/ansi_on",
+      "reason": "SELECT from_csv(INTERVAL '1 02:03:04' DAY TO SECOND, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#79a41ed78b55/ansi_off",
+      "reason": "SELECT from_csv(INTERVAL '1 02:03:04' DAY TO SECOND, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#8a95b4576118/ansi_on",
+      "reason": "SELECT from_csv(INTERVAL '1-2' YEAR TO MONTH, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#8a95b4576118/ansi_off",
+      "reason": "SELECT from_csv(INTERVAL '1-2' YEAR TO MONTH, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#b1f2e72ad580/ansi_on",
+      "reason": "SELECT from_csv('1, 0.8', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#b1f2e72ad580/ansi_off",
+      "reason": "SELECT from_csv('1, 0.8', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#c6d0dab49bdb/ansi_on",
+      "reason": "SELECT from_csv(INTERVAL '1 02:03:04' DAY TO SECOND, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#c6d0dab49bdb/ansi_off",
+      "reason": "SELECT from_csv(INTERVAL '1 02:03:04' DAY TO SECOND, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "from_csv#ce4cac384db9/ansi_on",
+      "reason": "SELECT from_csv('26/08/2015', INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#ce4cac384db9/ansi_off",
+      "reason": "SELECT from_csv('26/08/2015', INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+    },
+    {
+      "id": "from_csv#ff41fa0eef35/ansi_on",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "from_csv#ff41fa0eef35/ansi_off",
+      "reason": "SELECT from_csv('26/08/2015', 'time Timestamp', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    }
+  ],
+  "format_version": 1,
+  "function": "from_csv"
+}

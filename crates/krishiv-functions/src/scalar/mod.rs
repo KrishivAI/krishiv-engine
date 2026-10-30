@@ -30,9 +30,11 @@ mod bitwise;
 mod chars;
 mod codec;
 mod collection;
+mod csv;
 mod datetime;
 mod hash;
 mod json;
+mod json_tuple;
 mod map;
 mod math;
 mod misc;
@@ -421,7 +423,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 20] = [
+const FAMILIES: [(&[&str], Binder); 22] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -432,6 +434,7 @@ const FAMILIES: [(&[&str], Binder); 20] = [
     (hash::NAMES, hash::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
+    (json_tuple::NAMES, json_tuple::bind),
     (session::NAMES, session::bind),
     (bitwise::NAMES, bitwise::bind),
     (predicate::NAMES, predicate::bind),
@@ -442,6 +445,7 @@ const FAMILIES: [(&[&str], Binder); 20] = [
     (codec::NAMES, codec::bind),
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
+    (csv::NAMES, csv::bind),
 ];
 
 /// The name of every scalar function [`bind_scalar`] binds, aliases

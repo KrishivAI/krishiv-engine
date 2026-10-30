@@ -1,18 +1,23 @@
 {
   "cases": {
-    "depends-on-command": [
+    "datetime": [
       8,
       12,
       30,
-      40,
-      63,
-      64,
+      40
+    ],
+    "fn-aggregate": [
+      63
+    ],
+    "query-features": [
+      77,
+      79
+    ],
+    "subqueries": [
       72,
       73,
       74,
-      75,
-      77,
-      79
+      75
     ]
   },
   "file": "group-by-filter",

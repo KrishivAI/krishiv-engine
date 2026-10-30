@@ -35,7 +35,7 @@ use krishiv_types::DataType;
 
 use super::bind::unsupported;
 use super::exprs::{Bound, Cx, pretty, semantic_key};
-use super::ops::col_expr;
+use super::ops::{col_expr, has_generator};
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType};
 use crate::{
@@ -396,6 +396,12 @@ impl Resolver<'_> {
         });
         let keys: Vec<Attr> = gid.iter().cloned().collect();
         let items = self.select_items_in(&c, aggregates, env, "Aggregate", Some(&keys))?;
+        if items.iter().any(|b| has_generator(&b.expr)) {
+            return Err(unsupported(
+                "a generator in an aggregate SELECT list",
+                p.origin,
+            ));
+        }
         let bound = self.group_keys(&c, &flat, &items, env)?;
         let mut memo = HashMap::new();
         // The distinct expressions, and the sets as positions among them.

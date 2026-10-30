@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use krishiv_common::error::{ErrorClass, InvalidOptionsNonMapFunction, KrishivError};
 use krishiv_types::{ArrayType, DataType, DecimalType};
 
@@ -780,6 +782,73 @@ fn unary_math_nullability_matches_spark() {
         );
     }
     assert_eq!(result("pi", &[], &[]).unwrap(), d);
+}
+
+/// `min`/`max` take any orderable type — structs field by field — and
+/// refuse the rest with Spark's `INVALID_ORDERING_TYPE`.
+#[test]
+fn min_max_signatures_order_structs_field_by_field() {
+    use krishiv_types::{MapType, StructField, StructType};
+
+    let struct_of = |t: DataType| {
+        ty(DataType::Struct(StructType::new(vec![StructField::new(
+            "f", t, true,
+        )])))
+    };
+    let ordered = struct_of(DataType::Integer);
+    for name in ["min", "max"] {
+        assert_eq!(
+            result(name, std::slice::from_ref(&ordered), &[]).unwrap(),
+            nullable_struct()
+        );
+        let nested = struct_of(DataType::Struct(StructType::new(vec![
+            StructField::new("x", DataType::Double, true),
+            StructField::new("y", DataType::String, true),
+        ])));
+        assert!(result(name, &[nested], &[]).is_ok());
+        // A map field (or one nested in a struct) does not order.
+        let map = DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into());
+        let nested_map = struct_of(map.clone());
+        let nested_map = struct_of(nested_map.data_type.clone().unwrap());
+        for bad in [struct_of(map), nested_map] {
+            let err = result(name, &[bad], &[]).unwrap_err();
+            assert_eq!(
+                err.error_class(),
+                ErrorClass::DatatypeMismatchInvalidOrderingType,
+                "{name}"
+            );
+        }
+        // Spark orders an array field, the struct comparator does not take it:
+        // an unsupported feature, not an ordering mismatch.
+        let array = DataType::Array(krishiv_types::ArrayType::new(DataType::Integer, true).into());
+        let err = result(name, &[struct_of(array)], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{name}"
+        );
+        // `first`/`last` keep their old rule (any type, no ordering check).
+        for other in ["first", "last", "any_value"] {
+            assert!(
+                result(other, std::slice::from_ref(&ordered), &[]).is_ok(),
+                "{other}"
+            );
+        }
+    }
+}
+
+/// A nullable struct of one `INT` field, for `min`/`max` result checks.
+fn nullable_struct() -> ArgType {
+    use krishiv_types::{StructField, StructType};
+
+    ArgType::new(
+        DataType::Struct(StructType::new(vec![StructField::new(
+            "f",
+            DataType::Integer,
+            true,
+        )])),
+        true,
+    )
 }
 
 #[test]
@@ -2786,6 +2855,134 @@ fn csv_signatures() {
     ));
     let err = result("schema_of_csv", std::slice::from_ref(&s), &[Some(failed)]).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
+}
+
+/// `from_csv` and `to_csv`: Spark's checks (options map, schema shape, first
+/// argument types) with the golden's classes and parameters.
+#[test]
+fn from_to_csv_signatures() {
+    use krishiv_types::{MapType, StructField, StructType};
+    let s = ty(DataType::String);
+    let d = def("from_csv");
+    assert!(d.deterministic);
+    assert!(d.arity.accepts(2) && d.arity.accepts(3));
+    assert!(!d.arity.accepts(1) && !d.arity.accepts(4));
+    assert!(def("to_csv").arity.accepts(1) && def("to_csv").arity.accepts(2));
+    assert!(!def("to_csv").arity.accepts(0) && !def("to_csv").arity.accepts(3));
+    // `from_csv('1, 3.14', 'a INT, f FLOAT')` resolves to its struct.
+    let args = [s.clone(), s.clone()];
+    let consts = [
+        Some(Constant::String("1".to_owned())),
+        Some(Constant::String("a INT".to_owned())),
+    ];
+    let got = result("from_csv", &args, &consts).unwrap();
+    assert_eq!(
+        got.data_type,
+        Some(DataType::Struct(krishiv_types::StructType::new(vec![
+            StructField::new("a".to_owned(), DataType::Integer, true),
+        ])))
+    );
+    // A non-string schema is not a schema.
+    let err = result(
+        "from_csv",
+        &[s.clone(), ty(DataType::Integer)],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::Integral(1)),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidSchemaNonStringLiteral);
+    // A valid type that is not a struct.
+    let err = result(
+        "from_csv",
+        &[s.clone(), s.clone()],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("Array<int>".to_owned())),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidSchemaNonStructType);
+    assert!(err.to_string().contains("ARRAY<INT>"), "{err}");
+    // A malformed DDL.
+    let err = result(
+        "from_csv",
+        &[s.clone(), s.clone()],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("a InvalidType".to_owned())),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::ParseSyntaxError);
+    // A non-foldable, non-literal schema is `INVALID_SCHEMA.NON_STRING_LITERAL`
+    // (Spark 4.2.0, checked against a live server).
+    let err = (def("from_csv").result)(
+        &CallTypes::new(
+            &[s.clone(), s.clone()],
+            &[Some(Constant::String("1".to_owned())), None],
+        )
+        .with_literals(&[true, false]),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidSchemaNonStringLiteral);
+    // Options must be a map.
+    let err = result(
+        "from_csv",
+        &[s.clone(), s.clone(), ty(DataType::String)],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("a INT".to_owned())),
+            Some(Constant::String("x".to_owned())),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidOptionsNonMapFunction);
+    // A map with non-string values names its type.
+    let map_ty = DataType::Map(Arc::new(MapType::new(
+        DataType::String,
+        DataType::Integer,
+        true,
+    )));
+    let err = result(
+        "from_csv",
+        &[s.clone(), s, ArgType::new(map_ty, true)],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("a INT".to_owned())),
+            None,
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidOptionsNonStringType);
+    assert!(err.to_string().contains("MAP<STRING, INT>"), "{err}");
+    // `to_csv` needs a struct.
+    let err = result(
+        "to_csv",
+        &[ty(DataType::Integer)],
+        &[Some(Constant::Integral(1))],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnsupportedInputType
+    );
+    assert!(err.to_string().contains("`to_csv`"), "{err}");
+    let got = result(
+        "to_csv",
+        &[ArgType::new(
+            DataType::Struct(StructType::new(vec![StructField::new(
+                "a".to_owned(),
+                DataType::Integer,
+                true,
+            )])),
+            true,
+        )],
+        &[None],
+    )
+    .unwrap();
+    assert_eq!(got.data_type, Some(DataType::String));
 }
 
 /// `schema_of_csv` never executes: the analyzer replaces every

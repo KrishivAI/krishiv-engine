@@ -119,6 +119,7 @@ PYSPARK_SIGNATURES = {
     "isnull": "col",
     "json_array_length": "col",
     "json_object_keys": "col",
+    "json_tuple": "col, *fields",
     "kurtosis": "col",
     "lag": "col, offset=1, default=None",
     "last": "col, ignorenulls=False",

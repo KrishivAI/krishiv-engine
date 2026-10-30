@@ -3,9 +3,9 @@
 //! Spark 4.2's `url-functions.sql` run with Spark's rows, output names and
 //! error classes, as do the `schema_of_csv` statements of
 //! `csv-functions.sql` that use no other unimplemented function. The
-//! `from_csv`/`to_csv` statements (struct values, which Krishiv cannot
-//! type yet) and the `schema_of_csv` options statement (`map`, which is
-//! unimplemented) are skipped.
+//! `from_csv`/`to_csv` statements live in `csv_from_to.rs`; the
+//! `schema_of_csv` options statement (`map`, which is unimplemented) is
+//! skipped.
 #![cfg(test)]
 
 use std::sync::Arc;
