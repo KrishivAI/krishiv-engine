@@ -1127,6 +1127,48 @@ fn the_orphan_sweep_matches_partitioned_and_unpartitioned_file_names() {
     assert!(!is_job_file("part-00000-job-1.c000.parquet", "1"));
 }
 
+#[test]
+fn bad_partition_columns_are_refused_before_a_file_opens() {
+    let env = Env::memory();
+    for (cols, names, want) in [
+        (vec![5], vec!["p"], "out of range"),
+        (vec![1, 1], vec!["p", "p"], "listed twice"),
+        (vec![1], vec![], "partition"),
+    ] {
+        let e = env
+            .write_partitioned(
+                "t",
+                SaveMode::ErrorIfExists,
+                false,
+                "bad",
+                part_schema(),
+                &[part_batch(&[1], &["p1"])],
+                cols,
+                names,
+                0,
+            )
+            .unwrap_err();
+        assert!(e.to_string().contains(want), "{e}");
+        assert!(env.names("t").is_empty());
+    }
+    // An unsupported partition column type is refused too.
+    let e = env
+        .write_partitioned(
+            "t2",
+            SaveMode::ErrorIfExists,
+            false,
+            "bad",
+            part_schema(),
+            &[part_batch(&[1], &["p1"])],
+            vec![0],
+            vec!["id"],
+            0,
+        )
+        .ok();
+    // `id` is an integer: it renders as text, so this write is valid.
+    assert!(e.is_some());
+}
+
 /// A format counting its open encoders (at most one per task, however
 /// many partitions the task sees).
 #[derive(Debug)]

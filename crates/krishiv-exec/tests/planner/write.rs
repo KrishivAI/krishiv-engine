@@ -911,3 +911,49 @@ fn a_partitioned_write_sorts_by_the_partition_columns_below_the_writer() {
     assert!(text.contains("Sort"), "{text}");
     assert!(text.contains("partitioned by [s]"), "{text}");
 }
+
+/// A partition column the plan's input does not have is refused at
+/// instantiation, not indexed.
+#[test]
+fn a_write_with_an_out_of_range_partition_column_is_refused() {
+    let out = tempfile::tempdir().unwrap();
+    let store = Arc::new(LocalFileSystem::new_with_prefix(out.path()).unwrap());
+    let sched = IoScheduler::new(IoConfig::default());
+    sched.register_store(
+        StoreId::new("file://out"),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+    );
+    let plan = krishiv_exec::physical::PhysicalPlan::new(
+        PhysNode::WriteFiles {
+            input: Box::new(PhysNode::OneRow),
+            write: Some(WritePlan {
+                format: "parquet".to_owned(),
+                options: BTreeMap::new(),
+                store: "file://out".to_owned(),
+                dir: "result".to_owned(),
+                job_uuid: "job-1".to_owned(),
+                max_records_per_file: 0,
+                target_file_bytes: 0,
+                partition_by: vec![9],
+            }),
+        },
+        WritePlan::result_schema(),
+        krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
+        krishiv_exec::physical::ExprEnv {
+            ansi: true,
+            legacy_statistical_aggregate: false,
+            zone: None,
+            zone_name: None,
+            query_start_micros: 0,
+            user: Arc::from("u"),
+            map_key_dedup_last_win: false,
+        },
+    );
+    let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
+        .with_io(sched.context())
+        .with_formats(Arc::new(FormatRegistry::with_defaults()))
+        .with_config(Arc::new(Config::new()));
+    let e = instantiate(&plan, &worker).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("partition column 9"), "{e}");
+}

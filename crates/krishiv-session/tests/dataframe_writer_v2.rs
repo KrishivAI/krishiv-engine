@@ -235,3 +235,57 @@ fn options_and_properties_reach_the_table_and_the_name_may_be_qualified() {
     assert_eq!(rows(&s, "q").len(), 3);
     assert_eq!(rows(&s, "default.q").len(), 3);
 }
+
+#[test]
+fn the_bridge_call_runs_every_mode() {
+    let s = session();
+    let df = s.table("people");
+    let run = |table: &str, mode: &str, extra: bool| {
+        block_on(df.write_to_table_with(
+            table,
+            extra.then(|| "parquet".to_owned()),
+            if extra {
+                vec![("compression".to_owned(), "snappy".to_owned())]
+            } else {
+                Vec::new()
+            },
+            if extra {
+                vec![("k".to_owned(), "v".to_owned())]
+            } else {
+                Vec::new()
+            },
+            Vec::new(),
+            Vec::new(),
+            mode,
+            Some("true".to_owned()),
+        ))
+    };
+    run("b", "create", true).unwrap();
+    run("b", "append", false).unwrap();
+    assert_eq!(rows(&s, "b").len(), 6);
+    for mode in [
+        "replace",
+        "createOrReplace",
+        "overwrite",
+        "overwritePartitions",
+    ] {
+        assert!(run("b", mode, false).is_err(), "{mode}");
+    }
+    assert_eq!(
+        run("b", "bogus", false).unwrap_err().error_class(),
+        ErrorClass::InternalError
+    );
+    // Partition and cluster columns reach the writer and are refused.
+    let e = block_on(df.write_to_table_with(
+        "c",
+        None,
+        Vec::new(),
+        Vec::new(),
+        vec!["name".to_owned()],
+        vec!["id".to_owned()],
+        "create",
+        None,
+    ))
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}

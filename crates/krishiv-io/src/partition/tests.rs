@@ -165,3 +165,11 @@ fn column_names_are_escaped_like_values() {
         "a%2Fb=1/c%3Dd=2"
     );
 }
+
+#[test]
+fn partition_columns_of_different_lengths_are_refused() {
+    let a: ArrayRef = Arc::new(StringArray::from(vec!["x", "y"]));
+    let b: ArrayRef = Arc::new(StringArray::from(vec!["z"]));
+    let e = partition_segments(&[a, b], Some(0)).unwrap_err();
+    assert!(e.to_string().contains("different lengths"), "{e}");
+}
