@@ -168,7 +168,20 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
                 // columns there, over the `cse_*` columns here) adds nothing
                 // above: a second `optimize` pass derives such a predicate
                 // from the join condition again, and would stack it.
-                let defs = cse_definitions(plan);
+                // Only this projection's own definitions: a `cse_*` column
+                // from further down (the nullable side of a join) is NULL
+                // where the join extends, not its definition.
+                let defs: HashMap<AttrId, Arc<Expr>> = exprs
+                    .iter()
+                    .filter_map(|e| match &e.node {
+                        ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                            if crate::cse::is_cse_column(output) =>
+                        {
+                            Some((output.id, Arc::clone(expr)))
+                        }
+                        _ => None,
+                    })
+                    .collect();
                 let mut held: Vec<Arc<Expr>> = Vec::new();
                 let mut below = input;
                 while let PlanNode::Filter { input, predicate } = &below.node {
