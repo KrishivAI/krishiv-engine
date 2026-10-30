@@ -314,8 +314,10 @@ def test_writeto_partitioned_by_reports_unsupported(df: DataFrame) -> None:
         df.sparkSession.table("t").collect()
     assert bad.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
 
-    df.writeTo("u").partitionedBy("name").partitionedBy([]).create()
-    assert len(df.sparkSession.table("u").collect()) == 3
+    # An append ignores the layout the builder was given.
+    df.writeTo("u").create()
+    df.writeTo("u").partitionedBy("name").append()
+    assert len(df.sparkSession.table("u").collect()) == 6
 
 
 def test_writeto_cluster_by_reports_unsupported(df: DataFrame) -> None:
@@ -369,8 +371,8 @@ def test_writeto_signatures_match_pyspark() -> None:
     assert list(inspect.signature(W2.using).parameters) == ["self", "provider"]
     assert list(inspect.signature(W2.option).parameters) == ["self", "key", "value"]
     assert list(inspect.signature(W2.tableProperty).parameters) == ["self", "property", "value"]
-    assert list(inspect.signature(W2.partitionedBy).parameters) == ["self", "cols"]
-    assert list(inspect.signature(W2.clusterBy).parameters) == ["self", "cols"]
+    assert list(inspect.signature(W2.partitionedBy).parameters) == ["self", "col", "cols"]
+    assert list(inspect.signature(W2.clusterBy).parameters) == ["self", "col", "cols"]
     assert list(inspect.signature(W2.overwrite).parameters) == ["self", "condition"]
     for name in ("create", "replace", "createOrReplace", "append", "overwritePartitions"):
         assert list(inspect.signature(getattr(W2, name)).parameters) == ["self"], name

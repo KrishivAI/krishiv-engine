@@ -73,6 +73,9 @@ pub struct WriteOptions {
     pub partition_by: Vec<usize>,
     /// Partition column names (one per [`Self::partition_by`]).
     pub partition_names: Vec<String>,
+    /// The session time zone as a fixed offset in seconds, which renders
+    /// timestamp partition values; `None` when it is not a fixed offset.
+    pub zone: Option<i32>,
 }
 
 /// One file written.
@@ -295,7 +298,7 @@ impl FileWriter {
                     .ok_or_else(|| internal(format!("partition column {c} is out of range")))
             })
             .collect::<Result<_>>()?;
-        partition_segments(&columns)
+        partition_segments(&columns, self.options.zone)
     }
 
     /// Writes one partition's run: a new file when the key changed, then
@@ -314,9 +317,6 @@ impl FileWriter {
 
     /// `batch` without the partition columns.
     fn data_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        if self.options.partition_by.is_empty() {
-            return Ok(batch.clone());
-        }
         let columns: Vec<ArrayRef> = self
             .data_columns
             .iter()

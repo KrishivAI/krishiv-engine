@@ -103,20 +103,22 @@ pub fn partition_dir_name(names: &[String], segments: &[String]) -> String {
     names
         .iter()
         .zip(segments.iter())
-        .map(|(n, s)| format!("{n}={s}"))
+        .map(|(n, s)| format!("{}={s}", escape_partition_value(n)))
         .collect::<Vec<_>>()
         .join("/")
 }
 
-/// The `CAST(v AS STRING)` text of every row of `column` (legacy mode,
-/// UTC), or `None` for NULL rows. String carriers read as is; anything
+/// The `CAST(v AS STRING)` text of every row of `column` (legacy mode, in
+/// the session time zone `zone`, a fixed offset in seconds), or `None` for
+/// NULL rows. String carriers read as is; anything
 /// else goes through the cast kernel, so rendering matches the engine's
 /// own casts.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type the cast kernel
-/// cannot render as a string.
-pub fn partition_texts(column: &ArrayRef) -> Result<Vec<Option<String>>> {
+/// cannot render as a string, and for a timestamp column when the session
+/// time zone is not a fixed offset (`zone` is `None`).
+pub fn partition_texts(column: &ArrayRef, zone: Option<i32>) -> Result<Vec<Option<String>>> {
     match column.data_type() {
         DataType::Utf8 => Ok(column
             .as_string::<i32>()
@@ -134,7 +136,16 @@ pub fn partition_texts(column: &ArrayRef) -> Result<Vec<Option<String>>> {
             .map(|v| v.map(str::to_owned))
             .collect()),
         _ => {
-            let zone = FixedOffset(0);
+            let zone = match (zone, column.data_type()) {
+                (Some(offset), _) => FixedOffset(offset),
+                (None, DataType::Timestamp(_, Some(_))) => {
+                    return Err(unsupported(
+                        "partitioning by a timestamp column in a session time zone other than a fixed offset"
+                            .to_owned(),
+                    ));
+                }
+                (None, _) => FixedOffset(0),
+            };
             let opts = CastOptions {
                 mode: CastMode::Legacy,
                 time_zone: &zone,
@@ -151,11 +162,13 @@ pub fn partition_texts(column: &ArrayRef) -> Result<Vec<Option<String>>> {
 /// [`DEFAULT_PARTITION`].
 ///
 /// # Errors
-/// As [`partition_texts`]; `INTERNAL_ERROR` for columns of different
+/// As [`partition_texts`] with `zone`; `INTERNAL_ERROR` for columns of different
 /// lengths.
-pub fn partition_segments(columns: &[ArrayRef]) -> Result<Vec<Vec<String>>> {
-    let texts: Vec<Vec<Option<String>>> =
-        columns.iter().map(partition_texts).collect::<Result<_>>()?;
+pub fn partition_segments(columns: &[ArrayRef], zone: Option<i32>) -> Result<Vec<Vec<String>>> {
+    let texts: Vec<Vec<Option<String>>> = columns
+        .iter()
+        .map(|c| partition_texts(c, zone))
+        .collect::<Result<_>>()?;
     let rows = texts.first().map_or(0, Vec::len);
     if texts.iter().any(|t| t.len() != rows) {
         return Err(internal(

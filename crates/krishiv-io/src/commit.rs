@@ -90,6 +90,10 @@ pub struct DirectoryWrite {
     replaced: Vec<Path>,
     /// The highest task attempt observed, for the commit's orphan sweep.
     max_attempt: AtomicU32,
+    /// Whether the output is partitioned: an empty one then has no data
+    /// file (Spark writes only `_SUCCESS`), since a file at the root next
+    /// to the partition directories breaks partition discovery.
+    partitioned: bool,
 }
 
 impl DirectoryWrite {
@@ -155,6 +159,7 @@ impl DirectoryWrite {
             dynamic: dynamic_overwrite && matches!(mode, SaveMode::Overwrite),
             replaced,
             max_attempt: AtomicU32::new(0),
+            partitioned: false,
         }))
     }
 
@@ -163,6 +168,14 @@ impl DirectoryWrite {
     /// then skip the commit-time listing.
     pub fn note_attempt(&self, attempt: u32) {
         self.max_attempt.fetch_max(attempt, Ordering::Relaxed);
+    }
+
+    /// This write with a partitioned layout: an empty result writes no data
+    /// file.
+    #[must_use]
+    pub fn partitioned(mut self, partitioned: bool) -> Self {
+        self.partitioned = partitioned;
+        self
     }
 
     /// The writer options of task `task` (no `maxRecordsPerFile`, no
@@ -178,16 +191,20 @@ impl DirectoryWrite {
             target_file_bytes: 0,
             partition_by: Vec::new(),
             partition_names: Vec::new(),
+            zone: Some(0),
         }
     }
 
     /// Commits the write of `files` (all of them, from every committed
-    /// task): an empty file of `schema` if there are none, then every
+    /// task): an empty file of `schema` if there are none (none for a
+    /// partitioned output, which Spark leaves without data files), then every
     /// object of this write no committed task listed (a failed or late
     /// attempt's files, or orphans) is deleted, then the old objects of an
     /// overwrite are deleted, then `_SUCCESS` is written. Returns the files
-    /// of the output. Files listed twice (a retried task attempt rewriting
-    /// the same names) commit once.
+    /// of the output. Files listed twice (one task result
+    /// reported twice) commit once. Retried attempts write under their own
+    /// names (the attempt number is part of the job segment), so their files
+    /// are swept as orphans unless a committed task lists them.
     ///
     /// # Errors
     /// Encode and store failures. A failure while deleting the old objects
@@ -220,7 +237,7 @@ impl DirectoryWrite {
         max_attempt: u32,
     ) -> Result<Vec<WrittenFileInfo>> {
         let mut files = files;
-        if files.is_empty() {
+        if files.is_empty() && !self.partitioned {
             files.push(self.empty_file(io, format, schema, o).await?);
         }
         files = dedupe_by_path(files);
@@ -304,17 +321,16 @@ impl DirectoryWrite {
         files: &[WrittenFileInfo],
     ) -> Result<Vec<Path>> {
         use std::collections::BTreeSet;
-        // Every ancestor directory of a new file, strictly below the
-        // write's root (a file at the root has no partition directory).
+        // The directory of each new file (its leaf partition) when it is
+        // strictly below the write's root. Only leaves are replaced: with
+        // `partitionBy(a, b)` a write of `a=1/b=2` leaves `a=1/b=3` alone,
+        // and the listing of a leaf holds its data files only.
         let mut dirs: BTreeSet<Path> = BTreeSet::new();
         for f in files {
-            let mut dir = f.path.parent();
-            while let Some(d) = dir {
-                if d == self.dir || (!self.dir.as_ref().is_empty() && !d.prefix_matches(&self.dir))
-                {
-                    break;
-                }
-                dir = d.parent();
+            if let Some(d) = f.path.parent()
+                && d != self.dir
+                && (self.dir.as_ref().is_empty() || d.prefix_matches(&self.dir))
+            {
                 dirs.insert(d);
             }
         }
@@ -363,9 +379,10 @@ impl DirectoryWrite {
 }
 
 /// Whether `name` is a data file of the write with job id `job`: anchored
-/// to `part-<task>-<job>-c...` or `part-<task>-<job>_<attempt>-c...`, so a
-/// job id that is a suffix of another write's (`"1"` vs `"job-1"`) never
-/// matches the other's files.
+/// to `part-<task>-<job>-c<n>` or `part-<task>-<job>_<attempt>-c<n>` (and
+/// `.c<n>` for the files of a partitioned write), so a job id that is a
+/// suffix of another write's (`"1"` vs `"job-1"`) never matches the other's
+/// files.
 fn is_job_file(name: &str, job: &str) -> bool {
     let Some(rest) = name.strip_prefix("part-") else {
         return false;
@@ -373,18 +390,13 @@ fn is_job_file(name: &str, job: &str) -> bool {
     let Some(dash) = rest.find('-') else {
         return false;
     };
-    let after_task = &rest[dash + 1..];
-    if let Some(after_job) = after_task.strip_prefix(job) {
-        if let Some(after_dash) = after_job.strip_prefix("-c") {
-            // `c<n>`: the file number follows; the suffix check stays
-            // lenient so future suffixes still match.
-            return after_dash
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit());
-        }
-        if let Some(after_underscore) = after_job.strip_prefix('_') {
-            // `<attempt>-c<n>`: the attempt is digits, then `-c<n>`.
+    let Some(after_job) = rest[dash + 1..].strip_prefix(job) else {
+        return false;
+    };
+    // An optional `_<attempt>` (digits), then `-c<n>` or `.c<n>`; the
+    // suffix check stays lenient so future suffixes still match.
+    let after_attempt = match after_job.strip_prefix('_') {
+        Some(after_underscore) => {
             let digits = after_underscore
                 .bytes()
                 .take_while(u8::is_ascii_digit)
@@ -392,21 +404,21 @@ fn is_job_file(name: &str, job: &str) -> bool {
             if digits == 0 {
                 return false;
             }
-            if let Some(after_attempt) = after_underscore.get(digits..)
-                && let Some(after_c) = after_attempt.strip_prefix("-c")
-            {
-                return after_c.chars().next().is_some_and(|c| c.is_ascii_digit());
-            }
+            &after_underscore[digits..]
         }
-    }
-    false
+        None => after_job,
+    };
+    after_attempt
+        .strip_prefix("-c")
+        .or_else(|| after_attempt.strip_prefix(".c"))
+        .and_then(|after_c| after_c.chars().next())
+        .is_some_and(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
 mod tests;
 
-/// Files with repeated paths (a retried task attempt rewriting the same
-/// file names) commit once, in first-seen order.
+/// Files with repeated paths (one task result reported twice) commit once, in first-seen order.
 fn dedupe_by_path(files: Vec<WrittenFileInfo>) -> Vec<WrittenFileInfo> {
     use std::collections::HashSet;
     let mut seen = HashSet::new();

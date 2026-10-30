@@ -828,10 +828,9 @@ impl Session {
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
         let name = TableName::resolve(&parts, &env)?;
-        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
-            return Err(unsupported("partitioned tables"));
-        }
         match mode {
+            // An append ignores the layout the builder was given: the
+            // existing table's layout rules.
             V2Mode::Append => {
                 let table = self.table_for_write(&name, "INSERT", &env)?;
                 return self.insert_rows(&name, &table, df, &[], false, false).await;
@@ -844,6 +843,9 @@ impl Session {
                 .into());
             }
             V2Mode::Create => {}
+        }
+        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+            return Err(unsupported("partitioned tables"));
         }
         let warehouse = self.warehouse_dir()?;
         let provider = self.provider_of(spec.provider)?;

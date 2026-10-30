@@ -592,10 +592,6 @@ pub struct WritePlan {
     /// Input column indices the files are partitioned by (Spark directory layout).
     #[prost(uint64, repeated, tag = "8")]
     pub partition_by: ::prost::alloc::vec::Vec<u64>,
-    /// feature: partitioned_writes
-    /// Dynamic partition overwrite: replace only the partitions written.
-    #[prost(bool, tag = "9")]
-    pub dynamic_overwrite: bool,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -841,7 +841,6 @@ fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
         max_records_per_file: write.max_records_per_file,
         target_file_bytes: write.target_file_bytes,
         partition_by: indexes(&write.partition_by),
-        dynamic_overwrite: write.dynamic_overwrite,
     })
 }
 

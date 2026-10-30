@@ -126,7 +126,6 @@ pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
         max_records_per_file: 600,
         target_file_bytes: 1 << 20,
         partition_by: Vec::new(),
-        dynamic_overwrite: false,
     }
 }
 
@@ -801,7 +800,6 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 input: boxed(scan()),
                 write: Some(WritePlan {
                     partition_by: vec![1, 0],
-                    dynamic_overwrite: true,
                     ..write_plan()
                 }),
             },

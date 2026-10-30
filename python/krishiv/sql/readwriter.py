@@ -221,21 +221,20 @@ class DataFrameWriterV2:
         self._properties.append((property, value))
         return self
 
-    def partitionedBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriterV2:
+    def partitionedBy(self, col: str, *cols: str) -> DataFrameWriterV2:
         """Names of columns to partition by; each call replaces the columns of
         the one before. Only column names (``str``) are accepted. The engine
-        runs no partitioned tables yet, so any column fails ``create`` (and
-        friends) with ``KRISHIV_UNSUPPORTED_FEATURE``; an empty
-        ``partitionedBy`` is a no-op, as in Spark."""
-        self._partitioned_by = _column_names("cols", cols)
+        runs no partitioned tables yet, so any column fails ``create`` with
+        ``KRISHIV_UNSUPPORTED_FEATURE``; ``append`` ignores them."""
+        self._partitioned_by = _column_names("cols", (col, *cols))
         return self
 
-    def clusterBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriterV2:
+    def clusterBy(self, col: str, *cols: str) -> DataFrameWriterV2:
         """Names of columns to cluster by; each call replaces the columns of
         the one before. Only column names (``str``) are accepted. The engine
-        runs no clustered tables yet, so any column fails ``create`` (and
-        friends) with ``KRISHIV_UNSUPPORTED_FEATURE``."""
-        self._cluster_by = _column_names("cols", cols)
+        runs no clustered tables yet, so any column fails ``create`` with
+        ``KRISHIV_UNSUPPORTED_FEATURE``; ``append`` ignores them."""
+        self._cluster_by = _column_names("cols", (col, *cols))
         return self
 
     def create(self) -> None:

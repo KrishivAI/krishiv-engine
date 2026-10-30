@@ -1440,7 +1440,8 @@ impl Session {
         if !partitions.is_empty() && partitions.len() == schema.fields().len() {
             return Err(AllPartitionColumnsNotAllowed {}.into());
         }
-        let dynamic = !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config);
+        let dynamic =
+            !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
         // Cloud stores are built from the query snapshot with the write's
         // per-relation `fs.*` options overriding it (Spark's per-relation
@@ -1486,7 +1487,7 @@ impl Session {
             dynamic,
         )
         .await?
-        else {
+        .map(|w| w.partitioned(!partitions.is_empty())) else {
             // `ignore` found the path: nothing is written.
             return Ok(());
         };
@@ -1499,7 +1500,6 @@ impl Session {
             max_records_per_file: max_records,
             target_file_bytes: 0,
             partition_by: partitions.iter().map(|(i, _)| *i).collect(),
-            dynamic_overwrite: dynamic,
         })?;
         let worker = self.worker(env);
         let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
@@ -1521,12 +1521,38 @@ impl Session {
     }
 }
 
-/// Whether `spark.sql.sources.partitionOverwriteMode` is `DYNAMIC`.
-fn partition_overwrite_is_dynamic(config: &Config) -> bool {
-    config
+/// Whether the write overwrites dynamically: the `partitionOverwriteMode`
+/// write option (any case), else `spark.sql.sources.partitionOverwriteMode`,
+/// is `DYNAMIC`.
+///
+/// # Errors
+/// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for an option value other than
+/// `STATIC` or `DYNAMIC`.
+fn partition_overwrite_is_dynamic(
+    config: &Config,
+    options: &BTreeMap<String, OptionValue>,
+) -> Result<bool, KrishivError> {
+    let from_option = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("partitionOverwriteMode"));
+    if let Some((key, value)) = from_option {
+        let text = value.as_plain().unwrap_or("<secret>");
+        return match text.to_ascii_uppercase().as_str() {
+            "DYNAMIC" => Ok(true),
+            "STATIC" => Ok(false),
+            _ => Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
+                value: format!("'{text}'"),
+                option: format!("\"{key}\""),
+                format: "\"partitioned write\"".to_owned(),
+                reason: "expected STATIC or DYNAMIC".to_owned(),
+            }
+            .into()),
+        };
+    }
+    Ok(config
         .get(&PARTITION_OVERWRITE_MODE)
         .and_then(ConfigValue::as_str)
-        == Some("DYNAMIC")
+        == Some("DYNAMIC"))
 }
 
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
@@ -1639,9 +1665,18 @@ fn resolve_partitions(
                 "partition column `{name}` matches several columns"
             )));
         }
-        if !out.iter().any(|(i, _)| *i == index) {
-            out.push((index, field.name().clone()));
+        // Spark rejects a repeated partition column
+        // (`checkColumnNameDuplication`).
+        if out.iter().any(|(i, _)| *i == index) {
+            return Err(ColumnAlreadyExists {
+                column_name: format!("`{}`", field.name().replace('`', "``")),
+            }
+            .into());
         }
+        // Checked here so that nothing is started for a column type that
+        // has no partition path text.
+        krishiv_io::check_partition_column(field.name(), field.data_type())?;
+        out.push((index, field.name().clone()));
     }
     Ok(out)
 }

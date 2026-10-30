@@ -649,10 +649,6 @@ pub struct WritePlan {
     /// A partitioned write sorts its input by these columns directly
     /// below the writer.
     pub partition_by: Vec<usize>,
-    /// `DYNAMIC` (`spark.sql.sources.partitionOverwriteMode`): an
-    /// overwrite replaces only the partition directories the write
-    /// produced.
-    pub dynamic_overwrite: bool,
 }
 
 impl WritePlan {
@@ -742,8 +738,7 @@ plan_data!(struct WritePlan {
     job_uuid,
     max_records_per_file,
     target_file_bytes,
-    partition_by,
-    dynamic_overwrite
+    partition_by
 });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
 plan_data!(struct RangeNode { start, end, step, num_slices, output });

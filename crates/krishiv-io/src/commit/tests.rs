@@ -145,6 +145,7 @@ impl Env {
         let Some(w) = self.begin_dynamic(dir, mode, uuid, dynamic)? else {
             return Ok(Vec::new());
         };
+        let w = w.partitioned(!partition_by.is_empty());
         let o = FormatOptions::defaults(ParquetFormat.options());
         let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
         self.rt.block_on(async {
@@ -1003,6 +1004,129 @@ fn static_overwrite_replaces_everything_dynamic_keeps_other_partitions() {
     );
 }
 
+/// Rows of `(id, a, b)` for the two-level partition tests.
+fn two_level_batch(ids: &[i32], a: &[&str], b: &[&str]) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(ids.to_vec())),
+            Arc::new(arrow_array::StringArray::from(a.to_vec())),
+            Arc::new(arrow_array::StringArray::from(b.to_vec())),
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn dynamic_overwrite_replaces_only_the_leaf_partitions_it_wrote() {
+    let env = Env::memory();
+    let write = |mode: SaveMode, dynamic: bool, uuid: &str, batch: RecordBatch| {
+        env.write_partitioned(
+            "t",
+            mode,
+            dynamic,
+            uuid,
+            batch.schema(),
+            &[batch],
+            vec![1, 2],
+            vec!["a", "b"],
+            0,
+        )
+        .unwrap()
+    };
+    write(
+        SaveMode::ErrorIfExists,
+        false,
+        "base",
+        two_level_batch(&[1, 2], &["1", "1"], &["2", "3"]),
+    );
+    // Writing a=1/b=2 replaces that leaf only: a=1/b=3 survives.
+    write(
+        SaveMode::Overwrite,
+        true,
+        "d",
+        two_level_batch(&[9], &["1"], &["2"]),
+    );
+    assert_eq!(
+        env.names("t"),
+        vec![
+            "t/_SUCCESS".to_owned(),
+            "t/a=1/b=2/part-00000-d.c000.snappy.parquet".to_owned(),
+            "t/a=1/b=3/part-00000-base.c001.snappy.parquet".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn an_empty_partitioned_output_has_no_data_file_and_keeps_existing_partitions() {
+    let env = Env::memory();
+    env.write_partitioned(
+        "t",
+        SaveMode::ErrorIfExists,
+        false,
+        "base",
+        part_schema(),
+        &[part_batch(&[1], &["p1"])],
+        vec![1],
+        vec!["p"],
+        0,
+    )
+    .unwrap();
+    // An empty append writes only `_SUCCESS`: a data file at the root next
+    // to the partition directories would break partition discovery.
+    let files = env
+        .write_partitioned(
+            "t",
+            SaveMode::Append,
+            false,
+            "empty",
+            part_schema(),
+            &[],
+            vec![1],
+            vec!["p"],
+            0,
+        )
+        .unwrap();
+    assert!(files.is_empty());
+    assert_eq!(
+        env.names("t"),
+        vec![
+            "t/_SUCCESS".to_owned(),
+            "t/p=p1/part-00000-base.c000.snappy.parquet".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn the_orphan_sweep_matches_partitioned_and_unpartitioned_file_names() {
+    use super::is_job_file;
+    for name in [
+        "part-00000-job-c000.snappy.parquet",
+        "part-00003-job_2-c000.snappy.parquet",
+        "part-00000-job.c000.snappy.parquet",
+        "part-00003-job_2.c012.snappy.parquet",
+    ] {
+        assert!(is_job_file(name, "job"), "{name}");
+    }
+    for name in [
+        "part-00000-xjob.c000.parquet",
+        "part-00000-job_.c000.parquet",
+        "part-00000-job.cx.parquet",
+        "part-00000-job.parquet",
+        "_SUCCESS",
+        "other-00000-job.c000.parquet",
+    ] {
+        assert!(!is_job_file(name, "job"), "{name}");
+    }
+    // A job id that is a suffix of another write's never matches it.
+    assert!(!is_job_file("part-00000-job-1.c000.parquet", "1"));
+}
+
 /// A format counting its open encoders (at most one per task, however
 /// many partitions the task sees).
 #[derive(Debug)]
@@ -1235,7 +1359,7 @@ fn bad_partition_specs_fail_when_the_write_is_planned() {
     // The wide string carrier renders as is.
     let column: arrow_array::ArrayRef = Arc::new(LargeStringArray::from(vec![Some("x"), None]));
     assert_eq!(
-        crate::partition_texts(&column).unwrap(),
+        crate::partition_texts(&column, Some(0)).unwrap(),
         [Some("x".to_owned()), None]
     );
 }
@@ -1254,6 +1378,7 @@ impl WriteOptionsForTest {
             target_file_bytes: 0,
             partition_by: vec![1],
             partition_names: vec!["p".to_owned()],
+            zone: Some(0),
         }
     }
 }

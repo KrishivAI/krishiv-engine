@@ -42,7 +42,7 @@ fn non_ascii_and_empty_stay_or_default() {
     assert_eq!(escape_partition_value("héllo \u{1F600}"), "héllo \u{1F600}");
     // NULL and the empty string both become the default partition.
     let nulls: ArrayRef = Arc::new(StringArray::from(vec![None, Some(""), Some("x")]));
-    let segments = partition_segments(std::slice::from_ref(&nulls)).unwrap();
+    let segments = partition_segments(std::slice::from_ref(&nulls), Some(0)).unwrap();
     assert_eq!(
         segments,
         vec![
@@ -55,7 +55,7 @@ fn non_ascii_and_empty_stay_or_default() {
 
 #[test]
 fn values_render_as_cast_to_string() {
-    let texts = |column: ArrayRef| partition_texts(&column).unwrap();
+    let texts = |column: ArrayRef| partition_texts(&column, Some(0)).unwrap();
     assert_eq!(
         texts(Arc::new(StringViewArray::from(vec!["a", "b c"]))),
         [Some("a".to_owned()), Some("b c".to_owned())]
@@ -97,7 +97,7 @@ fn values_render_as_cast_to_string() {
 #[test]
 fn a_value_with_slash_and_equals_stays_one_segment() {
     let column: ArrayRef = Arc::new(StringArray::from(vec!["a/b=c"]));
-    let segments = partition_segments(std::slice::from_ref(&column)).unwrap();
+    let segments = partition_segments(std::slice::from_ref(&column), Some(0)).unwrap();
     assert_eq!(segments, vec![vec!["a%2Fb%3Dc".to_owned()]]);
     assert_eq!(
         partition_dir_name(&["k".to_owned()], &segments[0]),
@@ -123,5 +123,45 @@ fn names_follow_spark_byte_for_byte() {
         "c1=v1/c2=__HIVE_DEFAULT_PARTITION__"
     );
     let one: ArrayRef = Arc::new(Int32Array::from(vec![1]));
-    assert_eq!(partition_texts(&one).unwrap(), [Some("1".to_owned())]);
+    assert_eq!(
+        partition_texts(&one, Some(0)).unwrap(),
+        [Some("1".to_owned())]
+    );
+}
+
+#[test]
+fn timestamps_render_in_the_session_zone() {
+    use arrow_array::TimestampMicrosecondArray;
+    let ts: ArrayRef =
+        Arc::new(TimestampMicrosecondArray::from(vec![Some(0_i64)]).with_timezone("UTC"));
+    // 1970-01-01 00:00:00 UTC is 05:30 at +05:30 (19800 seconds).
+    assert_eq!(
+        partition_texts(&ts, Some(0)).unwrap(),
+        [Some("1970-01-01 00:00:00".to_owned())]
+    );
+    assert_eq!(
+        partition_texts(&ts, Some(19_800)).unwrap(),
+        [Some("1970-01-01 05:30:00".to_owned())]
+    );
+    // A session zone that is not a fixed offset cannot render them.
+    let e = partition_texts(&ts, None).unwrap_err();
+    assert!(e.to_string().contains("fixed offset"), "{e}");
+    // Other types do not depend on the zone.
+    let ints: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![7]));
+    assert_eq!(
+        partition_texts(&ints, None).unwrap(),
+        [Some("7".to_owned())]
+    );
+}
+
+#[test]
+fn column_names_are_escaped_like_values() {
+    use crate::partition_dir_name;
+    assert_eq!(
+        partition_dir_name(
+            &["a/b".to_owned(), "c=d".to_owned()],
+            &["1".to_owned(), "2".to_owned()]
+        ),
+        "a%2Fb=1/c%3Dd=2"
+    );
 }

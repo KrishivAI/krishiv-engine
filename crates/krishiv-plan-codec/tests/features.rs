@@ -365,8 +365,8 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
-    // A plain write plan is the `write_plan` feature; a layout (partitions,
-    // the dynamic overwrite) is the `partitioned_writes` feature.
+    // A plain write plan is the `write_plan` feature; a layout (partition
+    // columns) is the `partitioned_writes` feature.
     use krishiv_exec::physical::WritePlan;
     let base = inventory::write_plan();
     let node_of = |write: WritePlan| PhysNode::WriteFiles {
@@ -377,16 +377,10 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         feature_of(Construct::Node(&node_of(base.clone()))),
         Some(Feature::WritePlan)
     );
-    for write in [
-        WritePlan {
-            partition_by: vec![0],
-            ..base.clone()
-        },
-        WritePlan {
-            dynamic_overwrite: true,
-            ..base
-        },
-    ] {
+    for write in [WritePlan {
+        partition_by: vec![0],
+        ..base
+    }] {
         let node = node_of(write);
         assert_eq!(
             feature_of(Construct::Node(&node)),

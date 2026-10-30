@@ -723,6 +723,7 @@ impl Instantiation<'_> {
                 max_records_per_file: write.max_records_per_file,
                 target_file_bytes: write.target_file_bytes,
                 partition_by: write.partition_by.clone(),
+                zone: self.env.zone,
                 partition_names: write
                     .partition_by
                     .iter()

@@ -2328,6 +2328,7 @@ fn written_files_are_seeded_by_their_job() {
                     target_file_bytes: 0,
                     partition_by: Vec::new(),
                     partition_names: Vec::new(),
+                    zone: Some(0),
                 },
                 krishiv_memory::Reservation::new(pool, id),
             )
@@ -3981,6 +3982,7 @@ fn avro_target_file_bytes_rolls_files() {
                 target_file_bytes: 1000,
                 partition_by: Vec::new(),
                 partition_names: Vec::new(),
+                zone: Some(0),
             },
             krishiv_memory::Reservation::new(pool, id),
         )

@@ -419,3 +419,101 @@ fn the_partition_sort_spills_and_matches() {
         usize::try_from(n).unwrap()
     );
 }
+
+#[test]
+fn a_repeated_or_unsupported_partition_column_is_refused_before_anything_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let out = dir.path().join("dup");
+    let e = block_on(
+        s.table("t")
+            .write()
+            .partition_by(["part", "PART"])
+            .parquet(out.to_str().unwrap()),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::ColumnAlreadyExists);
+    assert!(!out.exists(), "nothing is written");
+
+    // A column type with no partition path text fails at analysis.
+    let list = Session::new().unwrap();
+    let s2 = block_on(list.sql("SELECT 1 AS id, array(1, 2) AS xs, 'a' AS part")).unwrap();
+    let out = dir.path().join("list");
+    let e = block_on(
+        s2.write()
+            .partition_by(["xs"])
+            .parquet(out.to_str().unwrap()),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(!out.exists(), "nothing is written");
+}
+
+#[test]
+fn the_write_option_overrides_the_overwrite_mode_conf() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let out = dir.path().join("t").to_str().unwrap().to_owned();
+    block_on(s.table("t").write().partition_by(["part"]).parquet(&out)).unwrap();
+    s.register_batches(
+        "u",
+        schema(),
+        vec![
+            RecordBatch::try_new(
+                schema(),
+                vec![
+                    Arc::new(Int32Array::from(vec![8])),
+                    Arc::new(StringArray::from(vec!["b"])),
+                ],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    // The conf says STATIC (the default); the option makes this DYNAMIC.
+    block_on(
+        s.table("u")
+            .write()
+            .partition_by(["part"])
+            .option("partitionOverwriteMode", "dynamic")
+            .mode("overwrite")
+            .parquet(&out),
+    )
+    .unwrap();
+    assert_eq!(
+        layout(dir.path().join("t").as_path()),
+        [
+            "_SUCCESS",
+            "part=a/part-00000-UUID.c000.snappy.parquet",
+            "part=b/part-00000-UUID.c000.snappy.parquet",
+            "part=c/part-00000-UUID.c002.snappy.parquet",
+        ]
+    );
+    // Anything but STATIC or DYNAMIC is refused.
+    let e = block_on(
+        s.table("u")
+            .write()
+            .partition_by(["part"])
+            .option("partitionOverwriteMode", "bogus")
+            .mode("overwrite")
+            .parquet(&out),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidFormatOptionValue);
+}
+
+#[test]
+fn an_empty_partitioned_write_leaves_only_the_success_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let out = dir.path().join("e");
+    block_on(
+        s.table("t")
+            .filter(krishiv_session::functions::lit(false))
+            .write()
+            .partition_by(["part"])
+            .parquet(out.to_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(layout(&out), ["_SUCCESS"]);
+}
