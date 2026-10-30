@@ -774,3 +774,48 @@ fn persisted_function_statements_change_nothing() {
         );
     }
 }
+
+static DENY_VIEW_READS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn deny_view_reads(securable: &Securable, p: Privilege) -> AccessDecision {
+    if DENY_VIEW_READS.load(std::sync::atomic::Ordering::SeqCst)
+        && p == Privilege::Select
+        && matches!(securable, Securable::View(v) if v.name == "inner_view")
+    {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// A policy that denies `SELECT` on a permanent view stops a query of it, even through another view,
+/// although every table it reads is allowed.
+#[test]
+fn querying_a_permanent_view_checks_the_view_securable() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(deny_view_reads));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW inner_view AS SELECT a FROM base",
+        "CREATE VIEW outer_view AS SELECT a FROM inner_view",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let read = |sql: &str| class(block_on(s.sql(sql)));
+    assert_eq!(read("SELECT * FROM outer_view"), "OK");
+    DENY_VIEW_READS.store(true, std::sync::atomic::Ordering::SeqCst);
+    let results = [
+        read("SELECT * FROM inner_view"),
+        read("SELECT * FROM outer_view"),
+        read("SELECT * FROM default.inner_view"),
+        read("SELECT * FROM base"),
+    ];
+    DENY_VIEW_READS.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(results[0], DENIED);
+    assert_eq!(results[1], DENIED, "a view read through another view");
+    assert_eq!(results[2], DENIED, "a qualified name");
+    assert_eq!(results[3], "OK", "the base table stays readable");
+}

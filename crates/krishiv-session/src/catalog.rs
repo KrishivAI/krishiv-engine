@@ -1087,7 +1087,7 @@ pub(crate) fn expand_temp_views(
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    expand_views(catalog, plan, case_sensitive, None)
+    expand_views(catalog, plan, case_sensitive, None).map(|(plan, _)| plan)
 }
 
 /// What expanding a permanent view needs: its SQL is parsed again with the session's parser options.
@@ -1108,15 +1108,25 @@ pub(crate) fn expand_views(
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
     stored: Option<&StoredViews<'_>>,
-) -> Result<Arc<LogicalPlan>, KrishivError> {
-    Expander {
+) -> Result<(Arc<LogicalPlan>, Vec<StoredViewRead>), KrishivError> {
+    let mut expander = Expander {
         catalog,
         case_sensitive,
         path: Vec::new(),
         stored,
         view_namespace: None,
-    }
-    .go(Arc::clone(plan), &mut Vec::new())
+        read: Vec::new(),
+    };
+    let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
+    Ok((plan, expander.read))
+}
+
+/// A permanent view the expansion inlined: its namespace and name as the catalog stores them. The
+/// analyzer never sees these reads, so the session authorizes each as a view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredViewRead {
+    pub(crate) namespace: String,
+    pub(crate) name: String,
 }
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
@@ -1128,6 +1138,8 @@ struct Expander<'a> {
     stored: Option<&'a StoredViews<'a>>,
     /// Inside a stored view: the namespace its bare table names belong to.
     view_namespace: Option<String>,
+    /// The permanent views inlined so far, in expansion order, without repeats.
+    read: Vec<StoredViewRead>,
 }
 
 impl Expander<'_> {
@@ -1263,6 +1275,13 @@ impl Expander<'_> {
         let Some(view) = &entry.view else {
             return Ok(plan);
         };
+        let read = StoredViewRead {
+            namespace: entry.namespace.clone(),
+            name: entry.name.clone(),
+        };
+        if !self.read.contains(&read) {
+            self.read.push(read);
+        }
         let key = format!("{namespace}.{table_key}");
         if self.path.contains(&key) {
             return Err(InternalError {

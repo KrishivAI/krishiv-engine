@@ -216,6 +216,28 @@ impl Session {
         Ok(())
     }
 
+    /// `SELECT` on the permanent view `namespace.name`: a query of the view, and the
+    /// statements that show its definition, columns or properties, need it besides
+    /// the checks on the tables the view reads.
+    pub(crate) async fn authorize_view_select(
+        &self,
+        namespace: &str,
+        name: &str,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let parts = [namespace.to_owned(), name.to_owned()];
+        let ident = table_ident(&*env.analysis.catalogs, &parts)
+            .ok_or_else(|| unplaceable("an empty name"))?;
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            &Securable::View(ident),
+            Privilege::Select,
+        )
+        .await;
+        audit(self, StatementClass::Read, r)
+    }
+
     /// The securables `object` stands for: as written, then folded.
     fn securables_of(
         &self,

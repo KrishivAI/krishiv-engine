@@ -1042,7 +1042,7 @@ impl Session {
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let next_source = || self.next_source_id();
-        let plan = crate::catalog::expand_views(
+        let (plan, views) = crate::catalog::expand_views(
             &self.state.catalog,
             plan,
             env.analysis.conf.case_sensitive,
@@ -1057,6 +1057,12 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
             }),
         )?;
+        // A permanent view is inlined before binding, so the analyzer never
+        // asks the policy about it: check each one here, before any read.
+        for view in &views {
+            self.authorize_view_select(&view.namespace, &view.name, env)
+                .await?;
+        }
         let plan = Plan::try_new(plan)?;
         let analyzed = DefaultAnalyzer
             .analyze(&plan, &env.analysis)
