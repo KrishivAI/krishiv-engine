@@ -194,7 +194,7 @@ impl Checker {
             if declared.contains(&name) {
                 return Err(at(
                     DuplicateConditionInScope {
-                        condition: quoted(&cond.name.value),
+                        condition: quoted(&cond.name.value.to_uppercase()),
                     },
                     cond.span,
                 ));
@@ -208,9 +208,18 @@ impl Checker {
         let mut names: Vec<(String, String)> = Vec::new();
         let mut states: Vec<String> = Vec::new();
         let mut broad = false;
+        // The broad conditions count as handled conditions too (two `SQLEXCEPTION` handlers clash).
+        let mut broad_names: Vec<(String, String)> = Vec::new();
         for condition in &h.conditions {
             match condition {
-                HandlerCondition::SqlException(_) | HandlerCondition::NotFound(_) => broad = true,
+                HandlerCondition::SqlException(_) => {
+                    broad = true;
+                    broad_names.push(("sqlexception".to_owned(), "SQLEXCEPTION".to_owned()));
+                }
+                HandlerCondition::NotFound(_) => {
+                    broad = true;
+                    broad_names.push(("not found".to_owned(), "NOT FOUND".to_owned()));
+                }
                 HandlerCondition::SqlState(state, span) => {
                     check_sqlstate(state, *span)?;
                     if states.contains(state) {
@@ -228,7 +237,7 @@ impl Checker {
                     if names.iter().any(|(f, _)| *f == folded) {
                         return Err(at(
                             InvalidHandlerDeclarationDuplicateConditionInHandlerDeclaration {
-                                condition: quoted(&name.value),
+                                condition: name.value.to_uppercase(),
                             },
                             name.span,
                         ));
@@ -236,7 +245,7 @@ impl Checker {
                     if !self.known_condition(&folded, &name.value) {
                         return Err(at(
                             InvalidHandlerDeclarationConditionNotFound {
-                                condition: quoted(&name.value),
+                                condition: name.value.to_uppercase(),
                             },
                             name.span,
                         ));
@@ -253,11 +262,12 @@ impl Checker {
             ));
         }
         // Two handlers of one compound for the same condition or SQLSTATE.
+        names.extend(broad_names);
         for (folded, written) in &names {
             if handled.contains(&(false, folded.clone())) {
                 return Err(at(
                     DuplicateExceptionHandlerCondition {
-                        condition: quoted(written),
+                        condition: written.to_uppercase(),
                     },
                     h.span,
                 ));
@@ -370,14 +380,14 @@ impl Checker {
                 match self.labels.iter().rev().find(|(l, _)| *l == name) {
                     None => Err(at(
                         InvalidLabelUsageDoesNotExist {
-                            label_name: quoted(&j.label.value),
+                            label_name: j.label.value.to_uppercase(),
                             statement_type: if leave { "LEAVE" } else { "ITERATE" }.to_owned(),
                         },
                         j.span,
                     )),
                     Some((_, Scope::Compound)) if !leave => Err(at(
                         InvalidLabelUsageIterateInCompound {
-                            label_name: quoted(&j.label.value),
+                            label_name: j.label.value.to_uppercase(),
                         },
                         j.span,
                     )),

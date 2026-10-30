@@ -3434,17 +3434,17 @@ fn script_structure_is_checked_before_anything_runs() {
         (
             "BEGIN LEAVE nowhere; END",
             "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
-            "LEAVE",
+            "NOWHERE",
         ),
         (
             "BEGIN ITERATE nowhere; END",
             "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
-            "ITERATE",
+            "NOWHERE",
         ),
         (
             "BEGIN c: BEGIN ITERATE c; END; END",
             "INVALID_LABEL_USAGE.ITERATE_IN_COMPOUND",
-            "`c`",
+            "C",
         ),
         (
             "BEGIN SELECT 1; DECLARE x INT; END",
@@ -3474,7 +3474,7 @@ fn script_structure_is_checked_before_anything_runs() {
         (
             "BEGIN DECLARE EXIT HANDLER FOR nosuch SELECT 1; END",
             "INVALID_HANDLER_DECLARATION.CONDITION_NOT_FOUND",
-            "`nosuch`",
+            "NOSUCH",
         ),
         (
             "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION, SQLSTATE '42000' SELECT 1; END",
@@ -3489,7 +3489,7 @@ fn script_structure_is_checked_before_anything_runs() {
         (
             "BEGIN DECLARE c CONDITION; DECLARE EXIT HANDLER FOR c, c SELECT 1; END",
             "INVALID_HANDLER_DECLARATION.DUPLICATE_CONDITION_IN_HANDLER_DECLARATION",
-            "`c`",
+            "C",
         ),
         (
             "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '42000', SQLSTATE '42000' SELECT 1; END",
@@ -3509,7 +3509,7 @@ fn script_structure_is_checked_before_anything_runs() {
         (
             "BEGIN DECLARE c CONDITION; DECLARE c CONDITION; END",
             "DUPLICATE_CONDITION_IN_SCOPE",
-            "`c`",
+            "`C`",
         ),
         (
             "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; DECLARE c CONDITION; END",
