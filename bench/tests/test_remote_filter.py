@@ -870,17 +870,29 @@ def test_the_http_readiness_probe_reports_a_closed_port_as_not_ready(tmp_path):
 
 
 def test_the_sigterm_handler_stops_the_container(tmp_path):
+    import signal
+
     from krishiv_bench.remote_filter_s3 import S3Server
 
     docker = FakeDocker()
+    before = signal.getsignal(signal.SIGTERM)
     srv = S3Server(tmp_path, _run=docker, _ready=lambda e: True)
-    srv.start()
-    with pytest.raises(SystemExit) as e:
-        srv._on_term(15, None)
-    assert e.value.code == 143
-    assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
-    srv.stop()  # idempotent: no second removal
-    assert sum(c[1] == "rm" for c in docker.calls) == 1
+    with srv:
+        handler = signal.getsignal(signal.SIGTERM)  # the one __enter__ installed
+        assert handler != before
+        assert callable(handler)
+        with pytest.raises(SystemExit) as e:
+            handler(signal.SIGTERM, None)
+        assert e.value.code == 143
+        assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
+    assert signal.getsignal(signal.SIGTERM) == before
+    assert sum(c[1] == "rm" for c in docker.calls) == 1  # stop is idempotent
+
+
+def test_each_server_gets_its_own_container_name(tmp_path):
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    assert S3Server(tmp_path).name != S3Server(tmp_path).name
 
 
 def test_s3_mode_serves_the_mirror_to_duckdb_and_polars_through_the_environment(monkeypatch, tmp_path):
@@ -994,3 +1006,24 @@ def test_a_real_container_serves_a_parquet_file_to_polars_and_duckdb(tmp_path):
         finally:
             for k in srv.env():
                 os.environ.pop(k, None)
+
+
+def test_an_s3_startup_failure_is_recorded_in_the_result(monkeypatch, tmp_path):
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    mirror = tmp_path / "mirror"
+    (mirror / "fw").mkdir(parents=True)
+    (mirror / "fw" / "p.parquet").write_bytes(b"x")
+    srv = S3Server(mirror / "fw", _run=FakeDocker(fail_on="run"), _ready=lambda e: True)
+    with pytest.raises(RuntimeError, match="docker run failed"):
+        run_remote_filter(str(mirror), ["duckdb"], None, 60, run=_scripted({}), reps=1, s3=True, _s3_server=srv)
+    (result,) = (tmp_path / "data").rglob("*_remote-filter.json")
+    assert "docker run failed" in json.loads(result.read_text())["error"]
+
+
+def test_remote_url_inputs_are_recorded_as_remote(monkeypatch, tmp_path):
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    run = _scripted({"duckdb": _fin()})
+    f = run_remote_filter('["https://example.invalid/a.parquet"]', ["duckdb"], None, 60, run=run, reps=1)
+    assert json.loads(f.read_text())["source"] == "remote"

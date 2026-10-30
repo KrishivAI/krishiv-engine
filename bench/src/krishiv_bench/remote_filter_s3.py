@@ -19,6 +19,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 IMAGE = "rclone/rclone:1.68.2"
@@ -33,7 +34,7 @@ class S3Server:
 
     def __init__(self, table_dir: Path, _run=subprocess.run, _ready=None, ready_timeout_s: float = 60):
         self.table_dir = Path(table_dir)
-        self.name = f"krishiv-bench-rf-{os.getpid()}"
+        self.name = f"krishiv-bench-rf-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self.endpoint = ""
         self._run = _run
         self._ready = _ready or self._http_ready

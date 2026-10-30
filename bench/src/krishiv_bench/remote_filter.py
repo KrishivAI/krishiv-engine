@@ -542,7 +542,7 @@ def run_remote_filter(
         "machine": machine_info(),
         "git": git_info(),
         "dataset": {"name": f"{HF_DATASET} {HF_SUBDIR}", "expected": expected, "revision": mirror_revision},
-        "source": "s3" if s3 else "local",
+        "source": "s3" if s3 else ("remote" if data_arg.strip().startswith("[") else "local"),
         "scopes": {},
     }
     work_root = data_root() / "tmp" / f"remote-filter-{os.getpid()}"
@@ -553,14 +553,14 @@ def run_remote_filter(
         server = _s3_server or S3Server(Path(data_arg) / TABLE)
     try:
         with contextlib.ExitStack() as stack, bench_lock() as waited:
-            if server is not None:
-                stack.enter_context(server)  # removed on error, exit and SIGTERM
-                data_arg = server.input_arg()
-                stack.enter_context(_environ(server.env()))
-                record["input"] = data_arg
             record["bench_lock_wait_s"] = waited
             record["loadavg_start"] = loadavg()
             try:
+                if server is not None:
+                    stack.enter_context(server)  # removed on error, exit and SIGTERM
+                    data_arg = server.input_arg()
+                    stack.enter_context(_environ(server.env()))
+                    record["input"] = data_arg
                 for cap in scopes:
                     record["scopes"][cap or "uncapped"] = run_scope(
                         names, data_arg, cap, timeout_s, reps, work_root, expected, run
