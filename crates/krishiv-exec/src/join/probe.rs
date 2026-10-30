@@ -386,25 +386,6 @@ pub(crate) fn emit_build(
     Ok((build_rows(shared, rows, table.arena(), &ids)?, done))
 }
 
-/// The next rows of `arena` from row `*from` on, all of which a right anti
-/// or right outer join returns as unmatched (its build rows with a NULL
-/// `=` key): at most `limit` per batch; `true` once the arena is done.
-pub(crate) fn emit_unmatched(
-    shared: &Shared,
-    rows: bool,
-    arena: &RowArena,
-    from: &mut u32,
-    limit: usize,
-) -> Result<(Option<Batch>, bool)> {
-    let n = u32::try_from(arena.len()).unwrap_or(u32::MAX);
-    let end = from
-        .saturating_add(u32::try_from(limit).unwrap_or(u32::MAX))
-        .min(n);
-    let ids: Vec<u32> = (*from..end).collect();
-    *from = end;
-    Ok((build_rows(shared, rows, arena, &ids)?, end >= n))
-}
-
 /// Rows `ids` of `arena` as the right join's output: the build columns,
 /// after NULL probe columns for a right outer join.
 fn build_rows(shared: &Shared, rows: bool, arena: &RowArena, ids: &[u32]) -> Result<Option<Batch>> {

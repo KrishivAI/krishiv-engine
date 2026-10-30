@@ -98,22 +98,16 @@ fn a_much_larger_right_input_builds_the_left_one() {
         "{outer:?}"
     );
     assert!(outer[0].contains("builds left (left: 10 rows"), "{outer:?}");
-    // A right anti or right outer join would keep build rows with a NULL
-    // `=` key in memory: a nullable key keeps Spark's side.
-    for (sql, join) in [
-        (
-            "SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
-            "HashJoin LeftAnti",
-        ),
-        (
-            "SELECT t.a, big.b FROM t LEFT JOIN big ON t.a = big.a",
-            "HashJoin LeftOuter",
-        ),
-    ] {
-        let js = joins(&env, sql);
-        assert!(js.len() == 1 && js[0].starts_with(join), "{sql}: {js:?}");
-        assert!(!js[0].contains("builds left"), "{sql}: {js:?}");
-    }
+    // Nullable keys flip too: build rows with a NULL `=` key are stored
+    // (and spill) with their partition, never indexed.
+    let anti = joins(
+        &env,
+        "SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
+    );
+    assert!(
+        anti.len() == 1 && anti[0].starts_with("HashJoin RightAnti"),
+        "{anti:?}"
+    );
 }
 
 #[test]

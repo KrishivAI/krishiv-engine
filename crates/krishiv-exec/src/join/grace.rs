@@ -370,15 +370,13 @@ impl Grace {
         }
     }
 
-    /// The next in-memory unit to emit build rows from (right joins, after
-    /// every probe driver's input ended): a partition `p < tables.len()` of
-    /// `tables`, or NULL-key arena `p - tables.len()` of the `nulls`.
-    fn next_emit(&mut self, tables: &[Option<JoinTable>], nulls: usize) -> Option<usize> {
+    /// The next in-memory partition to emit build rows from, of `tables`
+    /// (right joins, after every probe driver's input ended).
+    fn next_emit(&mut self, tables: &[Option<JoinTable>]) -> Option<usize> {
         let emit = self.emit.get_or_insert_with(|| {
-            let n = tables.len();
-            (0..n + nulls)
+            (0..tables.len())
                 .rev()
-                .filter(|&p| p >= n || tables[p].is_some())
+                .filter(|&p| tables[p].is_some())
                 .collect()
         });
         emit.pop()
@@ -828,23 +826,13 @@ pub(crate) async fn step(
         // The in-memory partitions' build rows first: every probe driver's
         // input ended, so their marks are final.
         if st.emitting.is_none() {
-            let next = lock(&built.grace).next_emit(&built.tables, built.nulls.len());
-            st.emitting = next.map(|p| (p, 0));
+            st.emitting = lock(&built.grace).next_emit(&built.tables).map(|p| (p, 0));
         }
         if let Some((p, from)) = &mut st.emitting {
-            let n = built.tables.len();
-            let (out, done) = if *p < n {
-                match built.tables.get(*p).and_then(Option::as_ref) {
-                    Some(t) => super::probe::emit_build(shared, hashing.rows(), t, from, limit)?,
-                    None => (None, true),
-                }
-            } else {
-                match built.nulls.get(*p - n) {
-                    Some(a) => {
-                        super::probe::emit_unmatched(shared, hashing.rows(), a, from, limit)?
-                    }
-                    None => (None, true),
-                }
+            let table = built.tables.get(*p).and_then(Option::as_ref);
+            let (out, done) = match table {
+                Some(t) => super::probe::emit_build(shared, hashing.rows(), t, from, limit)?,
+                None => (None, true),
             };
             if done {
                 st.emitting = None;
@@ -1910,6 +1898,7 @@ mod tests {
                 shared,
                 &hashing,
                 &keys,
+                keys.hashes(),
                 Some(&payload),
                 build.weights(),
                 &all,

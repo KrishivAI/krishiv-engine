@@ -167,15 +167,7 @@ impl Planner<'_> {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
             let other = orient(join_type, single_match, &probe_stats, &build_stats);
-            // A right anti or right outer join keeps its build rows with a
-            // NULL `=` key in memory (they are not spilled yet): it is not
-            // chosen when the would-be build side's `=` keys can be NULL.
-            let null_keys = keys.iter().zip(&probe_keys).any(|(k, &c)| {
-                !k.2 && probe.schema.fields().get(c).is_none_or(|f| f.is_nullable())
-            });
-            let unspilled =
-                matches!(other, JoinType::RightAnti | JoinType::RightOuter) && null_keys;
-            (other != join_type && !unspilled).then_some((other, probe_stats, build_stats))
+            (other != join_type).then_some((other, probe_stats, build_stats))
         } else {
             None
         };

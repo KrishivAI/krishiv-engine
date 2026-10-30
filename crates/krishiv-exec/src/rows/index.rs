@@ -70,6 +70,12 @@ pub trait RowSource {
     fn row(&self, id: u32) -> (&[u8], &[u8]);
     /// Row `id`'s stored hash `h`.
     fn hash(&self, id: u32) -> u64;
+    /// Whether row `id` goes into the index: a row a join keeps but no key
+    /// may find (a NULL `=` key) is stored and never indexed.
+    fn indexed(&self, id: u32) -> bool {
+        let _ = id;
+        true
+    }
 }
 
 /// Which index a table uses.
@@ -219,7 +225,7 @@ impl JoinIndex {
             let mut t: HashTable<u32> = HashTable::new();
             t.try_reserve(expect, |&id| g_of(id))
                 .map_err(|e| internal(format!("{e:?}")))?;
-            for id in 0..n {
+            for id in (0..n).filter(|&id| src.indexed(id)) {
                 match t.entry(g_of(id), |&o| eq(id, o), |&o| g_of(o)) {
                     Entry::Occupied(mut o) => {
                         next[id as usize] = *o.get();
@@ -238,7 +244,7 @@ impl JoinIndex {
             slots.try_reserve_exact(len).map_err(oom)?;
             slots.resize(len, 0);
             let mut mask = len - 1;
-            for id in 0..n {
+            for id in (0..n).filter(|&id| src.indexed(id)) {
                 if (keys + 1) * 2 > slots.len() {
                     slots = grow_salted(&slots, g_of)?;
                     mask = slots.len() - 1;

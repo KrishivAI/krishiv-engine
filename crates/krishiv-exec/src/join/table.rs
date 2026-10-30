@@ -98,6 +98,17 @@ pub(crate) fn arena_schema(format: ArenaFormat<'_>) -> Result<SchemaRef> {
     Ok(Arc::new(Schema::new(fields)))
 }
 
+/// The arena column flagging rows with a NULL `=` key (right anti and
+/// right outer joins: stored, emitted as unmatched, never indexed).
+pub(crate) const NULL_KEY: &str = "null_key";
+
+/// `schema` with the [`NULL_KEY`] column appended.
+pub(crate) fn with_null_key(schema: &SchemaRef) -> SchemaRef {
+    let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(Field::new(NULL_KEY, DataType::Boolean, false));
+    Arc::new(Schema::new(fields))
+}
+
 /// Bytes of the arrow-row key rows in arena chunks (0 for row-layout
 /// chunks: their index copies no key bytes).
 pub(crate) fn key_bytes(chunks: &[Batch]) -> usize {
@@ -203,6 +214,9 @@ pub(crate) struct RowArena {
     hashes: UInt64Array,
     keys: Cols,
     payload: Option<Cols>,
+    /// Rows with a NULL `=` key that a right anti or right outer join
+    /// keeps: stored, never indexed (column `null_key`, when present).
+    null_key: Option<arrow_array::BooleanArray>,
 }
 
 impl RowArena {
@@ -220,6 +234,10 @@ impl RowArena {
             .clone();
         let keys = Cols::of(&batch, "key")?.ok_or_else(bad)?;
         let payload = Cols::of(&batch, "payload")?;
+        let null_key = match batch.data().column_by_name(NULL_KEY) {
+            Some(c) => Some(c.as_boolean_opt().ok_or_else(bad)?.clone()),
+            None => None,
+        };
         if u32::try_from(batch.num_rows()).is_err() {
             return Err(internal("a join partition has over 2^32 rows".to_owned()));
         }
@@ -228,6 +246,7 @@ impl RowArena {
             hashes,
             keys,
             payload,
+            null_key,
         })
     }
 
@@ -308,6 +327,13 @@ impl RowSource for RowArena {
     #[inline]
     fn hash(&self, id: u32) -> u64 {
         self.hashes.values().get(id as usize).copied().unwrap_or(0)
+    }
+
+    #[inline]
+    fn indexed(&self, id: u32) -> bool {
+        self.null_key
+            .as_ref()
+            .is_none_or(|f| (id as usize) >= f.len() || !f.value(id as usize))
     }
 }
 
@@ -530,7 +556,7 @@ impl JoinTable {
                 keys.reserve(n, arrow.values().len());
                 let mut heads: Vec<u32> = Vec::new();
                 heads.try_reserve_exact(n).map_err(oom)?;
-                for row in 0..u32::try_from(n).unwrap_or(0) {
+                for row in (0..u32::try_from(n).unwrap_or(0)).filter(|&r| arena.indexed(r)) {
                     let (id, new) =
                         keys.insert_hashed(arrow.value(row as usize), arena.hash(row))?;
                     if new {

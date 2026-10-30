@@ -601,12 +601,21 @@ impl Shared {
         } else {
             None
         };
+        // The joins that return unmatched build rows store the rows with a
+        // NULL `=` key too, flagged, so they are never indexed.
+        let flag = |s: SchemaRef| {
+            if join_type.keeps_null_build_keys() {
+                table::with_null_key(&s)
+            } else {
+                s
+            }
+        };
         let row_arena = match keys.layout() {
-            Some(l) => Some(table::arena_schema(table::ArenaFormat::Rows {
+            Some(l) => Some(flag(table::arena_schema(table::ArenaFormat::Rows {
                 keys: l,
                 payload: row_payload.as_deref(),
                 arrow_payload: payload.is_some(),
-            })?),
+            })?)),
             None => None,
         };
         let arrow_format = table::ArenaFormat::Arrow {
@@ -617,7 +626,7 @@ impl Shared {
             single_match,
             probe_keys,
             build_keys,
-            arrow_arena: table::arena_schema(arrow_format)?,
+            arrow_arena: flag(table::arena_schema(arrow_format)?),
             row_arena,
             keys,
             payload,

@@ -72,10 +72,6 @@ impl Drop for BuildGlobal {
 #[derive(Debug, Default)]
 struct Collect {
     parts: Vec<Part>,
-    /// Build rows with a NULL `=` key (right anti, right outer) and their
-    /// memory.
-    nulls: Vec<Batch>,
-    null_memory: Vec<Reservation>,
     stored: u64,
     file_bytes: u64,
     /// Per partition: the distinct-key sketch of the rows sunk, row layout
@@ -93,10 +89,6 @@ pub(crate) struct Built {
     pub(crate) tables: Vec<Option<JoinTable>>,
     /// Level-0 partitions with build rows on disk (bit per partition).
     pub(crate) spilled: u64,
-    /// A right anti or right outer join's build rows with a NULL `=` key:
-    /// they match nothing, so they are kept outside every index and
-    /// emitted as unmatched (one arena per stored chunk).
-    pub(crate) nulls: Vec<RowArena>,
     /// The spilled partitions' work, shared by the probe drivers' flush.
     pub(crate) grace: Mutex<Grace>,
     /// Notified whenever a driver's claim on `grace` ends.
@@ -107,13 +99,6 @@ pub(crate) struct Built {
 struct BuildLocal {
     hashing: Hashing,
     parts: Vec<Part>,
-    /// This driver's build rows with a NULL `=` key that the join returns
-    /// (right anti, right outer), and their memory. They are reserved but
-    /// never spilled: a build side with more NULL-key rows than memory
-    /// holds fails with the pool's error instead of spilling them (open
-    /// issue).
-    nulls: Vec<Batch>,
-    null_memory: Reservation,
     spilled: Arc<AtomicU64>,
     signal: Arc<SpillSignal>,
     stored: u64,
@@ -128,6 +113,16 @@ struct BuildLocal {
 /// Register bits of a partition's distinct-key sketch: 1 KiB, 3.3% standard
 /// error, enough to presize an index.
 const SKETCH_BITS: u32 = 10;
+
+/// A well-mixed value for the `seq`-th stored row with a NULL `=` key
+/// (SplitMix64's finalizer): it decides the row's partition at every
+/// grace level, nothing else (the row is never looked up).
+fn null_spread(seq: u64) -> u64 {
+    let mut z = seq.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
 
 /// Builds each filter from its merged partial and publishes it, reserving
 /// it in `held` (a filter that does not fit keeps only its min/max range);
@@ -256,15 +251,17 @@ pub(crate) enum Payload {
     Rows(crate::rows::EncodedKeys),
 }
 
+/// `hashes`: each row's stored hash (its key's, or a spread value for a
+/// row with a NULL `=` key that a right join keeps, see [`null_spread`]).
 pub(crate) fn arena_chunk(
     shared: &Shared,
     hashing: &Hashing,
     keys: &Encoded,
+    hashes: &[u64],
     payload: Option<&Payload>,
     weights: &Weights,
     rows: &[usize],
 ) -> Result<Batch> {
-    let hashes = keys.hashes();
     let mut columns: Vec<ArrayRef> = vec![Arc::new(UInt64Array::from_iter_values(
         rows.iter().map(|&i| hashes[i]),
     ))];
@@ -283,6 +280,12 @@ pub(crate) fn arena_chunk(
             return Err(internal("payload rows without a layout".to_owned()));
         }
         (None, _) => {}
+    }
+    if shared.join_type.keeps_null_build_keys() {
+        // Rows with a NULL `=` key: stored, never indexed.
+        columns.push(Arc::new(arrow_array::BooleanArray::from_iter(
+            rows.iter().map(|&i| Some(!keys.is_valid(i))),
+        )));
     }
     let weights = match weights {
         Weights::Const(w) => Weights::Const(*w),
@@ -462,7 +465,6 @@ impl BuildGlobal {
         let _ = g.built.set(Built {
             tables: Vec::new(),
             spilled: 0,
-            nulls: Vec::new(),
             grace: Mutex::new(grace),
             grace_changed: Event::default(),
             _memory: Vec::new(),
@@ -507,8 +509,6 @@ impl Sink for BuildSink {
             parts: (0..state(global)?.hashing.fanout0())
                 .map(|_| Part::with_memory(memory.reservation()))
                 .collect(),
-            nulls: Vec::new(),
-            null_memory: memory.reservation(),
             spilled: Arc::clone(&state(global)?.spilled),
             signal: Arc::clone(memory.signal()),
             stored: 0,
@@ -559,37 +559,33 @@ impl Sink for BuildSink {
             (None, None) => None,
         };
         let mut by_part = vec![Vec::new(); g.hashing.fanout0()];
-        let hashes = keys.hashes();
         // A NULL `=` key matches nothing: the row is dropped, unless the
-        // join returns unmatched build rows; then it is kept apart from the
-        // partitions (no index may find it: in the row layout a NULL `=`
-        // key is not told apart from a value).
+        // join returns unmatched build rows; then it is stored flagged in
+        // its partition (it spills with it), and no index takes it (in the
+        // row layout a NULL `=` key is not told apart from a value). Its
+        // stored hash only places it: every NULL key hashes alike, so a
+        // spread value keeps such rows from piling into one partition that
+        // no repartitioning could split.
         let keep_null = s.join_type.keeps_null_build_keys();
-        let mut null_rows = Vec::new();
-        for i in 0..n {
-            if keys.is_valid(i) {
-                by_part[g.hashing.partition(hashes[i], 0)].push(i);
-            } else if keep_null {
-                null_rows.push(i);
-            }
-        }
-        let null_chunk = if null_rows.is_empty() {
-            None
+        let hashes: std::borrow::Cow<'_, [u64]> = if keep_null && any_invalid(keys.valid.as_ref()) {
+            let key_hashes = keys.hashes();
+            std::borrow::Cow::Owned(
+                (0..n)
+                    .map(|i| {
+                        if keys.is_valid(i) {
+                            key_hashes[i]
+                        } else {
+                            null_spread(l.stored + i as u64)
+                        }
+                    })
+                    .collect(),
+            )
         } else {
-            let chunk = arena_chunk(
-                s,
-                &g.hashing,
-                &keys,
-                payload.as_ref(),
-                input.weights(),
-                &null_rows,
-            )?;
-            let bytes = chunk.data().get_array_memory_size();
-            if l.null_memory.try_grow(bytes).is_err() {
-                return Ok(SinkStatus::NeedMemory { bytes });
-            }
-            Some((chunk, bytes))
+            std::borrow::Cow::Borrowed(keys.hashes())
         };
+        for i in (0..n).filter(|&i| keep_null || keys.is_valid(i)) {
+            by_part[g.hashing.partition(hashes[i], 0)].push(i);
+        }
         let mut chunks = Vec::new();
         let mut stored = 0;
         for (p, rows) in by_part.iter().enumerate().filter(|(_, r)| !r.is_empty()) {
@@ -600,6 +596,7 @@ impl Sink for BuildSink {
                     s,
                     &g.hashing,
                     &keys,
+                    &hashes,
                     payload.as_ref(),
                     input.weights(),
                     rows,
@@ -607,16 +604,7 @@ impl Sink for BuildSink {
             ));
         }
         if let Err(bytes) = reserve_chunks(&mut l.parts, &chunks) {
-            // All or nothing: the retry sinks the whole batch again.
-            let null_bytes = null_chunk.as_ref().map_or(0, |(_, b)| *b);
-            l.null_memory.shrink(null_bytes);
-            return Ok(SinkStatus::NeedMemory {
-                bytes: bytes + null_bytes,
-            });
-        }
-        if let Some((chunk, _)) = null_chunk {
-            stored += chunk.num_rows() as u64;
-            l.nulls.push(chunk);
+            return Ok(SinkStatus::NeedMemory { bytes });
         }
         // Only once the batch is stored: a `NeedMemory` retry sinks the same
         // batch again, which must not count its keys twice.
@@ -629,7 +617,8 @@ impl Sink for BuildSink {
         }
         if let Some((sketches, _)) = &mut l.sketches {
             for (sketch, rows) in sketches.iter_mut().zip(&by_part) {
-                for &i in rows {
+                // Distinct keys of the index: NULL-key rows are not in it.
+                for &i in rows.iter().filter(|&&i| keys.is_valid(i)) {
                     sketch.add(hashes[i]);
                 }
             }
@@ -651,8 +640,6 @@ impl Sink for BuildSink {
         for (dst, src) in c.parts.iter_mut().zip(l.parts) {
             dst.absorb(src);
         }
-        c.nulls.extend(l.nulls);
-        c.null_memory.push(l.null_memory);
         c.stored += l.stored;
         c.file_bytes += l.file_bytes;
         match (c.sketches.as_mut(), l.sketches) {
@@ -876,13 +863,6 @@ impl Sink for BuildSink {
             c.sketches = None;
             c.sketch_memory.clear();
             let mut memory = vec![index, filter_memory];
-            // One arena per chunk: no concatenation copy.
-            let schema = s.arena_schema(&g.hashing);
-            let nulls = std::mem::take(&mut c.nulls)
-                .iter()
-                .map(|chunk| RowArena::concat(schema, std::slice::from_ref(chunk)))
-                .collect::<Result<Vec<_>>>()?;
-            memory.append(&mut c.null_memory);
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
             for (p, part) in c.parts.iter_mut().enumerate() {
@@ -901,7 +881,6 @@ impl Sink for BuildSink {
                 .set(Built {
                     tables: all,
                     spilled,
-                    nulls,
                     grace: Mutex::new(grace),
                     grace_changed: Event::default(),
                     _memory: memory,

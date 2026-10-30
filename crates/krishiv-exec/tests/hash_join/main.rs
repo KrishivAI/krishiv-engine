@@ -498,6 +498,33 @@ async fn right_joins_reject_weighted_inputs() {
     }
 }
 
+/// A right anti / right outer join whose build side is half NULL `=` keys,
+/// under a budget that forces spill: the NULL-key rows spill with their
+/// partitions (never indexed) and come back as unmatched, as the oracle says.
+#[tokio::test(start_paused = true)]
+async fn null_key_build_rows_spill_with_their_partitions() {
+    let build: Vec<Row> = (0..8_000_i64)
+        .map(|i| r((i % 2 == 0).then_some(i % 2_000), Some(LONG_A), i % 20))
+        .collect();
+    let probe: Vec<Row> = (0..2_000_i64)
+        .map(|i| r(Some(i), Some(LONG_B), i % 20))
+        .collect();
+    for jt in [JoinType::RightAnti, JoinType::RightOuter] {
+        for row_layout in [false, true] {
+            let c = Case {
+                row_layout,
+                ..case(jt, 1, false, false)
+            };
+            let (got, q) = run_case(&c, &probe, &build, 256, 2, MIB).await;
+            assert_eq!(got, c.oracle(&probe, &build), "{jt:?} rows {row_layout}");
+            assert!(
+                metric(&q, "HashJoinBuild", "spilled_partitions") > 0,
+                "{jt:?} rows {row_layout}: no spill"
+            );
+        }
+    }
+}
+
 fn skewed(rows: usize, keys: i64) -> Vec<Row> {
     (0..rows)
         .map(|i| {
