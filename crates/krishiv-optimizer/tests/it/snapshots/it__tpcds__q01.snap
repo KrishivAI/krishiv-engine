@@ -1,0 +1,29 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [c_customer_id#84 ASC NULLS FIRST], true
+   +- Project [c_customer_id#84]
+      +- Join Inner, (s_store_sk#54 == ctr_store_sk#52)
+         :- Project [s_store_sk#54]
+         :  +- Filter (s_state#78 == 'TN')
+         :     +- Scan spark_catalog.default.store [s_store_sk#54, s_state#78]
+         +- Project [c_customer_id#84, ctr_store_sk#52]
+            +- Join Inner, (ctr_customer_sk#51 == c_customer_sk#83)
+               :- Scan spark_catalog.default.customer [c_customer_sk#83, c_customer_id#84]
+               +- Project [ctr_customer_sk#51, ctr_store_sk#52]
+                  +- Join Inner, ((ctr_store_sk#52 == ctr_store_sk#102) and (CAST(ctr_total_return#53 AS DECIMAL(24,7)) > (avg(ctr_total_return) * 1.2)#104))
+                     :- Project [ctr_customer_sk#153 AS ctr_customer_sk#51, ctr_store_sk#154 AS ctr_store_sk#52, ctr_total_return#155 AS ctr_total_return#53] (shared #1)
+                     :  +- Shift +105
+                     :     +- Aggregate [sr_customer_sk#3, sr_store_sk#7], [sr_customer_sk#3 AS ctr_customer_sk#48, sr_store_sk#7 AS ctr_store_sk#49, sum(sr_return_amt#11) AS ctr_total_return#50]
+                     :        +- Project [sr_customer_sk#3, sr_store_sk#7, sr_return_amt#11]
+                     :           +- Join Inner, (sr_returned_date_sk#0 == d_date_sk#20)
+                     :              :- Scan spark_catalog.default.store_returns [sr_returned_date_sk#0, sr_customer_sk#3, sr_store_sk#7, sr_return_amt#11]
+                     :              +- Project [d_date_sk#20]
+                     :                 +- Filter (d_year#26 == 2000)
+                     :                    +- Scan spark_catalog.default.date_dim [d_date_sk#20, d_year#26]
+                     +- Aggregate [ctr_store_sk#102], [(avg(ctr_total_return#103) * 1.2) AS (avg(ctr_total_return) * 1.2)#104, ctr_store_sk#102]
+                        +- Project [ctr_store_sk#102, ctr_total_return#103]
+                           +- Shift +50
+                              +- Shared #1, printed above

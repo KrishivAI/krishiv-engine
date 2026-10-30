@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-session/tests/explain.rs
+assertion_line: 178
 expression: "logical_and_physical(&s, 1)"
 ---
 == Parsed Logical Plan ==
@@ -17,17 +18,17 @@ Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST], true
 
 == Optimized Logical Plan ==
 Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST], true
-+- Aggregate [l_returnflag#8, l_linestatus#9], [l_returnflag#8, l_linestatus#9, sum(l_quantity#4) AS sum_qty#16, sum(l_extendedprice#5) AS sum_base_price#17, sum((l_extendedprice#5 * (1 - l_discount#6))) AS sum_disc_price#18, sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7))) AS sum_charge#19, avg(l_quantity#4) AS avg_qty#20, avg(l_extendedprice#5) AS avg_price#21, avg(l_discount#6) AS avg_disc#22, count(1) AS count_order#23]
-   +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9]
++- Aggregate [l_returnflag#8, l_linestatus#9], [l_returnflag#8, l_linestatus#9, sum(l_quantity#4) AS sum_qty#16, sum(l_extendedprice#5) AS sum_base_price#17, sum(cse_24#24) AS sum_disc_price#18, sum((cse_24#24 * (1 + l_tax#7))) AS sum_charge#19, avg(l_quantity#4) AS avg_qty#20, avg(l_extendedprice#5) AS avg_price#21, avg(l_discount#6) AS avg_disc#22, count(1) AS count_order#23]
+   +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, (l_extendedprice#5 * (1 - l_discount#6)) AS cse_24#24]
       +- Filter (l_shipdate#10 <= DATE '1998-09-02')
          +- Scan spark_catalog.default.lineitem [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10]
 
 == Physical Plan ==
 Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST]
 +- Exchange rangepartitioning(l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST)
-   +- Project [l_returnflag#8, l_linestatus#9, sum(l_quantity#4)#4611686018427387913 AS sum_qty#16, sum(l_extendedprice#5)#4611686018427387914 AS sum_base_price#17, sum((l_extendedprice#5 * (1 - l_discount#6)))#4611686018427387915 AS sum_disc_price#18, sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7)))#4611686018427387916 AS sum_charge#19, avg(l_quantity#4)#4611686018427387917 AS avg_qty#20, avg(l_extendedprice#5)#4611686018427387918 AS avg_price#21, avg(l_discount#6)#4611686018427387919 AS avg_disc#22, count(1)#4611686018427387920 AS count_order#23]
-      +- HashAggregate keys=[l_returnflag#8, l_linestatus#9], functions=[sum(l_quantity#4), sum(l_extendedprice#5), sum((l_extendedprice#5 * (1 - l_discount#6))), sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7))), avg(l_quantity#4), avg(l_extendedprice#5), avg(l_discount#6), count(1)]
+   +- Project [l_returnflag#8, l_linestatus#9, sum(l_quantity#4)#4611686018427387913 AS sum_qty#16, sum(l_extendedprice#5)#4611686018427387914 AS sum_base_price#17, sum(cse_24#24)#4611686018427387915 AS sum_disc_price#18, sum((cse_24#24 * (1 + l_tax#7)))#4611686018427387916 AS sum_charge#19, avg(l_quantity#4)#4611686018427387917 AS avg_qty#20, avg(l_extendedprice#5)#4611686018427387918 AS avg_price#21, avg(l_discount#6)#4611686018427387919 AS avg_disc#22, count(1)#4611686018427387920 AS count_order#23]
+      +- HashAggregate keys=[l_returnflag#8, l_linestatus#9], functions=[sum(l_quantity#4), sum(l_extendedprice#5), sum(cse_24#24), sum((cse_24#24 * (1 + l_tax#7))), avg(l_quantity#4), avg(l_extendedprice#5), avg(l_discount#6), count(1)]
          +- Exchange hashpartitioning(l_returnflag#8, l_linestatus#9)
-            +- Project [l_returnflag#8, l_linestatus#9, l_quantity#4, l_extendedprice#5, (l_extendedprice#5 * (1 - l_discount#6)), ((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7)), l_quantity#4, l_extendedprice#5, l_discount#6]
-               +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9]
+            +- Project [l_returnflag#8, l_linestatus#9, l_quantity#4, l_extendedprice#5, cse_24#24, (cse_24#24 * (1 + l_tax#7)), l_quantity#4, l_extendedprice#5, l_discount#6]
+               +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, (l_extendedprice#5 * (1 - l_discount#6)) AS cse_24#24]
                   +- Scan spark_catalog.default.lineitem [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10], PushedFilters: [(l_shipdate#10 <= DATE '1998-09-02')]

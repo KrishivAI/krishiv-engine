@@ -22,10 +22,35 @@ enum Item<'a> {
     Expr(&'a Expr, bool),
 }
 
+/// A hasher for the addresses of plan nodes: they are already well spread,
+/// so a multiply replaces SipHash (these sets are walked for every
+/// expression of every rule).
+#[derive(Default)]
+pub(crate) struct AddrHasher(u64);
+
+impl std::hash::Hasher for AddrHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(*b)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.0 = (self.0 ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+/// A set of node addresses.
+pub(crate) type AddrSet<T> = HashSet<*const T, std::hash::BuildHasherDefault<AddrHasher>>;
+
 /// Visits `e` and every expression and relation of its subquery plans
 /// once each, without recursing.
 fn walk<'a>(e: &'a Expr, mut f: impl FnMut(Item<'a>)) {
-    let mut seen: HashSet<*const ()> = HashSet::new();
+    let mut seen: AddrSet<()> = AddrSet::default();
     let mut stack = vec![Item::Expr(e, false)];
     while let Some(item) = stack.pop() {
         let key = match item {
@@ -185,20 +210,29 @@ pub(crate) fn disjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
+/// A resolved scalar call of a builtin, without a filter.
+pub(crate) fn call_builtin(
+    op: Builtin,
+    args: Vec<Arc<Expr>>,
+    data_type: DataType,
+) -> ResolvedFunction {
+    let nullable = args.iter().any(|a| nullable(a));
+    ResolvedFunction {
+        id: FunctionId::Builtin(op),
+        kind: FunctionKind::Scalar,
+        args,
+        distinct: false,
+        filter: None,
+        data_type,
+        nullable,
+        deterministic: true,
+    }
+}
+
 /// A resolved scalar call of a builtin.
 pub(crate) fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
-    let nullable = args.iter().any(|a| nullable(a));
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-        ResolvedFunction {
-            id: FunctionId::Builtin(op),
-            kind: FunctionKind::Scalar,
-            args,
-            distinct: false,
-            filter: None,
-            data_type,
-            nullable,
-            deterministic: true,
-        },
+        call_builtin(op, args, data_type),
     ))))
 }
 

@@ -1,0 +1,23 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [(sum_sales#102 - avg_monthly_sales#103) ASC NULLS FIRST, s_store_name#78 ASC NULLS FIRST, i_category#12 ASC NULLS FIRST, i_class#10 ASC NULLS FIRST, i_brand#8 ASC NULLS FIRST, s_company_name#90 ASC NULLS FIRST, d_moy#53 ASC NULLS FIRST, sum_sales#102 ASC NULLS FIRST, avg_monthly_sales#103 ASC NULLS FIRST], true
+   +- Project [i_category#12, i_class#10, i_brand#8, s_store_name#78, s_company_name#90, d_moy#53, sum_sales#102, _we0#104 AS avg_monthly_sales#103]
+      +- Filter (CASE WHEN (NOT (_we0#104 == 0.000000)) THEN (abs((sum_sales#102 - _we0#104)) / _we0#104) ELSE CAST(NULL AS DECIMAL(38,16)) END > 0.1000000000000000)
+         +- Window [avg(sum_sales#102) OVER (PARTITION BY i_category#12, i_brand#8, s_store_name#78, s_company_name#90 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS _we0#104], [i_category#12, i_brand#8, s_store_name#78, s_company_name#90], []
+            +- Aggregate [i_category#12, i_class#10, i_brand#8, s_store_name#78, s_company_name#90, d_moy#53], [i_category#12, i_class#10, i_brand#8, s_store_name#78, s_company_name#90, d_moy#53, sum(ss_sales_price#35) AS sum_sales#102]
+               +- Project [s_store_name#78, s_company_name#90, d_moy#53, ss_sales_price#35, i_brand#8, i_class#10, i_category#12]
+                  +- Join Inner, (ss_store_sk#29 == s_store_sk#73)
+                     :- Scan spark_catalog.default.store [s_store_sk#73, s_store_name#78, s_company_name#90]
+                     +- Project [d_moy#53, ss_store_sk#29, ss_sales_price#35, i_brand#8, i_class#10, i_category#12]
+                        +- Join Inner, (ss_sold_date_sk#22 == d_date_sk#45)
+                           :- Project [d_date_sk#45, d_moy#53]
+                           :  +- Filter (d_year#51 == 1999)
+                           :     +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_year#51, d_moy#53]
+                           +- Project [ss_sold_date_sk#22, ss_store_sk#29, ss_sales_price#35, i_brand#8, i_class#10, i_category#12]
+                              +- Join Inner, (ss_item_sk#24 == i_item_sk#0)
+                                 :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#22, ss_item_sk#24, ss_store_sk#29, ss_sales_price#35]
+                                 +- Filter (((i_category#12 IN ('Books', 'Electronics', 'Sports')) and (i_class#10 IN ('computers', 'stereo', 'football'))) or ((i_category#12 IN ('Men', 'Jewelry', 'Women')) and (i_class#10 IN ('shirts', 'birdal', 'dresses'))))
+                                    +- Scan spark_catalog.default.item [i_item_sk#0, i_brand#8, i_class#10, i_category#12]
