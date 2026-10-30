@@ -449,6 +449,35 @@ fn a_derived_filter_is_not_stacked_over_a_common_subexpression_projection() {
     );
 }
 
+/// Seeds 12940773005452159778 and 661053208515384776 of
+/// `random_queries_reach_the_lowest_operator`: common-subexpression
+/// elimination runs last, and reading a `cse_*` column in place of its
+/// expression leaves columns unread (the first query's aggregate output
+/// `x2.a`, now only read as `cse_8`; the second's join-side column under a
+/// shift). The second optimization pruned them, so the plan was not a fixed
+/// point. The pass is now followed by a prune.
+#[test]
+fn common_subexpression_elimination_leaves_nothing_to_prune() {
+    for seed in [12_940_773_005_452_159_778_u64, 661_053_208_515_384_776] {
+        let sql = Gen::new(seed).top();
+        let plan = support::resolve(&sql, &support::ctx());
+        let optimized = optimize(&plan).unwrap();
+        let again = optimize(&optimized).unwrap();
+        assert!(
+            again.structurally_eq(&optimized),
+            "seed {seed}: {sql}: not a fixed point:\n{}\n{}",
+            optimized.root(),
+            again.root()
+        );
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}: {sql}"
+        );
+    }
+}
+
 /// Seed 3574806867649217214 of `random_queries_reach_the_lowest_operator`:
 /// the aggregate's input is already a semi join on its key (the `LEFT SEMI
 /// JOIN` the query writes, its right side a shifted instance of `u`). The
