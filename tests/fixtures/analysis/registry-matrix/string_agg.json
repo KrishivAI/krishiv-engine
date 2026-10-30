@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "string_agg#7014aa7da770/ansi_on",
+      "reason": "SELECT string_agg(col, CAST(X'C328FF' AS STRING)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    },
+    {
+      "id": "string_agg#7014aa7da770/ansi_off",
+      "reason": "SELECT string_agg(col, CAST(X'C328FF' AS STRING)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    },
+    {
+      "id": "string_agg#72f9f74433de/ansi_on",
+      "reason": "SELECT string_agg(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "string_agg#72f9f74433de/ansi_off",
+      "reason": "SELECT string_agg(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "string_agg#8b36678b62be/ansi_on",
+      "reason": "SELECT string_agg(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "string_agg#8b36678b62be/ansi_off",
+      "reason": "SELECT string_agg(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "string_agg"
+}

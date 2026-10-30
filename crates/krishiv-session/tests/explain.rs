@@ -72,7 +72,7 @@ fn modes_print_spark_sections() {
         cost.lines()
             .nth(1)
             .unwrap()
-            .contains(", Statistics(rowCount="),
+            .contains(", Statistics(sizeInBytes="),
         "{cost}"
     );
     assert!(cost.ends_with("\n\n"), "{cost:?}");
@@ -82,6 +82,67 @@ fn modes_print_spark_sections() {
     assert!(formatted.ends_with("\n\n"), "{formatted:?}");
     let codegen = explain_sql(&s, &format!("EXPLAIN CODEGEN {q}"));
     assert_eq!(codegen, "Found 0 WholeStageCodegen subtrees.\n");
+}
+
+/// The optimized plan's node lines of an `EXPLAIN COST` text.
+fn optimized_nodes(text: &str) -> Vec<&str> {
+    text.lines()
+        .skip_while(|l| *l != "== Optimized Logical Plan ==")
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .collect()
+}
+
+#[test]
+fn cost_prints_statistics_after_every_node_in_sparks_layout() {
+    let s = tpch();
+    let q = "SELECT n_name, count(*) AS c FROM nation WHERE n_regionkey > 1 GROUP BY n_name";
+    let cost = explain_sql(&s, &format!("EXPLAIN COST {q}"));
+    let nodes = optimized_nodes(&cost);
+    assert!(nodes.len() >= 4, "{cost}");
+    // `<node>, Statistics(sizeInBytes=<size>, rowCount=<n>)` on every line,
+    // the byte size as Spark's `bytesToString` prints it.
+    let layout = |l: &str| {
+        let (_, stats) = l.rsplit_once(", Statistics(sizeInBytes=")?;
+        let (size, rows) = stats.strip_suffix(')')?.split_once(", rowCount=")?;
+        let (number, unit) = size.split_once(' ')?;
+        (number.parse::<f64>().is_ok()
+            && ["B", "KiB", "MiB", "GiB"].contains(&unit)
+            && rows
+                .chars()
+                .all(|c| c.is_ascii_digit() || ".E+".contains(c)))
+        .then_some(())
+    };
+    for line in &nodes {
+        assert!(layout(line).is_some(), "{line}\n{cost}");
+    }
+    // The empty tables the session registers: one row is the estimate's
+    // floor for a scan without a row count, so a node's rows do not
+    // exceed its input's.
+    assert!(nodes[0].starts_with("Aggregate"), "{cost}");
+    let row_count = |l: &str| -> f64 {
+        let n = l.rsplit_once("rowCount=").unwrap().1.trim_end_matches(')');
+        n.parse().unwrap()
+    };
+    // Parents print before children: the rows never grow toward a child's
+    // parent, so each node's count is at most its input's (nodes after the
+    // first are inputs, in order down a chain).
+    for pair in nodes.windows(2) {
+        assert!(row_count(pair[0]) <= row_count(pair[1]), "{cost}");
+    }
+    // The plain optimized plan prints none.
+    let extended = explain_sql(&s, &format!("EXPLAIN EXTENDED {q}"));
+    assert!(!extended.contains("Statistics("), "{extended}");
+}
+
+#[test]
+fn cost_of_tpch_q3_at_a_tiny_scale() {
+    let s = Session::new().unwrap();
+    common::register_with(&s, 8, true);
+    insta::assert_snapshot!(
+        "cost_q03",
+        explain_sql(&s, &format!("EXPLAIN COST {}", query(3)))
+    );
 }
 
 #[test]

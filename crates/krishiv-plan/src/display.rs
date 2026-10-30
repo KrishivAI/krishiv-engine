@@ -45,6 +45,43 @@ impl Display for LogicalPlan {
     }
 }
 
+/// Text to append to a relation's line, if any.
+type Note<'n> = &'n dyn Fn(&LogicalPlan) -> Option<String>;
+
+/// A plan printed with a note after each relation's line
+/// ([`LogicalPlan::display_with`]).
+pub struct Annotated<'a> {
+    plan: &'a LogicalPlan,
+    note: Note<'a>,
+}
+
+impl fmt::Debug for Annotated<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Annotated").finish_non_exhaustive()
+    }
+}
+
+impl Display for Annotated<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if walk::too_deep(Node::Plan(self.plan)) {
+            return writeln!(f, "{TOO_DEEP}");
+        }
+        let mut printer = Printer::new(self.plan);
+        printer.note = Some(self.note);
+        printer.tree(f, self.plan, "", "")
+    }
+}
+
+impl LogicalPlan {
+    /// The plan as `Display` prints it, each relation's line followed by
+    /// `, ` and `note(relation)` when that is `Some` (`EXPLAIN COST` adds
+    /// the estimated statistics this way).
+    #[must_use]
+    pub fn display_with<'a>(&'a self, note: Note<'a>) -> Annotated<'a> {
+        Annotated { plan: self, note }
+    }
+}
+
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if walk::too_deep(Node::Expr(self)) {
@@ -62,12 +99,14 @@ fn key(plan: &LogicalPlan) -> *const LogicalPlan {
 /// (a DAG, e.g. `df.join(df)`) is printed in full once, marked
 /// `(shared #n)`, and as `Shared #n, printed above` at its other places, so
 /// the output is linear in the distinct relations rather than exponential.
-struct Printer {
+struct Printer<'n> {
     shared: HashSet<*const LogicalPlan>,
     labels: HashMap<*const LogicalPlan, usize>,
+    /// Text to append to a relation's line.
+    note: Option<Note<'n>>,
 }
 
-impl Printer {
+impl Printer<'_> {
     /// Finds the relations reached from more than one place.
     fn new(root: &LogicalPlan) -> Self {
         let mut reached: HashMap<*const LogicalPlan, usize> = HashMap::new();
@@ -90,6 +129,7 @@ impl Printer {
                 .map(|(k, _)| k)
                 .collect(),
             labels: HashMap::new(),
+            note: None,
         }
     }
 
@@ -106,6 +146,9 @@ impl Printer {
             return writeln!(f, "{first}Shared #{n}, printed above");
         }
         write!(f, "{first}{}", NodeLine(plan))?;
+        if let Some(text) = self.note.and_then(|note| note(plan)) {
+            write!(f, ", {text}")?;
+        }
         if self.shared.contains(&key(plan)) {
             let n = self.labels.len() + 1;
             self.labels.insert(key(plan), n);
@@ -641,6 +684,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             arg_names,
             distinct,
             filter,
+            within_group,
         }) => {
             let qualified = if qualifier.is_empty() {
                 name.clone()
@@ -654,6 +698,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 arg_names,
                 *distinct,
                 filter.as_deref(),
+                within_group,
                 out,
             );
         }
@@ -662,13 +707,44 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             args,
             distinct,
             filter,
+            within_group,
             ..
         })) => {
+            // `mode` keeps Spark's `Mode.sql` form: the ordering is the
+            // tie-break (ascending written as descending) and takes no
+            // arguments (`mode() WITHIN GROUP (ORDER BY col DESC)`).
+            if id.name() == "mode" && !within_group.is_empty() {
+                out.push(Piece::Str("mode() WITHIN GROUP (ORDER BY "));
+                if let Some(o) = within_group.first() {
+                    out.push(Piece::Expr(&o.expr));
+                    if o.direction == SortDirection::Descending {
+                        out.push(Piece::Str(" DESC"));
+                    }
+                }
+                out.push(Piece::Str(")"));
+                if let Some(e) = filter {
+                    out.extend([
+                        Piece::Str(" FILTER (WHERE "),
+                        Piece::Expr(e),
+                        Piece::Str(")"),
+                    ]);
+                }
+                return;
+            }
             let op = match id {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
             };
-            call(id.name(), op, args, &[], *distinct, filter.as_deref(), out);
+            call(
+                id.name(),
+                op,
+                args,
+                &[],
+                *distinct,
+                filter.as_deref(),
+                within_group,
+                out,
+            );
         }
         ExprNode::Cast { expr, to, mode } => {
             out.push(Piece::Str(match mode {
@@ -820,7 +896,7 @@ fn bound_pieces<'a>(b: &'a FrameBound, out: &mut Vec<Piece<'a>>) {
 }
 
 /// ` ASC NULLS FIRST` and the like.
-const fn order_suffix(o: &SortOrder) -> &'static str {
+pub(crate) const fn order_suffix(o: &SortOrder) -> &'static str {
     match (o.direction, o.nulls) {
         (SortDirection::Ascending, NullOrdering::NullsFirst) => " ASC NULLS FIRST",
         (SortDirection::Ascending, NullOrdering::NullsLast) => " ASC NULLS LAST",
@@ -832,6 +908,10 @@ const fn order_suffix(o: &SortOrder) -> &'static str {
 /// Appends a call: operators infix or in their SQL form, others as
 /// `name(args)`. A named argument prints as `name => value`; a quantified
 /// `LIKE`/`ILIKE` prints in its SQL form (`a LIKE ANY (p, ...)`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site per expression form, every field of the call"
+)]
 fn call<'a>(
     name: &str,
     op: Option<Builtin>,
@@ -839,6 +919,7 @@ fn call<'a>(
     arg_names: &'a [Option<String>],
     distinct: bool,
     filter: Option<&'a Expr>,
+    within_group: &'a [SortOrder],
     out: &mut Vec<Piece<'a>>,
 ) {
     let arg = |i: usize| Piece::Expr(&args[i]);
@@ -929,6 +1010,18 @@ fn call<'a>(
             out.push(Piece::Str(")"));
         }
     }
+    if !within_group.is_empty() {
+        out.push(Piece::Str(" WITHIN GROUP (ORDER BY "));
+        for (i, o) in within_group.iter().enumerate() {
+            if i > 0 {
+                out.push(Piece::Str(", "));
+            }
+            out.push(Piece::Expr(&o.expr));
+            out.push(Piece::Str(order_suffix(o)));
+        }
+        out.push(Piece::Str(")"));
+    }
+    // Spark appends the filter after the whole function text.
     if let Some(e) = filter {
         out.extend([
             Piece::Str(" FILTER (WHERE "),

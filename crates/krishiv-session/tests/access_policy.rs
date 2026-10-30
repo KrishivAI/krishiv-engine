@@ -631,6 +631,236 @@ fn a_link_swapped_in_after_the_check_fails_the_write() {
     assert_eq!(tree(&outside), before, "nothing changed outside the root");
 }
 
+/// An overwrite replaces what the target directory holds; a link inside it
+/// is removed itself and never followed (the listing used to follow it, so
+/// the files it pointed at outside the root were deleted).
+#[cfg(unix)]
+#[test]
+fn an_overwrite_never_deletes_through_a_link_in_the_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(root.join("out/sub")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(root.join("out/old"), b"x").unwrap();
+    std::fs::write(outside.join("keep"), b"y").unwrap();
+    std::fs::create_dir_all(outside.join("deep")).unwrap();
+    std::fs::write(outside.join("deep/keep2"), b"z").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("out/link")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("out/sub/link2")).unwrap();
+    let before = tree(&outside);
+
+    let policy = PathPrefixPolicy::new([&root], Arc::new(AllowAll)).unwrap();
+    let s = session(Arc::new(policy));
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let out = root.join("out");
+    block_on(df.write().mode("overwrite").parquet(out.to_str().unwrap())).unwrap();
+    assert_eq!(
+        tree(&outside),
+        before,
+        "nothing outside the root was deleted"
+    );
+    assert!(
+        !root.join("out/old").exists(),
+        "the overwrite replaced the old file"
+    );
+    assert!(
+        std::fs::symlink_metadata(root.join("out/link")).is_err(),
+        "the link itself was replaced"
+    );
+}
+
+/// The target directory is renamed away and a link to a directory outside
+/// the root put in its place while the query runs: nothing lands outside, the
+/// write fails with the audited denial (not a task failure).
+#[cfg(unix)]
+#[test]
+fn a_directory_swapped_during_the_write_is_denied_and_cleaned_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep"), b"y").unwrap();
+    let before = tree(&outside);
+    let out = root.join("out");
+
+    let swapper = {
+        let (out, outside) = (out.clone(), outside.clone());
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            // Wait for the first part file, then swap.
+            while start.elapsed() < std::time::Duration::from_secs(60) {
+                let has_part = std::fs::read_dir(&out).is_ok_and(|mut d| {
+                    d.any(|e| e.is_ok_and(|e| e.file_name().to_string_lossy().starts_with("part-")))
+                });
+                if has_part {
+                    let old = out.with_file_name("out-old");
+                    std::fs::rename(&out, &old).unwrap();
+                    std::os::unix::fs::symlink(&outside, &out).unwrap();
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            false
+        })
+    };
+    let policy = PathPrefixPolicy::new([&root], Arc::new(AllowAll)).unwrap();
+    let s = session(Arc::new(policy));
+    let df = block_on(s.sql("SELECT id FROM range(0, 20000, 1, 1)")).unwrap();
+    let result = block_on(
+        df.write()
+            .option("maxRecordsPerFile", "1")
+            .parquet(out.to_str().unwrap()),
+    );
+    assert!(
+        swapper.join().unwrap(),
+        "the swap happened during the write"
+    );
+    assert_eq!(class(result), DENIED);
+    assert_eq!(tree(&outside), before, "nothing changed outside the root");
+    // Files written before the swap are in the renamed directory, inside
+    // the root; the link now at `out` cannot be followed to remove them.
+    assert!(root.join("out-old").is_dir());
+}
+
+/// Dropping the write's future mid-query cancels it; the writers still
+/// abort through the store they hold, so no finished part file stays.
+#[cfg(unix)]
+#[test]
+fn a_cancelled_write_removes_the_files_it_made() {
+    use futures::FutureExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("out");
+    let s = session(Arc::new(AllowAll));
+    let df = block_on(s.sql("SELECT id FROM range(0, 200000, 1, 1)")).unwrap();
+    let (tx, rx) = futures::channel::oneshot::channel::<()>();
+    let watcher = {
+        let out = out.clone();
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_secs(60) {
+                let parts = |d: &Path| {
+                    std::fs::read_dir(d).map_or(0, |d| {
+                        d.filter_map(Result::ok)
+                            .filter(|e| e.file_name().to_string_lossy().starts_with("part-"))
+                            .count()
+                    })
+                };
+                if parts(&out) >= 3 {
+                    tx.send(()).ok();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        })
+    };
+    let write = df
+        .write()
+        .option("maxRecordsPerFile", "1")
+        .parquet(out.to_str().unwrap())
+        .boxed();
+    let cancelled = block_on(async {
+        match futures::future::select(write, rx).await {
+            futures::future::Either::Left(_) => false,
+            futures::future::Either::Right(_) => true,
+        }
+    });
+    watcher.join().unwrap();
+    assert!(cancelled, "the write was still running when it was dropped");
+    // The detached writers finish aborting on their own.
+    let start = std::time::Instant::now();
+    loop {
+        let left = std::fs::read_dir(&out).map_or(0, |d| {
+            d.filter_map(Result::ok)
+                .filter(|e| e.file_name().to_string_lossy().starts_with("part-"))
+                .count()
+        });
+        if left == 0 {
+            break;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "{left} part files remain after the cancelled write"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// An existing file as the target: `overwrite` replaces it, `error` says it
+/// exists, with the store named `file` (never the write's private id).
+#[cfg(unix)]
+#[test]
+fn a_file_in_the_way_of_the_target_is_handled_as_before() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let target = root.join("t");
+    std::fs::write(&target, b"in the way").unwrap();
+    let s = session(Arc::new(AllowAll));
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let e = block_on(df.write().mode("error").parquet(target.to_str().unwrap())).unwrap_err();
+    let text = e.to_string();
+    assert_eq!(e.error_class().name(), "PATH_ALREADY_EXISTS", "{text}");
+    assert!(
+        text.contains(&format!(
+            "file/{}",
+            target.display().to_string().trim_start_matches('/')
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("private"), "{text}");
+    block_on(
+        df.write()
+            .mode("overwrite")
+            .parquet(target.to_str().unwrap()),
+    )
+    .unwrap();
+    assert!(target.is_dir());
+}
+
+/// A directory above the target whose name object paths would encode cannot
+/// be addressed: refused up front (it used to write into a differently named
+/// sibling directory).
+#[cfg(unix)]
+#[test]
+fn a_special_character_in_an_ancestor_name_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let dir = root.join("jos\u{e9}");
+    std::fs::create_dir_all(&dir).unwrap();
+    let s = session(Arc::new(AllowAll));
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let out = dir.join("out");
+    assert_eq!(
+        class(block_on(df.write().parquet(out.to_str().unwrap()))),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(!out.exists());
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        1,
+        "no sibling was created"
+    );
+}
+
+/// A file where a directory of the path should be fails as a storage error,
+/// not an internal one.
+#[cfg(unix)]
+#[test]
+fn a_file_on_the_path_is_a_storage_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    std::fs::write(root.join("f"), b"x").unwrap();
+    let s = session(Arc::new(AllowAll));
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let out = root.join("f/sub/out");
+    assert_eq!(
+        class(block_on(df.write().parquet(out.to_str().unwrap()))),
+        "KRISHIV_OBJECT_STORE_REQUEST_FAILED"
+    );
+    assert_eq!(std::fs::read(root.join("f")).unwrap(), b"x");
+}
+
 #[cfg(unix)]
 #[test]
 fn writes_go_to_the_directory_a_link_names_and_are_checked_there() {

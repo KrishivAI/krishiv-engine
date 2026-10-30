@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::ErrorClass;
-use krishiv_optimizer::{ColumnStats, Statistics, TableStats, TopN, optimize, optimize_with};
+use krishiv_optimizer::{
+    ColumnStats, StatSource, Statistics, TableStats, TopN, optimize, optimize_with,
+};
 use krishiv_plan::{
     Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, Plan, PlanNode,
     ResolvedExpr, ResolvedFunction, Scan,
@@ -599,6 +601,7 @@ fn expansion_copies_keep_their_input_ndv() {
             columns: HashMap::from([(
                 "a".to_owned(),
                 ColumnStats {
+                    source: StatSource::default(),
                     distinct: Some(10),
                     nulls: Some(0),
                     min: None,
@@ -707,6 +710,7 @@ fn shared_expressions_stay_linear() {
                 args,
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type,
                 nullable: true,
                 deterministic: true,

@@ -230,6 +230,7 @@ impl Resolver<'_> {
         // The call as the user wrote it names the result.
         let shown = Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
+                within_group: Vec::new(),
                 name: call.name.clone(),
                 qualifier: Vec::new(),
                 args: kids[..n].iter().map(Bound::shown).collect(),

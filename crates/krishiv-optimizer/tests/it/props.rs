@@ -421,6 +421,63 @@ fn implied_filters_reach_a_fixed_point() {
     }
 }
 
+/// Seed 11717397470216288774 of `random_queries_reach_the_lowest_operator`:
+/// the first run derives `coalesce(x2.c + 1, -1) = 2 or x2.b < 'y'` from the
+/// join condition below the join and common-subexpression elimination then
+/// puts `x2.c + 1` into a `cse_*` projection above that filter. The second
+/// run derived the same predicate over the `cse_*` column; nothing moves
+/// below that projection, so it stacked above it next to the equal filter
+/// already under it. A predicate the filters directly under a
+/// common-subexpression projection enforce is now dropped there.
+#[test]
+fn a_derived_filter_is_not_stacked_over_a_common_subexpression_projection() {
+    let sql = Gen::new(11_717_397_470_216_288_774).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(11_717_397_470_216_288_774);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}
+
+/// Seeds 12940773005452159778 and 661053208515384776 of
+/// `random_queries_reach_the_lowest_operator`: common-subexpression
+/// elimination runs last, and reading a `cse_*` column in place of its
+/// expression leaves columns unread (the first query's aggregate output
+/// `x2.a`, now only read as `cse_8`; the second's join-side column under a
+/// shift). The second optimization pruned them, so the plan was not a fixed
+/// point. The pass is now followed by a prune.
+#[test]
+fn common_subexpression_elimination_leaves_nothing_to_prune() {
+    for seed in [12_940_773_005_452_159_778_u64, 661_053_208_515_384_776] {
+        let sql = Gen::new(seed).top();
+        let plan = support::resolve(&sql, &support::ctx());
+        let optimized = optimize(&plan).unwrap();
+        let again = optimize(&optimized).unwrap();
+        assert!(
+            again.structurally_eq(&optimized),
+            "seed {seed}: {sql}: not a fixed point:\n{}\n{}",
+            optimized.root(),
+            again.root()
+        );
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}: {sql}"
+        );
+    }
+}
+
 /// Seed 3574806867649217214 of `random_queries_reach_the_lowest_operator`:
 /// the aggregate's input is already a semi join on its key (the `LEFT SEMI
 /// JOIN` the query writes, its right side a shifted instance of `u`). The

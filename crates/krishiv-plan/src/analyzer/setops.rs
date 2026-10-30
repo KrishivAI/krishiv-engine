@@ -668,6 +668,7 @@ impl Resolver<'_> {
                 args: vec![col_expr(&tag.col, Origin::UNKNOWN)],
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
             })));
             exprs.push(alias(sum, name));
         }

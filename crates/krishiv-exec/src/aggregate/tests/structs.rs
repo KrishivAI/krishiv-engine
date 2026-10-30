@@ -358,7 +358,7 @@ fn struct_projected_size_covers_the_size_after_an_update() {
     );
     let groups: Vec<u32> = (0..rows).map(|i| u32::try_from(i % 32).unwrap()).collect();
     for f in [Min, Max] {
-        let expr = AggregateExpr::new(f, 0, DataType::Struct(fields.clone()), "m");
+        let expr = AggregateExpr::new(f.clone(), 0, DataType::Struct(fields.clone()), "m");
         let mut acc = Accumulator::new(&expr, true).unwrap();
         acc.reserve(32);
         acc.resize(32);
@@ -398,7 +398,7 @@ fn struct_extrema_honour_the_filter_mask() {
         (Max, ["{\"a\":3}", "{\"a\":9}"]),
         (Min, ["{\"a\":1}", "{\"a\":9}"]),
     ] {
-        let mut expr = AggregateExpr::new(f, 0, DataType::Struct(fields.clone()), "m");
+        let mut expr = AggregateExpr::new(f.clone(), 0, DataType::Struct(fields.clone()), "m");
         expr.mask = Some(1);
         let mut acc = Accumulator::new(&expr, true).unwrap();
         acc.reserve(2);

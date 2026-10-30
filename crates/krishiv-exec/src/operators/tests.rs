@@ -1025,6 +1025,7 @@ fn project_threads_the_drivers_partition_to_stateful_functions() {
             ))))],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type: krishiv_types::DataType::Double,
             nullable: false,
             deterministic: false,
