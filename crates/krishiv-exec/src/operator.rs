@@ -82,6 +82,19 @@ pub trait Source: Send + Sync {
         let _ = local;
         0
     }
+    /// Whether [`position`](Self::position) reports where the source's
+    /// batches come from, so the result can keep their order. Default: no.
+    fn reports_positions(&self) -> bool {
+        false
+    }
+    /// The claim ordinal ([`MorselCursor::claim_ordered`](crate::MorselCursor::claim_ordered))
+    /// of the morsel this driver's last batch came from: batches of a lower
+    /// ordinal come first in the source's order (Spark's partition order).
+    /// `None` before the first claim, or for a source without an order.
+    fn position(&self, local: &LocalState) -> Option<u64> {
+        let _ = local;
+        None
+    }
     /// Source-specific `EXPLAIN ANALYZE` counters (name, value), read once
     /// the pipeline ended. Default: none.
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
@@ -288,6 +301,21 @@ pub trait Sink: Send + Sync {
     /// # Errors
     /// Any error fails the query.
     fn combine(&self, local: LocalState, global: &GlobalState) -> Result<()>;
+    /// Before any driver starts: the drivers `partitions` of fan-in member
+    /// `member` (0 without a fan-in) read an ordered source
+    /// ([`Source::reports_positions`]) and will report each new
+    /// [`position`](Self::position). A sink that keeps its input order
+    /// (the query's result) orders their batches by `(member, position)`.
+    /// Default: ignored.
+    fn expect_ordered(&self, global: &GlobalState, member: u32, partitions: std::ops::Range<u32>) {
+        let _ = (global, member, partitions);
+    }
+    /// This driver's next batches come from the morsel at claim ordinal
+    /// `position` of its source (reported before the morsel's first batch).
+    /// Default: ignored.
+    fn position(&self, local: &mut LocalState, global: &GlobalState, position: u64) {
+        let _ = (local, global, position);
+    }
     /// Runs once per pipeline run, on the last driver to combine. May exceed
     /// 1 ms (hash-table build, sort-run merge): chunk the work with yields
     /// or run it through [`TaskContext::run_blocking`], checking

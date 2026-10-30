@@ -647,3 +647,44 @@ fn expanded_columns_keep_whether_their_distinct_count_is_known() {
     let f = rows(eq, &footers) / rows(all, &footers);
     assert!(close(f, krishiv_optimizer::DEFAULT_SELECTIVITY), "{f}");
 }
+
+/// Whether `p` or anything under it is a union.
+fn holds_union(p: &LogicalPlan) -> bool {
+    if matches!(p.node, krishiv_plan::PlanNode::Union { .. }) {
+        return true;
+    }
+    let mut found = false;
+    p.for_each_child(&mut |c| found |= holds_union(c));
+    found
+}
+
+/// Panics when a join builds (its right input) on a union.
+fn no_union_build(p: &LogicalPlan, what: &str) {
+    if let krishiv_plan::PlanNode::Join { right, .. } = &p.node {
+        assert!(
+            !holds_union(right),
+            "{what}: a join builds on the union\n{p}"
+        );
+    }
+    p.for_each_child(&mut |c| no_union_build(c, what));
+}
+
+/// TPC-DS q05's shape: sales and returns of one channel as a union, joined
+/// to a filtered date dimension and a second dimension. The union's columns
+/// carry their inputs' statistics (a key's distinct values, its range), so
+/// the join on the date key is estimated as selective as it is and the
+/// union stays on the probe side. Without them every union value counted
+/// as distinct, each join with the union looked as small as the dimension,
+/// and the 3M-row union side was built.
+#[test]
+fn a_union_keeps_its_column_statistics() {
+    let sql = "SELECT count(*) \
+               FROM (SELECT cs_sold_date_sk AS d, cs_bill_cdemo_sk AS c FROM catalog_sales \
+                     UNION ALL SELECT cs_sold_date_sk, cs_bill_cdemo_sk FROM catalog_sales) s, \
+                    date_dim, customer_demographics \
+               WHERE s.d = d_date_sk AND d_year = 2000 AND s.c = cd_demo_sk AND cd_gender = 'F'";
+    let plan = support::resolve(sql, &tpcds_ctx());
+    let optimized = optimize_with(&plan, &TpcdsFooters).unwrap();
+    no_union_build(optimized.root(), "q05 shape");
+    insta::assert_snapshot!(optimized.root().to_string());
+}

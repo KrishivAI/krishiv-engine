@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc aacdbdc3ed80dc5ab71484122dbdabce693a2d590feb821256b0de5f2f2544ef # shrinks to c = Case { join_type: RightAnti, keys: 1, null_safe: [false], filter: false, row_layout: true }, probe = [Row { k1: Some(0), k2: None, v: 0 }], build = [Row { k1: None, k2: None, v: 0 }], batch_rows = 1, threads = 1
