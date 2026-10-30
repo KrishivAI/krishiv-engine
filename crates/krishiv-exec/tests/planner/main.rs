@@ -13,6 +13,7 @@
 mod conditionals;
 mod cse;
 mod exchanges;
+mod existence;
 mod folding;
 mod group_limit;
 mod hints;

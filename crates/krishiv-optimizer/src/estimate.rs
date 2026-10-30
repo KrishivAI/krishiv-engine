@@ -435,6 +435,8 @@ impl<'a> Estimator<'a> {
             JoinKind::FullOuter => inner.max(l.rows).max(r.rows),
             JoinKind::LeftSemi => inner.min(l.rows),
             JoinKind::LeftAnti => (l.rows - inner.min(l.rows)).max(1.0),
+            // Every left row once, with `exists` set or not.
+            JoinKind::Existence(_) => l.rows,
             _ => inner,
         };
         let proven_empty = self.propagate && (v.empty || cross <= 0.0);
@@ -444,7 +446,10 @@ impl<'a> Estimator<'a> {
             rows.max(1.0)
         };
         if !self.propagate {
-            if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+            if matches!(
+                kind,
+                JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+            ) {
                 cols.clone_from(&l.cols);
             }
             return RelStats {
@@ -521,6 +526,8 @@ impl<'a> Estimator<'a> {
                 .collect(),
             JoinKind::LeftSemi => side(l, ml, true, 0.0).into_iter().collect(),
             JoinKind::LeftAnti => side(l, ml, false, 0.0).into_iter().collect(),
+            // The left rows unchanged; `exists` has no statistics.
+            JoinKind::Existence(_) => side(l, ml, false, 0.0).into_iter().collect(),
             _ => side(l, ml, true, 0.0)
                 .into_iter()
                 .chain(side(r, mr, true, 0.0))

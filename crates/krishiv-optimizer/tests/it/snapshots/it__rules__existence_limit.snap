@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a, EXISTS (SELECT 1 FROM u WHERE u.a = t.a) AS e FROM t LIMIT 2"
+---
+Project [a#0, exists#7 AS e#6]
++- Limit 2
+   +- Join ExistenceJoin(exists#7), (a#3 == a#0)
+      :- Limit 2
+      :  +- Scan spark_catalog.default.t [a#0]
+      +- Scan spark_catalog.default.u [a#3]

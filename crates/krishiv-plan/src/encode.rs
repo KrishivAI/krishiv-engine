@@ -730,7 +730,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 kind, condition, ..
             } => {
                 self.u8(8);
-                self.u8(match kind {
+                let tag: u8 = match kind {
                     JoinKind::Inner => 1,
                     JoinKind::LeftOuter => 2,
                     JoinKind::RightOuter => 3,
@@ -738,7 +738,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     JoinKind::LeftSemi => 5,
                     JoinKind::LeftAnti => 6,
                     JoinKind::Cross => 7,
-                });
+                    JoinKind::Existence(_) => 8,
+                };
+                self.u8(tag);
+                if let JoinKind::Existence(id) = kind {
+                    self.put(&id.0.to_le_bytes());
+                }
                 match condition {
                     JoinCondition::None => self.u8(0),
                     JoinCondition::On(e) => {

@@ -22,9 +22,9 @@ use krishiv_common::secret::SecretUrl;
 use crate::walk::{self, Node};
 use crate::{
     Builtin, CastMode, DayTimeField, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
-    FunctionId, Grouping, JoinCondition, Literal, LogicalPlan, NullOrdering, Plan, PlanNode,
-    ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs, SubqueryKind,
-    WindowSpec, WindowSpecRef, YearMonthField,
+    FunctionId, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan,
+    PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs,
+    SubqueryKind, WindowSpec, WindowSpecRef, YearMonthField,
 };
 
 /// Printed instead of a node deeper than [`crate::MAX_DEPTH`].
@@ -267,7 +267,10 @@ impl Display for NodeLine<'_> {
             PlanNode::Join {
                 kind, condition, ..
             } => {
-                write!(f, "Join {kind:?}")?;
+                match kind {
+                    JoinKind::Existence(id) => write!(f, "Join ExistenceJoin(exists#{})", id.0)?,
+                    _ => write!(f, "Join {kind:?}")?,
+                }
                 match condition {
                     JoinCondition::None => Ok(()),
                     JoinCondition::On(e) => write!(f, ", {}", Text(e)),
