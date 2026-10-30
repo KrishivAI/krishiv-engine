@@ -608,6 +608,7 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::RightSemi => pb::JoinType::RightSemi,
         JoinType::RightAnti => pb::JoinType::RightAnti,
         JoinType::RightOuter => pb::JoinType::RightOuter,
+        JoinType::FullOuter => pb::JoinType::FullOuter,
     }
 }
 

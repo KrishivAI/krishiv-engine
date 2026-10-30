@@ -87,6 +87,8 @@ pub(crate) fn flipped(t: JoinType, single_match: bool) -> Option<JoinType> {
         JoinType::LeftSemi => Some(JoinType::RightSemi),
         JoinType::LeftAnti => Some(JoinType::RightAnti),
         JoinType::LeftOuter => Some(JoinType::RightOuter),
+        // Symmetric: either input builds, the output order is in the layout.
+        JoinType::FullOuter => Some(JoinType::FullOuter),
         JoinType::Inner
         | JoinType::NullAwareAnti
         | JoinType::Existence
@@ -105,11 +107,17 @@ pub(crate) fn orient(
     left: &InputStats,
     right: &InputStats,
 ) -> JoinType {
-    let Some(other) = flipped(join_type, single_match) else {
-        return join_type;
-    };
+    match flipped(join_type, single_match) {
+        Some(other) if builds_left(left, right) => other,
+        _ => join_type,
+    }
+}
+
+/// Whether the statistics say to build the left input of a join that can
+/// build either.
+pub(crate) fn builds_left(left: &InputStats, right: &InputStats) -> bool {
     if right.bytes <= BROADCAST_MAX_BYTES {
-        return join_type;
+        return false;
     }
     let factor =
         if left.source == StatsSource::Statistics && right.source == StatsSource::Statistics {
@@ -118,11 +126,7 @@ pub(crate) fn orient(
             DEFAULT_FACTOR
         };
     // NaN compares false: no flip.
-    if right.bytes > factor * left.bytes {
-        other
-    } else {
-        join_type
-    }
+    right.bytes > factor * left.bytes
 }
 
 #[cfg(test)]
