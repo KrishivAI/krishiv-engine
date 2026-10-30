@@ -349,6 +349,27 @@ impl FileReads {
         Ok(listing)
     }
 
+    /// The listing of a table whose columns are known: the files under
+    /// `paths` (none is fine: the table is empty), with `schema` as their
+    /// schema. Nothing is inferred and nothing is cached, so every query
+    /// lists the table afresh.
+    ///
+    /// # Errors
+    /// The listing errors of [`Self::listing`], except that no files is not
+    /// an error.
+    pub async fn listing_known(
+        &self,
+        format: &str,
+        paths: &[OptionValue],
+        options: &BTreeMap<String, OptionValue>,
+        schema: SchemaRef,
+    ) -> Result<Arc<FileListing>> {
+        let listing = self
+            .list_with(&format.to_ascii_lowercase(), paths, options, Some(schema))
+            .await?;
+        Ok(Arc::new(listing))
+    }
+
     fn cached(&self, key: &ReadKey) -> Option<Arc<FileListing>> {
         let listed = self.listed.lock().unwrap_or_else(PoisonError::into_inner);
         listed
@@ -362,6 +383,17 @@ impl FileReads {
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
+    ) -> Result<FileListing> {
+        self.list_with(format, paths, options, None).await
+    }
+
+    /// [`Self::list`]; with `known` the schema is given, not inferred.
+    async fn list_with(
+        &self,
+        format: &str,
+        paths: &[OptionValue],
+        options: &BTreeMap<String, OptionValue>,
+        known: Option<SchemaRef>,
     ) -> Result<FileListing> {
         // Spark checks the paths before the format.
         let mut files = Vec::new();
@@ -394,6 +426,14 @@ impl FileReads {
             ));
         }
         let (options, _) = format.options().parse(options, &self.session)?;
+        if let Some(schema) = known {
+            return Ok(FileListing {
+                format,
+                files: files.into(),
+                schema,
+                options,
+            });
+        }
         if files.is_empty() {
             return Err(UnableToInferSchema {
                 format: display_name(format.name()),

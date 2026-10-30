@@ -615,16 +615,39 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
+/// Whether Spark orders `t` (`RowOrdering.isOrderable`): atomic types,
+/// arrays of an orderable element and structs of orderable fields; maps do
+/// not.
+fn spark_orderable(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => false,
+        DataType::Array(a) => spark_orderable(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().all(|f| spark_orderable(f.data_type())),
+        _ => true,
+    }
+}
+
 /// `min`/`max` over `function`'s argument: its type, which must order. A
-/// struct orders field by field (recursively): one holding a map, an array
-/// or anything else the struct comparator does not take
+/// struct orders field by field (recursively). One Spark cannot order (a
+/// map field) is `DATATYPE_MISMATCH.INVALID_ORDERING_TYPE`; one Spark orders
+/// but the struct comparator does not take
 /// ([`krishiv_kernels::r#struct::comparable`], the same predicate the
-/// executor compares with) is `DATATYPE_MISMATCH.INVALID_ORDERING_TYPE`.
+/// executor compares with: an array or interval field) is
+/// `KRISHIV_UNSUPPORTED_FEATURE`.
 fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
     if let Some(t) = c.data_type(0)
         && matches!(t, DataType::Struct(_))
         && !krishiv_kernels::r#struct::comparable(&t.to_arrow())
     {
+        if spark_orderable(t) {
+            return Err(KrishivUnsupportedFeature {
+                feature: format!(
+                    "{function} over {}, a struct with a field the struct comparator does not take",
+                    t.sql()
+                ),
+            }
+            .into());
+        }
         return Err(DatatypeMismatchInvalidOrderingType {
             sql_expr: format!("\"{function}({})\"", c.sql(0).unwrap_or_default()),
             function_name: format!("`{function}`"),

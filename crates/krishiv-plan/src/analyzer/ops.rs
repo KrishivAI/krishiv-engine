@@ -1460,6 +1460,14 @@ impl Resolver<'_> {
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
+        // Spark extracts a generator from an aggregate's select list; this
+        // engine does not, and would fail later as `OUTSIDE_SELECT`.
+        if items.iter().any(|b| has_generator(&b.expr)) {
+            return Err(unsupported(
+                "a generator in an aggregate SELECT list",
+                p.origin,
+            ));
+        }
         // `GROUP BY ALL`: a lone unqualified `all` in SQL groups by the select
         // list, unless a column or a select-list alias named `all` takes it
         // (Spark resolves names first). A DataFrame `groupBy("all")` has no
@@ -3211,7 +3219,7 @@ fn is_json_tuple_call(e: &Arc<Expr>) -> bool {
 /// Whether `e` holds a generator call anywhere inside (subquery plans
 /// resolve on their own; [`Expr::for_each_child`] does not enter them).
 /// Expressions are DAGs, so shared nodes are visited once.
-fn has_generator(e: &Arc<Expr>) -> bool {
+pub(super) fn has_generator(e: &Arc<Expr>) -> bool {
     let mut seen: HashSet<*const ()> = HashSet::new();
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {

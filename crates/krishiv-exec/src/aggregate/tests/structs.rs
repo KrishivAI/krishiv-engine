@@ -338,34 +338,83 @@ fn structs_with_unorderable_fields_are_rejected() {
     }
 }
 
-/// The reservation covers what the struct fold holds: the projected size
-/// after an update is at least the size, with and without growth (the
-/// winner's buffers count toward the reservation through the aggregate's
-/// existing accounting path).
+/// The reservation covers what the struct fold holds: the size after an
+/// update never exceeds what `projected` promised for that batch before it,
+/// and a winner does not keep the whole input batch's string buffers alive
+/// (with 32 groups each winning one row of a batch of long strings, the
+/// buffers would otherwise be counted 32 times).
 #[test]
 fn struct_projected_size_covers_the_size_after_an_update() {
     let fields: Fields = vec![field("a", DataType::Int32), field("b", DataType::Utf8View)].into();
+    let long = "x".repeat(200);
+    let rows = 64_usize;
+    let keys: Vec<Option<i32>> = (0..rows).map(|i| Some(i32::try_from(i).unwrap())).collect();
+    let texts: Vec<String> = (0..rows).map(|i| format!("{long}{i}")).collect();
+    let text_refs: Vec<Option<&str>> = texts.iter().map(|t| Some(t.as_str())).collect();
     let col = structs(
         fields.clone(),
-        vec![
-            ints(&[Some(1), None, Some(2), Some(1)]),
-            strs(&[Some("x"), None, Some("yy"), Some("z")]),
-        ],
-        &[true, false, true, true],
+        vec![ints(&keys), strs(&text_refs)],
+        &vec![true; rows],
     );
+    let groups: Vec<u32> = (0..rows).map(|i| u32::try_from(i % 32).unwrap()).collect();
     for f in [Min, Max] {
         let expr = AggregateExpr::new(f, 0, DataType::Struct(fields.clone()), "m");
+        let mut acc = Accumulator::new(&expr, true).unwrap();
+        acc.reserve(32);
+        acc.resize(32);
+        let allowed = acc.projected(0, Some(&col), None);
+        acc.update(&groups, std::slice::from_ref(&col), &Weights::Const(1))
+            .unwrap();
+        assert!(
+            acc.size() <= allowed,
+            "{f:?}: size {} past the projected {allowed}",
+            acc.size()
+        );
+        // 32 winners of ~200 bytes each, not 32 copies of the whole batch.
+        let batch_bytes = col.get_buffer_memory_size();
+        assert!(
+            acc.size() < batch_bytes,
+            "{f:?}: size {} holds the batch's buffers ({batch_bytes})",
+            acc.size()
+        );
+    }
+}
+
+/// A `FILTER (WHERE ...)` mask drops a row from a struct `MIN`/`MAX` like a
+/// NULL: the winning row of the whole column is masked out.
+#[test]
+fn struct_extrema_honour_the_filter_mask() {
+    use arrow_array::BooleanArray;
+    let fields: Fields = vec![field("a", DataType::Int32)].into();
+    let col = structs(
+        fields.clone(),
+        vec![ints(&[Some(1), Some(5), Some(3), Some(9)])],
+        &[true, true, true, true],
+    );
+    // Rows 1 (a=5) and 3 (a=9) are filtered out of group 0; group 1's only
+    // row (a=9) survives.
+    let mask: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true, true]));
+    for (f, want) in [
+        (Max, ["{\"a\":3}", "{\"a\":9}"]),
+        (Min, ["{\"a\":1}", "{\"a\":9}"]),
+    ] {
+        let mut expr = AggregateExpr::new(f, 0, DataType::Struct(fields.clone()), "m");
+        expr.mask = Some(1);
         let mut acc = Accumulator::new(&expr, true).unwrap();
         acc.reserve(2);
         acc.resize(2);
         acc.update(
-            &[0, 0, 1, 1],
-            std::slice::from_ref(&col),
+            &[0, 0, 0, 1],
+            &[Arc::clone(&col), Arc::clone(&mask)],
             &Weights::Const(1),
         )
         .unwrap();
-        assert!(acc.size() <= acc.projected(0, None, None));
-        assert!(acc.size() <= acc.projected(8, Some(&col), None));
+        let out = acc.evaluate(&[0, 1]).unwrap();
+        assert_eq!(
+            [value(out.as_ref(), 0), value(out.as_ref(), 1)],
+            want,
+            "{f:?}"
+        );
     }
 }
 

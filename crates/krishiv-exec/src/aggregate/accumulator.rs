@@ -1615,15 +1615,17 @@ impl Accumulator {
                 // once: a tournament per group over whole-chunk comparisons,
                 // then one comparison of the group winners against the
                 // current extrema and one `take` per winning group.
+                // A `FILTER` mask drops a row like a NULL does.
+                let live = |i: usize| active(i) && valid(i);
                 if run.is_none() {
                     struct_extremum_batch(
-                        a, groups, &valid, order, values, bytes, set, heap, kernels,
+                        a, groups, &live, order, values, bytes, set, heap, kernels,
                     )?;
                     return Ok(());
                 }
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
-                    if valid(i) {
+                    if live(i) {
                         // A strict win keeps the first row on ties, so the
                         // value is the same whatever the grouping.
                         let better = match &values[g] {
@@ -1643,9 +1645,10 @@ impl Accumulator {
                             let index = u32::try_from(i).map_err(|_| {
                                 internal("a struct extremum past row u32::MAX".to_owned())
                             })?;
-                            let taken =
+                            let taken = compact_views(
                                 arrow_select::take::take(a, &UInt32Array::from(vec![index]), None)
-                                    .map_err(|e| internal(e.to_string()))?;
+                                    .map_err(|e| internal(e.to_string()))?,
+                            );
                             *heap = heap.saturating_sub(bytes[g]) + taken.get_buffer_memory_size();
                             bytes[g] = taken.get_buffer_memory_size();
                             values[g] = Some(taken);
@@ -2113,6 +2116,27 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
     }
 }
 
+/// `a` with the string and binary views it holds copied out of the shared
+/// buffers of the batch it was taken from: a one-row winner would otherwise
+/// keep every buffer of that batch alive, and the reservation would count
+/// them once per group. Nested structs are compacted field by field; other
+/// types already own what `take` copied.
+fn compact_views(a: ArrayRef) -> ArrayRef {
+    match a.data_type() {
+        DataType::Utf8View => Arc::new(a.as_string_view().gc()),
+        DataType::BinaryView => Arc::new(a.as_binary_view().gc()),
+        DataType::Struct(fields) => {
+            let s = a.as_struct();
+            let children: Vec<ArrayRef> = s.columns().iter().cloned().map(compact_views).collect();
+            match arrow_array::StructArray::try_new(fields.clone(), children, s.nulls().cloned()) {
+                Ok(compacted) => Arc::new(compacted),
+                Err(_) => a,
+            }
+        }
+        _ => a,
+    }
+}
+
 /// Folds one batch of a struct `MIN`/`MAX` into the per-group extrema
 /// without a comparison per row. Per group, the candidate rows (in input
 /// order, NULL structs skipped) meet in rounds: neighbours are compared in
@@ -2242,7 +2266,7 @@ fn struct_extremum_batch(
             continue;
         }
         let g = *g as usize;
-        let taken = take_rows(&[*row])?;
+        let taken = compact_views(take_rows(&[*row])?);
         let size = taken.get_buffer_memory_size();
         *heap = heap.saturating_sub(bytes[g]) + size;
         bytes[g] = size;

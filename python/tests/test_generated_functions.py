@@ -139,7 +139,8 @@ def _sample(name: str, p: inspect.Parameter) -> tuple[list[Any], list[tuple[str,
     """Values for the parameter, and the native arguments they must become."""
     if p.kind is p.VAR_POSITIONAL:
         names = [f"c_{p.name}0", f"c_{p.name}1"]
-        return names, [("col", n) for n in names]
+        # `*fields: str` is a list of literals (key names); `*cols: ColumnOrName` of columns.
+        return names, [("lit" if str(p.annotation) == "str" else "col", n) for n in names]
     annotation = str(p.annotation).removesuffix(" | None")
     if annotation in COLUMN_ANNOTATIONS:
         return [f"c_{p.name}"], [("col", f"c_{p.name}")]
@@ -383,3 +384,15 @@ def test_aggregates_run(df: DataFrame) -> None:
     assert _rows(out) == [[1.5, 3, 6, pytest.approx(2.0 / 3), 2.0, -2.5, 3, 3]]
     grouped = df.groupBy(F.col("d")).agg(F.sum("i"))
     assert _rows(grouped) == [["2024-01-30", 6]]
+
+
+def test_json_tuple_field_names_are_literals_not_columns() -> None:
+    """``json_tuple(col, "a")`` reads the key ``a``; a column that happens to be named ``a`` is not the key."""
+    from krishiv.sql import SparkSession
+
+    spark = SparkSession.builder.create()
+    df = spark.createDataFrame([('{"a": 1, "b": 2}', "b")], ["j", "a"])
+    row = df.select(F.json_tuple("j", "a")).collect()[0]
+    assert row[0] == "1"
+    row = df.select(F.json_tuple("j", "a", "b")).collect()[0]
+    assert (row[0], row[1]) == ("1", "2")

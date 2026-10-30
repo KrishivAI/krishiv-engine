@@ -349,7 +349,14 @@ fn from_csv_fallback_and_escape_escape() {
     ]);
     let (f, schema, _) = bind_from_csv(&csv, "d DATE", Some(&opts));
     let out = f.invoke(&[col(&csv), lit(&schema), lit(&opts)], 1).unwrap();
-    assert!(!out.as_struct().column(0).is_null(0));
+    // 2015-08-26 is day 16673 since the epoch.
+    let date = out.as_struct().column(0);
+    assert!(!date.is_null(0));
+    assert_eq!(
+        date.as_primitive::<arrow_array::types::Date32Type>()
+            .value(0),
+        16673
+    );
     // `charToEscapeQuoteEscaping` escapes the escape character.
     let csv = strs(&[Some("\"a\\\\b\"")]);
     let opts = map_lit(&[("charToEscapeQuoteEscaping", "\\")]);
@@ -641,20 +648,42 @@ fn from_csv_option_names_and_values() {
             "unescapedQuoteHandling=BAD",
         ),
         (vec![("timeFormat", "HH")], "timeFormat"),
-        (vec![("dateFormat", "yyyy-MM-dd'")], "dateFormat"),
-        (vec![("timestampFormat", "yyyy-MM-dd'")], "timestampFormat"),
-        (
-            vec![("timestampNTZFormat", "yyyy-MM-dd'")],
-            "timestampNTZFormat",
-        ),
         (vec![("quote", "ab")], "quote"),
     ] {
         let err = from_csv_bind_error("a INT", &pairs);
         assert!(err.contains(named), "{pairs:?}: {err}");
     }
+    // A malformed pattern keeps Spark's error (not an unsupported-option one).
+    for option in ["dateFormat", "timestampFormat", "timestampNTZFormat"] {
+        let err = from_csv_bind_error("a INT", &[(option, "yyyy-MM-dd'")]);
+        assert!(err.contains("INVALID_DATETIME_PATTERN"), "{option}: {err}");
+    }
     // A corrupt-record column that is not a string is refused.
     let err = from_csv_bind_error("a INT, _corrupt_record INT", &[("mode", "PERMISSIVE")]);
     assert!(err.contains("from_csv("), "{err}");
+}
+
+/// The option patterns are compiled for the operation: a format-only letter
+/// (the day name `EEE`) binds for `to_csv`, which formats, and keeps Spark's
+/// own "fail to recognize the pattern" error for `from_csv`, which parses.
+#[test]
+fn datetime_option_patterns_follow_the_operation() {
+    let fields: Fields = vec![Field::new("t", DataType::Date32, true)].into();
+    let opts = map_lit(&[("dateFormat", "EEE yyyy-MM-dd")]);
+    let to = bind_scalar(
+        "to_csv",
+        &[
+            BindArg::Column {
+                ty: DataType::Struct(fields),
+                nullable: true,
+            },
+            BindArg::Literal(Arc::clone(&opts)),
+        ],
+        &BindOptions::new(),
+    );
+    assert!(to.is_ok(), "{:?}", to.err());
+    let err = from_csv_bind_error("a DATE", &[("dateFormat", "EEE yyyy-MM-dd")]);
+    assert!(err.contains("DATETIME_PATTERN_RECOGNITION"), "{err}");
 }
 
 /// `to_csv` over every scalar type, and its quoting, null and format options

@@ -281,3 +281,25 @@ fn a_generator_outside_the_select_list_is_an_analysis_error() -> R {
     }
     Ok(())
 }
+
+/// A generator in the select list of an aggregate is something Spark extracts
+/// and this engine does not: an unsupported feature, not the
+/// `OUTSIDE_SELECT` error of a generator in a grouping key.
+#[test]
+fn a_generator_in_an_aggregate_select_list_is_unsupported() -> R {
+    let s = session()?;
+    let schema = Arc::new(Schema::new(vec![Field::new("j", DataType::Utf8, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec![Some("{\"a\":1}")])) as ArrayRef],
+    )?;
+    s.register_batches("w", schema, vec![batch])?;
+    for sql in [
+        "SELECT json_tuple(j, 'a'), count(*) FROM w GROUP BY j",
+        "SELECT json_tuple(j, 'a'), count(*) FROM w GROUP BY ROLLUP (j)",
+    ] {
+        let (class, _) = error(&s, sql)?;
+        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
+    Ok(())
+}

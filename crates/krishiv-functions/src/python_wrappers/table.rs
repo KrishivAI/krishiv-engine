@@ -471,7 +471,7 @@ pub(super) fn rows() -> Vec<Row> {
             "concat_ws",
             "sep: str, *cols: ColumnOrName",
         ),
-        Row::new("json_tuple", "col: ColumnOrName, *fields: ColumnOrName"),
+        Row::new("json_tuple", "col: ColumnOrName, *fields: str"),
         Row::new("decode", "col: ColumnOrName, charset: str"),
         Row::new("elt", "*inputs: ColumnOrName"),
         Row::new("encode", "col: ColumnOrName, charset: str"),

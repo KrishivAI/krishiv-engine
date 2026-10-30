@@ -828,3 +828,40 @@ fn column_struct_updates_follow_dotted_paths() {
         ErrorClass::DatatypeMismatchCannotDropAllFields
     );
 }
+
+/// An aggregate or a window expression inside `withField` keeps its analysis
+/// markers through the `named_struct` rewrite: the aggregate is found (the
+/// query is an aggregation) and a window expression still counts as one.
+#[test]
+fn with_field_values_keep_their_aggregate_and_window_markers() {
+    use krishiv_session::functions::{max, sum};
+    let s = session();
+    let df = block_on(s.sql("SELECT v FROM VALUES (1), (2), (3) AS t(v)")).unwrap();
+    // An aggregate value: one group, the whole column summed.
+    let base = call_function("named_struct", [lit("a"), lit(1)]);
+    let agg = df.agg([base.with_field("total", sum(col("v")))]);
+    assert_eq!(collected(&agg), ["{\"a\":1,\"total\":6}"]);
+    // An aggregate in a field that is replaced.
+    let base = call_function("named_struct", [lit("a"), lit(0)]);
+    let agg = df.agg([base.with_field("a", max(col("v")))]);
+    assert_eq!(collected(&agg), ["{\"a\":3}"]);
+    // A window value: the window is planned and evaluated per row.
+    let windowed = df.select([
+        call_function("named_struct", [lit("a"), lit(1)]).with_field(
+            "running",
+            sum(col("v")).over(
+                krishiv_session::WindowSpec::new()
+                    .order_by([col("v")])
+                    .rows_between(i64::MIN, 0),
+            ),
+        ),
+    ]);
+    assert_eq!(
+        collected(&windowed),
+        [
+            "{\"a\":1,\"running\":1}",
+            "{\"a\":1,\"running\":3}",
+            "{\"a\":1,\"running\":6}"
+        ]
+    );
+}

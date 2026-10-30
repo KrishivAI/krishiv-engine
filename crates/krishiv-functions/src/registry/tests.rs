@@ -709,6 +709,15 @@ fn min_max_signatures_order_structs_field_by_field() {
                 "{name}"
             );
         }
+        // Spark orders an array field, the struct comparator does not take it:
+        // an unsupported feature, not an ordering mismatch.
+        let array = DataType::Array(krishiv_types::ArrayType::new(DataType::Integer, true).into());
+        let err = result(name, &[struct_of(array)], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{name}"
+        );
         // `first`/`last` keep their old rule (any type, no ordering check).
         for other in ["first", "last", "any_value"] {
             assert!(

@@ -64,6 +64,8 @@ pub struct PartialAggregate {
     flushes: AtomicU64,
     /// Probe lengths of every driver's table (a detailed profile only).
     probes: Arc<crate::hash::ProbeTotals>,
+    /// Reallocations of the drivers' table indexes.
+    resizes: Arc<AtomicU64>,
     bypassed_drivers: AtomicU64,
     bypassed_rows: AtomicU64,
 }
@@ -104,6 +106,7 @@ impl PartialAggregate {
             seed: HashSeed::new(seed),
             flushes: AtomicU64::new(0),
             probes: Arc::default(),
+            resizes: Arc::default(),
             bypassed_drivers: AtomicU64::new(0),
             bypassed_rows: AtomicU64::new(0),
         }))
@@ -116,7 +119,9 @@ impl PartialAggregate {
 
     /// Moves the table out to be emitted chunk by chunk.
     fn start_drain(&self, l: &mut Local) -> Result<()> {
-        let fresh = AggTable::new(&self.core, &self.seed)?.with_probes(l.table.probes());
+        let fresh = AggTable::new(&self.core, &self.seed)?
+            .with_probes(l.table.probes())
+            .with_resizes(l.table.resizes());
         let table = std::mem::replace(&mut l.table, fresh);
         let table_groups = table.len() as u64;
         let reservation = std::mem::replace(&mut l.reservation, l.consumer.reservation());
@@ -168,12 +173,14 @@ impl Operator for PartialAggregate {
             .map_or(usize::MAX, |l| l / 8 / ctx.executor().parallelism().max(1));
         Ok(Box::new(Local {
             cap: self.policy.max_table_bytes.min(share),
-            table: AggTable::new(&self.core, &self.seed)?.with_probes(
-                ctx.query()
-                    .config()
-                    .detailed_metrics
-                    .then(|| Arc::clone(&self.probes)),
-            ),
+            table: AggTable::new(&self.core, &self.seed)?
+                .with_probes(
+                    ctx.query()
+                        .config()
+                        .detailed_metrics
+                        .then(|| Arc::clone(&self.probes)),
+                )
+                .with_resizes(Some(Arc::clone(&self.resizes))),
             reservation: consumer.reservation(),
             consumer,
             rows: 0,
@@ -251,6 +258,7 @@ impl Operator for PartialAggregate {
             ("flushes", self.flushes.load(Ordering::Relaxed)),
             ("bypassed_drivers", self.bypassed_drivers()),
             ("bypassed_rows", self.bypassed_rows.load(Ordering::Relaxed)),
+            ("hash_resizes", self.resizes.load(Ordering::Relaxed)),
         ]);
         out.extend(crate::metrics::probe_metrics(&self.probes.get()));
         out

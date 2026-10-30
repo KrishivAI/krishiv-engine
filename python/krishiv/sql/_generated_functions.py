@@ -782,9 +782,9 @@ def json_object_keys(col: ColumnOrName) -> Column:
     return _call("json_object_keys", _named(col, "col"))
 
 
-def json_tuple(col: ColumnOrName, *fields: ColumnOrName) -> Column:
+def json_tuple(col: ColumnOrName, *fields: str) -> Column:
     """Calls the registry function ``json_tuple``."""
-    return _call("json_tuple", _named(col, "col"), *_cols(fields))
+    return _call("json_tuple", _named(col, "col"), *[_lit(value, "fields") for value in fields])
 
 
 def kurtosis(col: ColumnOrName) -> Column:

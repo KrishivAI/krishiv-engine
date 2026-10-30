@@ -8,15 +8,6 @@
 //! builders: the schema is resolved once at bind, then each batch fills one
 //! builder per field.
 
-#![allow(
-    clippy::arithmetic_side_effects,
-    reason = "tokenizer ported from krishiv-io, where positions are bounded by the input length"
-)]
-#![allow(
-    clippy::too_many_lines,
-    reason = "tokenizer state machine, as reviewed in krishiv-io"
-)]
-
 use std::sync::Arc;
 
 use arrow_array::builder::{
@@ -155,7 +146,7 @@ impl<'a> Cursor<'a> {
 
     fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
-        self.pos += c.len_utf8();
+        self.pos = self.pos.saturating_add(c.len_utf8());
         Some(c)
     }
 }
@@ -283,7 +274,7 @@ impl Tokenizer {
                 self.push(out, t)?;
             }
             if self.at_sep(&c) {
-                c.pos += self.s.sep.len();
+                c.pos = c.pos.saturating_add(self.s.sep.len());
                 if self.at_end(&c) {
                     self.push(out, None)?;
                     break;
@@ -293,7 +284,7 @@ impl Tokenizer {
             }
         }
         let n = self.eol_len(&c);
-        Ok(c.pos + n)
+        Ok(c.pos.saturating_add(n))
     }
 
     /// With a separator of several characters Univocity doubles a quote that
@@ -486,7 +477,7 @@ impl Tokenizer {
                     Unescaped::SkipValue => {
                         self.skip_value(c);
                         if self.at_sep(c) {
-                            c.pos += self.s.sep.len();
+                            c.pos = c.pos.saturating_add(self.s.sep.len());
                         }
                         skipped = true;
                         prev = None;
@@ -501,7 +492,7 @@ impl Tokenizer {
                         c.bump();
                         self.escaped_rest(c, &mut v);
                         if self.at_sep(c) {
-                            c.pos += self.s.sep.len();
+                            c.pos = c.pos.saturating_add(self.s.sep.len());
                         }
                         prev = None;
                         began = true;
@@ -557,11 +548,9 @@ impl Tokenizer {
     /// `BACK_TO_DELIMITER` split.
     fn split_at_last_sep(&self, v: &mut String, out: &mut Vec<Token>) -> Result<(), TokenizeError> {
         let sep = self.s.sep.as_str();
-        let from = self
-            .s
-            .quote
-            .and_then(|q| v.rfind(q))
-            .map_or(0, |i| i + self.s.quote.map_or(0, char::len_utf8));
+        let from = self.s.quote.and_then(|q| v.rfind(q)).map_or(0, |i| {
+            i.saturating_add(self.s.quote.map_or(0, char::len_utf8))
+        });
         if !v[from..].contains(sep) {
             return Ok(());
         }
@@ -589,7 +578,7 @@ impl Tokenizer {
         white: &str,
     ) -> Result<Token, TokenizeError> {
         let q = self.s.quote.unwrap_or('"');
-        let mut v = String::with_capacity(content.len() + 2);
+        let mut v = String::with_capacity(content.len().saturating_add(2));
         v.push(q);
         v.push_str(content);
         v.push(q);
@@ -1020,7 +1009,7 @@ impl Column {
             (Self::Bin(b), Val::Bytes(x)) => b.append(Some(x)),
             (Self::Date(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
             (Self::Timestamp(b), Val::I64(x)) => b.append_value(*x),
-            (Self::Null(n, _), _) => *n += 1,
+            (Self::Null(n, _), _) => *n = n.saturating_add(1),
             (c, _) => c.append_null(),
         }
     }
@@ -1040,7 +1029,7 @@ impl Column {
             Self::Bin(b) => b.append(None),
             Self::Date(b) => b.append_null(),
             Self::Timestamp(b) => b.append_null(),
-            Self::Null(n, _) => *n += 1,
+            Self::Null(n, _) => *n = n.saturating_add(1),
         }
     }
 
@@ -1188,7 +1177,7 @@ pub fn from_csv(
                     continue;
                 }
                 ParseMode::FailFast => {
-                    return Err(KernelError::malformed_record(text));
+                    return Err(KernelError::malformed_record(row, text));
                 }
                 ParseMode::Permissive => {
                     for (i, c) in cols.iter_mut().enumerate() {
@@ -1281,7 +1270,7 @@ pub fn from_csv(
                 }
                 ParseMode::FailFast => {
                     // Spark shows the parsed row (`[1,null]`), not the text.
-                    return Err(KernelError::malformed_record(&row_text(&vals, kinds)));
+                    return Err(KernelError::malformed_record(row, &row_text(&vals, kinds)));
                 }
                 ParseMode::Permissive => {
                     for (v, i) in vals.iter_mut().zip(0..) {
@@ -1473,7 +1462,7 @@ fn nested_text(
             let o = list.value_offsets();
             let (lo, hi) = (
                 usize::try_from(o[row]).unwrap_or(0),
-                usize::try_from(o[row + 1]).unwrap_or(0),
+                usize::try_from(o[row.saturating_add(1)]).unwrap_or(0),
             );
             out.push('[');
             each(list.values(), lo..hi, out)?;
@@ -1484,7 +1473,7 @@ fn nested_text(
             let o = list.value_offsets();
             let (lo, hi) = (
                 usize::try_from(o[row]).unwrap_or(0),
-                usize::try_from(o[row + 1]).unwrap_or(0),
+                usize::try_from(o[row.saturating_add(1)]).unwrap_or(0),
             );
             out.push('[');
             each(list.values(), lo..hi, out)?;
@@ -1506,7 +1495,7 @@ fn nested_text(
             let o = m.value_offsets();
             let (lo, hi) = (
                 usize::try_from(o[row]).unwrap_or(0),
-                usize::try_from(o[row + 1]).unwrap_or(0),
+                usize::try_from(o[row.saturating_add(1)]).unwrap_or(0),
             );
             out.push('{');
             for (n, i) in (lo..hi).enumerate() {
@@ -2054,5 +2043,19 @@ mod tests {
                 .contains("[true,null,1.5,2.5,7.25,str,[62 69 6E],"),
             "{err}"
         );
+        assert_eq!(err.row(), Some(0));
+        // The error names the failing input row, after a NULL one.
+        let err = from_csv(
+            &StringArray::from(vec![None, Some(bad)]),
+            &fields,
+            &kinds,
+            Some(10),
+            &options(ParseMode::FailFast),
+            &zone,
+            &ts,
+            &ntz,
+        )
+        .unwrap_err();
+        assert_eq!(err.row(), Some(1), "{err}");
     }
 }

@@ -102,6 +102,16 @@ impl Env {
         req: &ScanRequest,
         o: &FormatOptions,
     ) -> Result<Vec<RecordBatch>, KrishivError> {
+        Ok(self.scan_metered(file, req, o)?.0)
+    }
+
+    /// As [`Self::scan`], also returning the decoder's counters.
+    pub(super) fn scan_metered(
+        &self,
+        file: &FileRef,
+        req: &ScanRequest,
+        o: &FormatOptions,
+    ) -> Result<(Vec<RecordBatch>, crate::ScanUnitMetrics), KrishivError> {
         self.rt.block_on(async {
             let pool: Arc<dyn krishiv_memory::MemoryPool> =
                 krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
@@ -121,7 +131,7 @@ impl Env {
             while let Some(b) = s.next_batch().await? {
                 out.push(b);
             }
-            Ok(out)
+            Ok((out, s.metrics()))
         })
     }
 }

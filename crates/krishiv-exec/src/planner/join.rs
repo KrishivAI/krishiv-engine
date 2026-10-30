@@ -151,10 +151,19 @@ impl Planner<'_> {
         // No logical join is a scalar subquery's single-match join yet
         // (design P2-T115 unit 2); orientation already refuses to flip one.
         let single_match = false;
-        // Which side the statistics say to build (design P2-T166). The
-        // joins that build their preserved side do not run yet: the plan
-        // keeps the right build and shows the preference.
-        let preferred = if choice.distribution.is_none() {
+        // Which side the statistics say to build (design P2-T166): a semi,
+        // anti or left outer join whose right input is much larger builds
+        // its left input instead, as a right semi, right anti or right
+        // outer join. A hint keeps Spark's side. The planner plans batch
+        // queries only (unweighted rows): the right joins refuse weighted
+        // inputs, so an incremental (IVM) planning mode must not flip.
+        let build_side = self
+            .cx
+            .config
+            .get(&krishiv_common::config::EXEC_JOIN_BUILD_SIDE)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let preferred = if choice.distribution.is_none() && build_side {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
             let other = orient(join_type, single_match, &probe_stats, &build_stats);
@@ -162,6 +171,29 @@ impl Planner<'_> {
         } else {
             None
         };
+        let (probe, probe_keys, probe_exprs, build, build_keys, build_exprs, build_rows, join_type) =
+            match &preferred {
+                Some((other, ..)) => (
+                    build,
+                    build_keys,
+                    build_exprs,
+                    probe,
+                    probe_keys,
+                    probe_exprs,
+                    self.estimated_rows(probe_plan),
+                    *other,
+                ),
+                None => (
+                    probe,
+                    probe_keys,
+                    probe_exprs,
+                    build,
+                    build_keys,
+                    build_exprs,
+                    build_rows,
+                    join_type,
+                ),
+            };
         // A hint decides, else the build's estimated size. The null-aware
         // anti join reads whether the whole build has a NULL key, so its
         // build is always broadcast. An existence join reads only the build
@@ -169,6 +201,10 @@ impl Planner<'_> {
         // like the other equi-joins, it is broadcast or partitioned by size.
         let distribution = if join_type == JoinType::NullAwareAnti {
             JoinDistribution::Broadcast
+        } else if join_type.builds_preserved() {
+            // A build whose rows the join returns is never broadcast: each
+            // copy would return them (design P2-T174 decision 3).
+            JoinDistribution::Partitioned
         } else {
             choice.distribution.unwrap_or(
                 if estimated_bytes(build_rows, &build.schema) <= BROADCAST_MAX_BYTES {
@@ -189,11 +225,14 @@ impl Planner<'_> {
         };
         let filter = residual_of(&probe, &build, &residual);
         let null_safe = keys.iter().map(|k| k.2).collect();
-        // Inner and left semi joins drop unmatched probe rows: the build
-        // publishes runtime filters to the probe side's scans.
+        // Inner, left semi and the right joins drop unmatched probe rows
+        // (a right join returns build rows by their matches, and a probe
+        // row that matches nothing marks nothing): the build publishes
+        // runtime filters to the probe side's scans.
         let mut published = Vec::new();
         let mut runtime_filters = Vec::new();
-        if matches!(join_type, JoinType::Inner | JoinType::LeftSemi) {
+        if matches!(join_type, JoinType::Inner | JoinType::LeftSemi) || join_type.builds_preserved()
+        {
             let key_types: Vec<_> = probe_keys
                 .iter()
                 .map(|&k| probe.schema.field(k).data_type().clone())
@@ -204,18 +243,31 @@ impl Planner<'_> {
         }
         let mut layout = probe.layout.clone();
         let mut sites = probe.sites.clone();
-        if matches!(join_type, JoinType::Inner | JoinType::LeftOuter) {
+        if matches!(
+            join_type,
+            JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter
+        ) {
             layout.extend(&build.layout);
+        }
+        if matches!(join_type, JoinType::RightSemi | JoinType::RightAnti) {
+            layout.clone_from(&build.layout);
         }
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
         }
-        // Rows stay where the probe placed them; an inner join's matched
-        // rows are equally placed by the build's keys.
+        if join_type.builds_preserved() {
+            // The rows the join returns are build rows (a right outer
+            // join's probe columns may be NULL).
+            sites.clone_from(&build.sites);
+        }
+        // Rows stay where the probe placed them (the build for the joins
+        // that return build rows); an inner join's matched rows are
+        // equally placed by the build's keys.
         let placement = match (distribution, join_type) {
             (JoinDistribution::Partitioned, JoinType::Inner) => {
                 probe.placement.clone().union(build.placement.clone())
             }
+            (_, t) if t.builds_preserved() => build.placement.clone(),
             _ => probe.placement.clone(),
         }
         .restrict(&layout);
@@ -231,9 +283,12 @@ impl Planner<'_> {
         for p in published {
             detail.push_str(&format!(", {p}"));
         }
-        if let Some((other, probe_stats, build_stats)) = preferred {
+        if let Some((_, probe_stats, build_stats)) = preferred {
+            // The statistics that chose to build the left input, labelled
+            // by the logical inputs: `probe_stats` is the left input's and
+            // `build_stats` the right one's (taken before the swap).
             detail.push_str(&format!(
-                ", prefers {other:?} (probe: {}; build: {})",
+                ", builds left (left: {}; right: {})",
                 probe_stats.describe(),
                 build_stats.describe()
             ));

@@ -115,6 +115,27 @@ pub(super) struct Bound {
     pub(super) shown: Option<Arc<Expr>>,
 }
 
+impl Bound {
+    /// Adds the analysis markers of `kids` to this expression: rebinding an
+    /// already resolved child drops its markers, so a rewrite that rebinds
+    /// its children carries them over.
+    fn carry_markers(&mut self, kids: &[Self]) {
+        for k in kids {
+            self.agg = self.agg.or(k.agg);
+            self.win = self.win.or(k.win);
+            self.outer = match (self.outer, k.outer) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            };
+            for id in &k.lateral {
+                if !self.lateral.contains(id) {
+                    self.lateral.push(*id);
+                }
+            }
+        }
+    }
+}
+
 /// The function Spark rewrites `extract(field FROM x)` (or `date_part`)
 /// to, when `field` is a literal naming one.
 fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
@@ -1605,19 +1626,7 @@ impl Resolver<'_> {
                     // The children are bound already, and rebinding a
                     // resolved child drops its markers: carry them over.
                     let mut b = self.expr(&rewritten, cx)?;
-                    for k in &kids[..n] {
-                        b.agg = b.agg.or(k.agg);
-                        b.win = b.win.or(k.win);
-                        b.outer = match (b.outer, k.outer) {
-                            (Some(x), Some(y)) => Some(x.min(y)),
-                            (x, y) => x.or(y),
-                        };
-                        for id in &k.lateral {
-                            if !b.lateral.contains(id) {
-                                b.lateral.push(*id);
-                            }
-                        }
-                    }
+                    b.carry_markers(&kids[..n]);
                     // Shown as written (`struct(1 AS a)`), not the
                     // `named_struct` it binds as: aliases keep `AS name`.
                     let mut shown_kids = Vec::with_capacity(n);
@@ -3956,6 +3965,10 @@ impl Resolver<'_> {
             self.expr(&cast, cx)?
         };
         let mut b = self.operator_call(Builtin::When, e.origin, &[cond, null_branch, rebuilt])?;
+        // The field values were bound before and rebinding them in the
+        // `named_struct` dropped their markers (an aggregate, a window
+        // expression, an outer or lateral reference): carry them over.
+        b.carry_markers(kids);
         // Shown as written (`update_fields(...)`), not the rewrite.
         b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
         Ok(b)

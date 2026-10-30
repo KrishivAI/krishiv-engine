@@ -105,12 +105,13 @@ impl KernelError {
         }
     }
 
-    /// `MALFORMED_RECORD_IN_PARSING` for a `FAILFAST` malformed CSV record.
+    /// `MALFORMED_RECORD_IN_PARSING` for a `FAILFAST` malformed CSV record at
+    /// input row `row` (0-based).
     #[must_use]
-    pub fn malformed_record(bad_record: &str) -> Self {
+    pub fn malformed_record(row: usize, bad_record: &str) -> Self {
         use krishiv_common::error::MalformedRecordInParsingWithoutSuggestion;
         Self {
-            row: None,
+            row: Some(row),
             error: MalformedRecordInParsingWithoutSuggestion {
                 bad_record: bad_record.to_owned(),
                 fail_fast_mode: "FAILFAST".to_owned(),

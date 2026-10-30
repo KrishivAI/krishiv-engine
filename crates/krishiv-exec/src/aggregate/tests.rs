@@ -48,6 +48,8 @@ struct Opts {
     /// The deterministic seed (morsel order); `None` claims morsels in
     /// order.
     seed: Option<u64>,
+    /// Collect a detailed profile's counters (`ExecConfig::detailed_metrics`).
+    detailed: bool,
 }
 
 impl Default for Opts {
@@ -57,6 +59,7 @@ impl Default for Opts {
             limit: 1 << 30,
             both_layouts: true,
             seed: Some(7),
+            detailed: false,
         }
     }
 }
@@ -126,6 +129,7 @@ async fn exec_with(
     let config = ExecConfig {
         seed: o.seed,
         agg_row_layout: rows,
+        detailed_metrics: o.detailed,
         ..ExecConfig::default()
     };
     let q = QueryContext::new(
@@ -852,6 +856,9 @@ async fn two_phase_and_adaptive_bypass() {
     let (out, m) = exec(plan, Opts::default()).await.unwrap();
     assert_eq!(rows(&out), expected);
     assert!(extra(&m, "PartialAggregate", "flushes") > 3);
+    // Each flushed table grew from empty; its successor counts into the
+    // same total.
+    assert!(extra(&m, "PartialAggregate", "hash_resizes") > 3);
     // Unique keys with a table that flushes long before `min_rows`: the
     // reduction is judged across flushes, so the partial still bypasses.
     let (s, b) = grouped_input(40_000, 1_000_000);
@@ -2336,6 +2343,54 @@ async fn row_merge_spills_on_request() {
     assert_eq!(rows(&out), expected);
     drop((sl, sg, src, g, sink_ctx));
     assert_eq!(root.reserved(), 0);
+}
+
+/// Both table layouts count their index reallocations, and, in a detailed
+/// profile only, their probe lengths.
+#[tokio::test]
+async fn resizes_and_probe_lengths_on_both_layouts() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    for rows in [false, true] {
+        let o = Opts {
+            both_layouts: false,
+            detailed: true,
+            ..Opts::default()
+        };
+        let (_, m) = exec_with(node(scan(&s, b.clone()), sp.clone()), o, rows)
+            .await
+            .unwrap();
+        assert!(
+            extra(&m, "HashAggregate", "hash_resizes") > 0,
+            "rows {rows}"
+        );
+        let lookups = extra(&m, "HashAggregate", "probe_lookups");
+        assert!(lookups > 0, "rows {rows}");
+        assert!(
+            extra(&m, "HashAggregate", "probe_key_compares") > 0,
+            "rows {rows}"
+        );
+        assert!(
+            extra(&m, "HashAggregate", "max_probe_length") >= 1,
+            "rows {rows}"
+        );
+        let o = Opts {
+            both_layouts: false,
+            ..Opts::default()
+        };
+        let (_, m) = exec_with(node(scan(&s, b.clone()), sp.clone()), o, rows)
+            .await
+            .unwrap();
+        assert!(
+            extra(&m, "HashAggregate", "hash_resizes") > 0,
+            "rows {rows}"
+        );
+        assert_eq!(
+            extra(&m, "HashAggregate", "probe_lookups"),
+            0,
+            "rows {rows}"
+        );
+    }
 }
 
 /// `EXPLAIN ANALYZE` counters of the row tables: abandons of full fixed

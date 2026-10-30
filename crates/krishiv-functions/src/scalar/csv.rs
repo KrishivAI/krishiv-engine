@@ -12,7 +12,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, Field, Fields};
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{ErrorClass, InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_kernels::cast::TimeZoneRules;
 use krishiv_kernels::csv::{
     FieldKind, FromCsvOptions, ParseMode, Syntax, ToCsvOptions, Unescaped,
@@ -245,6 +245,32 @@ struct Parsed {
     line_sep: Option<String>,
 }
 
+/// A `dateFormat` / `timestampFormat` / `timestampNTZFormat` option, compiled
+/// for the operation: `to_csv` formats, `from_csv` parses. Spark's pattern
+/// errors pass through; only a pattern letter this engine lacks becomes an
+/// unsupported-feature error naming the option.
+fn datetime_option(
+    pattern: &str,
+    func: &str,
+    option: &str,
+) -> Result<DateTimePattern, KrishivError> {
+    let purpose = if func == "to_csv" {
+        Purpose::Format
+    } else {
+        Purpose::Parse
+    };
+    DateTimePattern::new(pattern, purpose).map_err(|e| {
+        if e.error_class() == ErrorClass::KrishivUnsupportedFeature {
+            KrishivUnsupportedFeature {
+                feature: format!("{func} with option {option}"),
+            }
+            .into()
+        } else {
+            e
+        }
+    })
+}
+
 impl Parsed {
     /// Defaults for `func`.
     fn defaults() -> Self {
@@ -311,28 +337,13 @@ impl Parsed {
                 }
                 "columnnameofcorruptrecord" => self.corrupt_column = v.clone(),
                 "dateformat" => {
-                    self.date_pattern =
-                        Some(DateTimePattern::new(v, Purpose::Parse).map_err(|_| {
-                            KrishivUnsupportedFeature {
-                                feature: format!("{func} with option dateFormat"),
-                            }
-                        })?);
+                    self.date_pattern = Some(datetime_option(v, func, "dateFormat")?);
                 }
                 "timestampformat" => {
-                    self.timestamp_pattern =
-                        Some(DateTimePattern::new(v, Purpose::Parse).map_err(|_| {
-                            KrishivUnsupportedFeature {
-                                feature: format!("{func} with option timestampFormat"),
-                            }
-                        })?);
+                    self.timestamp_pattern = Some(datetime_option(v, func, "timestampFormat")?);
                 }
                 "timestampntzformat" => {
-                    self.ntz_pattern =
-                        Some(DateTimePattern::new(v, Purpose::Parse).map_err(|_| {
-                            KrishivUnsupportedFeature {
-                                feature: format!("{func} with option timestampNTZFormat"),
-                            }
-                        })?);
+                    self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat")?);
                 }
                 "enabledatetimeparsingfallback" => {
                     self.fallback = v.eq_ignore_ascii_case("true");
