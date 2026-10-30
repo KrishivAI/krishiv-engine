@@ -588,6 +588,7 @@ fn results_are_checked_against_the_binding() {
     assert!(err.to_string().contains("returned 1 rows of Utf8"), "{err}");
 }
 
+mod array_edit;
 mod bitwise;
 mod calendar;
 mod csv;

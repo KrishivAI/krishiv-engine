@@ -1099,6 +1099,8 @@ impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Null(None) => f.write_str("NULL"),
+            // Spark prints a NULL of a nested type as plain `NULL`.
+            Self::Null(Some(t)) if t.is_nested() => f.write_str("NULL"),
             Self::Null(Some(t)) => write!(f, "CAST(NULL AS {})", t.sql()),
             Self::Boolean(v) => write!(f, "{v}"),
             Self::Byte(v) => write!(f, "{v}Y"),

@@ -31,6 +31,10 @@ __all__ = [
     "acosh",
     "add_months",
     "array",
+    "array_append",
+    "array_compact",
+    "array_insert",
+    "array_prepend",
     "array_size",
     "ascii",
     "asin",
@@ -329,6 +333,26 @@ def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
 def array(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``array``."""
     return _call("array", *_cols(cols))
+
+
+def array_append(col: ColumnOrName, value: Any) -> Column:
+    """Calls the registry function ``array_append``."""
+    return _call("array_append", _named(col, "col"), _lit(value, "value"))
+
+
+def array_compact(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_compact``."""
+    return _call("array_compact", _named(col, "col"))
+
+
+def array_insert(arr: ColumnOrName, pos: Any, value: Any) -> Column:
+    """Calls the registry function ``array_insert``."""
+    return _call("array_insert", _named(arr, "arr"), _lit(pos, "pos"), _lit(value, "value"))
+
+
+def array_prepend(col: ColumnOrName, value: Any) -> Column:
+    """Calls the registry function ``array_prepend``."""
+    return _call("array_prepend", _named(col, "col"), _lit(value, "value"))
 
 
 def array_size(col: ColumnOrName) -> Column:

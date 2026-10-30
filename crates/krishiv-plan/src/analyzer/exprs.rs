@@ -5213,6 +5213,17 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             };
             format!("{keyword} '{value}'")
         }
+        // Spark's pretty SQL shows a cast to an array, map or struct type as
+        // its operand (`CAST(array() AS ARRAY<FLOAT>)` is `array()`).
+        ExprNode::Cast { to, mode, .. }
+            if *mode != CastMode::Try
+                && matches!(
+                    to,
+                    DataType::Array(_) | DataType::Map(_) | DataType::Struct(_)
+                ) =>
+        {
+            k[0].to_owned()
+        }
         ExprNode::Cast { to, mode, .. } => {
             let cast = if *mode == CastMode::Try {
                 "TRY_CAST"

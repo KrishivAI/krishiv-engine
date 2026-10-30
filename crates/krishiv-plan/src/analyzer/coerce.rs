@@ -880,6 +880,7 @@ pub(super) fn inputs(
         Inputs::Map => map_casts(args, Rules::of(call)),
         Inputs::MapConcat => map_concat_casts(args, Rules::of(call)),
         Inputs::MapContainsKey => map_contains_key_casts(args, call),
+        Inputs::ArrayItem => Ok(array_item_casts(args, Rules::of(call))),
         Inputs::CommonNoStrings => {
             let typed = args.iter().filter(|a| a.ty.is_some());
             let strings = typed
@@ -1085,6 +1086,32 @@ fn map_contains_key_casts(
         cast_to(map.ty, Some(&map_type.into())),
         cast_to(key.ty, Some(&wider)),
     ])
+}
+
+/// `array_append(arr, item)` and the like: the array's element type and the
+/// item meet at their tightest common type, both are cast to it, and the
+/// position of `array_insert` to `INT`; no casts when they do not meet.
+fn array_item_casts(args: &[Arg<'_>], rules: Rules) -> Vec<Option<DataType>> {
+    let none = vec![None; args.len()];
+    let (arr, pos, item) = match args {
+        [a, i] => (a, None, i),
+        [a, p, i] => (a, Some(p), i),
+        _ => return none,
+    };
+    let Some(DataType::Array(a)) = arr.ty else {
+        return none;
+    };
+    let item_ty = item.ty.unwrap_or(&DataType::Null);
+    let Some(Some(meet)) = tightest(a.element_type(), item_ty, rules) else {
+        return none;
+    };
+    let array: DataType = ArrayType::new(meet.clone(), a.contains_null()).into();
+    let mut casts = vec![cast_to(arr.ty, Some(&array))];
+    if let Some(p) = pos {
+        casts.push(cast_to(p.ty, Some(&DataType::Integer)));
+    }
+    casts.push(cast_to(item.ty, Some(&meet)));
+    casts
 }
 
 /// The literal `0` of `zeroifnull` and `nullifzero`.

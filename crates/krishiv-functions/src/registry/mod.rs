@@ -13,6 +13,7 @@
 //! [`Lookup::KnownUnsupported`] in profiles that have it, and
 //! [`Lookup::NotFound`] in older ones (as for an unknown name).
 
+mod array_edit;
 mod bitwise;
 mod catalog;
 mod collection;
