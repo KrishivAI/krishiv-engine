@@ -3263,3 +3263,136 @@ fn identifier_clause_is_not_a_named_marker() {
     let e = parse_statement("SELECT :IDENTIFIER('param1') FROM t", &d).unwrap_err();
     assert_eq!(e.span.start, 19);
 }
+
+/// Scripts: compound statements, control flow, declarations and handlers.
+#[test]
+fn script_statements() {
+    use ast::{HandlerBody, HandlerCondition, ScriptStatement as S, Statement};
+    let d = ParserOptions::default();
+    let script =
+        |sql: &str| match parse_statement(sql, &d).unwrap_or_else(|e| panic!("{sql}: {e:?}")) {
+            Statement::Script(c) => *c,
+            other => panic!("{sql} is {other:?}"),
+        };
+    assert!(script("BEGIN END").body.is_empty());
+    assert!(script("BEGIN NOT ATOMIC SELECT 1; END;").body.len() == 1);
+    let c = script(
+        "BEGIN
+           DECLARE x INT DEFAULT 1;
+           DECLARE VARIABLE a, b STRING;
+           DECLARE oops CONDITION FOR SQLSTATE '22012';
+           DECLARE EXIT HANDLER FOR SQLEXCEPTION, NOT FOUND, SQLSTATE VALUE '42000', oops
+             BEGIN SELECT 'e'; END;
+           SET x = x + 1;
+           SET (a, b) = (SELECT 'p', 'q');
+           IF x > 1 THEN SELECT 1; ELSEIF x = 1 THEN SELECT 2; ELSE SELECT 3; END IF;
+           CASE x WHEN 1 THEN SELECT 1; WHEN 2 THEN SELECT 2; ELSE SELECT 3; END CASE;
+           CASE WHEN x > 1 THEN SELECT 1; END CASE;
+           l1: WHILE x < 3 DO SET x = x + 1; ITERATE l1; END WHILE l1;
+           REPEAT SET x = x - 1; UNTIL x < 1 END REPEAT;
+           l2: LOOP LEAVE l2; END LOOP l2;
+           FOR r AS SELECT id FROM t DO SELECT r.id; END FOR;
+           FOR SELECT 1 DO SELECT 2; END FOR;
+           lbl: BEGIN SELECT 1; END lbl;
+           INSERT INTO t VALUES (1);
+         END",
+    );
+    let kinds: Vec<&str> = c
+        .body
+        .iter()
+        .map(|s| match s {
+            S::Declare(_) => "declare",
+            S::Condition(_) => "condition",
+            S::Handler(_) => "handler",
+            S::Assign(_) => "assign",
+            S::If(_) => "if",
+            S::Case(_) => "case",
+            S::While(_) => "while",
+            S::Repeat(_) => "repeat",
+            S::Loop(_) => "loop",
+            S::For(_) => "for",
+            S::Compound(_) => "compound",
+            S::Sql(_) => "sql",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "declare",
+            "declare",
+            "condition",
+            "handler",
+            "assign",
+            "assign",
+            "if",
+            "case",
+            "case",
+            "while",
+            "repeat",
+            "loop",
+            "for",
+            "for",
+            "compound",
+            "sql"
+        ]
+    );
+    let S::Handler(h) = &c.body[3] else { panic!() };
+    assert!(!h.continue_handler && h.conditions.len() == 4);
+    assert!(matches!(h.conditions[0], HandlerCondition::SqlException(_)));
+    assert!(matches!(&h.conditions[2], HandlerCondition::SqlState(s, _) if s == "42000"));
+    assert!(matches!(h.body, HandlerBody::Compound(_)));
+    let S::While(w) = &c.body[9] else { panic!() };
+    assert_eq!(w.label.as_ref().map(|l| l.value.as_str()), Some("l1"));
+    assert_eq!(w.end_label.as_ref().map(|l| l.value.as_str()), Some("l1"));
+    // Handlers take one statement or an assignment too.
+    for body in ["SELECT 1", "SET x = 1"] {
+        let c = script(&format!(
+            "BEGIN DECLARE x INT DEFAULT 0; DECLARE EXIT HANDLER FOR SQLEXCEPTION {body}; END"
+        ));
+        assert!(matches!(c.body[1], S::Handler(_)));
+    }
+}
+
+/// What a script never parses: Spark 4.2's syntax errors and the refusals the checks raise.
+#[test]
+fn script_syntax_errors_and_refusals() {
+    let d = ParserOptions::default();
+    let class = |sql: &str| parse_statement(sql, &d).unwrap_err().error.error_class();
+    for bad in [
+        "lbl: BEGIN END",
+        "EXPLAIN BEGIN END",
+        "BEGIN SELECT 1 END",
+        "BEGIN SIGNAL x; END",
+        "BEGIN RESIGNAL; END",
+        "BEGIN GET DIAGNOSTICS x = ROW_COUNT; END",
+        "BEGIN SELECT 1 INTO x; END",
+        "BEGIN SET; END",
+        "BEGIN SET spark.sql.ansi.enabled; END",
+        "BEGIN SET TIME ZONE 'UTC'; END",
+        "BEGIN RESET; END",
+        "BEGIN SET VAR x = 1; END",
+        "BEGIN IF 1 THEN SELECT 1; END; END",
+        "BEGIN DECLARE a.c CONDITION; END",
+        "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION IF 1 THEN SELECT 1; END IF; END",
+        "BEGIN END trailing",
+    ] {
+        assert_eq!(class(bad), ErrorClass::ParseSyntaxError, "{bad}");
+    }
+    assert_eq!(
+        class("BEGIN DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SELECT 1; END"),
+        ErrorClass::UnsupportedFeatureContinueExceptionHandler
+    );
+    for cursor in [
+        "BEGIN DECLARE c CURSOR FOR SELECT 1; END",
+        "BEGIN OPEN c; END",
+        "BEGIN FETCH c INTO x; END",
+        "BEGIN CLOSE c; END",
+    ] {
+        assert_eq!(
+            class(cursor),
+            ErrorClass::UnsupportedFeatureSqlCursor,
+            "{cursor}"
+        );
+    }
+}

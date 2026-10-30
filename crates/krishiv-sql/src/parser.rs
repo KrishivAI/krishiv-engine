@@ -18,6 +18,7 @@
 mod ddl;
 mod expr;
 mod function;
+mod script;
 mod types;
 
 use std::collections::HashMap;
@@ -137,6 +138,8 @@ pub(crate) struct Parser<'s> {
     closers: Vec<usize>,
     /// Token positions of the `?` parameter markers, in order.
     markers: Vec<usize>,
+    /// How many script bodies the cursor is inside: a statement there ends at its `;`.
+    in_script: usize,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
     /// the tree cannot carry; reported if the statement parses.
     deferred: Option<ParseError>,
@@ -642,6 +645,7 @@ impl<'s> Parser<'s> {
             after_parens,
             closers,
             markers,
+            in_script: 0,
             deferred: None,
             cast_types: vec![],
             force_bare,
@@ -665,6 +669,22 @@ impl<'s> Parser<'s> {
 
     fn tok(&self, n: usize) -> Option<Token> {
         self.toks.get(self.pos + n).copied()
+    }
+
+    /// Where a statement that reads the rest of its text raw stops: at the `;` that ends it inside a
+    /// script, else at the end of the input. A token index, and its byte offset.
+    fn raw_end(&self) -> (usize, usize) {
+        let end = if self.in_script > 0 {
+            (self.pos..self.toks.len())
+                .find(|&i| self.toks[i].kind == TokenKind::Sym(Sym::Semi))
+                .unwrap_or(self.toks.len())
+        } else {
+            self.toks.len()
+        };
+        (
+            end,
+            self.toks.get(end).map_or(self.src.len(), |t| t.span.start),
+        )
     }
 
     fn kind(&self, n: usize) -> Option<TokenKind> {
@@ -1451,6 +1471,10 @@ impl<'s> Parser<'s> {
     /// ANTLR reads it); `strict` admits the strict-non-reserved words
     /// (`UNION`, `JOIN`, ...), which only a column alias may be.
     fn implicit_alias(&mut self, strict: bool) -> PR<Option<Ident>> {
+        // In a script `DO` ends the query of `FOR ... DO`.
+        if self.in_script > 0 && self.kw_at(0, "DO") {
+            return Ok(None);
+        }
         // `APPROX NEAREST ...` after a join's relation is its ranking clause.
         if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
             return Ok(None);
@@ -1500,6 +1524,14 @@ impl<'s> Parser<'s> {
     /// ANTLR's `SEMICOLON*` loop) is reported as "extra input", as in
     /// Spark.
     fn command_end(&mut self) -> PR<()> {
+        // Inside a script a statement ends at its `;`, which the script reads.
+        if self.in_script > 0 {
+            return if self.sym_at(0, Sym::Semi) {
+                Ok(())
+            } else {
+                self.fail()
+            };
+        }
         let mut semi = false;
         while self.eat_sym(Sym::Semi) {
             semi = true;
@@ -1571,10 +1603,12 @@ impl<'s> Parser<'s> {
                 && (matches!(self.kind(2), Some(TokenKind::Word | TokenKind::QuotedIdent))
                     || self.sym_at(2, Sym::LParen))
             {
-                self.set_variable_command()?
+                self.set_variable_command(true)?
             } else {
                 self.set_command()?
             }
+        } else if explains.is_empty() && self.kw_at(0, "BEGIN") && self.in_script == 0 {
+            self.script_command()?
         } else if self.kw_at(0, "EXECUTE") && self.kw_at(1, "IMMEDIATE") {
             self.execute_immediate_command()?
         } else if self.kw_at(0, "DECLARE") {
@@ -1967,14 +2001,15 @@ impl<'s> Parser<'s> {
     /// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
     /// (query)` (`VAR` for `VARIABLE`), dispatched from [`Self::explainable`]
     /// when `VAR` or `VARIABLE` follows `SET`.
-    fn set_variable_command(&mut self) -> PR<Statement> {
+    fn set_variable_command(&mut self, keyword: bool) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("SET")?;
             // Dispatched on `VAR` or `VARIABLE` following `SET`; only that
             // one keyword is the form (`SET VAR variable = 1` assigns a
-            // variable named `variable`).
-            if !p.eat_kw("VAR") {
+            // variable named `variable`). In a script `SET` is always an
+            // assignment and the keyword is not part of the form.
+            if keyword && !p.eat_kw("VAR") {
                 p.eat_kw("VARIABLE");
             }
             if p.sym_at(0, Sym::LParen) {
