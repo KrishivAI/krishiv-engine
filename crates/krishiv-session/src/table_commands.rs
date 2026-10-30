@@ -1264,23 +1264,63 @@ impl Session {
         if a.partition.is_some() {
             return Err(unsupported("ANALYZE TABLE ... PARTITION"));
         }
-        if let AnalyzeColumns::ForColumns(columns) = &a.columns {
-            let case_sensitive = env.analysis.conf.case_sensitive;
-            let same = |x: &str, y: &str| {
-                if case_sensitive {
-                    x == y
-                } else {
-                    x.eq_ignore_ascii_case(y)
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let same = |x: &str, y: &str| {
+            if case_sensitive {
+                x == y
+            } else {
+                x.eq_ignore_ascii_case(y)
+            }
+        };
+        // The columns whose statistics are asked for: the listed ones, or all.
+        let chosen: Vec<&crate::store::StoreColumn> = match &a.columns {
+            AnalyzeColumns::All => Vec::new(),
+            AnalyzeColumns::ForAll => table.columns.iter().collect(),
+            AnalyzeColumns::ForColumns(columns) => {
+                let mut found = Vec::with_capacity(columns.len());
+                for c in columns {
+                    let Some(column) = table.columns.iter().find(|t| same(&t.name, &c.value))
+                    else {
+                        return Err(krishiv_common::error::ColumnNotFound {
+                            col_name: format!("`{}`", c.value.replace('`', "``")),
+                            case_sensitive_config: "\"spark.sql.caseSensitive\"".to_owned(),
+                        }
+                        .into());
+                    };
+                    found.push(column);
                 }
-            };
-            for c in columns {
-                if !table.columns.iter().any(|t| same(&t.name, &c.value)) {
-                    return Err(krishiv_common::error::ColumnNotFound {
-                        col_name: format!("`{}`", c.value.replace('`', "``")),
-                        case_sensitive_config: "\"spark.sql.caseSensitive\"".to_owned(),
+                found
+            }
+            _ => return Err(unsupported("this ANALYZE TABLE form")),
+        };
+        // Spark gathers statistics of numbers, booleans, dates and times, strings and binary only.
+        for column in chosen {
+            let supported = matches!(
+                column.data_type,
+                DataType::Boolean
+                    | DataType::Byte
+                    | DataType::Short
+                    | DataType::Integer
+                    | DataType::Long
+                    | DataType::Float
+                    | DataType::Double
+                    | DataType::Decimal(_)
+                    | DataType::String
+                    | DataType::Binary
+                    | DataType::Date
+                    | DataType::Timestamp
+                    | DataType::TimestampNtz
+                    | DataType::Time { .. }
+            );
+            if !supported {
+                return Err(
+                    krishiv_common::error::UnsupportedFeatureAnalyzeUnsupportedColumnType {
+                        column_type: format!("\"{}\"", column.data_type.sql()),
+                        column_name: format!("`{}`", column.name.replace('`', "``")),
+                        table_name: format!("`{}`.`{}`", table.namespace, table.name),
                     }
-                    .into());
-                }
+                    .into(),
+                );
             }
         }
         self.empty_frame().await
