@@ -111,7 +111,8 @@ def test_partition_by_writes_spark_partition_directories(df: DataFrame, tmp_path
     leaf = df.sparkSession.read.parquet(os.path.join(path, "name=b"))
     assert len(leaf.collect()) == 1
 
-    df.write.partitionBy(["id", "name"]).save(str(tmp_path / "u"))
+    wide = df.sparkSession.createDataFrame(pa.table({"id": [3, 1, 2], "name": ["c", None, "b"], "v": [1, 2, 3]}))
+    wide.write.partitionBy(["id", "name"]).save(str(tmp_path / "u"))
     assert os.path.isdir(os.path.join(str(tmp_path / "u"), "id=1", "name=__HIVE_DEFAULT_PARTITION__"))
 
     with pytest.raises(errors.PySparkTypeError):
