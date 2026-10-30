@@ -184,6 +184,27 @@ pub fn builtins() -> &'static Registry {
     &BUILTINS
 }
 
+/// The catalog row of a name Spark's grammar owns: `TIMESTAMPADD` and
+/// `TIMESTAMPDIFF` (and the unit forms of `DATEADD`/`DATEDIFF` the lowering
+/// renames to them) are parsed into expressions, not registered, so
+/// `SHOW FUNCTIONS` and `DESCRIBE FUNCTION` do not know them. Three
+/// arguments, as the grammar takes.
+fn grammar_row(name: &str) -> Option<SparkFunction> {
+    let name = match name {
+        "timestampadd" => "timestampadd",
+        "timestampdiff" => "timestampdiff",
+        _ => return None,
+    };
+    Some(SparkFunction {
+        name,
+        registry: "function",
+        since: SparkProfile::V3_5,
+        deterministic: Some(true),
+        kind: Some(FunctionKind::Scalar),
+        arity: Arity::new([false, false, false, true, false, false, false], "3"),
+    })
+}
+
 impl Registry {
     fn build() -> Self {
         let (rows, _) = catalog::load();
@@ -192,7 +213,8 @@ impl Registry {
         let mut defs = HashMap::new();
         let mut unlisted = Vec::new();
         for (id, spec) in (0_u32..).zip(defs::specs()) {
-            let Some(row) = spark.get(spec.name) else {
+            let grammar = grammar_row(spec.name);
+            let Some(row) = spark.get(spec.name).or(grammar.as_ref()) else {
                 unlisted.push(spec.name);
                 continue;
             };

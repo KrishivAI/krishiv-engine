@@ -420,6 +420,76 @@ fn date_trunc_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![exact(DataType::String), instant_input(c, 1)]
 }
 
+fn timestampadd_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![
+        exact(DataType::String),
+        exact(DataType::Long),
+        instant_input(c, 2),
+    ]
+}
+
+fn timestampdiff_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![
+        exact(DataType::String),
+        instant_input(c, 1),
+        instant_input(c, 2),
+    ]
+}
+
+/// `timestampadd` keeps a `TIMESTAMP_NTZ` and makes every other input
+/// (a date included) a `TIMESTAMP`.
+fn timestampadd_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.data_type(2) == Some(&DataType::TimestampNtz) {
+        timestamp_ntz_result(c)
+    } else {
+        timestamp_result(c)
+    }
+}
+
+/// The seconds of `make_timestamp`: `DECIMAL(16,6)`.
+fn seconds_input() -> InputType {
+    exact(DataType::Decimal(
+        DecimalType::try_new(16, 6).unwrap_or(DecimalType::USER_DEFAULT),
+    ))
+}
+
+fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 5];
+    inputs.push(seconds_input());
+    if c.args().len() == 7 {
+        inputs.push(exact(DataType::String));
+    }
+    inputs
+}
+
+fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 5];
+    inputs.push(seconds_input());
+    inputs
+}
+
+/// A malformed field is NULL with ANSI off and always for the `try_`
+/// forms, so the result may be null then whatever the arguments.
+fn make_timestamp_result(c: &CallTypes<'_>, ty: DataType, try_form: bool) -> ArgType {
+    ArgType::new(ty, try_form || !c.ansi() || c.any_nullable())
+}
+
+fn make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::Timestamp, false))
+}
+
+fn try_make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::Timestamp, true))
+}
+
+fn make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::TimestampNtz, false))
+}
+
+fn try_make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::TimestampNtz, true))
+}
+
 fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![
         instant_input(c, 0),
@@ -721,6 +791,38 @@ fn datetime() -> Vec<Spec> {
         &["date_trunc"],
         &Inputs::Built(InputBuilder(date_trunc_inputs)),
         always_null_timestamp,
+    ));
+    out.extend(scalar(
+        &["timestampadd"],
+        &Inputs::Built(InputBuilder(timestampadd_inputs)),
+        timestampadd_result,
+    ));
+    out.extend(scalar(
+        &["timestampdiff"],
+        &Inputs::Built(InputBuilder(timestampdiff_inputs)),
+        long,
+    ));
+    let make = Inputs::Built(InputBuilder(make_timestamp_inputs));
+    let make_ntz = Inputs::Built(InputBuilder(make_timestamp_ntz_inputs));
+    out.extend(scalar(
+        &["make_timestamp", "make_timestamp_ltz"],
+        &make,
+        make_timestamp_ltz,
+    ));
+    out.extend(scalar(
+        &["try_make_timestamp", "try_make_timestamp_ltz"],
+        &make,
+        try_make_timestamp_ltz,
+    ));
+    out.extend(scalar(
+        &["make_timestamp_ntz"],
+        &make_ntz,
+        make_timestamp_ntz,
+    ));
+    out.extend(scalar(
+        &["try_make_timestamp_ntz"],
+        &make_ntz,
+        try_make_timestamp_ntz,
     ));
     out.extend(scalar(
         &["months_between"],

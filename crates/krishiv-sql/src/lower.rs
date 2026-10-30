@@ -1607,9 +1607,23 @@ impl Lowerer {
                     }
                 }
                 let filter = f.filter.as_ref().map(|x| self.arg(x)).transpose()?;
+                // `DATEADD(unit, n, t)` and `DATEDIFF(unit, a, b)` with a unit
+                // keyword are `TIMESTAMPADD` and `TIMESTAMPDIFF` (Spark's
+                // AstBuilder), and are named so in output columns; any other
+                // three-argument call stays the day-count function.
+                let unit_form = qualifier.is_empty()
+                    && f.args.len() == 3
+                    && matches!(f.args[0].expr.kind, ExprKind::Keyword(_));
+                let function_name = match (unit_form, lname.as_str()) {
+                    (true, "timestampadd" | "dateadd" | "date_add") => "timestampadd".to_owned(),
+                    (true, "timestampdiff" | "datediff" | "date_diff") => {
+                        "timestampdiff".to_owned()
+                    }
+                    _ => name.value.clone(),
+                };
                 let call = self.ex(
                     ExprNode::Function(FunctionCall {
-                        name: name.value.clone(),
+                        name: function_name,
                         qualifier,
                         arg_names,
                         args,
