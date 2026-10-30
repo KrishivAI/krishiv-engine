@@ -100,8 +100,8 @@ def commits_between(repo: Path, good: str, bad: str) -> list[str]:
         if subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", f"{rev}^{{commit}}"],
                           capture_output=True, text=True).returncode != 0:  # fmt: skip
             raise BisectError(f"unknown revision {rev!r}")
-    anc = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", good, bad], capture_output=True)
-    if anc.returncode != 0:
+    ancestor = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", good, bad], capture_output=True)
+    if ancestor.returncode != 0:
         raise BisectError(f"--good {good} is not an ancestor of --bad {bad}")
     out = subprocess.run(
         ["git", "-C", str(repo), "rev-list", "--reverse", "--first-parent", f"{good}..{bad}"],
