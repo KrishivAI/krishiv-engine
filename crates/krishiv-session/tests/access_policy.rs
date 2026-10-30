@@ -265,6 +265,13 @@ fn ddl(s: &Session) -> Vec<(&'static str, String)> {
         ("DROP DATABASE", sql("DROP DATABASE default")),
         ("SHOW TABLES", sql("SHOW TABLES")),
         ("DESCRIBE TABLE", sql("DESCRIBE TABLE t")),
+        ("DESCRIBE QUERY", sql("DESCRIBE QUERY SELECT * FROM t")),
+        ("DESCRIBE NAMESPACE", sql("DESCRIBE NAMESPACE default")),
+        ("SHOW VIEWS", sql("SHOW VIEWS")),
+        ("SHOW COLUMNS", sql("SHOW COLUMNS IN t")),
+        ("SHOW NAMESPACES", sql("SHOW NAMESPACES")),
+        ("SHOW TBLPROPERTIES", sql("SHOW TBLPROPERTIES t")),
+        ("SHOW CREATE TABLE", sql("SHOW CREATE TABLE t")),
         ("CLEAR CACHE", sql("CLEAR CACHE")),
         ("ADD JAR", sql("ADD JAR '/tmp/x.jar'")),
     ]
@@ -375,6 +382,9 @@ fn denials_do_not_reveal_existence() {
         "INSERT INTO t VALUES (1)",
         "SELECT * FROM t",
         "DESCRIBE TABLE t",
+        "SHOW COLUMNS IN t",
+        "SHOW TBLPROPERTIES t",
+        "SHOW CREATE TABLE t",
     ] {
         let a = block_on(with_t.sql(sql)).unwrap_err().to_string();
         let b = block_on(without_t.sql(sql)).unwrap_err().to_string();
@@ -773,4 +783,60 @@ fn persisted_function_statements_change_nothing() {
             "{sql}"
         );
     }
+}
+
+static DENY_VIEWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn deny_view_selects(securable: &Securable, p: Privilege) -> AccessDecision {
+    if DENY_VIEWS.load(std::sync::atomic::Ordering::SeqCst)
+        && p == Privilege::Select
+        && matches!(securable, Securable::View(_))
+    {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// A grant on the table-named securable does not show a permanent view's definition, columns or
+/// properties: those statements need `SELECT` on the view, as a query of it does.
+#[test]
+fn describing_a_view_needs_the_view_securable() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(deny_view_selects));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    block_on(async {
+        s.sql("CREATE TABLE pt (a INT) USING parquet")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    block_on(async {
+        s.sql("CREATE VIEW pv AS SELECT a FROM pt")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    DENY_VIEWS.store(true, std::sync::atomic::Ordering::SeqCst);
+    let denied = [
+        "SHOW CREATE TABLE pv",
+        "SHOW TBLPROPERTIES pv",
+        "DESCRIBE TABLE pv",
+        "DESCRIBE TABLE EXTENDED pv",
+        "SHOW COLUMNS IN pv",
+    ];
+    let results: Vec<_> = denied
+        .iter()
+        .map(|sql| class(block_on(s.sql(sql))))
+        .collect();
+    let table_ok = block_on(async { s.sql("SHOW CREATE TABLE pt").await?.collect().await }).is_ok();
+    DENY_VIEWS.store(false, std::sync::atomic::Ordering::SeqCst);
+    for (sql, c) in denied.iter().zip(&results) {
+        assert_eq!(c, DENIED, "{sql}");
+    }
+    assert!(table_ok, "the table itself stays readable");
 }

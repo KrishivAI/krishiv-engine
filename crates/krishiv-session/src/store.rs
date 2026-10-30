@@ -126,6 +126,8 @@ pub(crate) trait CatalogStore: Send + Sync {
         namespace: &str,
         cascade: bool,
     ) -> Result<Vec<Arc<CatalogTable>>, DropNamespaceError>;
+    /// Every namespace with its metadata, by name.
+    fn namespaces(&self) -> Vec<(String, NamespaceMeta)>;
     /// The tables and views of `namespace`, by name.
     fn tables_in(&self, namespace: &str) -> Vec<Arc<CatalogTable>>;
     /// The table `namespace.name`.
@@ -189,6 +191,14 @@ impl CatalogStore for InMemoryCatalogStore {
 
     fn has_namespace(&self, namespace: &str) -> bool {
         self.lock().namespaces.contains_key(namespace)
+    }
+
+    fn namespaces(&self) -> Vec<(String, NamespaceMeta)> {
+        self.lock()
+            .namespaces
+            .iter()
+            .map(|(n, m)| (n.clone(), m.clone()))
+            .collect()
     }
 
     fn tables_in(&self, namespace: &str) -> Vec<Arc<CatalogTable>> {
