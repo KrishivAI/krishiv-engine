@@ -1,0 +1,82 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [channel#461 ASC NULLS FIRST, id#462 ASC NULLS FIRST, returns_#459 DESC NULLS LAST], true
+   +- Aggregate [channel#461, id#462, spark_grouping_id#457], [channel#461, id#462, sum(sales#429) AS sales#458, sum(returns_#436) AS returns_#459, sum(profit#437) AS profit#460]
+      +- Expand [[sales#429, returns_#436, profit#437, channel#434, id#435, 0L], [sales#429, returns_#436, profit#437, channel#434, CAST(NULL AS INT), 1L], [sales#429, returns_#436, profit#437, CAST(NULL AS STRING), CAST(NULL AS INT), 3L]], [sales#429, returns_#436, profit#437, channel#461, id#462, spark_grouping_id#457]
+         +- Union
+            :- Union
+            :  :- Project ['store channel' AS channel#434, s_store_sk#428 AS id#435, sales#429, coalesce(returns_#432, 0.00) AS returns_#436, (profit#430 - coalesce(profit_loss#433, 0.00)) AS profit#437]
+            :  :  +- Join LeftOuter, (s_store_sk#428 == s_store_sk#431)
+            :  :     :- Project [s_store_sk#514 AS s_store_sk#428, sales#543 AS sales#429, profit#544 AS profit#430]
+            :  :     :  +- Shift +463
+            :  :     :     +- Aggregate [s_store_sk#51], [s_store_sk#51, sum(ss_ext_sales_price#15) AS sales#80, sum(ss_net_profit#22) AS profit#81]
+            :  :     :        +- Project [s_store_sk#51, ss_ext_sales_price#15, ss_net_profit#22]
+            :  :     :           +- Join Inner, (ss_store_sk#7 == s_store_sk#51)
+            :  :     :              :- Scan spark_catalog.default.store [s_store_sk#51]
+            :  :     :              +- Project [ss_store_sk#7, ss_ext_sales_price#15, ss_net_profit#22]
+            :  :     :                 +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+            :  :     :                    :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_ext_sales_price#15, ss_net_profit#22]
+            :  :     :                    +- Project [d_date_sk#23]
+            :  :     :                       +- Filter ((d_date#25 >= DATE '2000-08-23') and (d_date#25 <= DATE '2000-09-22'))
+            :  :     :                          +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_date#25]
+            :  :     +- Project [s_store_sk#675 AS s_store_sk#431, returns_#704 AS returns_#432, profit_loss#705 AS profit_loss#433]
+            :  :        +- Shift +545
+            :  :           +- Aggregate [s_store_sk#130], [s_store_sk#130, sum(sr_return_amt#93) AS returns_#159, sum(sr_net_loss#101) AS profit_loss#160]
+            :  :              +- Project [s_store_sk#130, sr_return_amt#93, sr_net_loss#101]
+            :  :                 +- Join Inner, (sr_store_sk#89 == s_store_sk#130)
+            :  :                    :- Scan spark_catalog.default.store [s_store_sk#130]
+            :  :                    +- Project [sr_store_sk#89, sr_return_amt#93, sr_net_loss#101]
+            :  :                       +- Join Inner, (sr_returned_date_sk#82 == d_date_sk#102)
+            :  :                          :- Scan spark_catalog.default.store_returns [sr_returned_date_sk#82, sr_store_sk#89, sr_return_amt#93, sr_net_loss#101]
+            :  :                          +- Project [d_date_sk#102]
+            :  :                             +- Filter ((d_date#104 >= DATE '2000-08-23') and (d_date#104 <= DATE '2000-09-22'))
+            :  :                                +- Scan spark_catalog.default.date_dim [d_date_sk#102, d_date#104]
+            :  +- Project ['catalog channel' AS channel#444, cs_call_center_sk#438 AS id#445, sales#439, returns_#442, (profit#440 - profit_loss#443) AS profit#446]
+            :     +- Join Inner
+            :        :- Project [cs_call_center_sk#878 AS cs_call_center_sk#438, sales#929 AS sales#439, profit#930 AS profit#440]
+            :        :  +- Shift +706
+            :        :     +- Aggregate [cs_call_center_sk#172], [cs_call_center_sk#172, sum(cs_ext_sales_price#184) AS sales#223, sum(cs_net_profit#194) AS profit#224]
+            :        :        +- Project [cs_call_center_sk#172, cs_ext_sales_price#184, cs_net_profit#194]
+            :        :           +- Join Inner, (cs_sold_date_sk#161 == d_date_sk#195)
+            :        :              :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#161, cs_call_center_sk#172, cs_ext_sales_price#184, cs_net_profit#194]
+            :        :              +- Project [d_date_sk#195]
+            :        :                 +- Filter ((d_date#197 >= DATE '2000-08-23') and (d_date#197 <= DATE '2000-09-22'))
+            :        :                    +- Scan spark_catalog.default.date_dim [d_date_sk#195, d_date#197]
+            :        +- Project [returns_#1211 AS returns_#442, profit_loss#1212 AS profit_loss#443]
+            :           +- Shift +931
+            :              +- Aggregate [cr_call_center_sk#236], [sum(cr_return_amount#243) AS returns_#280, sum(cr_net_loss#251) AS profit_loss#281]
+            :                 +- Project [cr_call_center_sk#236, cr_return_amount#243, cr_net_loss#251]
+            :                    +- Join Inner, (cr_returned_date_sk#225 == d_date_sk#252)
+            :                       :- Scan spark_catalog.default.catalog_returns [cr_returned_date_sk#225, cr_call_center_sk#236, cr_return_amount#243, cr_net_loss#251]
+            :                       +- Project [d_date_sk#252]
+            :                          +- Filter ((d_date#254 >= DATE '2000-08-23') and (d_date#254 <= DATE '2000-09-22'))
+            :                             +- Scan spark_catalog.default.date_dim [d_date_sk#252, d_date#254]
+            +- Project ['web channel' AS channel#453, wp_web_page_sk#447 AS id#454, sales#448, coalesce(returns_#451, 0.00) AS returns_#455, (profit#449 - coalesce(profit_loss#452, 0.00)) AS profit#456]
+               +- Join LeftOuter, (wp_web_page_sk#447 == wp_web_page_sk#450)
+                  :- Project [wp_web_page_sk#1557 AS wp_web_page_sk#447, sales#1571 AS sales#448, profit#1572 AS profit#449]
+                  :  +- Shift +1213
+                  :     +- Aggregate [wp_web_page_sk#344], [wp_web_page_sk#344, sum(ws_ext_sales_price#305) AS sales#358, sum(ws_net_profit#315) AS profit#359]
+                  :        +- Project [wp_web_page_sk#344, ws_ext_sales_price#305, ws_net_profit#315]
+                  :           +- Join Inner, (ws_web_page_sk#294 == wp_web_page_sk#344)
+                  :              :- Scan spark_catalog.default.web_page [wp_web_page_sk#344]
+                  :              +- Project [ws_web_page_sk#294, ws_ext_sales_price#305, ws_net_profit#315]
+                  :                 +- Join Inner, (ws_sold_date_sk#282 == d_date_sk#316)
+                  :                    :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#282, ws_web_page_sk#294, ws_ext_sales_price#305, ws_net_profit#315]
+                  :                    +- Project [d_date_sk#316]
+                  :                       +- Filter ((d_date#318 >= DATE '2000-08-23') and (d_date#318 <= DATE '2000-09-22'))
+                  :                          +- Scan spark_catalog.default.date_dim [d_date_sk#316, d_date#318]
+                  +- Project [wp_web_page_sk#1985 AS wp_web_page_sk#450, returns_#1999 AS returns_#451, profit_loss#2000 AS profit_loss#452]
+                     +- Shift +1573
+                        +- Aggregate [wp_web_page_sk#412], [wp_web_page_sk#412, sum(wr_return_amt#375) AS returns_#426, sum(wr_net_loss#383) AS profit_loss#427]
+                           +- Project [wp_web_page_sk#412, wr_return_amt#375, wr_net_loss#383]
+                              +- Join Inner, (wr_web_page_sk#371 == wp_web_page_sk#412)
+                                 :- Scan spark_catalog.default.web_page [wp_web_page_sk#412]
+                                 +- Project [wr_web_page_sk#371, wr_return_amt#375, wr_net_loss#383]
+                                    +- Join Inner, (wr_returned_date_sk#360 == d_date_sk#384)
+                                       :- Scan spark_catalog.default.web_returns [wr_returned_date_sk#360, wr_web_page_sk#371, wr_return_amt#375, wr_net_loss#383]
+                                       +- Project [d_date_sk#384]
+                                          +- Filter ((d_date#386 >= DATE '2000-08-23') and (d_date#386 <= DATE '2000-09-22'))
+                                             +- Scan spark_catalog.default.date_dim [d_date_sk#384, d_date#386]

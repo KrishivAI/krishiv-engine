@@ -1,0 +1,110 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [customer_id#161 ASC NULLS FIRST, customer_first_name#162 ASC NULLS FIRST, customer_last_name#163 ASC NULLS FIRST, customer_preferred_cust_flag#164 ASC NULLS FIRST], true
+   +- Project [customer_id#161, customer_first_name#162, customer_last_name#163, customer_preferred_cust_flag#164]
+      +- Join Inner, ((CASE WHEN (year_total#179 > 0.00) THEN ((year_total#189 * 1.0000) / year_total#179) ELSE 0E-18 END > CASE WHEN (year_total#159 > 0.00) THEN ((year_total#169 * 1.0000) / year_total#159) ELSE 0E-18 END) and (customer_id#151 == customer_id#171))
+         :- Join Inner, (customer_id#161 == customer_id#151)
+         :  :- Shift +10
+         :  :  +- Project [customer_id#260 AS customer_id#151, customer_first_name#261 AS customer_first_name#152, customer_last_name#262 AS customer_last_name#153, customer_preferred_cust_flag#263 AS customer_preferred_cust_flag#154, year_total#268 AS year_total#159]
+         :  :     +- Shift +191
+         :  :        +- Union
+         :  :           :- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#47], [c_customer_id#1 AS customer_id#69, c_first_name#8 AS customer_first_name#70, c_last_name#9 AS customer_last_name#71, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#72, c_birth_country#14 AS customer_birth_country#73, c_login#15 AS customer_login#74, c_email_address#16 AS customer_email_address#75, d_year#47 AS dyear#76, sum((ss_ext_list_price#35 - ss_ext_discount_amt#32)) AS year_total#77, 's' AS sale_type#78]
+         :  :           :  +- Project [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, ss_ext_discount_amt#32, ss_ext_list_price#35, d_year#47]
+         :  :           :     +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
+         :  :           :        :- Scan spark_catalog.default.customer [c_customer_sk#0, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16] (shared #1)
+         :  :           :        +- Project [ss_customer_sk#21, ss_ext_discount_amt#32, ss_ext_list_price#35, d_year#47]
+         :  :           :           +- Join Inner, (ss_sold_date_sk#18 == d_date_sk#41)
+         :  :           :              :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#18, ss_customer_sk#21, ss_ext_discount_amt#32, ss_ext_list_price#35] (shared #2)
+         :  :           :              +- Filter (d_year#47 == 2002)
+         :  :           :                 +- Scan spark_catalog.default.date_dim [d_date_sk#41, d_year#47] (shared #3)
+         :  :           +- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#119], [c_customer_id#1 AS customer_id#141, c_first_name#8 AS customer_first_name#142, c_last_name#9 AS customer_last_name#143, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#144, c_birth_country#14 AS customer_birth_country#145, c_login#15 AS customer_login#146, c_email_address#16 AS customer_email_address#147, d_year#119 AS dyear#148, sum((ws_ext_list_price#104 - ws_ext_discount_amt#101)) AS year_total#149, 'w' AS sale_type#150]
+         :  :              +- Project [d_year#119, ws_ext_discount_amt#101, ws_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+         :  :                 +- Join Inner, (ws_sold_date_sk#79 == d_date_sk#113)
+         :  :                    :- Shift +72
+         :  :                    :  +- Filter (d_year#47 == 2002)
+         :  :                    :     +- Shared #3, printed above
+         :  :                    +- Project [ws_sold_date_sk#79, ws_ext_discount_amt#101, ws_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+         :  :                       +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#83)
+         :  :                          :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#79, ws_bill_customer_sk#83, ws_ext_discount_amt#101, ws_ext_list_price#104] (shared #4)
+         :  :                          +- Filter false
+         :  :                             +- Shared #1, printed above
+         :  +- Project [year_total#189, customer_id#151, year_total#159]
+         :     +- Join Inner, (customer_id#151 == customer_id#181)
+         :        :- Shift +30
+         :        :  +- Project [customer_id#260 AS customer_id#151, year_total#268 AS year_total#159]
+         :        :     +- Shift +191
+         :        :        +- Union
+         :        :           :- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#47], [c_customer_id#1 AS customer_id#69, c_first_name#8 AS customer_first_name#70, c_last_name#9 AS customer_last_name#71, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#72, c_birth_country#14 AS customer_birth_country#73, c_login#15 AS customer_login#74, c_email_address#16 AS customer_email_address#75, d_year#47 AS dyear#76, sum((ss_ext_list_price#35 - ss_ext_discount_amt#32)) AS year_total#77, 's' AS sale_type#78]
+         :        :           :  +- Project [d_year#47, ss_ext_discount_amt#32, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+         :        :           :     +- Join Inner, (ss_sold_date_sk#18 == d_date_sk#41)
+         :        :           :        :- Filter (d_year#47 == 2002)
+         :        :           :        :  +- Shared #3, printed above
+         :        :           :        +- Project [ss_sold_date_sk#18, ss_ext_discount_amt#32, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+         :        :           :           +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
+         :        :           :              :- Shared #2, printed above
+         :        :           :              +- Filter false
+         :        :           :                 +- Shared #1, printed above
+         :        :           +- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#119], [c_customer_id#1 AS customer_id#141, c_first_name#8 AS customer_first_name#142, c_last_name#9 AS customer_last_name#143, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#144, c_birth_country#14 AS customer_birth_country#145, c_login#15 AS customer_login#146, c_email_address#16 AS customer_email_address#147, d_year#119 AS dyear#148, sum((ws_ext_list_price#104 - ws_ext_discount_amt#101)) AS year_total#149, 'w' AS sale_type#150]
+         :        :              +- Project [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, ws_ext_discount_amt#101, ws_ext_list_price#104, d_year#119]
+         :        :                 +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#83)
+         :        :                    :- Shared #1, printed above
+         :        :                    +- Project [ws_bill_customer_sk#83, ws_ext_discount_amt#101, ws_ext_list_price#104, d_year#119]
+         :        :                       +- Join Inner, (ws_sold_date_sk#79 == d_date_sk#113)
+         :        :                          :- Shared #4, printed above
+         :        :                          +- Shift +72
+         :        :                             +- Filter (d_year#47 == 2002)
+         :        :                                +- Shared #3, printed above
+         :        +- Project [customer_id#260 AS customer_id#151, year_total#268 AS year_total#159]
+         :           +- Shift +191
+         :              +- Union
+         :                 :- Filter (year_total#77 > 0.00)
+         :                 :  +- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#47], [c_customer_id#1 AS customer_id#69, c_first_name#8 AS customer_first_name#70, c_last_name#9 AS customer_last_name#71, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#72, c_birth_country#14 AS customer_birth_country#73, c_login#15 AS customer_login#74, c_email_address#16 AS customer_email_address#75, d_year#47 AS dyear#76, sum((ss_ext_list_price#35 - ss_ext_discount_amt#32)) AS year_total#77, 's' AS sale_type#78]
+         :                 :     +- Project [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, ss_ext_discount_amt#32, ss_ext_list_price#35, d_year#47]
+         :                 :        +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
+         :                 :           :- Shared #1, printed above
+         :                 :           +- Project [ss_customer_sk#21, ss_ext_discount_amt#32, ss_ext_list_price#35, d_year#47]
+         :                 :              +- Join Inner, (ss_sold_date_sk#18 == d_date_sk#41)
+         :                 :                 :- Shared #2, printed above
+         :                 :                 +- Filter (d_year#47 == 2001)
+         :                 :                    +- Shared #3, printed above
+         :                 +- Filter (year_total#149 > 0.00)
+         :                    +- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#119], [c_customer_id#1 AS customer_id#141, c_first_name#8 AS customer_first_name#142, c_last_name#9 AS customer_last_name#143, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#144, c_birth_country#14 AS customer_birth_country#145, c_login#15 AS customer_login#146, c_email_address#16 AS customer_email_address#147, d_year#119 AS dyear#148, sum((ws_ext_list_price#104 - ws_ext_discount_amt#101)) AS year_total#149, 'w' AS sale_type#150]
+         :                       +- Project [d_year#119, ws_ext_discount_amt#101, ws_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+         :                          +- Join Inner, (ws_sold_date_sk#79 == d_date_sk#113)
+         :                             :- Shift +72
+         :                             :  +- Filter (d_year#47 == 2001)
+         :                             :     +- Shared #3, printed above
+         :                             +- Project [ws_sold_date_sk#79, ws_ext_discount_amt#101, ws_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+         :                                +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#83)
+         :                                   :- Shared #4, printed above
+         :                                   +- Filter false
+         :                                      +- Shared #1, printed above
+         +- Shift +20
+            +- Project [customer_id#260 AS customer_id#151, year_total#268 AS year_total#159]
+               +- Shift +191
+                  +- Union
+                     :- Filter (year_total#77 > 0.00)
+                     :  +- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#47], [c_customer_id#1 AS customer_id#69, c_first_name#8 AS customer_first_name#70, c_last_name#9 AS customer_last_name#71, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#72, c_birth_country#14 AS customer_birth_country#73, c_login#15 AS customer_login#74, c_email_address#16 AS customer_email_address#75, d_year#47 AS dyear#76, sum((ss_ext_list_price#35 - ss_ext_discount_amt#32)) AS year_total#77, 's' AS sale_type#78]
+                     :     +- Project [d_year#47, ss_ext_discount_amt#32, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+                     :        +- Join Inner, (ss_sold_date_sk#18 == d_date_sk#41)
+                     :           :- Filter (d_year#47 == 2001)
+                     :           :  +- Shared #3, printed above
+                     :           +- Project [ss_sold_date_sk#18, ss_ext_discount_amt#32, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
+                     :              +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
+                     :                 :- Shared #2, printed above
+                     :                 +- Filter false
+                     :                    +- Shared #1, printed above
+                     +- Filter (year_total#149 > 0.00)
+                        +- Aggregate [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, d_year#119], [c_customer_id#1 AS customer_id#141, c_first_name#8 AS customer_first_name#142, c_last_name#9 AS customer_last_name#143, c_preferred_cust_flag#10 AS customer_preferred_cust_flag#144, c_birth_country#14 AS customer_birth_country#145, c_login#15 AS customer_login#146, c_email_address#16 AS customer_email_address#147, d_year#119 AS dyear#148, sum((ws_ext_list_price#104 - ws_ext_discount_amt#101)) AS year_total#149, 'w' AS sale_type#150]
+                           +- Project [c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16, ws_ext_discount_amt#101, ws_ext_list_price#104, d_year#119]
+                              +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#83)
+                                 :- Shared #1, printed above
+                                 +- Project [ws_bill_customer_sk#83, ws_ext_discount_amt#101, ws_ext_list_price#104, d_year#119]
+                                    +- Join Inner, (ws_sold_date_sk#79 == d_date_sk#113)
+                                       :- Shared #4, printed above
+                                       +- Shift +72
+                                          +- Filter (d_year#47 == 2001)
+                                             +- Shared #3, printed above

@@ -26,7 +26,9 @@ use crate::expr::{
     Attrs, and_all, column, common_equalities, conjuncts, has_subquery, implied, is_deterministic,
     references,
 };
-use crate::stats::{Est, Estimator, Statistics, equi_columns, selectivity};
+use crate::stats::{
+    Est, Estimator, Statistics, cse_definitions, equi_columns, reads_cse, resolve_cse, selectivity,
+};
 
 /// An original relation (kept alive) and its rewrite.
 type Rewritten = (Arc<LogicalPlan>, Arc<LogicalPlan>);
@@ -376,11 +378,36 @@ impl Graph {
             }
         }
         let refs: Vec<_> = preds.iter().map(|p| references(p)).collect();
+        // Estimates see through common-subexpression projections: a `cse_*`
+        // column holds its definition's values, so the same rows are
+        // estimated before and after that pass runs. The plans keep the
+        // columns; only the estimates read the definitions.
+        let any_cse = preds.iter().any(|p| reads_cse(p));
+        let mut all_defs: HashMap<AttrId, Arc<Expr>> = HashMap::new();
+        if any_cse {
+            for l in leaves {
+                all_defs.extend(cse_definitions(l));
+            }
+        }
+        let resolved_refs: Vec<Attrs> = refs
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .flat_map(|id| match all_defs.get(id) {
+                        Some(def) => references(def),
+                        None => Attrs::from([*id]),
+                    })
+                    .collect()
+            })
+            .collect();
         // A canonical input order, so the plan depends neither on how the
         // tree was written nor on columns pruned since: inputs by the
         // smallest attribute the conjuncts read of them.
         let key = |i: usize| {
-            let read = refs.iter().flatten().filter(|id| owner.get(id) == Some(&i));
+            let read = resolved_refs
+                .iter()
+                .flatten()
+                .filter(|id| owner.get(id) == Some(&i));
             let all = leaves[i].resolved_output().unwrap_or_default();
             (read.min().copied(), all.iter().map(|c| c.id).min())
         };
@@ -411,6 +438,14 @@ impl Graph {
             })
             .collect();
         let mut joins = Vec::new();
+        // Definitions per sorted input, so estimates read through
+        // common-subexpression projections (built only when a conjunct
+        // needs them).
+        let leaf_defs: Vec<HashMap<AttrId, Arc<Expr>>> = if any_cse {
+            sorted.iter().map(|l| cse_definitions(l)).collect()
+        } else {
+            Vec::new()
+        };
         for (p, r) in preds.into_iter().zip(&refs) {
             let mut on: Vec<usize> = r
                 .iter()
@@ -421,7 +456,10 @@ impl Graph {
             if let [] | [_] = on.as_slice() {
                 // A conjunct over one input (or none) filters that input.
                 let i = on.first().copied().unwrap_or(0);
-                rows[i] = (rows[i] * selectivity(&p, &ests[order[i]])).max(1.0);
+                let resolved = leaf_defs
+                    .get(i)
+                    .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
+                rows[i] = (rows[i] * selectivity(&resolved, &ests[order[i]])).max(1.0);
                 sorted[i] = Arc::new(LogicalPlan::new(PlanNode::Filter {
                     input: Arc::clone(&sorted[i]),
                     predicate: p,
@@ -446,7 +484,20 @@ impl Graph {
         }
         let mut kept = Vec::new();
         for (p, on) in joins {
-            let sel = conditional(&p, selectivity(&p, &all), &on, &attrs, |i| &ests[order[i]]);
+            let resolved = if leaf_defs.is_empty() {
+                Arc::clone(&p)
+            } else {
+                let mut env = HashMap::new();
+                for o in &on {
+                    if let Some(defs) = leaf_defs.get(*o) {
+                        env.extend(defs.iter().map(|(k, v)| (*k, Arc::clone(v))));
+                    }
+                }
+                resolve_cse(&p, &env)
+            };
+            let sel = conditional(&resolved, selectivity(&resolved, &all), &on, &attrs, |i| {
+                &ests[order[i]]
+            });
             let edge = !has_subquery(&p);
             kept.push(Pred {
                 expr: p,

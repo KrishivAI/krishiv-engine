@@ -493,6 +493,9 @@ message WritePlan {
   string job_uuid = 5;
   uint64 max_records_per_file = 6;
   uint64 target_file_bytes = 7;
+  // feature: partitioned_writes
+  // Input column indices the files are partitioned by (Spark directory layout).
+  repeated uint64 partition_by = 8;
 }
 
 // v2: moves rows between partitions.

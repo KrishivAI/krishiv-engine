@@ -1,0 +1,24 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Aggregate [], [sum(ss_quantity#10) AS sum(ss_quantity)#102]
++- Project [ss_quantity#10]
+   +- Join Inner, (s_store_sk#23 == ss_store_sk#7)
+      :- Scan spark_catalog.default.store [s_store_sk#23]
+      +- Project [ss_store_sk#7, ss_quantity#10]
+         +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#74)
+            :- Project [d_date_sk#74]
+            :  +- Filter (d_year#80 == 2000)
+            :     +- Scan spark_catalog.default.date_dim [d_date_sk#74, d_year#80]
+            +- Project [ss_sold_date_sk#0, ss_store_sk#7, ss_quantity#10]
+               +- Join Inner, (((((cd_demo_sk#52 == ss_cdemo_sk#4) and (cd_marital_status#54 == 'M')) and ((cd_education_status#55 == '4 yr Degree') and ((ss_sales_price#13 >= 100.00) and (ss_sales_price#13 <= 150.00)))) or (((cd_demo_sk#52 == ss_cdemo_sk#4) and (cd_marital_status#54 == 'D')) and ((cd_education_status#55 == '2 yr Degree') and ((ss_sales_price#13 >= 50.00) and (ss_sales_price#13 <= 100.00))))) or (((cd_demo_sk#52 == ss_cdemo_sk#4) and (cd_marital_status#54 == 'S')) and ((cd_education_status#55 == 'College') and ((ss_sales_price#13 >= 150.00) and (ss_sales_price#13 <= 200.00)))))
+                  :- Filter ((((cd_marital_status#54 == 'M') and (cd_education_status#55 == '4 yr Degree')) or ((cd_marital_status#54 == 'D') and (cd_education_status#55 == '2 yr Degree'))) or ((cd_marital_status#54 == 'S') and (cd_education_status#55 == 'College')))
+                  :  +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#52, cd_marital_status#54, cd_education_status#55]
+                  +- Project [ss_sold_date_sk#0, ss_cdemo_sk#4, ss_store_sk#7, ss_quantity#10, ss_sales_price#13]
+                     +- Join Inner, (((((ss_addr_sk#6 == ca_address_sk#61) and (ca_country#71 == 'United States')) and ((ca_state#69 IN ('CO', 'OH', 'TX')) and ((ss_net_profit#22 >= 0.00) and (ss_net_profit#22 <= 2000.00)))) or (((ss_addr_sk#6 == ca_address_sk#61) and (ca_country#71 == 'United States')) and ((ca_state#69 IN ('OR', 'MN', 'KY')) and ((ss_net_profit#22 >= 150.00) and (ss_net_profit#22 <= 3000.00))))) or (((ss_addr_sk#6 == ca_address_sk#61) and (ca_country#71 == 'United States')) and ((ca_state#69 IN ('VA', 'CA', 'MS')) and ((ss_net_profit#22 >= 50.00) and (ss_net_profit#22 <= 25000.00)))))
+                        :- Filter (((cse_103#103 and (ca_state#69 IN ('CO', 'OH', 'TX'))) or (cse_103#103 and (ca_state#69 IN ('OR', 'MN', 'KY')))) or (cse_103#103 and (ca_state#69 IN ('VA', 'CA', 'MS'))))
+                        :  +- Project [ca_address_sk#61, ca_state#69, ca_country#71, (ca_country#71 == 'United States') AS cse_103#103]
+                        :     +- Scan spark_catalog.default.customer_address [ca_address_sk#61, ca_state#69, ca_country#71]
+                        +- Filter (((((ss_sales_price#13 >= 100.00) and (ss_sales_price#13 <= 150.00)) or ((ss_sales_price#13 >= 50.00) and (ss_sales_price#13 <= 100.00))) or ((ss_sales_price#13 >= 150.00) and (ss_sales_price#13 <= 200.00))) and ((((ss_net_profit#22 >= 0.00) and (ss_net_profit#22 <= 2000.00)) or ((ss_net_profit#22 >= 150.00) and (ss_net_profit#22 <= 3000.00))) or ((ss_net_profit#22 >= 50.00) and (ss_net_profit#22 <= 25000.00))))
+                           +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_cdemo_sk#4, ss_addr_sk#6, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_net_profit#22]

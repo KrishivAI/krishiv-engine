@@ -473,6 +473,29 @@ const CASES: &[(&str, &str)] = &[
         "prune_exists",
         "SELECT a FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)",
     ),
+    // Existence joins (EXISTS / IN inside OR or a select list): every left
+    // row survives; a left-only conjunct stays in the condition, a filter
+    // that reads `exists` stays above, and nothing restricts the left side.
+    (
+        "existence_or",
+        "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a) OR b = 'x'",
+    ),
+    (
+        "existence_left_only_conjunct",
+        "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a AND t.c > 3 AND u.d = 'y') OR b = 'x'",
+    ),
+    (
+        "existence_filter_above",
+        "SELECT a FROM (SELECT a, b, EXISTS (SELECT 1 FROM u WHERE u.a = t.a) AS e FROM t) WHERE (e OR b = 'x') AND a > 1",
+    ),
+    (
+        "existence_not_in",
+        "SELECT a FROM t WHERE a NOT IN (SELECT a FROM u) OR b = 'x'",
+    ),
+    (
+        "existence_limit",
+        "SELECT a, EXISTS (SELECT 1 FROM u WHERE u.a = t.a) AS e FROM t LIMIT 2",
+    ),
     // Grouping sets: the expansion keeps what the aggregate reads.
     (
         "expand_rollup",
@@ -709,7 +732,18 @@ fn shared_expressions_stay_linear() {
     let started = std::time::Instant::now();
     let optimized = optimize(&Plan::try_new(filter).unwrap()).unwrap();
     assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
-    assert!(matches!(optimized.root().node, PlanNode::Filter { .. }));
+    // The filter stays on top: common-subexpression elimination may only
+    // add its projection (and the output-restoring projection, when the
+    // filter is the root) below it.
+    match &optimized.root().node {
+        PlanNode::Filter { .. } => {}
+        PlanNode::Project { input, exprs }
+            if exprs
+                .iter()
+                .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_))))
+                && matches!(input.node, PlanNode::Filter { .. }) => {}
+        _ => panic!("{}", optimized.root()),
+    }
 }
 
 /// Windows nobody reads are dropped (Spark's `ColumnPruning`), the others

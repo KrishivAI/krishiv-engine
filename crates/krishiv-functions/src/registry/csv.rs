@@ -3,9 +3,9 @@
 //!
 //! `schema_of_csv(csv[, options])`: Spark's `SchemaOfCsv` takes any first
 //! argument and checks it by hand (whether it folds, whether it is null,
-//! whether it is exactly a `STRING`), and any second argument is refused
-//! (options are a `MAP<STRING, STRING>`, which Krishiv cannot type yet, so
-//! only `map(...)` could pass it and `map` is unimplemented). The analyzer
+//! whether it is exactly a `STRING`); a second argument must be a
+//! `MAP<STRING, STRING>` (anything else is `INVALID_OPTIONS.NON_MAP_FUNCTION`,
+//! a map of other types `INVALID_OPTIONS.NON_STRING_TYPE`). The analyzer
 //! replaces a well-typed call with the DDL literal, so the call never
 //! executes: its execution is `Execution::Evaluator`, which needs no scalar
 //! binding.
@@ -38,7 +38,11 @@ use crate::signature::{ArgType, CallTypes, Constant, FunctionKind, InputType, In
 /// is a string). The DDL itself is resolved by the analyzer.
 fn schema_of_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if c.args().len() > 1 {
-        return Err(KrishivError::from(InvalidOptionsNonMapFunction {}));
+        match check_options_map(c, 1) {
+            Some(Ok(())) => {}
+            Some(Err(e)) => return Err(e),
+            None => return Err(KrishivError::from(InvalidOptionsNonMapFunction {})),
+        }
     }
     let sql = |i: usize| c.sql(i).unwrap_or_default();
     let call = format!("\"schema_of_csv({})\"", sql(0));

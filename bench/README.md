@@ -117,6 +117,40 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Selective scan (`remote-filter`)
+One selective scan over a FineWeb-Edu sample, written back as Parquet.
+```bash
+uv run krishiv-datasets remote-filter --yes                    # ~28 GB mirror -> $KRISHIV_DATA/remote-filter/sample-10BT/fw/
+uv run krishiv-bench remote-filter --engines duckdb,polars     # local mirror (the default input); scopes: uncapped and 4g
+uv run krishiv-bench remote-filter --memory-limit 4g --reps 7  # only a MemoryMax=4g scope, 7 timed repetitions
+uv run krishiv-bench remote-filter --sources '["https://..."]' # remote reads (Krishiv needs the local mirror)
+```
+* **Data**: FineWeb-Edu `sample/10BT` Parquet (Hugging Face dataset `HuggingFaceFW/fineweb-edu`), stored as the
+  `fw` table (`fw.parquet`, or an `fw/` directory of part files). The download is opt-in (`--yes`) with a size
+  warning, resolves the listing to a commit sha so the files are those of one revision, and resumes through a
+  `.part` file. A sha256 manifest covers the mirror files. `expected.json` may hold row and token counts the
+  operator recorded with `write_expected`; nothing writes counts automatically.
+* **Query**: the rows with `int_score >= 4 AND token_count >= 4000 AND language_score >= 0.95`, written back
+  (DuckDB: `COPY ... (FORMAT parquet, COMPRESSION zstd)` to one file; Polars:
+  `sink_parquet(..., compression="zstd")` to one file; Krishiv: the bench runner's native output directory with
+  the runner's default codec, since its DUMP protocol has no per-write codec option). The result JSON records the
+  codec each engine wrote, so write cost is not like for like. All engines run with 8 threads.
+* **Runs**: one fresh process per engine under the bench lock. Each scope (an uncapped one, then each
+  `--memory-limit`; the default is uncapped plus `4g`) runs one validation pass and `--reps` timed repetitions
+  (default 5) with the engine order rotated per repetition. A capped process runs in a
+  `systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0` scope, the way the `memcap` suite gates
+  memory. A run is `finished`, `killed`, `timeout` or `failed`; a kill is a recorded result, and an uncapped
+  timeout kills the whole process group.
+* **Correctness**: the row count, the exact sum of `token_count` and a digest of the sorted `id` values. The
+  reference is DuckDB's validation result (or the counts in `expected.json`); a run that differs is recorded as
+  `fail` and never timed. With neither a DuckDB run nor counts the verdict is `unverified`.
+* **Output**: `$KRISHIV_DATA/results/<ts>_remote-filter.json`, written even when a run raises, with per scope and
+  engine: the runs, the median wall time and peak RSS (the cgroup figure when capped, else the process's own
+  peak), a 95% bootstrap CI of the wall-time ratio to DuckDB, the verdict and timing buckets (`scan_s`/`filter_s`/
+  `write_s`, empty unless a per-operator profile is supplied, plus the `total_s` span).
+* **Not covered yet**: reads from a local S3-compatible server in a throw-away container (the spec's remote
+  input); runs read the local mirror or the Hugging Face URLs directly.
+
 ## Spill coverage of the memory gate (TPC-H SF10)
 The gate's 2 GiB run (each query in its own `MemoryMax=2816M`, `MemorySwapMax=0` scope, a fresh runner per query)
 spills only in hash joins (q04, q21). Hash aggregate and sort spill at 1 GiB on the same data: TPC-H `q18`
@@ -159,6 +193,46 @@ strided), then `ddmin` removes row ranges. Query: text-level reductions to a fix
 subqueries). `--max-runs` bounds the engine comparisons. Output `$KRISHIV_DATA/minimized/<suite>_<query>/`: `query.sql`,
 `setup.sql` (`CREATE TEMPORARY VIEW ... VALUES`, for the golden runner), `expected.json`, `actual.json`, `data/*.parquet`.
 A difference that needs rows outside the slice is reported as not reproducing; use `--full-data` then.
+
+## Find the commit that broke a query (`bisect`)
+
+```sh
+uv run krishiv-bench bisect --suite tpch --sf 10 --query q07 --good <sha> --bad <sha>            # wrong rows vs DuckDB
+uv run krishiv-bench bisect --suite tpcds --sf 1 --query q14 --good <sha> --bad <sha> --time --threshold 1.15
+```
+
+Bisects the first-parent commits after `--good` up to `--bad` (one commit per merged PR). Each probed commit gets its own
+`krishiv-bench-runner` (`--profile dist`, built in a scratch worktree under `$KRISHIV_DATA/bisect/<ts>`, one shared target
+dir for the run; a binary is reused within the run and everything is removed at the end). `--correctness` (default): the commit is bad when its rows differ from DuckDB's or the engine
+fails. `--time`: a paired ABBA (`ab`) of the `--good` build against the probed build; bad when B/A is at least
+`--threshold` (default 1.10) with the 95% CI above 1. A commit that does not build, or whose runner does not start, is skipped, and the result then names
+the range of candidates. The `--bad` commit must reproduce the problem or the run stops. Holds the bench lock. Output
+`$KRISHIV_DATA/results/<ts>_bisect_<suite>_<query>.json`.
+Build settings come from the environment: export the same `RUSTFLAGS` as for the ABBA builds (for example
+`-C target-cpu=x86-64-v3`) before running, or the probed runners are compiled for a different target.
+
+## Differential flamegraph (`flamediff`)
+
+```sh
+uv run krishiv-bench flamediff --suite tpch --sf 10 --query q07 --a-runner <baseline runner> --b-runner <new runner>
+```
+
+Both runners (built with frame pointers, see the ledger section) run the query under `perf record`: one warm-up and
+`--runs` (3) timed runs, with only the timed window kept. The sides are normalised to the same sample count and merged
+into `inferno-diff-folded` format; `inferno-flamegraph` (`cargo install inferno`) renders `diff.svg` (red: B spends a
+larger share, blue: smaller). `summary.md` lists the frames with the largest share change by self and inclusive time and
+works without inferno. Output `$KRISHIV_DATA/results/flamediff/<ts>_<suite>_<query>/`. Link `summary.md` and the SVG
+from a perf PR's A/B.
+
+## Trend page (`trend`)
+
+```sh
+uv run krishiv-bench trend [--out trend.md] [--last 10]
+```
+
+Per suite and scale factor: the Krishiv/DuckDB ratio of every query in the last `--last` `abba` results (oldest left), a
+sparkline, and the change from the previous run. `x` is a failed query, `*` a run above the load bound (indicative only).
+Reads `$KRISHIV_DATA/results/*_abba_*.json`; other kinds and unreadable files are ignored.
 
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash

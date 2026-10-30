@@ -1,0 +1,39 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Join Inner
+   :- Join Inner
+   :  :- Join Inner
+   :  :  :- Join Inner
+   :  :  :  :- Join Inner
+   :  :  :  :  :- Aggregate [], [avg(ss_list_price#12) AS B1_LP#23, count(ss_list_price#12) AS B1_CNT#24, count(DISTINCT ss_list_price#12) AS B1_CNTD#25]
+   :  :  :  :  :  +- Project [ss_list_price#12]
+   :  :  :  :  :     +- Filter (((ss_quantity#10 >= 0) and (ss_quantity#10 <= 5)) and ((((ss_list_price#12 >= 8.00) and (CAST(ss_list_price#12 AS DECIMAL(12,2)) <= 18.00)) or ((ss_coupon_amt#19 >= 459.00) and (CAST(ss_coupon_amt#19 AS DECIMAL(12,2)) <= 1459.00))) or ((ss_wholesale_cost#11 >= 57.00) and (CAST(ss_wholesale_cost#11 AS DECIMAL(12,2)) <= 77.00))))
+   :  :  :  :  :        +- Scan spark_catalog.default.store_sales [ss_quantity#10, ss_wholesale_cost#11, ss_list_price#12, ss_coupon_amt#19] (shared #1)
+   :  :  :  :  +- Shift +29
+   :  :  :  :     +- Aggregate [], [avg(ss_list_price#12) AS B2_LP#26, count(ss_list_price#12) AS B2_CNT#27, count(DISTINCT ss_list_price#12) AS B2_CNTD#28]
+   :  :  :  :        +- Project [ss_list_price#12]
+   :  :  :  :           +- Filter (((ss_quantity#10 >= 6) and (ss_quantity#10 <= 10)) and ((((ss_list_price#12 >= 90.00) and (CAST(ss_list_price#12 AS DECIMAL(12,2)) <= 100.00)) or ((ss_coupon_amt#19 >= 2323.00) and (CAST(ss_coupon_amt#19 AS DECIMAL(12,2)) <= 3323.00))) or ((ss_wholesale_cost#11 >= 31.00) and (CAST(ss_wholesale_cost#11 AS DECIMAL(12,2)) <= 51.00))))
+   :  :  :  :              +- Shared #1, printed above
+   :  :  :  +- Shift +61
+   :  :  :     +- Aggregate [], [avg(ss_list_price#12) AS B3_LP#58, count(ss_list_price#12) AS B3_CNT#59, count(DISTINCT ss_list_price#12) AS B3_CNTD#60]
+   :  :  :        +- Project [ss_list_price#12]
+   :  :  :           +- Filter (((ss_quantity#10 >= 11) and (ss_quantity#10 <= 15)) and ((((ss_list_price#12 >= 142.00) and (CAST(ss_list_price#12 AS DECIMAL(12,2)) <= 152.00)) or ((ss_coupon_amt#19 >= 12214.00) and (CAST(ss_coupon_amt#19 AS DECIMAL(12,2)) <= 13214.00))) or ((ss_wholesale_cost#11 >= 79.00) and (CAST(ss_wholesale_cost#11 AS DECIMAL(12,2)) <= 99.00))))
+   :  :  :              +- Shared #1, printed above
+   :  :  +- Shift +125
+   :  :     +- Aggregate [], [avg(ss_list_price#12) AS B4_LP#122, count(ss_list_price#12) AS B4_CNT#123, count(DISTINCT ss_list_price#12) AS B4_CNTD#124]
+   :  :        +- Project [ss_list_price#12]
+   :  :           +- Filter (((ss_quantity#10 >= 16) and (ss_quantity#10 <= 20)) and ((((ss_list_price#12 >= 135.00) and (CAST(ss_list_price#12 AS DECIMAL(12,2)) <= 145.00)) or ((ss_coupon_amt#19 >= 6071.00) and (CAST(ss_coupon_amt#19 AS DECIMAL(12,2)) <= 7071.00))) or ((ss_wholesale_cost#11 >= 38.00) and (CAST(ss_wholesale_cost#11 AS DECIMAL(12,2)) <= 58.00))))
+   :  :              +- Shared #1, printed above
+   :  +- Shift +253
+   :     +- Aggregate [], [avg(ss_list_price#12) AS B5_LP#250, count(ss_list_price#12) AS B5_CNT#251, count(DISTINCT ss_list_price#12) AS B5_CNTD#252]
+   :        +- Project [ss_list_price#12]
+   :           +- Filter (((ss_quantity#10 >= 21) and (ss_quantity#10 <= 25)) and ((((ss_list_price#12 >= 122.00) and (CAST(ss_list_price#12 AS DECIMAL(12,2)) <= 132.00)) or ((ss_coupon_amt#19 >= 836.00) and (CAST(ss_coupon_amt#19 AS DECIMAL(12,2)) <= 1836.00))) or ((ss_wholesale_cost#11 >= 17.00) and (CAST(ss_wholesale_cost#11 AS DECIMAL(12,2)) <= 37.00))))
+   :              +- Shared #1, printed above
+   +- Shift +509
+      +- Aggregate [], [avg(ss_list_price#12) AS B6_LP#506, count(ss_list_price#12) AS B6_CNT#507, count(DISTINCT ss_list_price#12) AS B6_CNTD#508]
+         +- Project [ss_list_price#12]
+            +- Filter (((ss_quantity#10 >= 26) and (ss_quantity#10 <= 30)) and ((((ss_list_price#12 >= 154.00) and (CAST(ss_list_price#12 AS DECIMAL(12,2)) <= 164.00)) or ((ss_coupon_amt#19 >= 7326.00) and (CAST(ss_coupon_amt#19 AS DECIMAL(12,2)) <= 8326.00))) or ((ss_wholesale_cost#11 >= 7.00) and (CAST(ss_wholesale_cost#11 AS DECIMAL(12,2)) <= 27.00))))
+               +- Shared #1, printed above
