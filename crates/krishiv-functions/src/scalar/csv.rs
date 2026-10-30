@@ -48,7 +48,7 @@ fn shape(args: &[BindArg]) -> String {
 }
 
 /// Reads a `STRING` literal's value.
-fn literal_string(arg: &BindArg) -> Result<String, KrishivError> {
+pub(super) fn literal_string(arg: &BindArg) -> Result<String, KrishivError> {
     let BindArg::Literal(a) = arg else {
         return Err(internal(
             "a literal schema where a column was bound".to_owned(),
@@ -62,7 +62,7 @@ fn literal_string(arg: &BindArg) -> Result<String, KrishivError> {
 }
 
 /// Parses a DDL schema string into struct fields (Spark's `DataType.fromDDL`).
-fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
+pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
     let parsed: krishiv_types::DataType = ddl.parse().or_else(|_: KrishivError| {
         let wrapped = format!("STRUCT<{ddl}>");
         wrapped.parse()
@@ -141,7 +141,7 @@ fn one_char(value: &str, name: &str, func: &str) -> Result<Option<char>, Krishiv
 }
 
 /// Reads `MAP<STRING, STRING>` literal options into pairs.
-fn map_pairs(arg: &BindArg) -> Result<Vec<(String, String)>, KrishivError> {
+pub(super) fn map_pairs(arg: &BindArg) -> Result<Vec<(String, String)>, KrishivError> {
     let BindArg::Literal(a) = arg else {
         return Err(internal("CSV options that are not a literal".to_owned()));
     };
@@ -249,7 +249,7 @@ struct Parsed {
 /// for the operation: `to_csv` formats, `from_csv` parses. Spark's pattern
 /// errors pass through; only a pattern letter this engine lacks becomes an
 /// unsupported-feature error naming the option.
-fn datetime_option(
+pub(super) fn datetime_option(
     pattern: &str,
     func: &str,
     option: &str,
