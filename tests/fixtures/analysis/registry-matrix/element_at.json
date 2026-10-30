@@ -1,0 +1,158 @@
+{
+  "entries": [
+    {
+      "id": "element_at#17f472955ef2/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1 AS SMALLINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#17f472955ef2/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1 AS SMALLINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#2b19bd86acce/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#2b19bd86acce/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#2bc2640a6076/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), 1) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#2bc2640a6076/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), 1) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#564a6db89fec/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1.5 AS DECIMAL(10,2))) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#564a6db89fec/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1.5 AS DECIMAL(10,2))) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#585786407802/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), 1L) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#585786407802/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), 1L) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#5c9c1670028b/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), '1') | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#5c9c1670028b/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), '1') | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#6b5f1561fea9/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(NULL AS int)) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#956e07813cee/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1 AS TINYINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#956e07813cee/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1 AS TINYINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#a394da3928ca/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1.5 AS FLOAT)) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#a394da3928ca/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1.5 AS FLOAT)) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#aa88b72666c8/ansi_on",
+      "reason": "SELECT element_at(array(1, 2), 2) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#aa88b72666c8/ansi_off",
+      "reason": "SELECT element_at(array(1, 2), 2) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#aae20af0fbc9/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1.5 AS DECIMAL(38,18))) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#aae20af0fbc9/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(1.5 AS DECIMAL(38,18))) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#b4d704be1641/ansi_on",
+      "reason": "SELECT element_at(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#b4d704be1641/ansi_off",
+      "reason": "SELECT element_at(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#ba6c73f1e047/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), 1.5D) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#ba6c73f1e047/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), 1.5D) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#bbcca036369f/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), 'abc') | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#bbcca036369f/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), 'abc') | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#c53d34ee428d/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), CAST(2147483647 AS INT)) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#ce7f65b8dc25/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), 2) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#ce7f65b8dc25/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), 2) | int where Spark has int not null"
+    },
+    {
+      "id": "element_at#d67a1e78dca1/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#d67a1e78dca1/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#d8897104f09e/ansi_on",
+      "reason": "SELECT element_at(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#d8897104f09e/ansi_off",
+      "reason": "SELECT element_at(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#df7c8faec0c0/ansi_on",
+      "reason": "SELECT element_at(array(1, 2, 3), NULL) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#df7c8faec0c0/ansi_off",
+      "reason": "SELECT element_at(array(1, 2, 3), NULL) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "element_at#eb38ed012f63/ansi_on",
+      "reason": "SELECT element_at(map('a', 1), 2) | resolves to int where Spark has DATATYPE_MISMATCH.MAP_FUNCTION_DIFF_TYPES"
+    },
+    {
+      "id": "element_at#eb38ed012f63/ansi_off",
+      "reason": "SELECT element_at(map('a', 1), 2) | resolves to int where Spark has DATATYPE_MISMATCH.MAP_FUNCTION_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "element_at"
+}

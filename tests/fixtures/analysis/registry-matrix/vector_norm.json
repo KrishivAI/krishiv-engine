@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "vector_norm#0fd41e2712de/ansi_on",
+      "reason": "SELECT vector_norm(INTERVAL '1 02:03:04' DAY TO SECOND, 2.0F) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "vector_norm#0fd41e2712de/ansi_off",
+      "reason": "SELECT vector_norm(INTERVAL '1 02:03:04' DAY TO SECOND, 2.0F) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "vector_norm#583e49e15ace/ansi_on",
+      "reason": "SELECT vector_norm(array(3.0F, 4.0F), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "vector_norm#583e49e15ace/ansi_off",
+      "reason": "SELECT vector_norm(array(3.0F, 4.0F), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "vector_norm#d32b299a6868/ansi_on",
+      "reason": "SELECT vector_norm(array(3.0F, 4.0F), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "vector_norm#d32b299a6868/ansi_off",
+      "reason": "SELECT vector_norm(array(3.0F, 4.0F), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "vector_norm#f1005562ed13/ansi_on",
+      "reason": "SELECT vector_norm(INTERVAL '1-2' YEAR TO MONTH, 2.0F) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "vector_norm#f1005562ed13/ansi_off",
+      "reason": "SELECT vector_norm(INTERVAL '1-2' YEAR TO MONTH, 2.0F) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "vector_norm"
+}
