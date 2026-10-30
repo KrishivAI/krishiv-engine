@@ -55,6 +55,7 @@ pub mod functions;
 mod introspection;
 mod locals;
 mod profile;
+mod scripting;
 mod session;
 mod sql_functions;
 mod store;

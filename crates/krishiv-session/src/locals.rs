@@ -17,13 +17,6 @@ use crate::session::Session;
 
 impl Session {
     /// A handle of this session whose queries also resolve `locals` (outermost frame first).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the script interpreter (T196 unit 2b) is its user"
-        )
-    )]
     pub(crate) fn with_locals(&self, locals: Vec<LocalFrame>) -> Session {
         Session {
             state: Arc::clone(&self.state),
