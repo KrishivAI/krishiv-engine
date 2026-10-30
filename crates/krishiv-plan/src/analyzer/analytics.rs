@@ -605,13 +605,18 @@ impl Resolver<'_> {
         Ok(out)
     }
 
-    /// The type of the resolved `e`.
+    /// The type of the resolved `e`. `e` is a select item already checked
+    /// where windows may appear, so a window in it (`rank() OVER (PARTITION
+    /// BY grouping(a))`, TPC-DS q70/q86) types as it did, not as a misplaced
+    /// window.
     fn type_of(&mut self, e: &Arc<Expr>, env: &Arc<Env>) -> Result<ArgType, AnalysisError> {
         let inner = match &e.node {
             ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
             _ => e,
         };
-        Ok(self.bind(inner, &Self::cx(&[], &[], env, "Aggregate"))?.ty)
+        let mut cx = Self::cx(&[], &[], env, "Aggregate");
+        cx.windows = super::exprs::WindowUse::Allowed;
+        Ok(self.bind(inner, &cx)?.ty)
     }
 
     /// `e` over the grouping sets: with `replace`, a subtree that is a
