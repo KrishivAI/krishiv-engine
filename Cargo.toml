@@ -75,6 +75,8 @@ arrow-array = { version = "60", default-features = false }
 arrow-buffer = { version = "60", default-features = false }
 arrow-schema = { version = "60", default-features = false }
 arrow-select = { version = "60", default-features = false }
+arrow-string = { version = "60", default-features = false }
+arrow-ord = { version = "60", default-features = false }
 arrow-row = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }

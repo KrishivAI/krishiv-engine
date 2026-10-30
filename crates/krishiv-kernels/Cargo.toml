@@ -16,6 +16,8 @@ arrow-array.workspace = true
 arrow-buffer.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
+arrow-string.workspace = true
+arrow-ord.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 jiff = { workspace = true, features = ["std", "tzdb-bundle-always"] }
 libm.workspace = true
@@ -48,4 +50,8 @@ harness = false
 
 [[bench]]
 name = "list"
+harness = false
+
+[[bench]]
+name = "arrow_spike"
 harness = false
