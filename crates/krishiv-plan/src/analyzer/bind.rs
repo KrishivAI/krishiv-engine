@@ -118,6 +118,7 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
         b.sql.insert(addr(p), Arc::clone(&root));
         roots.push(root);
     }
+    sql_function_roots(ctx, &mut roots)?;
     let mut found = Vec::new();
     let mut seen = HashSet::new();
     // Every CTE scope stays alive for the walk, so no scope address is
@@ -236,6 +237,63 @@ fn visit<'a>(
     Ok(())
 }
 
+/// Adds to `roots` a plan holding the body and the defaults of every
+/// SQL-bodied function the plans in `roots` call, and of those they call
+/// in turn, so that the walk below binds the tables and functions they read
+/// like the query's own. A function is added once, however often it is
+/// called.
+fn sql_function_roots(
+    ctx: &AnalysisContext,
+    roots: &mut Vec<Arc<LogicalPlan>>,
+) -> Result<(), AnalysisError> {
+    let mut known: HashSet<String> = HashSet::new();
+    let mut next = 0;
+    while next < roots.len() {
+        let mut defs = Vec::new();
+        let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
+            if let Node::Expr(e) = node
+                && let ExprNode::Function(f) = &e.node
+                && f.qualifier.is_empty()
+                && is_registry_call(&f.name)
+                && let FunctionLookup::Sql(def) = ctx
+                    .functions
+                    .lookup(std::slice::from_ref(&f.name), ctx.profile)
+            {
+                defs.push(def);
+            }
+            ControlFlow::Continue(())
+        });
+        next += 1;
+        for def in defs {
+            if !known.insert(def.name.clone()) {
+                continue;
+            }
+            if known.len() > crate::MAX_DEPTH {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::FailedToParseTooComplex {},
+                    roots[0].origin,
+                ));
+            }
+            let exprs = std::iter::once(&def.body)
+                .chain(def.params.iter().filter_map(|p| p.default.as_ref()))
+                .cloned()
+                .collect();
+            roots.push(Arc::new(LogicalPlan::new(PlanNode::Project {
+                input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                exprs,
+            })));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a call of `name` is for the function registry to answer: not a
+/// canonical operator or a grouping function.
+fn is_registry_call(name: &str) -> bool {
+    crate::Builtin::from_name(name).is_none()
+        && super::analytics::GroupingFn::from_name(name).is_none()
+}
+
 fn check_function(
     ctx: &AnalysisContext,
     f: &crate::FunctionCall,
@@ -310,6 +368,11 @@ fn check_function(
             },
             origin,
         ));
+    }
+    // A SQL-bodied function takes named arguments by its own parameters;
+    // the call is checked when it is inlined.
+    if matches!(registry, Some(FunctionLookup::Sql(_))) {
+        return Ok(());
     }
     // A named call of a function without a named-parameter signature is
     // rejected before the function itself is (as Spark's builders do); a

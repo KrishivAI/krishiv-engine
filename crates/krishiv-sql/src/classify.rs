@@ -129,6 +129,22 @@ pub fn classify(statement: &Statement) -> StatementClass {
                 StatementClass::Ddl
             }
         }
+        // A temporary function is the session's own; a persisted one is
+        // shared catalog state (the session refuses it as unsupported).
+        Statement::CreateFunction(f) => {
+            if f.temporary {
+                StatementClass::Session
+            } else {
+                StatementClass::Ddl
+            }
+        }
+        Statement::DropFunction(f) => {
+            if f.temporary {
+                StatementClass::Session
+            } else {
+                StatementClass::Ddl
+            }
+        }
         Statement::CreateTableLike(_)
         | Statement::DropTable(_)
         | Statement::CreateNamespace(_)
@@ -238,6 +254,8 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::DropView(_)
+        | Statement::CreateFunction(_)
+        | Statement::DropFunction(_)
         | Statement::CreateTableLike(_)
         | Statement::DropTable(_)
         | Statement::CreateNamespace(_)
@@ -347,6 +365,10 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         | Statement::DropVariable(_)
         | Statement::CreateView(_)
         | Statement::DropView(_)
+        // Functions have no securable yet: a persisted one is refused by
+        // the session before it changes anything.
+        | Statement::CreateFunction(_)
+        | Statement::DropFunction(_)
         | Statement::ListResource(_) => Vec::new(),
         Statement::Explain(e) => match e.mode {
             ExplainMode::Analyze => statement_targets(&e.statement),

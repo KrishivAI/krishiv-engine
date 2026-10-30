@@ -25,6 +25,7 @@
 //! | `NATURAL JOIN LATERAL`, `JOIN LATERAL ... USING` | `INCOMPATIBLE_JOIN_TYPES`, `UNSUPPORTED_FEATURE.LATERAL_JOIN_USING` |
 //! | `VALUES` rows of different widths | `INVALID_INLINE_TABLE.NUM_COLUMNS_MISMATCH` |
 //! | `()` in `ROLLUP` / `CUBE` | `_LEGACY_ERROR_TEMP_0051` |
+//! | `CREATE FUNCTION` parameters with `GENERATED` or constraints; a characteristic written twice | `INVALID_SQL_SYNTAX.CREATE_FUNC_WITH_GENERATED_COLUMNS_AS_PARAMETERS`, `INVALID_SQL_SYNTAX.CREATE_FUNC_WITH_COLUMN_CONSTRAINTS`, `DUPLICATE_CLAUSES` |
 //! | a `CREATE TABLE` column descriptor or clause written twice | `CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE`, `DUPLICATE_CLAUSES` |
 //! | a repeated or zero identity option | `IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION`, `IDENTITY_COLUMNS_ILLEGAL_STEP` |
 //! | `SKEWED BY`; `USING` with `STORED AS` / `ROW FORMAT`; a CTAS with a schema or typed partition columns | `INVALID_STATEMENT_OR_CLAUSE`, `_LEGACY_ERROR_TEMP_0035` |
@@ -51,14 +52,15 @@ use krishiv_common::error::{
     DuplicatedCteNames, IdentityColumnsDuplicatedSequenceGeneratorOption,
     IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceWhereTableAliasNotAllowed,
     InvalidBucketCount, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
-    InvalidSetSyntax, InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxEmptyPartitionValue,
-    InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
-    InvalidSqlSyntaxShowFunctionsInvalidPattern, InvalidSqlSyntaxUnresolvedWindowReference,
-    InvalidSqlSyntaxVariableTypeOrDefaultRequired, InvalidStatementOrClause, KrishivError,
-    LegacyErrorTemp0035, LegacyErrorTemp0051, LegacyErrorTemp0064, LegacyErrorTemp1292,
-    UnsupportedFeatureDescTableColumnJson, UnsupportedFeatureDescTableColumnPartition,
-    UnsupportedFeatureLateralJoinUsing, UnsupportedFeatureSchemaLevelCollations,
-    UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
+    InvalidSetSyntax, InvalidSqlSyntaxCreateFuncWithColumnConstraints,
+    InvalidSqlSyntaxCreateFuncWithGeneratedColumnsAsParameters, InvalidSqlSyntaxEmptyInPredicate,
+    InvalidSqlSyntaxEmptyPartitionValue, InvalidSqlSyntaxInvalidWindowReference,
+    InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxShowFunctionsInvalidPattern,
+    InvalidSqlSyntaxUnresolvedWindowReference, InvalidSqlSyntaxVariableTypeOrDefaultRequired,
+    InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
+    LegacyErrorTemp0064, LegacyErrorTemp1292, UnsupportedFeatureDescTableColumnJson,
+    UnsupportedFeatureDescTableColumnPartition, UnsupportedFeatureLateralJoinUsing,
+    UnsupportedFeatureSchemaLevelCollations, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
 };
 
 pub(crate) use self::types::data_type;
@@ -66,15 +68,15 @@ use crate::ParserOptions;
 use crate::ast::{
     AlterColumnAction, AlterNamespaceAction, AlterTable, AlterTableAction, AlterView,
     AlterViewAction, CacheKind, ChangeColumnAction, ColumnConstraintKind, ColumnDef, ColumnName,
-    CreatePermanentView, CreateTable, CreateTableLike, DdlName, Delete, Describe, DescribeKind,
-    Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind, FromClause, Function,
-    GeneratedKind, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Insert, InsertClause,
-    Join, JoinConstraint, Literal, Merge, MergeAction, MergeInsert, MergeSource, NamedWindow,
-    NumKind, ObjectName, PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation,
-    RelationExt, RowFormat, RowFormatKind, Select, SelectItem, SetExpr, SetExprKind,
-    SetVariableKind, Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias,
-    TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause,
-    Truncate, Update, UpdateAssignment, WindowRef, WindowSpec, With,
+    CreateFunction, CreatePermanentView, CreateTable, CreateTableLike, DdlName, Delete, Describe,
+    DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind, FromClause, Function,
+    FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
+    GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal, Merge,
+    MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName, PartitionFieldKind,
+    PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat, RowFormatKind, Select,
+    SelectItem, SetExpr, SetExprKind, SetVariableKind, Show, ShowKind, SortItem, Span, Statement,
+    StructField, TableAlias, TableConstraintKind, TableElement, TableFactor, TableFactorKind,
+    TableOption, TemporalClause, Truncate, Update, UpdateAssignment, WindowRef, WindowSpec, With,
 };
 use crate::error::{self, ParseError};
 use crate::lexer::tokenize;
@@ -107,6 +109,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             Statement::Set(_)
             | Statement::Reset(_)
             | Statement::DropView(_)
+            | Statement::DropFunction(_)
             | Statement::DropTable(_)
             | Statement::CreateNamespace(_)
             | Statement::DropNamespace(_)
@@ -183,6 +186,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             }
             Statement::CreateTableLike(t) => return Checker { sql, opts }.create_table_like(t),
             Statement::CreateView(v) => return query(&v.query, sql, opts),
+            Statement::CreateFunction(f) => return Checker { sql, opts }.create_function(f),
             Statement::CreateTable(t) => return Checker { sql, opts }.create_table(t),
             Statement::DeclareVariable(v) => {
                 // Neither a type nor a default: Spark rejects the declaration
@@ -256,6 +260,48 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
+    /// `CREATE FUNCTION`, in the order Spark's builder visits it: the
+    /// parameters (their types and defaults, then `GENERATED` and
+    /// constraints, which a function does not take), the return type or
+    /// columns, the characteristics (a repeated one is `DUPLICATE_CLAUSES`)
+    /// and the body.
+    fn create_function(&self, f: &CreateFunction) -> R {
+        for p in &f.params {
+            self.column_def(p, f.span)?;
+            if p.generated.is_some() {
+                return Err(at(
+                    InvalidSqlSyntaxCreateFuncWithGeneratedColumnsAsParameters {},
+                    f.span,
+                ));
+            }
+            if !p.constraints.is_empty() {
+                return Err(at(
+                    InvalidSqlSyntaxCreateFuncWithColumnConstraints {},
+                    f.span,
+                ));
+            }
+        }
+        match f.returns.as_ref().map(|r| &r.kind) {
+            Some(FunctionReturnsKind::Type(t)) => data_type(t)?,
+            Some(FunctionReturnsKind::Table(Some(columns))) => {
+                columns.iter().try_for_each(|c| data_type(&c.data_type))?;
+            }
+            _ => {}
+        }
+        if let Some(clause) = f.characteristics.duplicate {
+            return Err(at(
+                DuplicateClauses {
+                    clause_name: clause.to_owned(),
+                },
+                f.span,
+            ));
+        }
+        match &f.body.kind {
+            FunctionBodyKind::Expr(e) => self.expr(e),
+            FunctionBodyKind::Query(q) => self.query(q),
+        }
+    }
+
     /// `CREATE TABLE`, in the order Spark's builder visits it: the name,
     /// the column definitions and table constraints, the clauses (their
     /// duplicates first, then `SKEWED BY`, then their contents, the bucket

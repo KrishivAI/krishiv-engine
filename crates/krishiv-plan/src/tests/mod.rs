@@ -19,4 +19,5 @@ mod props;
 mod rewrite;
 mod secrets;
 mod setops;
+mod sqlfn;
 mod tpch;

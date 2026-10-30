@@ -308,6 +308,10 @@ impl Resolver<'_> {
                             self.ctx.functions.spark_deterministic(n) == Some(false)
                         }),
                         FunctionLookup::NotFound => false,
+                        // A SQL-bodied function is inlined later; its body
+                        // is not checked here, so it is refused (a divergence
+                        // from Spark, which folds it).
+                        FunctionLookup::Sql(_) => true,
                     }
                 }
                 _ => false,

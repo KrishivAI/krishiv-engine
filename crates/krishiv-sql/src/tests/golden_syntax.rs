@@ -163,22 +163,6 @@ const GOLDEN_DEVIATIONS: &[(&str, &str)] = &[
         "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
     ),
     (
-        "CREATE FUNCTION foo2a0() RETURNS TABLE() RETURN SELECT 1",
-        "`CREATE FUNCTION` is not a supported statement: the error is at `FUNCTION`, not at the table return type",
-    ),
-    (
-        "CREATE FUNCTION foo2c1() RETURNS TABLE(c1 INT DEFAULT 5) RETURN SELECT 1, 2",
-        "`CREATE FUNCTION` is not a supported statement: the error is at `FUNCTION`, not at the default",
-    ),
-    (
-        "CREATE TEMPORARY FUNCTION test_udf(IDENTIFIER('param1') INT, IDENTIFIER('param2') STRING)\nRETURNS INT\nRETURN IDENTIFIER('param1') + length(IDENTIFIER('param2'))",
-        "`CREATE FUNCTION` is not a supported statement: the error is at `FUNCTION`, not at the parameter list",
-    ),
-    (
-        "CREATE TEMPORARY FUNCTION test_table_udf(IDENTIFIER('input_val') INT)\nRETURNS TABLE(IDENTIFIER('col1') INT, IDENTIFIER('col2') STRING)\nRETURN SELECT IDENTIFIER('input_val'), 'result'",
-        "`CREATE FUNCTION` is not a supported statement: the error is at `FUNCTION`, not at the parameter list",
-    ),
-    (
         "SELECT CASE WHEN foo3_1b(rand(0) * 0 < 1 THEN 1 ELSE -1 END",
         "the `CASE WHEN` function-argument recovery reports `THEN`, Spark reports the function name",
     ),
