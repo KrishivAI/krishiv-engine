@@ -121,6 +121,7 @@ pub fn krishiv_session::agent::render_error(&krishiv_common::error::KrishivError
 pub fn krishiv_session::agent::render_estimate(u64, u64, u64, &[alloc::string::String]) -> alloc::string::String
 pub fn krishiv_session::agent::session_tz_micros(core::option::Option<&str>) -> core::result::Result<i64, alloc::string::String>
 pub fn krishiv_session::agent::spark_float(f64) -> alloc::string::String
+pub fn krishiv_session::agent::spark_float32(f32) -> alloc::string::String
 pub mod krishiv_session::functions
 pub trait krishiv_session::functions::IntoLiteral
 pub fn krishiv_session::functions::IntoLiteral::into_literal(self) -> krishiv_plan::literal::Literal

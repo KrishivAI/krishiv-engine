@@ -514,14 +514,15 @@ fn cut_chars(s: &str, cap: usize) -> String {
 }
 
 /// Escapes a cell so it can never forge structure: every control
-/// character as `\uXXXX`, `|` as `\|`, and a leading `--` as `\--`.
+/// character (C0, DEL, C1 and the Unicode line and paragraph separators) as `\uXXXX`, `|` as `\|`, and a
+/// leading `--` as `\--`.
 /// Backslashes are literal (only the three escapes above introduce them).
 fn escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if c == '|' {
             out.push_str("\\|");
-        } else if (c as u32) < 0x20 || (c as u32) == 0x7F {
+        } else if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
             let _ = write!(out, "\\u{:04x}", c as u32);
         } else {
             out.push(c);
@@ -779,7 +780,7 @@ pub fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
         ArrowType::UInt16 => a.as_primitive::<UInt16Type>().value(i).to_string(),
         ArrowType::UInt32 => a.as_primitive::<UInt32Type>().value(i).to_string(),
         ArrowType::UInt64 => a.as_primitive::<UInt64Type>().value(i).to_string(),
-        ArrowType::Float32 => spark_float(f64::from(a.as_primitive::<Float32Type>().value(i))),
+        ArrowType::Float32 => spark_float32(a.as_primitive::<Float32Type>().value(i)),
         ArrowType::Float64 => spark_float(a.as_primitive::<Float64Type>().value(i)),
         ArrowType::Decimal128(..) => a.as_primitive::<Decimal128Type>().value_as_string(i),
         ArrowType::Utf8 => a.as_string::<i32>().value(i).to_owned(),
@@ -912,6 +913,16 @@ pub fn spark_float(v: f64) -> String {
     }
 }
 
+/// [`spark_float`] for a `FLOAT`: formatted from the `f32` itself, so `0.1f32` prints `0.1` and not the
+/// digits of its widened `f64`.
+pub fn spark_float32(v: f32) -> String {
+    if v.is_finite() {
+        format!("{v:?}")
+    } else {
+        spark_float(f64::from(v))
+    }
+}
+
 /// The session time zone as microseconds east of UTC. Only `UTC` and fixed
 /// offsets are known (the engine has no time-zone database yet); unset is
 /// UTC, where Spark would use the local zone.
@@ -959,9 +970,9 @@ mod tests {
 
     use arrow_array::RecordBatch;
     use arrow_array::array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float64Array,
-        Int32Array, ListArray, NullArray, StringArray, StructArray, TimestampMicrosecondArray,
-        UInt8Array,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+        Float64Array, Int32Array, ListArray, NullArray, StringArray, StructArray,
+        TimestampMicrosecondArray, UInt8Array,
     };
     use arrow_array::types::Int32Type;
     use arrow_schema::DataType as ArrowType;
@@ -988,6 +999,7 @@ mod tests {
         let cases: Vec<(ArrayRef, &str)> = vec![
             (arr(BooleanArray::from(vec![true])), "true"),
             (arr(UInt8Array::from(vec![5])), "5"),
+            (arr(Float32Array::from(vec![0.1f32])), "0.1"),
             (arr(Float64Array::from(vec![1.0])), "1.0"),
             (arr(dec), "123.45"),
             (arr(StringArray::from(vec!["s"])), "s"),

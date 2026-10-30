@@ -556,9 +556,23 @@ fn collect_rows(
     session: &krishiv::Session,
     max_rows: usize,
 ) -> Result<Collected, String> {
+    use futures::StreamExt as _;
+
     let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
-    let batches = futures::executor::block_on(df.collect()).map_err(|e| e.to_string())?;
     let schema = futures::executor::block_on(df.schema()).map_err(|e| e.to_string())?;
+    // Streams and stops at the cap, so a huge result is never buffered: dropping the stream cancels the query.
+    let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| e.to_string())?;
+    let mut batches = Vec::new();
+    let mut seen = 0usize;
+    while seen < max_rows {
+        let Some(next) = futures::executor::block_on(stream.next()) else {
+            break;
+        };
+        let batch = next.map_err(|e| e.to_string())?;
+        seen = seen.saturating_add(batch.num_rows());
+        batches.push(batch);
+    }
+    drop(stream);
     if let Ok(warnings) = futures::executor::block_on(df.warnings()) {
         for w in warnings {
             let _ = writeln!(io::stderr(), "warning: {w}");
@@ -584,6 +598,9 @@ fn collect_rows(
     let mut nulls: Vec<Vec<bool>> = Vec::new();
     for b in &batches {
         for r in 0..b.num_rows() {
+            if rows.len() >= max_rows {
+                break;
+            }
             rows.push(
                 b.columns()
                     .iter()
@@ -592,10 +609,6 @@ fn collect_rows(
             );
             nulls.push(b.columns().iter().map(|c| c.is_null(r)).collect());
         }
-    }
-    if rows.len() > max_rows {
-        rows.truncate(max_rows);
-        nulls.truncate(max_rows);
     }
     Ok(Collected {
         names,

@@ -31,10 +31,49 @@ pub(crate) fn should_persist(line: &str) -> bool {
     // file through a multi-statement paste.
     split_top_level(line).iter().all(|stmt| {
         let Some(key) = set_key(stmt) else {
-            return true;
+            return !assigns_secret(stmt);
         };
         !krishiv_common::secret::is_sensitive_key(&key)
     })
+}
+
+/// Whether a non-`SET` statement carries a credential: a sensitive option key assigned a value
+/// (`OPTIONS (password 'x')`, `password = 'x'`) or credentials in a URL (`jdbc:...://user:pw@host`).
+/// A column merely named `password` is not one, so ordinary queries still persist.
+fn assigns_secret(stmt: &str) -> bool {
+    let mut i = 0;
+    while let Some(off) = stmt.get(i..).and_then(|r| r.find("://")) {
+        let rest = &stmt[i + off + 3..];
+        let authority = rest
+            .split(['/', ' ', '\'', '"', ')', ';'])
+            .next()
+            .unwrap_or("");
+        if authority.contains('@') {
+            return true;
+        }
+        i += off + 3;
+    }
+    let mut start = None;
+    for (pos, c) in stmt
+        .char_indices()
+        .chain(std::iter::once((stmt.len(), ' ')))
+    {
+        let word = c.is_alphanumeric() || matches!(c, '.' | '_' | '-');
+        match (start, word) {
+            (None, true) => start = Some(pos),
+            (Some(from), false) => {
+                start = None;
+                let next = stmt[pos..].trim_start().bytes().next();
+                if matches!(next, Some(b'=' | b'\'' | b'"'))
+                    && krishiv_common::secret::is_sensitive_key(&stmt[from..pos])
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `s` without leading whitespace and comments (`-- ...` to the end of the
@@ -103,6 +142,17 @@ fn split_top_level(line: &str) -> Vec<&str> {
                         if n == '\n' {
                             break;
                         }
+                    }
+                }
+                '/' if chars.peek().is_some_and(|(_, n)| *n == '*') => {
+                    // A block comment hides `;` too; an unterminated one runs to the end.
+                    chars.next();
+                    let mut prev = ' ';
+                    for (_, n) in chars.by_ref() {
+                        if prev == '*' && n == '/' {
+                            break;
+                        }
+                        prev = n;
                     }
                 }
                 ';' => {
@@ -229,6 +279,18 @@ mod tests {
         assert!(!should_persist("SET token='abc'"));
         // One sensitive statement vetoes a multi-statement line.
         assert!(!should_persist("select 1; SET password=hunter2"));
+        assert!(!should_persist("/* ; */ SET password=hunter2;"));
+        assert!(!should_persist("/* a */ select 1; /* b; */ SET token='x'"));
+        assert!(!should_persist(
+            "CREATE TEMPORARY VIEW v USING jdbc OPTIONS (url 'jdbc:x', password 'hunter2')"
+        ));
+        assert!(!should_persist(
+            "CREATE TEMPORARY VIEW v USING jdbc OPTIONS (password='hunter2')"
+        ));
+        assert!(!should_persist(
+            "SELECT * FROM t USING 'jdbc:pg://user:pw@host/db'"
+        ));
+        assert!(should_persist("SELECT password FROM users WHERE id = 1"));
         // A secret-looking *value* under an ordinary key persists: the
         // rule keys on the option name, as the engine's classification does.
         assert!(should_persist("select 'hunter2' as s"));

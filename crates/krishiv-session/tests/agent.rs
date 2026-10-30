@@ -543,8 +543,14 @@ fn cells_cannot_forge_structure() {
             // no bare pipe or leading dashes.
             assert!(!inner.contains('\n') && !inner.contains('\r') && !inner.contains('\u{1b}'));
             assert!(!inner.contains('\0') && !inner.contains('\u{7f}'));
+            assert!(
+                !inner.contains('\u{85}')
+                    && !inner.contains('\u{2028}')
+                    && !inner.contains('\u{2029}')
+            );
+            // Escaping is lossless: nothing was dropped or altered.
+            assert_eq!(back, *raw);
         }
-        let _ = back;
     }
     // NULL stays unquoted and differs from the string 'NULL'.
     let schema2 = Arc::new(Schema::new(vec![Field::new("c", ArrowType::Utf8, true)]));
