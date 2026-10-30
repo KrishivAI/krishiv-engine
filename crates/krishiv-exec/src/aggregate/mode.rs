@@ -701,3 +701,80 @@ fn byte_key(a: &ArrayRef, i: usize) -> Result<&[u8]> {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::Int64Array;
+
+    use super::*;
+
+    fn acc() -> ModeAcc {
+        ModeAcc::new(DataType::Int64, &AggregateFunction::Mode).unwrap()
+    }
+
+    fn ints(v: Vec<i64>) -> ArrayRef {
+        Arc::new(Int64Array::from(v))
+    }
+
+    /// Spark's slot order decides ties, including after the table grows
+    /// past 44 keys (70% of 64 slots) and rehashes; the pick is stable and
+    /// has no winner for no keys.
+    #[test]
+    fn spark_pick_survives_table_growth() {
+        assert_eq!(spark_pick(&[], &[]), None);
+        let hashes: Vec<i32> = (0..200).map(|k| long_hash(i64::from(k) * 7919)).collect();
+        let counts = vec![1_u64; 200];
+        let picked = spark_pick(&hashes, &counts).unwrap();
+        assert!(picked < 200);
+        // A strictly larger count always wins, whatever the slot order.
+        let mut counts = counts;
+        counts[137] = 2;
+        assert_eq!(spark_pick(&hashes, &counts), Some(137));
+    }
+
+    /// Partial states merge: counts add, and the winner is the most
+    /// frequent value across both.
+    #[test]
+    fn states_merge_and_evaluate() {
+        let mut a = acc();
+        a.resize(2);
+        a.reserve(1);
+        a.fold(&[0, 0, 0, 1], &ints(vec![5, 5, 7, 9]), &|_| true)
+            .unwrap();
+        let states = a.state(&[0, 1]).unwrap();
+        let mut b = acc();
+        b.resize(1);
+        b.fold(&[0, 0], &ints(vec![7, 7]), &|_| true).unwrap();
+        let refs: Vec<&ArrayRef> = states.iter().collect();
+        b.merge(&[0, 0], &refs).unwrap();
+        let out = b.evaluate(&[0]).unwrap();
+        assert_eq!(out.as_primitive::<Int64Type>().value(0), 7);
+        // A snapshot copies the state of its source group.
+        b.resize(2);
+        b.snapshot(0, 1);
+        let out = b.evaluate(&[1]).unwrap();
+        assert_eq!(out.as_primitive::<Int64Type>().value(0), 7);
+    }
+
+    /// Misshapen folds and states are refused, not misread; an untyped NULL
+    /// column folds nothing.
+    #[test]
+    fn misshapen_inputs_are_refused() {
+        assert!(ModeAcc::new(DataType::Int64, &AggregateFunction::Count).is_err());
+        let mut a = acc();
+        a.resize(1);
+        assert!(a.fold(&[0, 0], &ints(vec![1]), &|_| true).is_err());
+        let nulls: ArrayRef = arrow_array::new_null_array(&DataType::Null, 1);
+        a.fold(&[0], &nulls, &|_| true).unwrap();
+        assert!(a.fold_chunk(0, &ints(vec![1, 2]), &[1]).is_err());
+        let one = ints(vec![1]);
+        assert!(a.merge(&[0], &[&one]).is_err());
+        assert!(a.merge(&[0], &[&one, &one]).is_err());
+        let states = a.state(&[0]).unwrap();
+        let refs: Vec<&ArrayRef> = states.iter().collect();
+        assert!(a.merge(&[0, 0], &refs).is_err());
+        let list = Arc::clone(&states[0]);
+        assert!(a.merge(&[0], &[&list, &one]).is_err());
+        assert!(a.merge(&[0], &[&one, &list]).is_err());
+    }
+}

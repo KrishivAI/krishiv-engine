@@ -599,9 +599,10 @@ pub(super) fn picks_bytes(a: &AggregateExpr) -> bool {
 /// The heap a running frame's snapshots of a growing state hold: each row
 /// of a partition copies the whole state so far, which is quadratic in the
 /// partition's rows (`collect_list`, `collect_set`, `mode`, `listagg`).
-/// Estimated from the average partition size, at 16 bytes an element (a
-/// lower bound for views and keys): a skewed input can hold more.
-fn snapshot_heap(a: &AggregateExpr, shape: Shape, rows: usize, parts: usize) -> usize {
+/// `held` is the number of elements all snapshots hold (see
+/// [`snapshot_slots`]), exact for any partition sizes; each is counted at 16
+/// bytes (a lower bound for long strings and key tables).
+fn snapshot_heap(a: &AggregateExpr, shape: Shape, held: usize) -> usize {
     use AggregateFunction as F;
     let grows = matches!(
         a.function,
@@ -610,9 +611,27 @@ fn snapshot_heap(a: &AggregateExpr, shape: Shape, rows: usize, parts: usize) -> 
     if !grows || shape == Shape::Whole {
         return 0;
     }
-    let per_part = rows.div_ceil(parts.max(1));
-    rows.saturating_mul(per_part.saturating_add(1) / 2 + 1)
-        .saturating_mul(16)
+    held.saturating_mul(16)
+}
+
+/// The elements the snapshots of a growing state hold for the rows of one
+/// batch: the row at position `k` of its partition copies `k` elements.
+/// `part_start` flags the rows that start a partition; `open` is the length
+/// of the partition the batch continues (rows of earlier batches).
+/// Additive across batches, so the cost of a partition is the sum of its
+/// batches' costs whatever the skew. Returns the elements and the length of
+/// the partition open at the batch's end.
+pub(super) fn snapshot_slots(part_start: &[bool], open: usize) -> (usize, usize) {
+    let mut held = 0usize;
+    let mut len = open;
+    for &start in part_start {
+        if start {
+            len = 0;
+        }
+        len = len.saturating_add(1);
+        held = held.saturating_add(len);
+    }
+    (held, len)
 }
 
 /// The view type a string or binary argument is read as.
@@ -751,8 +770,14 @@ pub(super) fn width(t: &DataType, rows: usize) -> usize {
 /// `rows` rows in `parts` partitions and `peers` peer groups: the row
 /// maps, each function's states and output, and the index vectors that
 /// gather outputs. Linear in its arguments, so the cost of a unit is the
-/// sum of its batches' costs.
-pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -> Result<usize> {
+/// sum of its batches' costs. `held` is [`snapshot_slots`] of the batch.
+pub(super) fn cost(
+    plan: &WindowPlan,
+    rows: usize,
+    parts: usize,
+    peers: usize,
+    held: usize,
+) -> Result<usize> {
     // `part_of`, `peer_of`; `parts` and `first_peer`; `peers`.
     let mut total = rows * 8 + parts * 20 + peers * 16;
     for f in &plan.functions {
@@ -819,7 +844,7 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
                     };
                     let slots = if shape == Shape::Whole { 0 } else { rows * 4 };
                     ids + slots
-                        + snapshot_heap(a, shape, rows, parts)
+                        + snapshot_heap(a, shape, held)
                         + groups * state
                         + width(&out, segments)
                         + if shape == Shape::RunningRows {

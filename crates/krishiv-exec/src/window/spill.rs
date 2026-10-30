@@ -252,6 +252,7 @@ impl Window {
         l.failed = None;
         // The rows are read back as a new input.
         l.started = false;
+        l.open_len = 0;
         l.prev_partition = None;
         l.prev_order = None;
         l.last_start = None;
@@ -468,7 +469,13 @@ impl Window {
             .file
             .max_read_reservation()
             .saturating_mul(3)
-            .saturating_add(eval::cost(&self.env.plan, rows, 1, rows)?);
+            .saturating_add(eval::cost(
+                &self.env.plan,
+                rows,
+                1,
+                rows,
+                rows.saturating_mul(rows.saturating_add(1)) / 2,
+            )?);
         let spare = r.headroom.size().saturating_sub(need.max(r.base));
         r.headroom.shrink(spare);
         if r.headroom.size() < need {

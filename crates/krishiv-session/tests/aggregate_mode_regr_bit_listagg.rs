@@ -623,8 +623,13 @@ fn ordered_t(s: &Session) -> R {
 }
 
 /// A `WITHIN GROUP` ordering survives the rewrites that rebuild a call: the
-/// distinct-aggregate expansion, `PIVOT` and the `ROLLUP` re-typing. The
-/// expected values follow from the ordering (not a Spark run).
+/// distinct-aggregate expansion, `PIVOT` and the `ROLLUP` re-typing.
+/// Checked on Spark 4.2.0 (2026-10-30): the `mode` rows and the `ROLLUP` row
+/// match its output. Spark fails the `listagg` rows with an internal
+/// `ClassCastException` (an ordered `listagg` next to two distinct sets, and
+/// under `PIVOT`; a plain `PIVOT (listagg ...)` fails with
+/// `DATATYPE_MISMATCH.NON_FOLDABLE_INPUT` because it wraps the delimiter
+/// too), so those expected values follow from the ordering.
 #[test]
 fn within_group_survives_rewrites() -> R {
     let s = Session::builder().build()?;
@@ -826,6 +831,31 @@ fn within_group_refusals_match_spark() -> R {
             "SELECT mode(x) WITHIN GROUP (ORDER BY x) FROM (VALUES (1)) AS t(x)",
             "INVALID_WITHIN_GROUP_EXPRESSION.WRONG_NUM_ORDERINGS",
         ),
+        // The error classes below were taken from Spark 4.2.0 (2026-10-30).
+        (
+            "SELECT mode() WITHIN GROUP (ORDER BY x, y) FROM (VALUES (1, 2)) AS t(x, y)",
+            "INVALID_WITHIN_GROUP_EXPRESSION.WRONG_NUM_ORDERINGS",
+        ),
+        (
+            "SELECT mode(x, y > 1) FROM (VALUES (1, 2)) AS t(x, y)",
+            "NON_FOLDABLE_ARGUMENT",
+        ),
+        (
+            "SELECT mode(x, CAST(NULL AS BOOLEAN)) FROM (VALUES (1)) AS t(x)",
+            "DATATYPE_MISMATCH.UNEXPECTED_NULL",
+        ),
+        (
+            "SELECT mode(x, 1) FROM (VALUES (1)) AS t(x)",
+            "UNEXPECTED_INPUT_TYPE",
+        ),
+        (
+            "SELECT mode(x, true, true) FROM (VALUES (1)) AS t(x)",
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+        ),
+        (
+            "SELECT mode(x, 1 / 0 > 1) FROM (VALUES (1)) AS t(x)",
+            "DIVIDE_BY_ZERO",
+        ),
         (
             "SELECT listagg(DISTINCT CAST(a AS STRING)) WITHIN GROUP (ORDER BY b) FROM (VALUES ('x', 'y')) AS t(a, b)",
             "INVALID_WITHIN_GROUP_EXPRESSION.MISMATCH_WITH_DISTINCT_INPUT",
@@ -860,6 +890,26 @@ fn within_group_refusals_match_spark() -> R {
     } else {
         Err(format!("{} mismatches:\n{}", bad.len(), bad.join("\n")).into())
     }
+}
+
+/// `mode` with its tie-break flag or written ordering, on a table whose
+/// modes tie (values 1 and 2 twice each). Spark 4.2.0 (2026-10-30) returns
+/// 1 for `mode(y, true)`, `mode(y, false)` and `mode()` ascending, and 2
+/// for `mode()` descending.
+#[test]
+fn mode_tie_break_forms_match_spark() -> R {
+    let s = Session::builder().build()?;
+    ordered_t(&s)?;
+    for (query, want) in [
+        ("SELECT mode(y, true) FROM t", "1"),
+        ("SELECT mode(y, false) FROM t", "1"),
+        ("SELECT mode() WITHIN GROUP (ORDER BY y) FROM t", "1"),
+        ("SELECT mode() WITHIN GROUP (ORDER BY y DESC) FROM t", "2"),
+    ] {
+        let (_, rows) = run(&s, query)?;
+        assert_eq!(rows, [want], "{query}");
+    }
+    Ok(())
 }
 
 /// Window use for the non-moment aggregates, and the moment refusal:

@@ -1176,7 +1176,7 @@ fn reserved_cost_matches_what_evaluation_holds() {
                 + 8 * n
                 + 20 * count(&part)
                 + 16 * count(&peer);
-            let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+            let cost = super::eval::cost(&window, n, count(&part), count(&peer), 0).unwrap();
             assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
             assert!(cost <= 2 * held, "{f:?}: reserved {cost} for {held} held");
         }
@@ -1206,7 +1206,7 @@ async fn partitioned_windows_run_at_a_tight_limit() {
     // A batch: 40 partitions, 1334 peer groups.
     let exact = batches[0].data().get_array_memory_size()
         + 2 * per_batch
-        + super::eval::cost(&window, per_batch, 40, 1_334).unwrap();
+        + super::eval::cost(&window, per_batch, 40, 1_334, 0).unwrap();
     let limit = 4 * exact;
     // The flat estimate this replaces reserved 2 + 16 + 64 + 16 bytes per
     // row besides the input.
@@ -1902,7 +1902,7 @@ fn frame_costs_cover_their_outputs() {
                 .map(|c| Array::get_array_memory_size(c.as_ref()))
                 .sum::<usize>()
                 + 8 * n * 2;
-            let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+            let cost = super::eval::cost(&window, n, count(&part), count(&peer), 0).unwrap();
             assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
         }
     }
@@ -1985,7 +1985,7 @@ fn offset_function_costs_cover_their_scratch() {
         let scratch = n * (8 + 16 + 32 + frames);
         let held = output + views + scratch;
         let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
-        let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+        let cost = super::eval::cost(&window, n, count(&part), count(&peer), 0).unwrap();
         assert!(cost >= held, "{function:?}: reserved {cost} < held {held}");
     }
 }
@@ -2301,3 +2301,48 @@ proptest! {
 
 #[path = "group_limit_tests.rs"]
 mod group_limit_tests;
+
+/// A growing state's snapshots are priced by position in the partition, so
+/// a skewed input costs its real quadratic share and the price is additive
+/// across batches.
+#[test]
+fn snapshot_slots_follow_partition_sizes_across_batches() {
+    use super::eval::snapshot_slots;
+    // Partitions of 3 and 1 rows: 1+2+3 and 1.
+    assert_eq!(snapshot_slots(&[true, false, false, true], 0), (7, 1));
+    // One partition of 6 rows, whole or split into batches of 4 and 2.
+    let whole = snapshot_slots(&[true, false, false, false, false, false], 0);
+    let (a, open) = snapshot_slots(&[true, false, false, false], 0);
+    let (b, open) = snapshot_slots(&[false, false], open);
+    assert_eq!((whole.0, whole.1), (21, 6));
+    assert_eq!((a + b, open), (21, 6));
+    // The average-partition estimate of two partitions of 100 and 2
+    // rows would have been far lower than the skewed truth.
+    let mut flags = vec![false; 102];
+    flags[0] = true;
+    flags[100] = true;
+    assert_eq!(snapshot_slots(&flags, 0).0, 5_050 + 3);
+    assert_eq!(snapshot_slots(&[], 7), (0, 7));
+}
+
+/// The window cost of a running `collect_list` grows with the snapshot
+/// elements; a whole-partition frame and a non-growing aggregate ignore them.
+#[test]
+fn window_cost_counts_snapshot_elements_of_growing_aggregates() {
+    let running = WindowFrame::running(FrameUnits::Rows);
+    let growing = plan(
+        vec![(agg(AggregateFunction::CollectList, Some(3)), running)],
+        true,
+    );
+    let summing = plan(vec![(agg(AggregateFunction::Sum, Some(3)), running)], true);
+    let base = super::eval::cost(&growing, 10, 1, 10, 0).unwrap();
+    assert_eq!(
+        super::eval::cost(&growing, 10, 1, 10, 55).unwrap(),
+        base + 55 * 16
+    );
+    let sum_base = super::eval::cost(&summing, 10, 1, 10, 0).unwrap();
+    assert_eq!(
+        super::eval::cost(&summing, 10, 1, 10, 55).unwrap(),
+        sum_base
+    );
+}

@@ -926,4 +926,103 @@ mod tests {
         v.add(0, 2, 0, &values[..2], Some(&nulls)).unwrap();
         assert_eq!(v.sums[0], Some(vec![1.0, 0.0]));
     }
+
+    /// Every carrier of variable-width and nested values counts the bytes
+    /// it keeps, never less than its values.
+    #[test]
+    fn kept_bytes_covers_views_fixed_binary_and_lists() {
+        use arrow_array::{FixedSizeBinaryArray, LargeStringArray};
+        let views: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "a",
+            "a value longer than twelve bytes",
+        ]));
+        assert!(kept_bytes(&views) >= 32 + 33);
+        let bviews: ArrayRef = Arc::new(BinaryViewArray::from(vec![b"ab".as_ref(), b"c"]));
+        assert!(kept_bytes(&bviews) >= 32 + 3);
+        let fixed: ArrayRef =
+            Arc::new(FixedSizeBinaryArray::try_from_iter([[1_u8, 2], [3, 4]].into_iter()).unwrap());
+        assert!(kept_bytes(&fixed) >= 4);
+        let large: ArrayRef = Arc::new(LargeStringArray::from(vec!["ab", "c"]));
+        assert!(kept_bytes(&large) >= 3);
+        let child: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new("e", DataType::Int64, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4])),
+            child,
+            None,
+        ));
+        assert!(kept_bytes(&list) >= 32);
+        let ints: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        assert!(kept_bytes(&ints) >= 16);
+    }
+
+    /// Raw string and binary chunks convert to the view element type; any
+    /// other pairing is refused rather than concatenated wrongly.
+    #[test]
+    fn normalize_converts_carriers_and_refuses_others() {
+        use arrow_array::LargeStringArray;
+        let utf8: ArrayRef = Arc::new(StringArray::from(vec!["a"]));
+        let large: ArrayRef = Arc::new(LargeStringArray::from(vec!["a"]));
+        let binary: ArrayRef = Arc::new(BinaryArray::from_iter_values([b"a".as_ref()]));
+        let lbinary: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values([b"a".as_ref()]));
+        for c in [&utf8, &large] {
+            let out = normalize(Arc::clone(c), &DataType::Utf8View).unwrap();
+            assert_eq!(out.data_type(), &DataType::Utf8View);
+        }
+        for c in [&binary, &lbinary] {
+            let out = normalize(Arc::clone(c), &DataType::BinaryView).unwrap();
+            assert_eq!(out.data_type(), &DataType::BinaryView);
+        }
+        let ints: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        assert!(normalize(ints, &DataType::Utf8View).is_err());
+    }
+
+    fn list_of(values: Vec<i64>, offsets: Vec<i32>, nulls: Option<NullBuffer>) -> ArrayRef {
+        Arc::new(ListArray::new(
+            Arc::new(Field::new("e", DataType::Int64, true)),
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            Arc::new(Int64Array::from(values)),
+            nulls,
+        ))
+    }
+
+    /// Merging partial states appends the lists of the non-NULL rows to
+    /// their groups, and refuses a state of another type or length.
+    #[test]
+    fn merge_appends_lists_and_refuses_misshapen_states() {
+        let mut acc = CollectAcc::new(DataType::Int64, false).unwrap();
+        acc.resize(2);
+        // Rows: [1, 2], NULL, [], [3].
+        let state = list_of(
+            vec![1, 2, 3],
+            vec![0, 2, 2, 2, 3],
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+        acc.merge(&[0, 0, 1, 1], &state).unwrap();
+        let out = acc
+            .state(
+                &[0, 1],
+                &DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            )
+            .unwrap();
+        let out = out.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(out.value_length(0), 2);
+        assert_eq!(out.value_length(1), 1);
+        let ints: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        assert!(acc.merge(&[0, 0], &ints).is_err());
+        assert!(acc.merge(&[0], &state).is_err());
+        assert!(acc.state(&[0], &DataType::Int64).is_err());
+    }
+
+    /// A column of another length than the group ids is refused; an untyped
+    /// NULL column adds nothing.
+    #[test]
+    fn update_refuses_a_column_of_another_length() {
+        let mut acc = CollectAcc::new(DataType::Int64, false).unwrap();
+        acc.resize(1);
+        let col: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        assert!(acc.update(&[0], &col, &|_| true, None).is_err());
+        let nulls: ArrayRef = arrow_array::new_null_array(&DataType::Null, 2);
+        acc.update(&[0, 0], &nulls, &|_| true, None).unwrap();
+    }
 }

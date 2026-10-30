@@ -566,4 +566,72 @@ mod tests {
             assert!(new(key.clone()).is_ok(), "{key}");
         }
     }
+
+    fn strs(v: Vec<&str>) -> ArrayRef {
+        Arc::new(arrow_array::StringArray::from(v))
+    }
+
+    fn ints(v: Vec<i32>) -> ArrayRef {
+        Arc::new(arrow_array::Int32Array::from(v))
+    }
+
+    /// Partial states round-trip: folded values come out as lists, merge
+    /// into a second accumulator in key order, and a running frame's
+    /// snapshot copies a group's state.
+    #[test]
+    fn states_merge_in_key_order_and_snapshot() {
+        let mut a = ListAggAcc::new(
+            b",".to_vec(),
+            vec![(false, false)],
+            DataType::Utf8View,
+            vec![DataType::Int32],
+        )
+        .unwrap();
+        a.resize(2);
+        a.reserve(1);
+        let values = strs(vec!["c", "a", "b", "z"]);
+        let keys = ints(vec![3, 1, 2, 9]);
+        // Row 3 is filtered out; rows 0..3 go to groups 0, 0, 1.
+        a.fold(&[0, 0, 1, 1], &[&values, &keys], &|i| i != 3)
+            .unwrap();
+        let states = a.state(&[0, 1]).unwrap();
+        assert_eq!(states.len(), 2);
+        let mut b = ListAggAcc::new(
+            b",".to_vec(),
+            vec![(false, false)],
+            DataType::Utf8View,
+            vec![DataType::Int32],
+        )
+        .unwrap();
+        b.resize(3);
+        let refs: Vec<&ArrayRef> = states.iter().collect();
+        b.merge(&[2, 2], &refs).unwrap();
+        b.snapshot(2, 0);
+        let out = b.evaluate(&[0, 1, 2]).unwrap();
+        let out = out.as_string_view();
+        assert_eq!(out.value(0), "a,b,c");
+        assert!(out.is_null(1));
+        assert_eq!(out.value(2), "a,b,c");
+    }
+
+    /// Misshapen folds and states are refused, not misread.
+    #[test]
+    fn misshapen_inputs_are_refused() {
+        let mut a = new(DataType::Int32).unwrap();
+        a.resize(1);
+        let values = strs(vec!["a"]);
+        let keys = ints(vec![1]);
+        assert!(a.fold(&[0], &[], &|_| true).is_err());
+        assert!(a.fold(&[0], &[&values], &|_| true).is_err());
+        assert!(a.fold(&[0, 0], &[&values, &keys], &|_| true).is_err());
+        let nulls: ArrayRef = arrow_array::new_null_array(&DataType::Null, 1);
+        a.fold(&[0], &[&nulls, &keys], &|_| true).unwrap();
+        // A state that is not a list, has the wrong arity, or the wrong length.
+        assert!(a.merge(&[0], &[&values, &keys]).is_err());
+        let states = a.state(&[0]).unwrap();
+        let one: Vec<&ArrayRef> = states.iter().take(1).collect();
+        assert!(a.merge(&[0], &one).is_err());
+        let both: Vec<&ArrayRef> = states.iter().collect();
+        assert!(a.merge(&[0, 0], &both).is_err());
+    }
 }
