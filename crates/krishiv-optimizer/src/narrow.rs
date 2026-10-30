@@ -346,16 +346,27 @@ fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
     let Some((id, c)) = v.column(x).map(|(i, c)| (i, c.clone())) else {
         return DEFAULT_SELECTIVITY;
     };
-    let k = to_f64(u64::try_from(list.len()).unwrap_or(u64::MAX));
+    // Distinct literals only: a duplicate adds no value, and an element
+    // that is not a literal can hold any value of its column.
+    let numbers: Option<Vec<f64>> = list.iter().map(|e| literal(e).and_then(number)).collect();
+    let literals: Option<Vec<&Literal>> = list.iter().map(|e| literal(e)).collect();
+    let distinct = literals.map(|l| {
+        l.iter()
+            .map(|x| format!("{x:?}"))
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    });
+    let k = to_f64(u64::try_from(distinct.unwrap_or(list.len())).unwrap_or(u64::MAX));
     let sel = if c.ndv_known() {
-        k / c.ndv
+        (k / c.ndv).min(1.0)
     } else {
         DEFAULT_SELECTIVITY
     };
-    let numbers: Option<Vec<f64>> = list.iter().map(|e| literal(e).and_then(number)).collect();
     v.update(id, |c| {
         c.null_frac = 0.0;
-        c.ndv = c.ndv.min(k).max(1.0);
+        if distinct.is_some() {
+            c.ndv = c.ndv.min(k).max(1.0);
+        }
         if let Some(n) = numbers {
             cut(
                 c,
@@ -368,8 +379,8 @@ fn in_list(x: &Expr, list: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
 }
 
 /// The fraction of the rows of `est` that satisfy `pred`.
-pub(crate) fn selectivity(pred: &Expr, est: &RelStats) -> f64 {
-    apply(pred, &mut View::new(&est.cols, true))
+pub(crate) fn selectivity(pred: &Expr, est: &RelStats, narrow: bool) -> f64 {
+    apply(pred, &mut View::new(&est.cols, narrow))
 }
 
 /// The two columns of an equality between columns, with their distinct

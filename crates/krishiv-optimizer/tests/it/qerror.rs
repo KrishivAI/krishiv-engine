@@ -234,9 +234,8 @@ fn load(dir: &Path, schemas: &Schemas, ext: &str) -> Db {
     let mut db = Db::default();
     for (name, cols) in schemas {
         let path = dir.join(format!("{name}.{ext}"));
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         let rows = text
             .lines()
             .filter(|l| !l.is_empty())

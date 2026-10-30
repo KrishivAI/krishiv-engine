@@ -381,6 +381,16 @@ fn distinct_counts_follow_the_filter_rules() {
         ndv("b IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)", "b").1,
         10.0
     );
+    // Duplicates count once; an element that is not a literal can hold any
+    // value of its column: capped by the 20 surviving rows, not by the
+    // list length.
+    assert_eq!(ndv("a IN (1, 1, 1)", "a").1, 1.0);
+    assert_eq!(ndv("a IN (b, 2)", "a").1, 20.0);
+    // Duplicates count once; an element that is not a literal can hold any
+    // value of its column: capped by the 20 surviving rows, not by the
+    // list length.
+    assert_eq!(ndv("a IN (1, 1, 1)", "a").1, 1.0);
+    assert_eq!(ndv("a IN (b, 2)", "a").1, 20.0);
     // `IS NOT NULL` keeps it.
     assert_eq!(ndv("a IS NOT NULL", "a").1, 100.0);
     // A range predicate scales it by its selectivity, at least 1.

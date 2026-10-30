@@ -120,6 +120,16 @@ fn cost_prints_statistics_after_every_node_in_sparks_layout() {
     // floor for a scan without a row count, so a node's rows do not
     // exceed its input's.
     assert!(nodes[0].starts_with("Aggregate"), "{cost}");
+    let row_count = |l: &str| -> f64 {
+        let n = l.rsplit_once("rowCount=").unwrap().1.trim_end_matches(')');
+        n.parse().unwrap()
+    };
+    // Parents print before children: the rows never grow toward a child's
+    // parent, so each node's count is at most its input's (nodes after the
+    // first are inputs, in order down a chain).
+    for pair in nodes.windows(2) {
+        assert!(row_count(&pair[0]) <= row_count(&pair[1]), "{cost}");
+    }
     // The plain optimized plan prints none.
     let extended = explain_sql(&s, &format!("EXPLAIN EXTENDED {q}"));
     assert!(!extended.contains("Statistics("), "{extended}");

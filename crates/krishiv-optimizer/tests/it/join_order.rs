@@ -580,11 +580,7 @@ fn literal_equalities_without_a_distinct_count_use_the_default() {
     // `col = literal` takes the default selectivity.
     let cols = "SELECT l_orderkey FROM lineitem WHERE l_commitdate = l_receiptdate";
     // The fixture has no distinct counts: each column reads as the rows.
-    assert!(
-        rows(cols, &footers) <= 1.0 + 1e-9,
-        "{}",
-        rows(cols, &footers)
-    );
+    assert!(close(rows(cols, &footers), 1.0), "{}", rows(cols, &footers));
 }
 
 /// TPC-DS q26's shape: a fact table joined to a dimension filtered to one

@@ -98,14 +98,26 @@ pub fn invocation(args: &QerrorArgs) -> (Vec<String>, Vec<(String, String)>) {
 /// # Errors
 /// A usage error, a data directory that does not exist, or the test failing.
 pub fn run_qerror(root: &Path, flags: &[&str]) -> Result<(), String> {
-    let args = parse_args(flags)?;
-    if let Some(dir) = &args.data
-        && !Path::new(dir).is_dir()
-    {
-        return Err(format!("--data {dir:?} is not a directory"));
+    let mut args = parse_args(flags)?;
+    if let Some(dir) = &args.data {
+        // The test runs in the package directory: a relative path would
+        // name another directory there.
+        let abs = std::fs::canonicalize(dir)
+            .ok()
+            .filter(|p| p.is_dir())
+            .ok_or_else(|| format!("--data {dir:?} is not a directory"))?;
+        args.data = Some(abs.to_string_lossy().into_owned());
     }
     let (cargo_args, env) = invocation(&args);
     let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    // The flags describe the run: nothing inherited from the shell.
+    for var in [
+        "KRISHIV_QERROR_DIR",
+        "KRISHIV_QERROR_SCALE",
+        "KRISHIV_QERROR_SUITES",
+    ] {
+        cmd.env_remove(var);
+    }
     cmd.current_dir(root).args(cargo_args).envs(env);
     match cmd.status() {
         Ok(status) if status.success() => Ok(()),

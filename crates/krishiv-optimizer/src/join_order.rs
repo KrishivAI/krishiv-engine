@@ -43,6 +43,7 @@ pub(crate) fn reorder(
 ) -> Arc<LogicalPlan> {
     Reorder {
         est: Estimator::with_propagation(stats, propagate),
+        propagate,
         done: HashMap::new(),
     }
     .positional(root)
@@ -50,6 +51,9 @@ pub(crate) fn reorder(
 
 struct Reorder<'a> {
     est: Estimator<'a>,
+    /// Whether estimates narrow ranges within a conjunct
+    /// ([`crate::Options::stats_propagation`]).
+    propagate: bool,
     /// The original is kept alive so its address stays unique.
     done: HashMap<*const LogicalPlan, Rewritten>,
 }
@@ -235,7 +239,7 @@ impl Reorder<'_> {
             return self.children(root);
         }
         let ests: Vec<Arc<RelStats>> = leaves.iter().map(|l| self.est.plan(l)).collect();
-        let mut graph = Graph::new(&leaves, &ests, preds.clone());
+        let mut graph = Graph::new(&leaves, &ests, preds.clone(), self.propagate);
         if graph.binary_parts() > graph.parts(true) {
             // Some inputs are joined only by a condition over three or more
             // of them, so two of them would meet in a cross product. Take
@@ -243,7 +247,7 @@ impl Reorder<'_> {
             // as conditions of their own (TPC-DS q13). Only then: elsewhere
             // they would add join keys the inputs do not need.
             let preds = preds.iter().flat_map(common_equalities).collect();
-            graph = Graph::new(&leaves, &ests, preds);
+            graph = Graph::new(&leaves, &ests, preds, self.propagate);
         }
         if graph.parts(false) < graph.parts(true) {
             // Inputs related only through a conjunct with a subquery: as
@@ -324,10 +328,11 @@ fn conditional<'e>(
     on: &[usize],
     attrs: &[Attrs],
     est: impl Fn(usize) -> &'e RelStats,
+    narrow: bool,
 ) -> f64 {
     let implied: f64 = on
         .iter()
-        .filter_map(|&i| implied(pred, &attrs[i]).map(|f| selectivity(&f, est(i))))
+        .filter_map(|&i| implied(pred, &attrs[i]).map(|f| selectivity(&f, est(i), narrow)))
         .product();
     // An implied filter estimated to keep nothing leaves its input at one
     // row (estimates are at least one), and the conjunct at most 1.
@@ -373,7 +378,12 @@ struct Graph {
 }
 
 impl Graph {
-    fn new(leaves: &[Arc<LogicalPlan>], ests: &[Arc<RelStats>], preds: Vec<Arc<Expr>>) -> Self {
+    fn new(
+        leaves: &[Arc<LogicalPlan>],
+        ests: &[Arc<RelStats>],
+        preds: Vec<Arc<Expr>>,
+        narrow: bool,
+    ) -> Self {
         let mut owner: HashMap<AttrId, usize> = HashMap::new();
         for (i, l) in leaves.iter().enumerate() {
             for c in l.resolved_output().unwrap_or_default() {
@@ -462,7 +472,7 @@ impl Graph {
                 let resolved = leaf_defs
                     .get(i)
                     .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
-                rows[i] = (rows[i] * selectivity(&resolved, &ests[order[i]])).max(1.0);
+                rows[i] = (rows[i] * selectivity(&resolved, &ests[order[i]], narrow)).max(1.0);
                 sorted[i] = Arc::new(LogicalPlan::new(PlanNode::Filter {
                     input: Arc::clone(&sorted[i]),
                     predicate: p,
@@ -498,9 +508,14 @@ impl Graph {
                 }
                 resolve_cse(&p, &env)
             };
-            let sel = conditional(&resolved, selectivity(&resolved, &all), &on, &attrs, |i| {
-                &ests[order[i]]
-            });
+            let sel = conditional(
+                &resolved,
+                selectivity(&resolved, &all, narrow),
+                &on,
+                &attrs,
+                |i| &ests[order[i]],
+                narrow,
+            );
             let edge = !has_subquery(&p);
             kept.push(Pred {
                 expr: p,
