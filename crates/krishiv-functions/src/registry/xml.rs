@@ -4,8 +4,7 @@
 //! `from_xml(xmlStr, schema[, options])`: Spark's `XmlToStructs`. The first
 //! argument is a `STRING` (no implicit cast); the schema is a foldable `STRING`
 //! literal holding a DDL struct type; options are a `MAP<STRING, STRING>` from
-//! `map(...)`. The result is the struct the schema names, nullable when the
-//! input may be null.
+//! `map(...)`. The result is the struct the schema names, always nullable.
 //!
 //! `to_xml(struct[, options])`: Spark's `StructsToXml`. The first argument
 //! must be a struct (an array or a map is
@@ -18,9 +17,10 @@ use krishiv_common::error::{
 };
 use krishiv_types::DataType;
 
-use super::csv::{check_options_map, struct_of_ddl};
+use super::Execution;
+use super::csv::{check_options_map, schema_of_text, struct_of_ddl};
 use super::defs::{Spec, scalar};
-use crate::signature::{ArgType, CallTypes, Constant, InputType, Inputs};
+use crate::signature::{ArgType, CallTypes, Constant, FunctionKind, InputType, Inputs};
 
 /// The options argument at `at`, if any: absent is the defaults, anything but
 /// a string map is refused with Spark's class.
@@ -51,8 +51,9 @@ fn from_xml(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         Some(Constant::Error(e)) => Err(e.clone()),
         Some(Constant::String(s)) => {
             let struct_type = struct_of_ddl(s)?;
-            let nullable = c.args().first().is_some_and(|a| a.nullable);
-            Ok(ArgType::new(struct_type, nullable))
+            // Spark's `XmlToStructs` is always nullable (a document that
+            // does not parse is a row of NULLs, but the node stays nullable).
+            Ok(ArgType::new(struct_type, true))
         }
         _ => Err(not_a_schema()),
     }
@@ -91,12 +92,26 @@ fn from_xml_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     out
 }
 
+/// `schema_of_xml(xml[, options])`: Spark's checks, in Spark's order, as for
+/// `schema_of_csv`. The analyzer replaces a well-typed call with the DDL
+/// literal, so the call never executes.
+fn schema_of_xml(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    schema_of_text(c, "schema_of_xml", "xml")
+}
+
 pub(super) fn specs() -> Vec<Spec> {
-    let mut out = scalar(
+    let mut out = vec![Spec {
+        name: "schema_of_xml",
+        kind: FunctionKind::Scalar,
+        inputs: Inputs::Any,
+        result: schema_of_xml,
+        execution: Execution::Evaluator,
+    }];
+    out.extend(scalar(
         &["from_xml"],
         &Inputs::Built(crate::signature::InputBuilder(from_xml_inputs)),
         from_xml,
-    );
+    ));
     out.extend(scalar(&["to_xml"], &Inputs::Any, to_xml));
     out
 }

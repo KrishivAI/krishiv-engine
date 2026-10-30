@@ -97,6 +97,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "PySpark's `options` map parameter has no wrapper support yet; SQL only",
     ),
     (
+        "schema_of_xml",
+        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
+    ),
+    (
         "from_xml",
         "PySpark's `options` map parameter has no wrapper support yet; SQL only",
     ),

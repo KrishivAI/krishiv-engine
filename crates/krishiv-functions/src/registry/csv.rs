@@ -37,6 +37,16 @@ use crate::signature::{ArgType, CallTypes, Constant, FunctionKind, InputType, In
 /// options map, then whether the CSV folds, whether it is null, whether it
 /// is a string). The DDL itself is resolved by the analyzer.
 fn schema_of_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    schema_of_text(c, "schema_of_csv", "csv")
+}
+
+/// The checks of `schema_of_csv` and `schema_of_xml` (the same in Spark):
+/// `func` and the text argument's `name` are what the errors quote.
+pub(super) fn schema_of_text(
+    c: &CallTypes<'_>,
+    func: &str,
+    name: &str,
+) -> Result<ArgType, KrishivError> {
     if c.args().len() > 1 {
         match check_options_map(c, 1) {
             Some(Ok(())) => {}
@@ -45,7 +55,7 @@ fn schema_of_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         }
     }
     let sql = |i: usize| c.sql(i).unwrap_or_default();
-    let call = format!("\"schema_of_csv({})\"", sql(0));
+    let call = format!("\"{func}({})\"", sql(0));
     let input_type = || {
         format!(
             "\"{}\"",
@@ -60,7 +70,7 @@ fn schema_of_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if folded.is_none() && !c.is_plain_literal(0) {
         return Err(DatatypeMismatchNonFoldableInput {
             sql_expr: call,
-            input_name: "`csv`".to_owned(),
+            input_name: format!("`{name}`"),
             input_type: input_type(),
             input_expr: format!("\"{}\"", sql(0)),
         }
@@ -70,7 +80,7 @@ fn schema_of_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         Some(Constant::Error(e)) => Err(e.clone()),
         Some(Constant::Null) => Err(DatatypeMismatchUnexpectedNull {
             sql_expr: call,
-            expr_name: "csv".to_owned(),
+            expr_name: name.to_owned(),
         }
         .into()),
         _ => {
