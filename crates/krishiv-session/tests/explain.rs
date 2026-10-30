@@ -128,7 +128,7 @@ fn cost_prints_statistics_after_every_node_in_sparks_layout() {
     // parent, so each node's count is at most its input's (nodes after the
     // first are inputs, in order down a chain).
     for pair in nodes.windows(2) {
-        assert!(row_count(&pair[0]) <= row_count(&pair[1]), "{cost}");
+        assert!(row_count(pair[0]) <= row_count(pair[1]), "{cost}");
     }
     // The plain optimized plan prints none.
     let extended = explain_sql(&s, &format!("EXPLAIN EXTENDED {q}"));
