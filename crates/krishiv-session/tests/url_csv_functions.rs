@@ -4,8 +4,8 @@
 //! error classes, as do the `schema_of_csv` statements of
 //! `csv-functions.sql` that use no other unimplemented function. The
 //! `from_csv`/`to_csv` statements live in `csv_from_to.rs`; the
-//! `schema_of_csv` options statement (`map`, which is unimplemented) is
-//! skipped.
+//! `schema_of_csv` options statement is covered by
+//! `schema_of_csv_reads_map_options` (values from the Spark 4.2.0 oracle).
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -449,5 +449,48 @@ fn schema_of_csv_of_a_variable_keeps_its_shown_form() {
     assert_eq!(
         run(&s, "select schema_of_csv(v)"),
         ["STRUCT<_c0: INT, _c1: STRING>"]
+    );
+}
+
+/// `schema_of_csv(csv, map(...))` reads the options literal, and the output
+/// name drops it; a non-`map` or a map of other types is refused with
+/// Spark's classes (all checked against Spark 4.2.0).
+#[test]
+fn schema_of_csv_reads_map_options() {
+    let s = session();
+    assert_eq!(
+        run(&s, "select schema_of_csv('1|abc', map('delimiter', '|'))"),
+        ["STRUCT<_c0: INT, _c1: STRING>"]
+    );
+    assert_eq!(
+        names(&s, "select schema_of_csv('1|abc', map('delimiter', '|'))"),
+        ["schema_of_csv(1|abc)"]
+    );
+    // The option changes the answer: with the default separator the record is one string field.
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_csv('1;abc', map('sep', ';', 'inferSchema', 'false'))"
+        ),
+        ["STRUCT<_c0: INT, _c1: STRING>"]
+    );
+    assert_eq!(
+        run(&s, "select schema_of_csv('1;abc')"),
+        ["STRUCT<_c0: STRING>"]
+    );
+    assert_eq!(
+        class_of(&s, "select schema_of_csv('1', 1)"),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    assert_eq!(
+        class_of(&s, "select schema_of_csv('1', map(1, 2))"),
+        ErrorClass::InvalidOptionsNonStringType
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|'))"
+        ),
+        ["1|2"]
     );
 }
