@@ -361,16 +361,16 @@ fn dropping_a_table_after_the_warehouse_moved_removes_its_files() {
 }
 
 #[test]
-fn not_null_columns_refuse_nulls() {
+fn not_null_is_dropped_for_file_tables_as_in_spark() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE TABLE t (a INT NOT NULL, b INT)");
-    run(&s, "INSERT INTO t VALUES (1, NULL)");
-    let e = err(&s, "INSERT INTO t VALUES (NULL, 2)");
-    assert!(e.to_string().contains("NOT_NULL_ASSERT_VIOLATION"), "{e}");
-    let e = err(&s, "INSERT INTO t (b) VALUES (3)");
-    assert!(e.to_string().contains("NOT_NULL_ASSERT_VIOLATION"), "{e}");
-    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM t"), ["1"]);
+    run(&s, "INSERT INTO t VALUES (NULL, 2)");
+    run(&s, "INSERT INTO t (b) VALUES (3)");
+    assert_eq!(
+        col0(&s, "SELECT CAST(count(*) AS STRING) FROM t WHERE a IS NULL"),
+        ["2"]
+    );
 }
 
 #[test]

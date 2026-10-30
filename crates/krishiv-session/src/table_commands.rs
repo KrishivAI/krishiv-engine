@@ -344,7 +344,9 @@ impl Session {
             columns.push(StoreColumn {
                 name: ident.value.clone(),
                 data_type: def.data_type.to_data_type()?,
-                nullable: !def.not_null,
+                // File-source tables are nullable whatever the DDL says (Spark 4.2 verified: NOT NULL is dropped
+                // and NULLs are stored), so nothing is enforced on insert.
+                nullable: true,
                 default: def.default.as_ref().map(|e| {
                     original
                         .get(e.span.start..e.span.end)
@@ -771,31 +773,7 @@ impl Session {
             };
             select.push(value.alias(&column.name));
         }
-        let mut df = base.select(select);
-        if table.columns.iter().any(|c| !c.nullable) {
-            // A NULL for a NOT NULL column fails the write before any file is committed.
-            let quote = |n: &str| format!("`{}`", n.replace('`', "``"));
-            let checked = table
-                .columns
-                .iter()
-                .map(|column| {
-                    let q = quote(&column.name);
-                    if column.nullable {
-                        Ok(col(&column.name))
-                    } else {
-                        let message = format!(
-                            "NOT_NULL_ASSERT_VIOLATION: NULL value appeared in non-nullable field {q}"
-                        )
-                        .replace('\'', "''");
-                        expr(&format!(
-                            "CASE WHEN {q} IS NULL THEN raise_error('{message}') ELSE {q} END"
-                        ))
-                        .map(|e| e.alias(&column.name))
-                    }
-                })
-                .collect::<Result<Vec<_>, KrishivError>>()?;
-            df = df.select(checked);
-        }
+        let df = base.select(select);
         let mode = if c.overwrite { "overwrite" } else { "append" };
         let written = self.write_table_rows(&table, &df, mode).await;
         // Data may have changed even when the write failed late.
