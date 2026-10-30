@@ -369,9 +369,28 @@ fn profile_reports_the_phases_and_matches_run() {
         "\"spill_files\":0",
         "\"spill_bytes\":0",
         "\"blocked_memory_seconds\":",
+        "\"drivers\":",
+        "\"batches_in\":",
+        "\"batches_out\":",
+        "\"morsels\":",
+        "\"max_driver_compute_seconds\":",
+        "\"blocked_sink_seconds\":",
         "\"extra\":{",
+        "\"pipelines\":[{\"id\":",
+        "\"started_seconds\":",
+        "\"detailed\":false",
+        "\"scan_rows_decoded\":",
+        "\"hash_resizes\":",
     ] {
         assert!(json.contains(key), "{key} in {json}");
+    }
+    assert!(!json.contains("\"probe_lookups\""), "{json}");
+    if cfg!(feature = "heap-stats") {
+        // A number (the test binary does not install the counting allocator,
+        // so it may be 0 here).
+        assert!(field("allocations").is_some(), "{json}");
+    } else {
+        assert!(json.contains("\"allocations\":null"), "{json}");
     }
     assert!(reply_for(&r, "RUN", &sql).starts_with("OK 3 "));
     assert!(
@@ -379,6 +398,35 @@ fn profile_reports_the_phases_and_matches_run() {
             .unwrap()
             .starts_with("ERR bad command")
     );
+}
+
+/// `PROFILE_DETAILED` adds the probe-length counters of a detailed profile and
+/// returns the same rows as `PROFILE`.
+#[test]
+fn profile_detailed_counts_probe_lengths() {
+    let dir = data_dir();
+    let sql = dir.path().join("q.sql");
+    std::fs::write(
+        &sql,
+        "SELECT a.l_returnflag, count(*) FROM lineitem a \
+         JOIN (SELECT DISTINCT l_returnflag FROM lineitem) b ON a.l_returnflag = b.l_returnflag GROUP BY 1",
+    )
+    .unwrap();
+    let r = runner(&dir);
+    let plain = reply_for(&r, "PROFILE", &sql);
+    let detailed = reply_for(&r, "PROFILE_DETAILED", &sql);
+    let rows = |reply: &str| reply.split(' ').nth(1).map(str::to_owned);
+    assert!(detailed.starts_with("OK "), "{detailed}");
+    assert_eq!(rows(&plain), rows(&detailed));
+    assert!(detailed.contains("\"detailed\":true"), "{detailed}");
+    for key in [
+        "\"probe_lookups\":",
+        "\"probe_key_compares\":",
+        "\"max_probe_length\":",
+    ] {
+        assert!(detailed.contains(key), "{key} in {detailed}");
+        assert!(!plain.contains(key), "{key} in {plain}");
+    }
 }
 
 #[test]

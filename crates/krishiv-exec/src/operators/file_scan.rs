@@ -248,16 +248,48 @@ pub struct FileScanMetrics {
     /// was full and nothing could be spilled for them
     /// (`krishiv_io::ScanGate`).
     pub decode_overcommit_bytes: u64,
+    /// Units decoded with the row filter (predicate columns first).
+    pub units_filtered: u64,
+    /// Units decoded without it.
+    pub units_unfiltered: u64,
+    /// Rows the row filter evaluated while decoding.
+    pub row_filter_rows: u64,
+    /// Rows it kept.
+    pub row_filter_kept: u64,
 }
 
 impl FileScanMetrics {
-    /// The `EXPLAIN ANALYZE` counters: the decode over-commit, when there
-    /// was any.
+    /// The `EXPLAIN ANALYZE` counters, once a split was read: units
+    /// (row groups) decoded and skipped, rows and bytes decoded, and how
+    /// the row filter ran (`row_filter_*` only where it did); the decode
+    /// over-commit when there was any. Page-index pruning is not counted:
+    /// the Parquet reader does not read page indexes.
     fn extra(&self) -> crate::metrics::ExtraMetrics {
-        if self.decode_overcommit_bytes == 0 {
-            return Vec::new();
+        let mut out = Vec::new();
+        if self.splits > 0 {
+            out = crate::metrics::counts([
+                ("scan_splits", self.splits),
+                ("scan_units", self.units),
+                ("scan_units_pruned", self.units_pruned),
+                ("scan_rows_decoded", self.rows),
+                ("scan_bytes", self.bytes),
+            ]);
         }
-        crate::metrics::counts([("decode_overcommit_bytes", self.decode_overcommit_bytes)])
+        if self.units_filtered > 0 || self.row_filter_rows > 0 {
+            out.extend(crate::metrics::counts([
+                ("row_filter_units", self.units_filtered),
+                ("row_filter_units_skipped", self.units_unfiltered),
+                ("row_filter_rows", self.row_filter_rows),
+                ("row_filter_kept", self.row_filter_kept),
+            ]));
+        }
+        if self.decode_overcommit_bytes > 0 {
+            out.extend(crate::metrics::counts([(
+                "decode_overcommit_bytes",
+                self.decode_overcommit_bytes,
+            )]));
+        }
+        out
     }
 
     fn add(&mut self, m: &ScanUnitMetrics, overcommitted: u64) {
@@ -268,6 +300,10 @@ impl FileScanMetrics {
         self.pages_pruned += m.pages_pruned;
         self.rows += m.rows;
         self.bytes += m.bytes_pushed;
+        self.units_filtered += m.units_filtered;
+        self.units_unfiltered += m.units_unfiltered;
+        self.row_filter_rows += m.row_filter_rows;
+        self.row_filter_kept += m.row_filter_kept;
     }
 }
 
@@ -854,19 +890,60 @@ impl Source for FileScanSource {
 mod tests {
     use super::*;
 
+    fn value(extra: &crate::metrics::ExtraMetrics, name: &str) -> Option<u64> {
+        extra
+            .iter()
+            .find(|(n, _)| n == name)
+            .and_then(|(_, v)| v.value())
+    }
+
     /// The decode over-commit shows in `EXPLAIN ANALYZE` only when there was
     /// any, summed over the scan's splits.
     #[test]
     fn decode_over_commit_is_reported_when_there_was_any() {
         let mut m = FileScanMetrics::default();
-        m.add(&ScanUnitMetrics::default(), 0);
         assert!(m.extra().is_empty());
+        m.add(&ScanUnitMetrics::default(), 0);
+        assert_eq!(value(&m.extra(), "decode_overcommit_bytes"), None);
         m.add(&ScanUnitMetrics::default(), 3);
         m.add(&ScanUnitMetrics::default(), 4);
+        assert_eq!(value(&m.extra(), "decode_overcommit_bytes"), Some(7));
+    }
+
+    /// The scan counters are summed over splits; the row filter's appear
+    /// only where it ran.
+    #[test]
+    fn scan_counters_sum_over_splits() {
+        let mut m = FileScanMetrics::default();
+        let mut unit = ScanUnitMetrics::default();
+        unit.units = 4;
+        unit.units_pruned = 1;
+        unit.rows = 100;
+        unit.bytes_pushed = 1000;
+        m.add(&unit, 0);
         let extra = m.extra();
-        assert_eq!(extra.len(), 1);
-        assert_eq!(extra[0].0, "decode_overcommit_bytes");
-        assert_eq!(extra[0].1.value(), Some(7));
+        assert_eq!(value(&extra, "scan_splits"), Some(1));
+        assert_eq!(value(&extra, "row_filter_rows"), None);
+        let mut filtered = unit;
+        filtered.units_filtered = 2;
+        filtered.units_unfiltered = 1;
+        filtered.row_filter_rows = 50;
+        filtered.row_filter_kept = 5;
+        m.add(&filtered, 0);
+        let extra = m.extra();
+        for (name, want) in [
+            ("scan_splits", 2),
+            ("scan_units", 8),
+            ("scan_units_pruned", 2),
+            ("scan_rows_decoded", 200),
+            ("scan_bytes", 2000),
+            ("row_filter_units", 2),
+            ("row_filter_units_skipped", 1),
+            ("row_filter_rows", 50),
+            ("row_filter_kept", 5),
+        ] {
+            assert_eq!(value(&extra, name), Some(want), "{name}");
+        }
     }
 
     #[test]
