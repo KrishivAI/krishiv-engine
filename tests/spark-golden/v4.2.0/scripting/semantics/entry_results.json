@@ -1,0 +1,404 @@
+{
+ "cases": [
+  {
+   "name": "empty_script",
+   "statements": [
+    {
+     "query": "BEGIN END;",
+     "rows": [],
+     "schema": "struct<>"
+    }
+   ]
+  },
+  {
+   "name": "begin_not_atomic",
+   "statements": [
+    {
+     "query": "BEGIN NOT ATOMIC SELECT 1 AS a; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<a:int>"
+    }
+   ]
+  },
+  {
+   "name": "top_level_label",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'lbl'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "lbl: BEGIN SELECT 1; END lbl;"
+    }
+   ]
+  },
+  {
+   "name": "explain_script",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'BEGIN'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "EXPLAIN BEGIN SELECT 1; END;"
+    }
+   ]
+  },
+  {
+   "name": "execute_immediate_script",
+   "statements": [
+    {
+     "error": {
+      "class": "SQL_SCRIPT_IN_EXECUTE_IMMEDIATE",
+      "params": {
+       "sqlString": "BEGIN SELECT 1; END"
+      },
+      "sqlstate": "07501"
+     },
+     "query": "EXECUTE IMMEDIATE 'BEGIN SELECT 1; END';"
+    }
+   ]
+  },
+  {
+   "name": "scripting_disabled",
+   "statements": [
+    {
+     "query": "SET spark.sql.scripting.enabled = false;",
+     "rows": [
+      [
+       "spark.sql.scripting.enabled",
+       "false"
+      ]
+     ],
+     "schema": "struct<key:string,value:string>"
+    },
+    {
+     "error": {
+      "class": "UNSUPPORTED_FEATURE.SQL_SCRIPTING",
+      "exception": "SqlScriptingException",
+      "params": {
+       "sqlScriptingEnabled": "\"spark.sql.scripting.enabled\""
+      },
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN SELECT 1; END;"
+    }
+   ]
+  },
+  {
+   "name": "last_result_wins",
+   "statements": [
+    {
+     "query": "BEGIN SELECT 1 AS a; SELECT 2 AS b; END;",
+     "rows": [
+      [
+       2
+      ]
+     ],
+     "schema": "struct<b:int>"
+    }
+   ]
+  },
+  {
+   "name": "set_is_not_result",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 1; SELECT 1 AS a; SET x = 2; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<a:int>"
+    }
+   ]
+  },
+  {
+   "name": "insert_is_not_result",
+   "statements": [
+    {
+     "query": "BEGIN SELECT 1 AS a; INSERT INTO s VALUES (5); END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<a:int>"
+    },
+    {
+     "query": "SELECT * FROM s;",
+     "rows": [
+      [
+       5
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "show_is_not_result",
+   "statements": [
+    {
+     "query": "BEGIN SELECT 1 AS a; SHOW TABLES; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<a:int>"
+    }
+   ]
+  },
+  {
+   "name": "describe_is_not_result",
+   "statements": [
+    {
+     "query": "BEGIN SELECT 1 AS a; DESCRIBE TABLE s; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<a:int>"
+    }
+   ]
+  },
+  {
+   "name": "explain_alone",
+   "statements": [
+    {
+     "query": "BEGIN EXPLAIN SELECT 1; END;",
+     "rows": [],
+     "schema": "struct<>"
+    }
+   ]
+  },
+  {
+   "name": "no_result_statement",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 1; SET x = 2; END;",
+     "rows": [],
+     "schema": "struct<>"
+    }
+   ]
+  },
+  {
+   "name": "loop_select_last_row",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE i INT DEFAULT 0; WHILE i < 3 DO SET i = i + 1; SELECT i AS v; END WHILE; END;",
+     "rows": [
+      [
+       3
+      ]
+     ],
+     "schema": "struct<v:int>"
+    }
+   ]
+  },
+  {
+   "name": "values_is_result",
+   "statements": [
+    {
+     "query": "BEGIN VALUES (1, 'a'), (2, 'b'); END;",
+     "rows": [
+      [
+       1,
+       "a"
+      ],
+      [
+       2,
+       "b"
+      ]
+     ],
+     "schema": "struct<col1:int,col2:string>"
+    }
+   ]
+  },
+  {
+   "name": "eager_insert_visible",
+   "statements": [
+    {
+     "query": "BEGIN INSERT INTO s VALUES (7); END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT * FROM s;",
+     "rows": [
+      [
+       7
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "error_after_result",
+   "statements": [
+    {
+     "error": {
+      "class": "DIVIDE_BY_ZERO",
+      "params": {
+       "config": "\"spark.sql.ansi.enabled\""
+      },
+      "sqlstate": "22012"
+     },
+     "query": "BEGIN SELECT 1 AS a; SELECT 1/0; END;"
+    }
+   ]
+  },
+  {
+   "name": "error_after_insert_keeps_insert",
+   "statements": [
+    {
+     "error": {
+      "class": "DIVIDE_BY_ZERO",
+      "params": {
+       "config": "\"spark.sql.ansi.enabled\""
+      },
+      "sqlstate": "22012"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (9); SELECT 1/0; END;"
+    },
+    {
+     "query": "SELECT * FROM s;",
+     "rows": [
+      [
+       9
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "ansi_off_divide",
+   "statements": [
+    {
+     "query": "SET spark.sql.ansi.enabled = false;",
+     "rows": [
+      [
+       "spark.sql.ansi.enabled",
+       "false"
+      ]
+     ],
+     "schema": "struct<key:string,value:string>"
+    },
+    {
+     "query": "BEGIN SELECT 1/0 AS q; END;",
+     "rows": [
+      [
+       null
+      ]
+     ],
+     "schema": "struct<q:double>"
+    }
+   ]
+  },
+  {
+   "name": "ansi_on_divide_handler",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS c; SELECT 1/0; END;",
+     "rows": [
+      [
+       "caught"
+      ]
+     ],
+     "schema": "struct<c:string>"
+    }
+   ]
+  },
+  {
+   "name": "ansi_off_divide_handler_not_run",
+   "statements": [
+    {
+     "query": "SET spark.sql.ansi.enabled = false;",
+     "rows": [
+      [
+       "spark.sql.ansi.enabled",
+       "false"
+      ]
+     ],
+     "schema": "struct<key:string,value:string>"
+    },
+    {
+     "query": "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 'caught' AS c; SELECT 1/0 AS q; END;",
+     "rows": [
+      [
+       null
+      ]
+     ],
+     "schema": "struct<q:double>"
+    }
+   ]
+  },
+  {
+   "name": "unresolved_variable_keeps_earlier_insert",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_VARIABLE",
+      "params": {
+       "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`<db>`]",
+       "variableName": "`nope`"
+      },
+      "sqlstate": "42883"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); SET nope = 1; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "unresolved_column_keeps_earlier_insert",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`nope`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); SELECT nope; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  }
+ ],
+ "file": "entry_results.sql",
+ "spark": "4.2.0"
+}
