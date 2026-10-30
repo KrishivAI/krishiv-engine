@@ -1120,6 +1120,7 @@ impl DataFrame {
             && a.env.variables_version == env.variables_version
             && a.env.cache_generation == env.cache_generation
             && a.env.functions_version == env.functions_version
+            && a.env.policy_version == env.policy_version
         {
             return Ok(a);
         }
