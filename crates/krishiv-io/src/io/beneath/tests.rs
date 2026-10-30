@@ -527,6 +527,10 @@ fn a_directory_name_object_paths_would_encode_is_refused_up_front() {
     BeneathStore::anchor(&f.root.join("a/jos\u{e9}")).unwrap();
 }
 
+// Counts this process's descriptors through procfs, so Linux only; the
+// allowance covers tests running beside it under plain `cargo test`, far
+// below the 300 a listing that kept every directory open would hold.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_listing_holds_one_descriptor_however_wide_the_tree_is() {
     let f = fixture();
@@ -540,9 +544,10 @@ async fn a_listing_holds_one_descriptor_however_wide_the_tree_is() {
     let before = open_fds();
     let all: Vec<_> = s.list(Some(&obj(&f, "t"))).try_collect().await.unwrap();
     assert_eq!(all.len(), 300);
-    assert!(open_fds() <= before + 2, "no descriptor is left open");
+    assert!(open_fds() <= before + 24, "no descriptor is left open");
 }
 
+#[cfg(target_os = "linux")]
 fn open_fds() -> usize {
     std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count)
 }

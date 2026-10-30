@@ -223,7 +223,7 @@ impl BeneathStore {
                     depth += 1;
                 }
                 Err(Errno::NOENT) => break,
-                Err(Errno::LOOP | Errno::NOTDIR) => {
+                Err(Errno::LOOP | Errno::NOTDIR | Errno::MLINK) => {
                     return Err(AnchorError::Swapped(format!("/{}", names.join("/"))));
                 }
                 Err(e) => return Err(AnchorError::Io(e.into())),
@@ -334,7 +334,8 @@ fn errno(location: &Path, e: Errno) -> object_store::Error {
             path: location.to_string(),
             source: Box::new(std::io::Error::from(e)),
         },
-        Errno::LOOP | Errno::XDEV | Errno::NOTDIR => violation(
+        // FreeBSD reports `O_NOFOLLOW` on a link as `EMLINK`.
+        Errno::LOOP | Errno::XDEV | Errno::NOTDIR | Errno::MLINK => violation(
             location,
             "a symbolic link, mount point or file is on the path",
         ),

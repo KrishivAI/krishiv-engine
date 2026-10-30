@@ -854,10 +854,11 @@ fn a_file_on_the_path_is_a_storage_failure() {
     let s = session(Arc::new(AllowAll));
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
     let out = root.join("f/sub/out");
-    assert_ne!(
+    assert_eq!(
         class(block_on(df.write().parquet(out.to_str().unwrap()))),
-        "INTERNAL_ERROR"
+        "KRISHIV_OBJECT_STORE_REQUEST_FAILED"
     );
+    assert_eq!(std::fs::read(root.join("f")).unwrap(), b"x");
 }
 
 #[cfg(unix)]
