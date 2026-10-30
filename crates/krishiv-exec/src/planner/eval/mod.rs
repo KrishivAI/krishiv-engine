@@ -204,6 +204,21 @@ pub(crate) struct EvalEnv {
 }
 
 impl EvalEnv {
+    /// The session zone's rules: the fixed offset, else the region the
+    /// plan's `zone_name` names in the bundled database. UTC when the name
+    /// does not resolve (the plan codec refuses such a plan; the session
+    /// validates the config).
+    pub(crate) fn zone_rules(&self) -> krishiv_kernels::datetime::ZoneRef {
+        use krishiv_kernels::datetime::{ZoneRef, resolve_zone};
+        match (self.zone, &self.zone_name) {
+            (Some(off), _) => ZoneRef::Fixed(krishiv_kernels::cast::FixedOffset(off)),
+            (None, Some(name)) => {
+                resolve_zone(name).unwrap_or(ZoneRef::Fixed(krishiv_kernels::cast::FixedOffset(0)))
+            }
+            (None, None) => ZoneRef::Fixed(krishiv_kernels::cast::FixedOffset(0)),
+        }
+    }
+
     pub(crate) fn new(config: &Config, user: Arc<str>) -> Self {
         let ansi = config
             .get(&ANSI_ENABLED)

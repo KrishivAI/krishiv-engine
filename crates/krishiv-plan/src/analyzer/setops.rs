@@ -21,6 +21,8 @@
 //! - A hint passes rows through; [`super::hints`] resolves it once the
 //!   whole plan is resolved (a hint names relations of its subtree).
 
+use super::SessionZone;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -908,7 +910,7 @@ fn arg(t: Option<&DataType>) -> Arg<'_> {
 
 /// `INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE` for
 /// `e`, shown as Spark shows it, at its origin.
-fn cannot_evaluate(e: &Expr, zone: Option<i32>) -> AnalysisError {
+fn cannot_evaluate(e: &Expr, zone: Option<SessionZone>) -> AnalysisError {
     AnalysisError::new(
         InvalidInlineTableCannotEvaluateExpressionInInlineTable {
             expr: format!("\"{}\"", pretty(e, zone)),

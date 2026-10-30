@@ -95,6 +95,7 @@ mod unpivot;
 mod variables;
 mod windows;
 
+use krishiv_kernels::datetime::{TimeZoneRules, ZoneRef, resolve_zone};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
@@ -120,6 +121,101 @@ pub use variables::{SessionVariable, VariableSnapshot, variable_name};
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
 pub use krishiv_functions::signature::SparkProfile;
+
+/// The session time zone, resolved once per analysis: a fixed offset, or a
+/// region of the bundled time-zone database. `Copy` so the conf stays
+/// `Copy`; regions are interned (the database is finite, so the interner is
+/// bounded).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionZone {
+    /// A fixed offset in seconds east of UTC.
+    Fixed(i32),
+    /// A region id, interned.
+    Region(&'static RegionZone),
+}
+
+/// An interned region zone; equal when the ids are.
+#[derive(Debug)]
+pub struct RegionZone {
+    id: String,
+    zone: ZoneRef,
+}
+
+impl PartialEq for RegionZone {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for RegionZone {}
+
+impl std::hash::Hash for RegionZone {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl SessionZone {
+    /// The zone `text` names; `None` when it is not a zone id.
+    #[must_use]
+    pub fn resolve(text: &str) -> Option<Self> {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static REGIONS: OnceLock<Mutex<HashMap<String, &'static RegionZone>>> = OnceLock::new();
+        match resolve_zone(text).ok()? {
+            ZoneRef::Fixed(fixed) => Some(Self::Fixed(fixed.0)),
+            zone @ ZoneRef::Named(_) => {
+                let mut regions = REGIONS
+                    .get_or_init(Mutex::default)
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let interned = regions.entry(text.to_owned()).or_insert_with(|| {
+                    Box::leak(Box::new(RegionZone {
+                        id: text.to_owned(),
+                        zone,
+                    }))
+                });
+                Some(Self::Region(interned))
+            }
+        }
+    }
+}
+
+impl SessionZone {
+    /// The offset in seconds when the zone is a fixed one (the constant
+    /// folder has no tz database, so it reads no region zone).
+    #[must_use]
+    pub fn fixed(self) -> Option<i32> {
+        match self {
+            Self::Fixed(off) => Some(off),
+            Self::Region(_) => None,
+        }
+    }
+
+    /// `us` (microseconds since the epoch) shifted to wall-clock time in
+    /// `zone`; UTC when there is none.
+    #[must_use]
+    pub fn local_micros(zone: Option<Self>, us: i64) -> i64 {
+        let off = zone.map_or(0, |z| z.offset_at_utc(us.div_euclid(1_000_000)));
+        us.saturating_add(i64::from(off).saturating_mul(1_000_000))
+    }
+}
+
+impl TimeZoneRules for SessionZone {
+    fn offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        match self {
+            Self::Fixed(off) => *off,
+            Self::Region(r) => r.zone.offset_at_utc(utc_seconds),
+        }
+    }
+
+    fn offset_for_local(&self, local_seconds: i64) -> i32 {
+        match self {
+            Self::Fixed(off) => *off,
+            Self::Region(r) => r.zone.offset_for_local(local_seconds),
+        }
+    }
+}
 
 /// How nested `WITH` definitions with the same name resolve
 /// (`spark.sql.legacy.ctePrecedencePolicy`).
@@ -191,12 +287,11 @@ pub struct ResolutionConf {
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: plain `TIMESTAMP '...'`
     /// without a zone is a `TIMESTAMP_NTZ`.
     pub timestamp_ntz: bool,
-    /// `spark.sql.session.timeZone` as a fixed offset in seconds east of
-    /// UTC (`UTC` is `Some(0)`); `None` for a region id or a malformed
-    /// zone, which need the time-zone database. Unset is `Some(0)`, the
-    /// default the cast path uses, so the default session resolves
-    /// timestamp literals.
-    pub session_zone: Option<i32>,
+    /// `spark.sql.session.timeZone` resolved against the bundled time-zone
+    /// database (a fixed offset or a region id); `None` for a malformed or
+    /// unknown zone. Unset is `UTC`, the default the cast path uses, so the
+    /// default session resolves timestamp literals.
+    pub session_zone: Option<SessionZone>,
     /// `spark.sql.legacy.ctePrecedencePolicy`.
     pub cte_precedence: CtePrecedencePolicy,
     /// `spark.sql.legacy.allowParameterlessCount`: `count()` counts no
@@ -230,7 +325,7 @@ impl Default for ResolutionConf {
             map_key_dedup_last_win: false,
             run_sql_on_files: true,
             timestamp_ntz: false,
-            session_zone: Some(0),
+            session_zone: Some(SessionZone::Fixed(0)),
             cte_precedence: CtePrecedencePolicy::default(),
             allow_parameterless_count: false,
             allow_star_with_single_table_identifier_in_count: false,
@@ -294,8 +389,8 @@ impl ResolutionConf {
             timestamp_ntz: conf(Self::KEYS[9])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
             session_zone: match conf(Self::KEYS[10]) {
-                None => Some(0),
-                Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
+                None => Some(SessionZone::Fixed(0)),
+                Some(s) => SessionZone::resolve(s),
             },
             cte_precedence: conf(Self::KEYS[11])
                 .and_then(CtePrecedencePolicy::from_value)
@@ -415,14 +510,18 @@ impl ContextFingerprint {
                 CtePrecedencePolicy::Exception => 2,
             },
         );
-        // The session zone: `None` (a region id) is one input.
-        num(
-            &mut b,
-            match c.session_zone {
-                Some(v) => u64::from(u32::from_ne_bytes(v.to_ne_bytes())),
-                None => 0x8000_0000,
-            },
-        );
+        // The session zone: its id (or offset) is one input.
+        match c.session_zone {
+            Some(SessionZone::Fixed(v)) => {
+                num(&mut b, 1);
+                num(&mut b, u64::from(u32::from_ne_bytes(v.to_ne_bytes())));
+            }
+            Some(SessionZone::Region(r)) => {
+                num(&mut b, 2);
+                text(&mut b, &r.id);
+            }
+            None => num(&mut b, 0),
+        }
         num(&mut b, self.current.len() as u64);
         self.current.iter().for_each(|p| text(&mut b, p));
         num(&mut b, self.catalogs);

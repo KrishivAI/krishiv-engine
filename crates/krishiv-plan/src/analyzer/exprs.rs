@@ -2,6 +2,8 @@
 //! Expression binding: names, stars, functions, casts, subqueries, output
 //! names (Spark's `toPrettySQL`) and semantic keys.
 
+use super::SessionZone;
+use krishiv_kernels::datetime::TimeZoneRules;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -207,7 +209,7 @@ fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> 
 
 /// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
 /// with casts stripped as Spark's `toPrettySQL` strips them.
-fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
+fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZone>) -> Bound {
     let mut shown = cond.shown();
     while let ExprNode::Cast { expr, .. } = &shown.node {
         shown = Arc::clone(expr);
@@ -378,7 +380,7 @@ fn bad_cast(
     arg: &Bound,
     to: &DataType,
     mode: CastMode,
-    zone: Option<i32>,
+    zone: Option<SessionZone>,
 ) -> AnalysisError {
     let shown = ExprNode::Cast {
         expr: arg.shown(),
@@ -593,7 +595,7 @@ fn typed_literal(
     }
     // One string cast through the kernels, as a microsecond instant or
     // NTZ wall-clock value.
-    let cast_one = |value: &str, to: &arrow_schema::DataType, zone: &FixedOffset| {
+    let cast_one = |value: &str, to: &arrow_schema::DataType, zone: &dyn TimeZoneRules| {
         use arrow_array::StringArray;
         use arrow_array::cast::AsArray as _;
         use arrow_array::types::TimestampMicrosecondType;
@@ -651,13 +653,12 @@ fn typed_literal(
                 Ok(Literal::Timestamp(micros))
             } else {
                 match conf.session_zone {
-                    Some(off) => {
-                        let micros =
-                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                    Some(zone) => {
+                        let micros = cast_one(value, &ltz_arrow(), &zone).map_err(map_error)?;
                         Ok(Literal::Timestamp(micros))
                     }
                     None => Err(unsupported(
-                        "a timestamp literal in a session time zone other than a fixed offset",
+                        "a timestamp literal in an unresolvable session time zone",
                     )),
                 }
             }
@@ -679,13 +680,12 @@ fn typed_literal(
                 Ok(Literal::Timestamp(micros))
             } else {
                 match conf.session_zone {
-                    Some(off) => {
-                        let micros =
-                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                    Some(zone) => {
+                        let micros = cast_one(value, &ltz_arrow(), &zone).map_err(map_error)?;
                         Ok(Literal::Timestamp(micros))
                     }
                     None => Err(unsupported(
-                        "a timestamp literal in a session time zone other than a fixed offset",
+                        "a timestamp literal in an unresolvable session time zone",
                     )),
                 }
             }
@@ -2302,7 +2302,7 @@ impl Resolver<'_> {
             self.ctx.conf.decimal_precision_loss,
             self.ctx.conf.map_key_dedup_last_win,
             self.ctx.profile,
-            self.ctx.conf.session_zone,
+            self.ctx.conf.session_zone.and_then(SessionZone::fixed),
         );
         fold::constant(
             e,
@@ -4422,7 +4422,7 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
 /// explicit stack, once per distinct node. Timestamp literals render in
 /// `zone`, the session's resolved zone, through the same cast-to-string
 /// kernels `CAST(ts AS STRING)` uses.
-pub(super) fn pretty(e: &Expr, zone: Option<i32>) -> String {
+pub(super) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String {
     let mut done: HashMap<usize, String> = HashMap::new();
     let mut stack = vec![(e, false)];
     while let Some((x, expanded)) = stack.pop() {
@@ -4477,7 +4477,7 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         .join(", ")
 }
 
-fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
+fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
     match &x.node {
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
             c.name.clone()
@@ -4649,7 +4649,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
 /// `DENSE_RANK()` and `PERCENT_RANK()` upper case, as Spark's `RankLike`
 /// writes them), then the window as `WindowSpecDefinition.sql` writes it.
 /// `k` holds the children's names in [`Expr::for_each_child`] order.
-fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<i32>) -> String {
+fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<SessionZone>) -> String {
     use crate::{FrameBound, FrameUnits, WindowSpecRef};
     let function = match &w.function.node {
         ExprNode::Resolved(ResolvedExpr::Function(f))
@@ -4965,7 +4965,7 @@ fn is_upper_math(name: &str) -> bool {
     )
 }
 
-fn pretty_literal(v: &Literal, zone: Option<i32>) -> String {
+fn pretty_literal(v: &Literal, zone: Option<SessionZone>) -> String {
     match v {
         // A URL's credentials never reach a name (ADR 0038).
         Literal::String(s) => krishiv_common::secret::SecretUrl::parse(s)
@@ -4996,10 +4996,9 @@ fn pretty_literal(v: &Literal, zone: Option<i32>) -> String {
         Literal::Date(days) => crate::spark_fmt::date(*days),
         // An instant renders in the session zone (a fixed offset; UTC when
         // unset), as Spark's `toPrettySQL` of a timestamp literal does.
-        Literal::Timestamp(us) => crate::spark_fmt::timestamp(
-            us.saturating_add(i64::from(zone.unwrap_or(0)).saturating_mul(1_000_000)),
-            false,
-        ),
+        Literal::Timestamp(us) => {
+            crate::spark_fmt::timestamp(SessionZone::local_micros(zone, *us), false)
+        }
         Literal::TimestampNtz(us) => crate::spark_fmt::timestamp(*us, true),
         _ => v.to_string(),
     }
