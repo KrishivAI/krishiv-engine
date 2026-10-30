@@ -8,8 +8,9 @@
 //! typed literals, so plans and the executor are unchanged. The script's result is the rows of the
 //! last query statement that ran.
 //!
-//! Not yet here (unit 3): `FOR` loops and `EXIT` handlers; a script that executes either fails
-//! with `KRISHIV_UNSUPPORTED_FEATURE`.
+//! `FOR` loops run their query once and give each row's columns to the body as locals. `EXIT`
+//! handlers catch the errors raised while their compound runs (never `KRISHIV_*` errors or
+//! cancellation), then end that compound.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -27,8 +28,9 @@ use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{LocalFrame, SessionVariable};
 use krishiv_plan::{Expr as PlanExpr, ExprNode, Literal, LogicalPlan, PlanNode};
 use krishiv_sql::ast::{
-    Compound, DataTypeSpec, DeclareVariable, Expr, ObjectName, ScriptStatement,
-    ScriptStatement as S, SetVariable, SetVariableKind, Statement,
+    Compound, DataTypeSpec, DeclareVariable, Expr, ForStatement, Handler, HandlerBody,
+    HandlerCondition, ObjectName, ScriptStatement, ScriptStatement as S, SetVariable,
+    SetVariableKind, Statement,
 };
 use krishiv_types::DataType;
 
@@ -66,6 +68,8 @@ struct Local {
 struct Scope {
     label: Option<String>,
     vars: BTreeMap<String, Local>,
+    /// The `EXIT` handlers declared in the compound, in declaration order.
+    handlers: Vec<Handler>,
 }
 
 /// Where an assignment goes.
@@ -150,16 +154,83 @@ impl Run<'_> {
 
     async fn compound(&mut self, c: &Compound) -> Result<Flow, KrishivError> {
         let label = c.label.as_ref().map(|l| self.fold(&l.value));
+        let depth = self.scopes.len();
+        // Handlers cover the whole compound, its declarations' defaults included.
+        let handlers = c
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                S::Handler(h) => Some((**h).clone()),
+                _ => None,
+            })
+            .collect();
         self.scopes.push(Scope {
             label: label.clone(),
             vars: BTreeMap::new(),
+            handlers,
         });
-        let flow = Box::pin(self.items(&c.body)).await;
-        self.scopes.pop();
+        let mut flow = Box::pin(self.items(&c.body)).await;
+        if let Err(error) = &flow {
+            // The scopes inside this one are gone when its handler runs.
+            self.scopes.truncate(depth + 1);
+            if let Some(handler) = self.find_handler(depth, error) {
+                flow = Box::pin(self.exit_handler(&handler)).await;
+            }
+        }
+        self.scopes.truncate(depth);
         Ok(match flow? {
             Flow::Leave(l) if label.as_deref() == Some(l.as_str()) => Flow::Normal,
             other => other,
         })
+    }
+
+    /// The handler of the compound at `depth` that takes `error`: a specific condition before
+    /// `SQLEXCEPTION`, as in Spark. The errors of Krishiv's own classes, cancellation and the
+    /// interpreter's bookkeeping are never taken: a statement Spark runs but Krishiv cannot must
+    /// not read as an error the script handled.
+    fn find_handler(&self, depth: usize, error: &KrishivError) -> Option<Handler> {
+        let class = error.error_class();
+        let name = class.name();
+        if name.starts_with("KRISHIV_") || name == "OPERATION_CANCELED" || name == "INTERNAL_ERROR"
+        {
+            return None;
+        }
+        let state = error.sql_state().unwrap_or("");
+        let prefix = name.split('.').next().unwrap_or(name);
+        let rank = |condition: &HandlerCondition| -> Option<u8> {
+            match condition {
+                HandlerCondition::Name(n) if n.value.eq_ignore_ascii_case(name) => Some(0),
+                HandlerCondition::Name(n) if n.value.eq_ignore_ascii_case(prefix) => Some(1),
+                HandlerCondition::SqlState(s, _) if s.eq_ignore_ascii_case(state) => Some(2),
+                HandlerCondition::NotFound(_) if state.starts_with("02") => Some(3),
+                HandlerCondition::SqlException(_)
+                    if !state.starts_with("XX") && !state.starts_with("02") =>
+                {
+                    Some(4)
+                }
+                _ => None,
+            }
+        };
+        self.scopes
+            .get(depth)?
+            .handlers
+            .iter()
+            .filter_map(|h| h.conditions.iter().filter_map(rank).min().map(|r| (r, h)))
+            .min_by_key(|(r, _)| *r)
+            .map(|(_, h)| h.clone())
+    }
+
+    /// Runs the body of an `EXIT` handler; a `LEAVE` or `ITERATE` that escapes it ends the body only.
+    async fn exit_handler(&mut self, handler: &Handler) -> Result<Flow, KrishivError> {
+        match &handler.body {
+            HandlerBody::Compound(c) => {
+                Box::pin(self.compound(c)).await?;
+            }
+            HandlerBody::Sql(statement) => self.leaf(statement).await?,
+            HandlerBody::Assign(set) => self.assign(set).await?,
+            _ => return Err(unsupported("this handler body")),
+        }
+        Ok(Flow::Normal)
     }
 
     /// Runs `items` in order until one asks to leave or iterate.
@@ -178,10 +249,10 @@ impl Run<'_> {
     async fn item(&mut self, item: &ScriptStatement) -> Result<Flow, KrishivError> {
         match item {
             S::Declare(d) => self.declare(d).await.map(|()| Flow::Normal),
-            S::Condition(_) => Ok(Flow::Normal),
-            S::Handler(_) => Err(unsupported("EXIT handlers in SQL scripts")),
+            // Conditions match by name and handlers were registered when the compound started.
+            S::Condition(_) | S::Handler(_) => Ok(Flow::Normal),
             S::Cursor(_) => Err(unsupported("SQL cursors")),
-            S::For(_) => Err(unsupported("FOR loops in SQL scripts")),
+            S::For(f) => Box::pin(self.for_loop(f)).await,
             S::Assign(set) => self.assign(set).await.map(|()| Flow::Normal),
             S::Sql(statement) => self.leaf(statement).await.map(|()| Flow::Normal),
             S::Compound(c) => Box::pin(self.compound(c)).await,
@@ -243,6 +314,67 @@ impl Run<'_> {
             }
             _ => Err(unsupported("this script statement")),
         }
+    }
+
+    /// `FOR [var AS] query DO ... END FOR`: the query runs once, then the body once per row with
+    /// the row's columns as locals (`var.col` and `col`, assignable, gone after the loop).
+    async fn for_loop(&mut self, f: &ForStatement) -> Result<Flow, KrishivError> {
+        let label = f.label.as_ref().map(|l| self.fold(&l.value));
+        let variable = f.variable.as_ref().map(|v| self.fold(&v.value));
+        let inner = self
+            .text
+            .get(f.query.span.start..f.query.span.end)
+            .unwrap_or_default();
+        let sql = padded_select("", inner, f.query.span.start, "");
+        let handle = self.handle();
+        let analysis = handle.analyze_variable_query(&sql).await?;
+        let names: Vec<String> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        let mut seen = HashSet::new();
+        for name in &names {
+            if !seen.insert(self.fold(name)) {
+                return Err(VariableAlreadyExists {
+                    variable_name: match &variable {
+                        Some(v) => format!("`{v}`.`{name}`"),
+                        None => format!("`{name}`"),
+                    },
+                }
+                .into());
+            }
+        }
+        let batches = handle.run_analyzed_variable_query(&analysis).await?;
+        for batch in &batches {
+            for row in 0..batch.num_rows() {
+                tokio::task::yield_now().await;
+                let mut vars = BTreeMap::new();
+                for (i, name) in names.iter().enumerate() {
+                    let (data_type, value) = arrow_value(batch.column(i), row)?;
+                    vars.insert(
+                        self.fold(name),
+                        Local {
+                            variable: SessionVariable { data_type, value },
+                            default_sql: None,
+                        },
+                    );
+                }
+                self.scopes.push(Scope {
+                    label: variable.clone(),
+                    vars,
+                    handlers: Vec::new(),
+                });
+                let depth = self.scopes.len();
+                let pass = self.round(&label, &f.body).await;
+                self.scopes.truncate(depth - 1);
+                if let Some(flow) = pass? {
+                    return Ok(flow);
+                }
+            }
+        }
+        Ok(Flow::Normal)
     }
 
     /// One pass over a loop body. `Some(flow)` ends the loop with that flow (`Normal` when the loop
