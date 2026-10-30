@@ -925,6 +925,10 @@ impl Source for FileScanSource {
             .and_then(|l| l.position)
     }
 
+    fn runtime_filters(&self) -> Vec<krishiv_io::FilterId> {
+        self.runtime.filters().iter().map(|f| f.id()).collect()
+    }
+
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         let mut m = self.runtime.extra_metrics();
         m.extend(

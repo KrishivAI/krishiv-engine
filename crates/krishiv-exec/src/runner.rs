@@ -6,7 +6,10 @@
 //! [`WorkerContext`] ([`instantiate`](crate::physical::instantiate)) on
 //! the executor's blocking pool when its future runs,
 //! splits the operator graph into pipelines and spawns a coordinator task,
-//! which starts each pipeline once its dependencies have finalized:
+//! which starts each pipeline once its dependencies have finalized, and
+//! once the pipelines publishing the runtime filters its scan applies have
+//! ([`with_filter_order`]), so a scan does not read rows a filter about to
+//! be published would drop:
 //! `min(worker slots, source parallelism)` drivers per pipeline (one if it
 //! must keep order). The pipelines of a fan-in (`UNION ALL`) end in one
 //! sink: they run one after another, in pipeline order, when none of
@@ -24,6 +27,7 @@ use std::sync::{Arc, Weak};
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, FuturesUnordered};
+use krishiv_io::FilterId;
 use krishiv_memory::SpillOwner;
 use krishiv_types::batch::Batch;
 
@@ -237,6 +241,55 @@ impl Drop for Finish {
     }
 }
 
+/// `deps` with each pipeline that applies a runtime filter (`applies`) also
+/// depending on the pipelines that publish it (`publishes`), unless a
+/// publisher already runs after that pipeline, or with it: a filter never
+/// makes a query wait for itself. Pipelines with one sink (`sinks`) start
+/// together, so depending on one means depending on all.
+fn with_filter_order(
+    mut deps: Vec<Vec<usize>>,
+    sinks: &[OperatorId],
+    applies: &[Vec<FilterId>],
+    publishes: &[Vec<FilterId>],
+) -> Vec<Vec<usize>> {
+    for (consumer, filters) in applies.iter().enumerate() {
+        for filter in filters {
+            for publisher in 0..publishes.len() {
+                if publishes[publisher].contains(filter)
+                    && !deps[consumer].contains(&publisher)
+                    && !runs_with_or_after(publisher, consumer, &deps, sinks)
+                {
+                    deps[consumer].push(publisher);
+                }
+            }
+        }
+    }
+    deps
+}
+
+/// Whether `pipeline` starts with `other`, or only after it has finalized.
+fn runs_with_or_after(
+    pipeline: usize,
+    other: usize,
+    deps: &[Vec<usize>],
+    sinks: &[OperatorId],
+) -> bool {
+    let mut seen = vec![false; deps.len()];
+    let mut stack = vec![pipeline];
+    while let Some(next) = stack.pop() {
+        for member in (0..sinks.len()).filter(|&m| sinks[m] == sinks[next]) {
+            if member == other {
+                return true;
+            }
+            if !seen[member] {
+                seen[member] = true;
+                stack.extend(&deps[member]);
+            }
+        }
+    }
+    false
+}
+
 /// Runs the pipelines in dependency waves. The coordinator owns every
 /// breaker's state: a finalized sink's global state is kept here and handed
 /// to the pipelines that read it, dropped (with the memory it holds) once
@@ -253,7 +306,18 @@ async fn run_pipelines(
     let sinks: Vec<OperatorId> = pipelines.iter().map(|p| p.sink.0).collect();
     let group =
         |i: usize| -> Vec<usize> { (0..sinks.len()).filter(|&j| sinks[j] == sinks[i]).collect() };
-    let deps: Vec<Vec<usize>> = pipelines.iter().map(|p| p.deps.clone()).collect();
+    let deps = with_filter_order(
+        pipelines.iter().map(|p| p.deps.clone()).collect(),
+        &sinks,
+        &pipelines
+            .iter()
+            .map(|p| p.source.1.runtime_filters())
+            .collect::<Vec<_>>(),
+        &pipelines
+            .iter()
+            .map(|p| p.sink.1.published_filters())
+            .collect::<Vec<_>>(),
+    );
     let mut todo: Vec<Option<Pipeline>> = pipelines.into_iter().map(Some).collect();
     let mut done = vec![false; todo.len()];
     let mut finalized: HashMap<OperatorId, GlobalState> = HashMap::new();
@@ -644,5 +708,81 @@ async fn await_drivers(query: &QueryContext, handles: &mut Drivers) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod filter_order_tests {
+    use krishiv_io::FilterId;
+
+    use super::with_filter_order;
+    use crate::OperatorId;
+
+    fn sinks(ids: &[u32]) -> Vec<OperatorId> {
+        ids.iter().map(|&i| OperatorId(i)).collect()
+    }
+
+    /// A consumer starts after the publisher of the filter it applies.
+    #[test]
+    fn a_consumer_waits_for_its_filters_publisher() {
+        let f = FilterId(1);
+        let deps = with_filter_order(
+            vec![vec![], vec![], vec![0, 1]],
+            &sinks(&[0, 1, 2]),
+            &[vec![], vec![f], vec![]],
+            &[vec![f], vec![], vec![]],
+        );
+        assert_eq!(deps, [vec![], vec![0], vec![0, 1]]);
+    }
+
+    /// Without a publisher in the query (another fragment's filter), or
+    /// when it already comes first, nothing changes.
+    #[test]
+    fn nothing_changes_without_a_publisher_or_when_it_comes_first() {
+        let f = FilterId(1);
+        let same = vec![vec![], vec![0]];
+        let order = |applies: &[Vec<FilterId>], publishes: &[Vec<FilterId>]| {
+            with_filter_order(same.clone(), &sinks(&[0, 1]), applies, publishes)
+        };
+        assert_eq!(order(&[vec![], vec![f]], &[vec![], vec![]]), same);
+        assert_eq!(order(&[vec![], vec![f]], &[vec![f], vec![]]), same);
+    }
+
+    /// A publisher that runs after the consumer, directly, transitively or
+    /// through a fan-in member, adds nothing: the query would never start.
+    #[test]
+    fn a_filter_never_makes_a_cycle() {
+        let f = FilterId(1);
+        // 2 depends on 1, which depends on 0: 0 applies 2's filter.
+        let chain = vec![vec![], vec![0], vec![1]];
+        let deps = with_filter_order(
+            chain.clone(),
+            &sinks(&[0, 1, 2]),
+            &[vec![f], vec![], vec![]],
+            &[vec![], vec![], vec![f]],
+        );
+        assert_eq!(deps, chain);
+        // 0 and 1 share a sink and start together; 2 depends on 1, so 0
+        // cannot wait for 2.
+        let fan_in = vec![vec![], vec![], vec![1]];
+        let deps = with_filter_order(
+            fan_in.clone(),
+            &sinks(&[9, 9, 2]),
+            &[vec![f], vec![], vec![]],
+            &[vec![], vec![], vec![f]],
+        );
+        assert_eq!(deps, fan_in);
+        // The same filter's own pipeline.
+        let deps = with_filter_order(vec![vec![]], &sinks(&[0]), &[vec![f]], &[vec![f]]);
+        assert_eq!(deps, [Vec::<usize>::new()]);
+        // Two filters in opposite directions: only the first edge is added.
+        let g = FilterId(2);
+        let deps = with_filter_order(
+            vec![vec![], vec![]],
+            &sinks(&[0, 1]),
+            &[vec![f], vec![g]],
+            &[vec![g], vec![f]],
+        );
+        assert_eq!(deps, [vec![1], vec![]]);
     }
 }

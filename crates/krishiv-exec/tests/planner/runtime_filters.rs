@@ -337,8 +337,8 @@ proptest! {
 /// Filters prune at every stage they reach: an empty build skips the probe
 /// side's splits unopened; a selective build prunes row groups of a
 /// clustered key and drops rows of the others; a scan below an aggregate
-/// runs while the build does (its filter may arrive late) and its join
-/// still returns the right rows.
+/// starts after the build, so its filter applies from the first row, and
+/// its join still returns the right rows.
 #[test]
 fn filters_prune_splits_row_groups_and_rows() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -405,6 +405,12 @@ fn filters_prune_splits_row_groups_and_rows() {
     let q = "SELECT b.v FROM big b JOIN small s ON b.s = s.s";
     let (_, c) = run(&t.plan_sql(q).unwrap());
     assert!(c.rows_dropped > 0, "{c:?}");
+    // Below an aggregate the scan does not depend on the build, but its
+    // pipeline starts after it: nearly every row meets the filter.
+    let q = "SELECT x.k, t.v FROM (SELECT s AS k, count(*) AS c FROM big GROUP BY s) x \
+             JOIN small t ON x.k = t.s";
+    let (_, c) = run(&t.plan_sql(q).unwrap());
+    assert!(c.rows_dropped >= 3_600, "{c:?}");
 }
 
 /// Runtime filters on and off over a TPC-H or TPC-DS data set
