@@ -7,6 +7,15 @@
 //! commutative, so the metrics of the drivers of one worker, and of the
 //! workers of one query, combine in any order (sums add, maxima take the
 //! larger value).
+//!
+//! [`registry`] holds the engine's cross-query view: the v1 metric
+//! catalogue, the per-engine [`registry::MetricsRegistry`] (folded once per
+//! query at query end, scraped gauges otherwise) and the plain-data
+//! [`registry::MetricsSnapshot`] it serves.
+
+pub(crate) mod registry;
+
+pub mod prometheus;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

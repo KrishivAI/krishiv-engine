@@ -12,6 +12,8 @@ pub enum Doc {
     Config,
     /// The error-class registry.
     Errors,
+    /// The engine metrics catalogue.
+    Metrics,
 }
 
 impl Doc {
@@ -20,6 +22,7 @@ impl Doc {
         match cmd {
             "docs-config" => Some(Doc::Config),
             "docs-errors" => Some(Doc::Errors),
+            "docs-metrics" => Some(Doc::Metrics),
             _ => None,
         }
     }
@@ -29,6 +32,7 @@ impl Doc {
         match self {
             Doc::Config => krishiv_common::config::docs_markdown(),
             Doc::Errors => krishiv_common::error::docs_markdown(),
+            Doc::Metrics => krishiv_exec::MetricsRegistry::catalogue_markdown(),
         }
     }
 }
