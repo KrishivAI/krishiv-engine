@@ -1361,6 +1361,27 @@ impl Session {
         Ok(out)
     }
 
+    /// As [`Self::run_analyzed_variable_query`], but stops reading at the first row beyond
+    /// `max_rows` and returns `None`: a caller that holds the rows never holds more.
+    pub(crate) async fn run_analyzed_variable_query_capped(
+        &self,
+        analysis: &Arc<crate::dataframe::Analysis>,
+        max_rows: usize,
+    ) -> Result<Option<Vec<RecordBatch>>, KrishivError> {
+        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
+        let mut stream = self.run(&physical, &analysis.env).await?;
+        let (mut out, mut rows) = (Vec::new(), 0_usize);
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            rows = rows.saturating_add(batch.num_rows());
+            if rows > max_rows {
+                return Ok(None);
+            }
+            out.push(batch);
+        }
+        Ok(Some(out))
+    }
+
     /// The value of `sql` (a synthesized one-row `SELECT`): its single
     /// row and column as a typed literal.
     ///

@@ -47,6 +47,10 @@ use crate::variables::{RESOLVE_SEARCH_PATH, StoredVariable, quote_normalized};
 /// it independent of the script's session; a larger one is refused rather than truncated.
 const MAX_RESULT_ROWS: i32 = 256;
 
+/// The most rows a `FOR` loop holds. Spark reads them lazily; this engine holds the query's rows for
+/// the whole loop, so a larger one is refused rather than risking the process's memory.
+const MAX_FOR_ROWS: usize = 100_000;
+
 /// What a statement tells the statements around it to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Flow {
@@ -150,6 +154,10 @@ impl Run<'_> {
 
     // ---- statements ------------------------------------------------------------------------
 
+    /// Runs a compound. After an `EXIT` handler the script goes on after the compound that declared it,
+    /// as design note T196 section 2.4 says. A divergence, stated: Spark 4.2 ends the whole script
+    /// silently when that compound is the last statement of an `IF` or `WHILE` body (the record's
+    /// `exit_handler_in_loop_body_compound` cases); this engine continues after the compound there too.
     async fn compound(&mut self, c: &Compound) -> Result<Flow, KrishivError> {
         let label = c.label.as_ref().map(|l| self.fold(&l.value));
         let depth = self.scopes.len();
@@ -344,7 +352,12 @@ impl Run<'_> {
                 .into());
             }
         }
-        let batches = handle.run_analyzed_variable_query(&analysis).await?;
+        let Some(batches) = handle
+            .run_analyzed_variable_query_capped(&analysis, MAX_FOR_ROWS)
+            .await?
+        else {
+            return Err(unsupported("a FOR loop over more than 100000 rows"));
+        };
         for batch in &batches {
             for row in 0..batch.num_rows() {
                 tokio::task::yield_now().await;

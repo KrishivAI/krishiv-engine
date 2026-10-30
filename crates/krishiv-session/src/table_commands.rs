@@ -1372,30 +1372,21 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(table, &env)?;
-        let stored = self.table_for_write(&name, operation, &env)?;
+        self.table_for_write(&name, operation, &env)?;
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
-        let same = |x: &str, y: &str| {
-            if env.analysis.conf.case_sensitive {
-                x == y
-            } else {
-                x.eq_ignore_ascii_case(y)
-            }
-        };
+        // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
+        // error (with its suggestions), not a message of ours.
+        let plain = self.with_locals(Vec::new());
         for target in changes.targets {
-            let written = target.parts.last().map_or("", |p| p.value.as_str());
-            if !stored.columns.iter().any(|c| same(&c.name, written)) {
-                return Err(UnresolvedColumnWithSuggestion {
-                    object_name: format!("`{written}`"),
-                    proposal: stored
-                        .columns
-                        .iter()
-                        .map(|c| format!("`{}`", c.name))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                }
-                .into());
-            }
+            let written = target
+                .parts
+                .iter()
+                .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join(".");
+            let sql = format!("SELECT {written} FROM {}", name.quoted());
+            plain.analyze_variable_query(&sql).await?;
         }
         let slice = |e: &krishiv_sql::ast::Expr| {
             original
@@ -1403,7 +1394,13 @@ impl Session {
                 .unwrap_or_default()
                 .to_owned()
         };
-        let mut select: Vec<String> = changes.values.iter().map(|e| slice(e)).collect();
+        // `SET c = DEFAULT` takes the column's default: nothing to resolve.
+        let mut select: Vec<String> = changes
+            .values
+            .iter()
+            .filter(|e| !crate::command::is_bare_default(e))
+            .map(|e| slice(e))
+            .collect();
         if select.is_empty() {
             select.push("1".to_owned());
         }

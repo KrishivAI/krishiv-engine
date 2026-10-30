@@ -23,3 +23,13 @@ time zone), never transcribed. Design: `krishiv-internal/design/P2-T196-sql-scri
 - Phases and differences from the design note: `research/t196-scripting-phases.md`.
 
 Version note: the run is Spark 4.2.0 only; scripting is new in 4.0 and the other versions were not run.
+
+## Acceptance against Krishiv (`crates/krishiv-session/tests/scripting_goldens.rs`)
+
+The 95 scripts run on fresh tables and are compared with `handler-record.json` (rows, per-table count and
+checksum over the non-timestamp columns, and the error class that fires with the handler removed).
+`known-failures.json` lists, with a hand-written reason each, the scripts that do not match yet; the test fails
+for a new failure and for a listed script that now passes (`KRISHIV_RATCHET_UPDATE=1` rewrites the list and
+keeps existing reasons). A script with a `FOR` over `DISTINCT`/`GROUP BY` and no `ORDER BY` depends on the
+engine's row order, which differs between machines: it is compared and printed, never asserted.
+`semantics/*.json` is checked by `tests/scripting_semantics.rs`.
