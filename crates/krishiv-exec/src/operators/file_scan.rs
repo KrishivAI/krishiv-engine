@@ -483,7 +483,7 @@ impl FileScanSource {
         &self.request
     }
 
-    /// The partitions (morsels).
+    /// The planned partitions (cut into morsels when the scan starts).
     #[must_use]
     pub fn partitions(&self) -> &[FilePartition] {
         &self.partitions
@@ -926,6 +926,9 @@ impl Source for FileScanSource {
     }
 
     fn runtime_filters(&self) -> Vec<krishiv_io::FilterId> {
+        if !self.request.row_level.runtime_filters() {
+            return Vec::new();
+        }
         self.runtime.filters().iter().map(|f| f.id()).collect()
     }
 

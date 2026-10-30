@@ -20,8 +20,8 @@ immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) 
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
 `spill_global`), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION ·
-(P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions as
-morsels, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
+(P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
+about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
 End-to-end tests over the mock format: `krishiv-testkit/tests/file_exec.rs`; the conformance suite through the
 executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
@@ -34,7 +34,9 @@ versioned values (`ValueId`, `Version` are plan data), published as one partial 
 once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is
 ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
-(adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model.
+(adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
+starts after the pipelines publishing its filters unless they run with or after it (`runner.rs`,
+`with_filter_order`); no driver ever waits on a filter's value.
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
 `Sort` below it; `planner/window.rs`; over a hash exchange that sort splits its rows into hash buckets merged and read
 by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one

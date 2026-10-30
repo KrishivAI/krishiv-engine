@@ -700,7 +700,14 @@ fn a_split_is_cut_into_morsels_for_every_driver() {
         ScanOptions::default(),
         splits(1 << 30),
     )
-    .source(ScanPushdowns::default())
+    .source(ScanPushdowns {
+        metadata: MetadataCols {
+            file_block_start: true,
+            file_block_length: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    })
     .unwrap();
     assert_eq!(scan.partitions().len(), 1);
     let scan = Arc::new(scan);
@@ -716,6 +723,17 @@ fn a_split_is_cut_into_morsels_for_every_driver() {
         .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
         .collect();
     assert_eq!(ids, (0..4000).collect::<Vec<i32>>());
+    for b in &out {
+        let m = b.column(b.num_columns() - 1).as_struct();
+        let block = |name: &str| m.column_by_name(name).unwrap().as_primitive::<Int64Type>();
+        let (start, len) = (block("file_block_start"), block("file_block_length"));
+        assert!(start.values().iter().all(|v| *v == 0));
+        assert!(
+            len.values()
+                .iter()
+                .all(|v| *v == i64::try_from(size).unwrap())
+        );
+    }
     // 4 drivers, 4 morsels each: 16 pieces of the one split.
     let m = scan.metrics();
     assert_eq!((m.splits, m.rows), (16, 4000));

@@ -25,10 +25,12 @@ use krishiv_exec::testing::{
     BlockingGate, Break, Buffer, Count, Filter, Limit, Pipe, RangeSource, Scan, schema,
 };
 use krishiv_exec::{
-    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, Executor, ExecutorConfig, FlushOutput, LocalState,
-    Operator, OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result,
-    Scheduler, TaskContext, TokioClock, TokioExecutor, WorkloadClass,
+    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, Executor, ExecutorConfig, FlushOutput, GlobalState,
+    LocalState, Operator, OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner,
+    Result, Scheduler, Sink, SinkStatus, Source, TaskContext, TokioClock, TokioExecutor,
+    WorkloadClass,
 };
+use krishiv_io::FilterId;
 use krishiv_memory::{BoxFuture, MemoryConfig, MemoryError, MemoryPool, Spillable, TreePool};
 use krishiv_types::batch::Batch;
 
@@ -1589,5 +1591,133 @@ async fn a_finalized_state_is_released_after_its_last_reader() {
     let out = run(&runner, third, &q).await.unwrap();
     assert_eq!(rows(&out), 32 * DEFAULT_BATCH_SIZE);
     assert_eq!(root.stats().aborts, 0);
+    assert_released(&root);
+}
+
+/// A [`Count`] whose sink publishes runtime filter 1.
+struct Publisher(Arc<Count>);
+
+impl Sink for Publisher {
+    fn published_filters(&self) -> Vec<FilterId> {
+        vec![FilterId(1)]
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        Sink::global_state(&*self.0, ctx)
+    }
+
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        Sink::local_state(&*self.0, ctx, global)
+    }
+
+    fn sink(
+        &self,
+        input: Batch,
+        local: &mut LocalState,
+        global: &GlobalState,
+    ) -> Result<SinkStatus> {
+        self.0.sink(input, local, global)
+    }
+
+    fn combine(&self, local: LocalState, global: &GlobalState) -> Result<()> {
+        self.0.combine(local, global)
+    }
+
+    fn finalize<'a>(
+        &'a self,
+        global: &'a GlobalState,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<()>> {
+        self.0.finalize(global, ctx)
+    }
+}
+
+/// A range that applies runtime filter 1, noting how many times `publisher`
+/// had finalized when its pipeline started.
+struct Consumer {
+    range: Arc<RangeSource>,
+    publisher: Arc<Count>,
+    finalized_at_start: AtomicU64,
+}
+
+impl Source for Consumer {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn runtime_filters(&self) -> Vec<FilterId> {
+        vec![FilterId(1)]
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        let finalized = self.publisher.finalized.load(Ordering::Relaxed);
+        self.finalized_at_start.store(finalized, Ordering::Relaxed);
+        Source::global_state(&*self.range, ctx)
+    }
+
+    fn max_parallelism(&self, global: &GlobalState) -> usize {
+        self.range.max_parallelism(global)
+    }
+
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        Source::local_state(&*self.range, ctx, global)
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        global: &'a GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        self.range.get_data(local, global)
+    }
+}
+
+/// Two child pipelines no dependency orders: the publisher's and the
+/// consumer's, below a pipeline reading the consumer's breaker.
+struct Siblings {
+    publisher: Arc<Publisher>,
+    publisher_input: Arc<dyn ExecNode>,
+    consumer: Arc<dyn ExecNode>,
+    top: Arc<Count>,
+}
+
+impl ExecNode for Siblings {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        b.child_pipeline(
+            Arc::clone(&self.publisher) as Arc<dyn Sink>,
+            Arc::clone(&self.publisher_input),
+        )?;
+        let sink = b.child_pipeline(
+            Arc::clone(&self.top) as Arc<dyn Sink>,
+            Arc::clone(&self.consumer),
+        )?;
+        b.set_breaker_source(Arc::clone(&self.top) as Arc<dyn Source>, sink)?;
+        Ok(())
+    }
+}
+
+/// A scan's pipeline starts only once the pipeline publishing its runtime
+/// filter has finalized, though no dependency orders them.
+#[tokio::test]
+async fn a_scan_starts_after_the_pipeline_publishing_its_filter() {
+    let runner = QueryRunner::new(executor(2));
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let count = Count::new();
+    let (_, publisher_input) = scan(10_000);
+    let consumer = Arc::new(Consumer {
+        range: RangeSource::new(1_000),
+        publisher: Arc::clone(&count),
+        finalized_at_start: AtomicU64::new(u64::MAX),
+    });
+    let plan = Arc::new(Siblings {
+        publisher: Arc::new(Publisher(count)),
+        publisher_input,
+        consumer: Arc::new(Scan(Arc::clone(&consumer) as Arc<dyn Source>)),
+        top: Count::new(),
+    });
+    let out = run(&runner, plan, &q).await.unwrap();
+    assert_eq!(values(&out)[0], 1_000);
+    assert_eq!(consumer.finalized_at_start.load(Ordering::Relaxed), 1);
     assert_released(&root);
 }

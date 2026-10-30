@@ -412,3 +412,38 @@ fn drivers_keep_the_row_filter_measurement_across_morsels() {
     let on = counter("row_filter_units");
     assert!((1..=threads).contains(&on), "{on} guesses: {text}");
 }
+
+/// A text file cut into morsels mid-line: every line is read once, by the
+/// piece holding its start, in file order. Reporting `row_index` keeps the
+/// planned splits whole, since a piece of a text file would count its lines
+/// again.
+#[test]
+fn finer_morsels_of_a_text_file_keep_its_lines_and_row_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lines.csv");
+    let lines: String = (0..20_000)
+        .map(|i| format!("{i},row number {i}\n"))
+        .collect();
+    std::fs::write(&path, lines).unwrap();
+    let path = path.display();
+    let ids = format!("SELECT CAST(_c0 AS BIGINT) AS id FROM csv.`{path}`");
+    let rows = format!("SELECT _metadata.row_index AS r FROM csv.`{path}`");
+    let want: Vec<i64> = (0..20_000).collect();
+    let pieces = |text: &str| -> usize {
+        text.split("scan_splits=")
+            .nth(1)
+            .and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no scan_splits: {text}"))
+    };
+    for threads in [2, 8] {
+        let s = session(threads);
+        s.conf()
+            .set("spark.sql.files.openCostInBytes", "1024")
+            .unwrap();
+        assert!(pieces(&analyzed(&s, &ids)) >= 4 * threads);
+        repeat_under_load(&s, &ids, &want);
+        assert_eq!(pieces(&analyzed(&s, &rows)), threads);
+        repeat_under_load(&s, &rows, &want);
+    }
+}
