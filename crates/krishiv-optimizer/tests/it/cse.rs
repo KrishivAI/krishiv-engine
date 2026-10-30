@@ -391,4 +391,24 @@ fn a_user_alias_named_like_a_cse_column_is_left_alone() {
     for seed in 1..=8 {
         assert_same_rows(&data::small(seed), on.root(), off.root(), "cse_1 alias");
     }
+
+/// A property-test find: a self-join over a filter with repeated
+/// `coalesce` calls is a fixed point of `optimize`.
+#[test]
+fn a_self_join_with_repeated_coalesce_is_a_fixed_point() {
+    let ctx = support::ctx();
+    let sql = "SELECT * FROM (SELECT x1.c0 AS c0 FROM (SELECT x3.d AS c0, x3.d AS c1, x3.d AS c2 \
+        FROM u AS x2 JOIN u AS x3 ON x2.a = x3.a AND (x2.d IS NULL OR x3.d IS NOT NULL) \
+        WHERE x2.d <> 'x') AS x1 LEFT ANTI JOIN u AS x4 ON coalesce(x1.c0, 'x') = 'x' \
+        WHERE ((coalesce(x1.c2, 'x') = 'z' OR coalesce(x1.c0, 'z') = 'z') \
+        AND coalesce(x1.c0, 'x') = 'y')) ORDER BY c0 LIMIT 1";
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{}\n---\n{}",
+        optimized.root(),
+        again.root()
+    );
 }
