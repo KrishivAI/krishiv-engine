@@ -233,8 +233,10 @@ const MASK_DEFAULTS: [Option<&str>; 4] = [Some("X"), Some("x"), Some("n"), None]
 /// The position of the options argument of the CSV and JSON functions.
 fn options_index(name: &str) -> Option<usize> {
     match name {
-        "from_csv" | "from_json" => Some(2),
-        "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" => Some(1),
+        "from_csv" | "from_json" | "from_xml" => Some(2),
+        "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" | "to_xml" | "schema_of_xml" => {
+            Some(1)
+        }
         _ => None,
     }
 }
@@ -1909,8 +1911,11 @@ impl Resolver<'_> {
                 let is_schema_of_csv =
                     is_builtin_entry(&entry) && entry.id.name() == "schema_of_csv";
                 // `from_csv` and `to_csv` show only their first argument.
-                let is_csv =
-                    is_builtin_entry(&entry) && matches!(entry.id.name(), "from_csv" | "to_csv");
+                let is_csv = is_builtin_entry(&entry)
+                    && matches!(
+                        entry.id.name(),
+                        "from_csv" | "to_csv" | "from_xml" | "to_xml"
+                    );
                 if is_builtin_entry(&entry) && entry.id.name() == "mask" {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
