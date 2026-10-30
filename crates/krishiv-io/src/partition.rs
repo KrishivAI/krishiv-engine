@@ -178,14 +178,20 @@ pub fn partition_segments(columns: &[ArrayRef], zone: Option<i32>) -> Result<Vec
     let mut out = vec![Vec::with_capacity(columns.len()); rows];
     for (row, key) in out.iter_mut().enumerate() {
         for text in &texts {
-            let segment = match &text[row] {
-                Some(v) if !v.is_empty() => escape_partition_value(v),
-                _ => DEFAULT_PARTITION.to_owned(),
-            };
-            key.push(segment);
+            key.push(partition_segment(text[row].as_deref()));
         }
     }
     Ok(out)
+}
+
+/// The directory segment of one partition value: its escaped text, or the
+/// default partition for NULL and the empty string.
+#[must_use]
+pub fn partition_segment(text: Option<&str>) -> String {
+    match text {
+        Some(v) if !v.is_empty() => escape_partition_value(v),
+        _ => DEFAULT_PARTITION.to_owned(),
+    }
 }
 
 /// Whether the cast kernel renders `data_type` as a string (what

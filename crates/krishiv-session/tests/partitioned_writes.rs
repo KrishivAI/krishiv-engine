@@ -413,6 +413,11 @@ fn the_partition_sort_spills_and_matches() {
         out
     };
     assert_eq!(per_partition(&out_plain), per_partition(&out_limited));
+    // The sort really spilled: the session still holds its spill files.
+    let spill_files = std::fs::read_dir(&spill_root)
+        .map(|d| d.flatten().count())
+        .unwrap_or(0);
+    assert!(spill_files > 0, "the 6 MiB limit never triggered a spill");
     assert_eq!(per_partition(&out_plain).len(), 50);
     assert_eq!(
         per_partition(&out_plain).values().sum::<usize>(),

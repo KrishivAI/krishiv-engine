@@ -27,7 +27,8 @@ use crate::format::{Encoder, FileFormat};
 use crate::io::{IoContext, StoreId, Upload};
 use crate::options::FormatOptions;
 use crate::partition::{
-    check_partition_column, partition_dir_name, partition_segments, spark_partitioned_file_name,
+    check_partition_column, partition_dir_name, partition_segment, partition_texts,
+    spark_partitioned_file_name,
 };
 use crate::stats::FileStatistics;
 
@@ -269,36 +270,38 @@ impl FileWriter {
         if self.options.partition_by.is_empty() {
             return self.write_to_current(batch).await;
         }
-        let keys = self.partition_keys(batch)?;
+        let texts = self.partition_texts(batch)?;
         let mut start = 0;
         while start < batch.num_rows() {
+            // Runs are found on the raw texts; only a run's first row is escaped.
             let mut end = start + 1;
-            while end < batch.num_rows() && keys[end] == keys[start] {
+            while end < batch.num_rows() && texts.iter().all(|t| t[end] == t[start]) {
                 end += 1;
             }
-            self.write_partition_run(&batch.slice(start, end - start), &keys[start])
+            let key: Vec<String> = texts
+                .iter()
+                .map(|t| partition_segment(t[start].as_deref()))
+                .collect();
+            self.write_partition_run(&batch.slice(start, end - start), &key)
                 .await?;
             start = end;
         }
         Ok(())
     }
 
-    /// The partition key (one escaped segment per partition column) of
-    /// every row of `batch`.
-    fn partition_keys(&self, batch: &RecordBatch) -> Result<Vec<Vec<String>>> {
-        let columns: Vec<ArrayRef> = self
-            .options
+    /// The text of every row of `batch` for each partition column.
+    fn partition_texts(&self, batch: &RecordBatch) -> Result<Vec<Vec<Option<String>>>> {
+        self.options
             .partition_by
             .iter()
             .map(|&c| {
-                batch
+                let column = batch
                     .columns()
                     .get(c)
-                    .cloned()
-                    .ok_or_else(|| internal(format!("partition column {c} is out of range")))
+                    .ok_or_else(|| internal(format!("partition column {c} is out of range")))?;
+                partition_texts(column, self.options.zone)
             })
-            .collect::<Result<_>>()?;
-        partition_segments(&columns, self.options.zone)
+            .collect()
     }
 
     /// Writes one partition's run: a new file when the key changed, then

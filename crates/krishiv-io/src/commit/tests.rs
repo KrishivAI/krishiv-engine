@@ -1131,9 +1131,17 @@ fn the_orphan_sweep_matches_partitioned_and_unpartitioned_file_names() {
 fn bad_partition_columns_are_refused_before_a_file_opens() {
     let env = Env::memory();
     for (cols, names, want) in [
-        (vec![5], vec!["p"], "out of range"),
-        (vec![1, 1], vec!["p", "p"], "listed twice"),
-        (vec![1], vec![], "partition"),
+        (vec![5], vec!["p"], "partition column 5 is out of range"),
+        (
+            vec![1, 1],
+            vec!["p", "p"],
+            "partition column 1 is listed twice",
+        ),
+        (
+            vec![1],
+            vec![],
+            "partition names do not match the partition columns",
+        ),
     ] {
         let e = env
             .write_partitioned(
@@ -1148,6 +1156,7 @@ fn bad_partition_columns_are_refused_before_a_file_opens() {
                 0,
             )
             .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
         assert!(e.to_string().contains(want), "{e}");
         assert!(env.names("t").is_empty());
     }

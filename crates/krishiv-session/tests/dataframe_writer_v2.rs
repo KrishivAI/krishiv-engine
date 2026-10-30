@@ -223,6 +223,13 @@ fn overwrites_partitioned_and_clustered_tables_are_unsupported() {
 #[test]
 fn options_and_properties_reach_the_table_and_the_name_may_be_qualified() {
     let s = session();
+    let warehouse = tempfile::tempdir().unwrap();
+    s.conf()
+        .set(
+            "spark.sql.warehouse.dir",
+            warehouse.path().to_str().unwrap(),
+        )
+        .unwrap();
     block_on(
         s.table("people")
             .write_to_table("spark_catalog.default.q")
@@ -234,6 +241,22 @@ fn options_and_properties_reach_the_table_and_the_name_may_be_qualified() {
     .unwrap();
     assert_eq!(rows(&s, "q").len(), 3);
     assert_eq!(rows(&s, "default.q").len(), 3);
+    // The separator reached the writer: the files use `;`, never `,`.
+    let mut csv = Vec::new();
+    let mut stack = vec![warehouse.path().to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "csv") {
+                csv.push(std::fs::read_to_string(path).unwrap());
+            }
+        }
+    }
+    assert!(!csv.is_empty());
+    assert!(csv.iter().any(|c| c.contains(';')), "{csv:?}");
+    assert!(csv.iter().all(|c| !c.contains(',')), "{csv:?}");
 }
 
 #[test]
@@ -263,13 +286,20 @@ fn the_bridge_call_runs_every_mode() {
     run("b", "create", true).unwrap();
     run("b", "append", false).unwrap();
     assert_eq!(rows(&s, "b").len(), 6);
-    for mode in [
-        "replace",
-        "createOrReplace",
-        "overwrite",
-        "overwritePartitions",
+    for (mode, want) in [
+        ("replace", ErrorClass::UnsupportedFeatureTableOperation),
+        (
+            "createOrReplace",
+            ErrorClass::UnsupportedFeatureTableOperation,
+        ),
+        ("overwrite", ErrorClass::KrishivUnsupportedFeature),
+        ("overwritePartitions", ErrorClass::KrishivUnsupportedFeature),
     ] {
-        assert!(run("b", mode, false).is_err(), "{mode}");
+        assert_eq!(
+            run("b", mode, false).unwrap_err().error_class(),
+            want,
+            "{mode}"
+        );
     }
     assert_eq!(
         run("b", "bogus", false).unwrap_err().error_class(),
