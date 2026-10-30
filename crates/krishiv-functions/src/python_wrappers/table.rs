@@ -54,6 +54,11 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
     ("some", "no PySpark function"),
+    ("vector_cosine_similarity", "no PySpark function in 4.2"),
+    ("vector_inner_product", "no PySpark function in 4.2"),
+    ("vector_l2_distance", "no PySpark function in 4.2"),
+    ("vector_norm", "no PySpark function in 4.2"),
+    ("vector_normalize", "no PySpark function in 4.2"),
     // The cast-named functions (`float(x)`, `int(x)`, ...): the analyzer
     // rewrites every call to a `CAST`, so there is no call to send.
     (

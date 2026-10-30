@@ -603,6 +603,7 @@ mod random;
 mod r#struct;
 mod text;
 mod url;
+mod vector;
 
 #[test]
 fn session_user_and_local_clock() {

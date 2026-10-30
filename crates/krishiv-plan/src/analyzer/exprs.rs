@@ -1912,6 +1912,22 @@ impl Resolver<'_> {
                             owned.push(filter.clone());
                         }
                         (&owned[..], n)
+                    } else if is_builtin_entry(&entry)
+                        && matches!(entry.id.name(), "vector_norm" | "vector_normalize")
+                        && n == 1
+                    {
+                        // `vector_norm(v)` is `vector_norm(v, 2.0)`.
+                        owned = kids[..n].to_vec();
+                        owned.push(default_argument(
+                            Literal::Float(2.0),
+                            DataType::Float,
+                            false,
+                            e.origin,
+                        ));
+                        if let Some(filter) = kids.get(n) {
+                            owned.push(filter.clone());
+                        }
+                        (&owned[..], 2)
                     } else if is_builtin_entry(&entry) && entry.id.name() == "named_struct" && n > 0
                     {
                         owned = kids.clone();

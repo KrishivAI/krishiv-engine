@@ -30,6 +30,7 @@ mod predicate;
 mod r#struct;
 mod text;
 mod url;
+mod vector;
 
 use std::collections::HashMap;
 use std::fmt;
