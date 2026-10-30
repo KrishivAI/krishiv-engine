@@ -252,9 +252,8 @@ def test_writeto_create_twice_fails_and_replace_is_unsupported(df: DataFrame) ->
         lambda: df.writeTo("t").createOrReplace(),
         lambda: df.writeTo("fresh").createOrReplace(),
     ):
-        with pytest.raises(Exception) as bad:
+        with pytest.raises(Exception, match="REPLACE TABLE AS SELECT") as bad:
             action()
-        assert bad.value.getCondition() == "UNSUPPORTED_FEATURE.TABLE_OPERATION"
     assert len(df.sparkSession.table("t").collect()) == 3
 
 
