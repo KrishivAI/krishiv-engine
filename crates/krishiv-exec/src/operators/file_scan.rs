@@ -53,7 +53,7 @@ use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
-use krishiv_io::split::{FilePartition, MorselSplit, SplitConfig, SplitFile};
+use krishiv_io::split::{FilePartition, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile};
 use krishiv_io::{
     ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
     MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowLevel, ScanOptions, ScanRequest, ScanStream,
@@ -378,6 +378,10 @@ struct FileScanLocal {
     claimed: u64,
     /// The claim ordinal of the claimed morsel.
     position: Option<u64>,
+    /// What the last piece read measured for its row-level filter, and its
+    /// file: the next piece of that file starts from it instead of guessing
+    /// again.
+    row_filter: Option<(usize, bool)>,
     rows: super::RowStage,
 }
 
@@ -568,15 +572,20 @@ impl FileScanSource {
             drop(fut.await);
         }
         let f = self.file(file)?.clone();
+        let row_filter_start = local
+            .row_filter
+            .and_then(|(last, on)| (last == file).then_some(on));
         let selected;
-        let req = match &self.selection {
-            Some(s) => {
-                let mut r = request.clone();
+        let req = if self.selection.is_some() || row_filter_start.is_some() {
+            let mut r = request.clone();
+            if let Some(s) = &self.selection {
                 r.selection = s.selection(&f);
-                selected = r;
-                &selected
             }
-            None => request,
+            r.row_filter_start = row_filter_start;
+            selected = r;
+            &selected
+        } else {
+            request
         };
         let stream = ScanStream::open(
             &self.io,
@@ -625,6 +634,9 @@ impl FileScanSource {
                     None => {
                         if let Some(done) = local.current.take() {
                             self.end_split(&done);
+                            if let Some(on) = done.stream.row_filter_measured() {
+                                local.row_filter = Some((done.file, on));
+                            }
                         }
                         continue;
                     }
@@ -647,8 +659,11 @@ impl FileScanSource {
             }
             local.morsel = Some((m, 0));
             local.claimed += 1;
-            // Runtime filter decisions depend on this morsel's rows only.
-            local.rows.start_partition();
+            // Runtime filters are measured afresh about as often as a driver
+            // reads a planned split's worth of rows, not at every morsel.
+            if local.claimed % MORSELS_PER_DRIVER == 1 {
+                local.rows.start_partition();
+            }
         }
     }
 
@@ -881,6 +896,7 @@ impl Source for FileScanSource {
             current: None,
             ahead: None,
             claimed: 0,
+            row_filter: None,
             position: None,
         }))
     }
