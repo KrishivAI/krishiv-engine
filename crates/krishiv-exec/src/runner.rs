@@ -290,9 +290,7 @@ fn runs_with_or_after(
     false
 }
 
-/// Runs the pipelines, each group as soon as its dependencies have ended,
-/// so one slow pipeline holds back only what depends on it. The coordinator
-/// owns every
+/// Runs the pipelines in dependency waves. The coordinator owns every
 /// breaker's state: a finalized sink's global state is kept here and handed
 /// to the pipelines that read it, dropped (with the memory it holds) once
 /// the last of them has ended, and whatever is left is dropped when this
@@ -321,7 +319,7 @@ async fn run_pipelines(
             .collect::<Vec<_>>(),
     );
     let mut todo: Vec<Option<Pipeline>> = pipelines.into_iter().map(Some).collect();
-    let mut finished = vec![false; todo.len()];
+    let mut done = vec![false; todo.len()];
     let mut finalized: HashMap<OperatorId, GlobalState> = HashMap::new();
     // Pipelines yet to end that read each breaker's state.
     let mut readers: HashMap<OperatorId, usize> = HashMap::new();
@@ -330,24 +328,47 @@ async fn run_pipelines(
             *readers.entry(input).or_default() += 1;
         }
     }
-    let mut running = FuturesUnordered::new();
-    loop {
-        // Nothing new starts once the query failed; what runs is drained.
-        if query.check_cancelled().is_ok() {
-            for i in 0..todo.len() {
-                let members = group(i);
-                if members[0] != i
-                    || todo[i].is_none()
-                    || !members
-                        .iter()
-                        .all(|&m| deps[m].iter().all(|&d| finished[d]))
-                {
-                    continue;
+    while done.iter().any(|d| !d) {
+        let ready: Vec<Vec<usize>> = (0..todo.len())
+            .filter(|&i| !done[i] && group(i)[0] == i)
+            .map(group)
+            .filter(|g| g.iter().all(|&m| deps[m].iter().all(|&d| done[d])))
+            .collect();
+        if ready.is_empty() {
+            // Unreachable: dependencies form a tree.
+            return Err(internal("pipeline dependencies form a cycle".to_owned()));
+        }
+        let mut handles = Drivers(FuturesUnordered::new());
+        let mut runs = Vec::new();
+        for g in ready {
+            let members: Vec<Pipeline> = g
+                .iter()
+                .filter_map(|&i| {
+                    done[i] = true;
+                    todo[i].take()
+                })
+                .collect();
+            let group = match start_group(executor, query, members, &finalized) {
+                Ok(group) => group,
+                Err(e) => {
+                    query.fail(e);
+                    break;
                 }
-                let pipelines: Vec<Pipeline> =
-                    members.iter().filter_map(|&m| todo[m].take()).collect();
-                match start_group(executor, query, pipelines, &finalized) {
-                    Ok(start) => running.push(run_group(executor, query, members, start)),
+            };
+            if fan_in_is_sequential(&group) {
+                match run_group_sequential(executor, query, group).await {
+                    Ok(rs) => runs.extend(rs),
+                    Err(e) => {
+                        query.fail(e);
+                        break;
+                    }
+                }
+            } else {
+                match spawn_group(executor, query, group) {
+                    Ok((rs, hs)) => {
+                        handles.0.extend(hs);
+                        runs.extend(rs);
+                    }
                     Err(e) => {
                         query.fail(e);
                         break;
@@ -355,12 +376,9 @@ async fn run_pipelines(
                 }
             }
         }
-        let Some((members, runs)) = running.next().await else {
-            break;
-        };
-        for m in members {
-            finished[m] = true;
-        }
+        await_drivers(query, &mut handles).await;
+        record_extra_metrics(query, &runs);
+        query.check_cancelled()?;
         for run in &runs {
             finalized.insert(run.pipeline.sink.0, Arc::clone(&run.sink_global));
         }
@@ -376,46 +394,7 @@ async fn run_pipelines(
             }
         }
     }
-    query.check_cancelled()?;
-    if todo.iter().any(Option::is_some) {
-        // Unreachable: dependencies form a tree.
-        return Err(internal("pipeline dependencies form a cycle".to_owned()));
-    }
     Ok(())
-}
-
-/// Runs one started group to its end. A failure fails the query, and the
-/// drivers have released everything when this returns. Gives back the
-/// group's pipeline indexes and its runs.
-async fn run_group(
-    executor: &Arc<dyn Executor>,
-    query: &Arc<QueryContext>,
-    members: Vec<usize>,
-    start: GroupStart,
-) -> (Vec<usize>, Vec<Arc<PipelineRun>>) {
-    if fan_in_is_sequential(&start) {
-        return match run_group_sequential(executor, query, start).await {
-            Ok(runs) => (members, runs),
-            Err(e) => {
-                query.fail(e);
-                (members, Vec::new())
-            }
-        };
-    }
-    let mut handles = Drivers(FuturesUnordered::new());
-    let runs = match spawn_group(executor, query, start) {
-        Ok((runs, spawned)) => {
-            handles.0.extend(spawned);
-            runs
-        }
-        Err(e) => {
-            query.fail(e);
-            Vec::new()
-        }
-    };
-    await_drivers(query, &mut handles).await;
-    record_extra_metrics(query, &runs);
-    (members, runs)
 }
 
 /// The breakers whose finalized state `p` reads, once each.
@@ -697,8 +676,8 @@ async fn run_group_sequential(
     Ok(runs)
 }
 
-/// A group's drivers, aborted if the coordinator is dropped while they run
-/// (so they are never detached).
+/// A wave's drivers, aborted if the coordinator is dropped mid-wave (so
+/// they are never detached).
 struct Drivers(FuturesUnordered<TaskHandle>);
 
 impl Drop for Drivers {
