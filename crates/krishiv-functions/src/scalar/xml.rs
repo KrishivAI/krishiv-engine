@@ -183,18 +183,15 @@ fn parse_document(text: &str) -> Option<Elem> {
         let event = reader.read_event().ok()?;
         let after = usize::try_from(reader.buffer_position()).ok()?;
         match event {
-            Event::Start(e) => {
-                if root.is_some() {
-                    return None;
-                }
-                stack.push((start_elem(&e)?, after));
-            }
+            Event::Start(e) => stack.push((start_elem(&e)?, after)),
             Event::Empty(e) => {
                 let elem = start_elem(&e)?;
                 match stack.last_mut() {
                     Some((parent, _)) => parent.children.push(elem),
-                    None if root.is_none() => root = Some(elem),
-                    None => return None,
+                    None => {
+                        root = Some(elem);
+                        break;
+                    }
                 }
             }
             Event::End(_) => {
@@ -202,7 +199,11 @@ fn parse_document(text: &str) -> Option<Elem> {
                 elem.inner = text.get(start..before)?.to_owned();
                 match stack.last_mut() {
                     Some((parent, _)) => parent.children.push(elem),
-                    None => root = Some(elem),
+                    None => {
+                        // Whatever follows the root element is not read.
+                        root = Some(elem);
+                        break;
+                    }
                 }
             }
             Event::Text(t) => {
@@ -294,8 +295,13 @@ impl Reading<'_> {
         if null_text == Some(text) && !(text.is_empty() && kind == FieldKind::Str) {
             return Ok(V::Null);
         }
-        if text.is_empty() && kind != FieldKind::Str {
-            return Ok(V::Null);
+        if text.is_empty() {
+            // An empty element is NULL, except for a string, which is empty.
+            return Ok(if kind == FieldKind::Str {
+                V::Leaf(Val::Text(String::new()))
+            } else {
+                V::Null
+            });
         }
         let fatal = |e: KernelError| e.error().clone();
         let micros = |parsed: Result<Option<i64>, KrishivError>, bad: &mut bool| match parsed {
@@ -321,6 +327,7 @@ impl Reading<'_> {
                 bad,
             ),
             _ => match self.conv.convert(&kind, Some(text)) {
+                Ok(Val::Null) => V::Null,
                 Ok(v) => V::Leaf(v),
                 Err(ConvError::Malformed) => {
                     *bad = true;
@@ -872,22 +879,27 @@ impl Writing<'_> {
         let mut body = String::new();
         for (f, col) in s.fields().iter().zip(s.columns()) {
             if col.is_null(i) {
+                // A NULL field is left out, or written as `nullValue`.
+                self.element(&mut body, f.name(), col, i, depth + 1)?;
                 continue;
             }
-            if let Some(attr) = f.name().strip_prefix(prefix)
+            if f.name() == &self.o.value_tag
+                && let Some(v) = self.scalar(col, i)?
+            {
+                text.push_str(&escape(&v, false));
+            } else if let Some(attr) = f.name().strip_prefix(prefix)
                 && !prefix.is_empty()
                 && let Some(v) = self.scalar(col, i)?
             {
                 attributes.push_str(&format!(" {attr}=\"{}\"", escape(&v, true)));
-            } else if f.name() == &self.o.value_tag
-                && let Some(v) = self.scalar(col, i)?
-            {
-                text.push_str(&escape(&v, false));
             } else {
                 self.element(&mut body, f.name(), col, i, depth + 1)?;
             }
         }
-        self.newline(out, depth);
+        // The document starts with its root element, not a line break.
+        if depth > 0 {
+            self.newline(out, depth);
+        }
         if body.is_empty() && text.is_empty() {
             out.push_str(&format!("<{name}{attributes}/>"));
         } else {
