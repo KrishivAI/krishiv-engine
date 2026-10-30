@@ -219,6 +219,8 @@ pub(super) struct ScanLocal {
     /// Rows already read of `batches.start`.
     pub(super) offset: usize,
     pub(super) claimed: u64,
+    /// The claim ordinal of the current morsel.
+    pub(super) position: Option<u64>,
     /// The runtime filters' row stage.
     pub(super) rows: super::RowStage,
     /// The driver's partition: pushed filters evaluate stateful functions
@@ -370,9 +372,10 @@ impl MemoryScan {
             return Ok(None);
         }
         if local.batches.is_empty() {
-            let Some(m) = g.cursor.claim() else {
+            let Some((ordinal, m)) = g.cursor.claim_ordered() else {
                 return Ok(None);
             };
+            local.position = Some(ordinal);
             local.batches = g
                 .morsels
                 .get(m)
@@ -478,6 +481,7 @@ impl Source for MemoryScan {
             batches: 0..0,
             offset: 0,
             claimed: 0,
+            position: None,
             rows: super::RowStage::new(&g.runtime, &self.table, self.runtime.settings()),
             partition: _ctx.partition(),
         }))
@@ -493,6 +497,14 @@ impl Source for MemoryScan {
 
     fn morsels_claimed(&self, local: &LocalState) -> u64 {
         local.downcast_ref::<ScanLocal>().map_or(0, |l| l.claimed)
+    }
+
+    fn reports_positions(&self) -> bool {
+        true
+    }
+
+    fn position(&self, local: &LocalState) -> Option<u64> {
+        local.downcast_ref::<ScanLocal>().and_then(|l| l.position)
     }
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {

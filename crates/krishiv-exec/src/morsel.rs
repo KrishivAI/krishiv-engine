@@ -36,13 +36,20 @@ impl MorselCursor {
 
     /// The next unclaimed morsel, or `None` once all are claimed.
     pub fn claim(&self) -> Option<usize> {
+        self.claim_ordered().map(|(_, m)| m)
+    }
+
+    /// As [`claim`](Self::claim), with the claim's ordinal: claims are
+    /// numbered `0..len` in the order they happen, so a later claim always
+    /// has a higher ordinal. Unseeded, the ordinal is the morsel index.
+    pub fn claim_ordered(&self) -> Option<(u64, usize)> {
         // Relaxed: the index only selects work; the morsel's data is shared
         // immutable state published before the drivers started.
         let i = self.next.fetch_add(1, Ordering::Relaxed);
         if i >= self.len {
             return None;
         }
-        Some(self.order.as_ref().map_or(i, |o| o[i]))
+        Some((i as u64, self.order.as_ref().map_or(i, |o| o[i])))
     }
 }
 

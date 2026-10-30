@@ -739,6 +739,7 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
         batches: 5..6,
         offset: 0,
         claimed: 0,
+        position: None,
         rows: super::RowStage::new(&[], &schema(), super::RowStageSettings::default()),
         partition: 0,
     };
