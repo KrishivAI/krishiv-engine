@@ -398,6 +398,7 @@ def test_unix_timestamp_without_a_timestamp_takes_no_arguments() -> None:
     parsed = df.select(F.unix_timestamp(F.lit("1970-01-02 00:00:00")).alias("t")).collect()[0]["t"]
     assert parsed == 86400
 
+
 def test_json_tuple_field_names_are_literals_not_columns() -> None:
     """``json_tuple(col, "a")`` reads the key ``a``; a column that happens to be named ``a`` is not the key."""
     from krishiv.sql import SparkSession
