@@ -47,6 +47,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("window_offset_values").features,
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
+    assert_eq!(
+        message("aggregate_mode_regr_bit_listagg").features,
+        ["mode_regr_bit_listagg_aggs"]
+    );
     // An offset of zero is the baseline `Limit`.
     let zero = plan_of(PhysNode::Limit {
         input: Box::new(PhysNode::OneRow),
@@ -310,6 +314,12 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         None
     );
     assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::Sum
+        )),
+        None
+    );
+    assert_eq!(
         feature_of(Construct::Aggregate(
             &krishiv_exec::aggregate::AggregateExpr {
                 mask: Some(1),
@@ -322,6 +332,33 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             }
         )),
         Some(Feature::AggregateFilter)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::CollectSet
+        )),
+        Some(Feature::CollectAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::VectorAvg
+        )),
+        Some(Feature::CollectAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::RegrR2
+        )),
+        Some(Feature::ModeRegrBitListaggAggs)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::ListAgg {
+                delimiter: Vec::new(),
+                orders: Vec::new(),
+            }
+        )),
+        Some(Feature::ModeRegrBitListaggAggs)
     );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
@@ -423,6 +460,42 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         err,
         CodecError::UnsupportedFeatures {
             missing: vec!["lambda_functions".to_owned()]
+        }
+    );
+    // A reader without `collect_aggregates` refuses the collect plan
+    // naming the feature.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "aggregate_collects")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::NestedTypes]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["collect_aggregates".to_owned()]
+        }
+    );
+    // A reader without `mode_regr_bit_listagg_aggs` refuses the plan of
+    // the new aggregates naming it.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "aggregate_mode_regr_bit_listagg")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::NestedTypes]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["mode_regr_bit_listagg_aggs".to_owned()]
         }
     );
 }

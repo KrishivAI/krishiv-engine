@@ -94,6 +94,7 @@ fn shared_subtrees_print_once() {
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         })))
     });
     let shown = e.to_string();

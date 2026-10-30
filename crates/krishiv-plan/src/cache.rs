@@ -865,6 +865,7 @@ mod tests {
     fn gt(left: Arc<Expr>, value: i32) -> Expr {
         Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
             ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Builtin(Builtin::Gt),
                 kind: FunctionKind::Scalar,
                 args: vec![left, Arc::new(Expr::literal(Literal::Integer(value)))],
@@ -971,6 +972,7 @@ mod tests {
         let lit = |v: i32| Arc::new(Expr::literal(Literal::Integer(v)));
         let unresolved = |node: ExprNode| Arc::new(Expr::new(node));
         let call = |name: &str| FunctionCall {
+            within_group: Vec::new(),
             name: name.to_owned(),
             qualifier: Vec::new(),
             args: vec![lit(1)],
@@ -1003,6 +1005,7 @@ mod tests {
         let resolved_fn = |filter: Option<Arc<Expr>>| {
             Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
                 ResolvedFunction {
+                    within_group: Vec::new(),
                     id: FunctionId::Builtin(Builtin::Gt),
                     kind: FunctionKind::Scalar,
                     args: vec![a(), lit(1)],

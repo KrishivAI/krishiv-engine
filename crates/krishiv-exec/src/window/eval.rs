@@ -673,7 +673,7 @@ fn byte_values(
             if passes(mask.as_ref(), i) {
                 let valid = sources[k].is_valid(i);
                 let picked = state.map(|(sk, si)| sources[sk].is_valid(si).then(|| value(sk, si)));
-                if replaces(a.function, picked, valid, || value(k, i))? {
+                if replaces(&a.function, picked, valid, || value(k, i))? {
                     state = Some((k, i));
                 }
             }
@@ -695,7 +695,7 @@ fn byte_values(
 /// far (`picked`: `None` before any row, `Some(None)` for a picked NULL);
 /// Spark compares by bytes.
 pub(super) fn replaces<'v>(
-    function: AggregateFunction,
+    function: &AggregateFunction,
     picked: Option<Option<&'v [u8]>>,
     valid: bool,
     value: impl FnOnce() -> &'v [u8],
@@ -706,7 +706,7 @@ pub(super) fn replaces<'v>(
         F::Min | F::Max => match picked.flatten() {
             Some(old) => {
                 let order = value().cmp(old);
-                if function == F::Max {
+                if *function == F::Max {
                     order.is_gt()
                 } else {
                     order.is_lt()

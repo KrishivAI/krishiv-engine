@@ -41,6 +41,8 @@ PYSPARK_SIGNATURES = {
     "character_length": "str",
     "coalesce": "*cols",
     "col": "col",
+    "collect_list": "col",
+    "collect_set": "col",
     "concat": "*cols",
     "concat_ws": "sep, *cols",
     "contains": "left, right",

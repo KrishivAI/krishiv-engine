@@ -195,6 +195,7 @@ pub(crate) fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType) -> Ar
             args,
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type,
             nullable,
             deterministic: true,

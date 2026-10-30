@@ -2646,6 +2646,7 @@ impl Resolver<'_> {
                 args,
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
             }))
             .with_origin(origin),
         );
@@ -3112,6 +3113,7 @@ fn synth_call(
 ) -> Arc<Expr> {
     Arc::new(
         Expr::new(ExprNode::Function(FunctionCall {
+            within_group: Vec::new(),
             name: name.to_owned(),
             qualifier: Vec::new(),
             arg_names: Vec::new(),

@@ -558,6 +558,7 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
                 args: vec![Arc::new(c("a"))],
                 distinct: false,
                 filter: Some(Arc::new(eq(c("b"), s("x")))),
+                within_group: Vec::new(),
             }))]),
         ),
         ("SELECT * FROM t JOIN u USING (z)", default, using(&["z"])),
@@ -674,6 +675,7 @@ fn shared_expressions_stay_linear() {
                 args: vec![Arc::clone(&e), e],
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
             })))
         })
     };
@@ -1793,6 +1795,7 @@ fn cast_named_functions_fail_like_casts() {
 fn cast_named_functions_reject_distinct_and_filter() {
     let ctx = ctx();
     let distinct = Expr::new(ExprNode::Function(crate::FunctionCall {
+        within_group: Vec::new(),
         name: "float".to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),
@@ -1809,6 +1812,7 @@ fn cast_named_functions_reject_distinct_and_filter() {
         ])
     );
     let filtered = Expr::new(ExprNode::Function(crate::FunctionCall {
+        within_group: Vec::new(),
         name: "float".to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),
@@ -1973,6 +1977,7 @@ fn shared_subexpressions_in_rewrites() {
             args: vec![Arc::clone(&x), x],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         }))
     };
     let lateral =
@@ -2464,6 +2469,7 @@ fn conditional_with_filter_names_the_filter_once() {
         args: vec![Arc::new(c("a")), Arc::new(int(1))],
         distinct: false,
         filter: Some(Arc::new(eq(c("b"), s("x")))),
+        within_group: Vec::new(),
     }));
     let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
     assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
@@ -3429,6 +3435,7 @@ fn parameterless_count_honours_the_legacy_flag() {
     let distinct = || {
         LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Function(
             crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "count".to_owned(),
                 qualifier: Vec::new(),
                 args: Vec::new(),
@@ -3443,6 +3450,7 @@ fn parameterless_count_honours_the_legacy_flag() {
     let filtered = || {
         LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Function(
             crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "count".to_owned(),
                 qualifier: Vec::new(),
                 args: Vec::new(),
@@ -3459,6 +3467,7 @@ fn parameterless_count_honours_the_legacy_flag() {
     let over = || {
         LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Window(crate::WindowExpr {
             function: Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "count".to_owned(),
                 qualifier: Vec::new(),
                 args: Vec::new(),

@@ -371,6 +371,7 @@ fn ilike_with_escape_keeps_the_escape_but_hides_it() {
         arg_names: Vec::new(),
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
     }));
     let r = analyze(vec![call]).unwrap();
     assert_eq!(names(&r), ["ilike(s, a%b)"]);

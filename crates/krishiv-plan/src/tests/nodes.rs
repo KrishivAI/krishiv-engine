@@ -124,6 +124,7 @@ fn transforms_share_unchanged_subtrees() {
         args: vec![Arc::new(a()), Arc::clone(&b)],
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
     })));
     let renamed = Arc::clone(&call)
         .transform_up(&mut rename)

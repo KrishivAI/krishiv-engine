@@ -361,6 +361,50 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_MAX = 5;
   AGGREGATE_FUNCTION_FIRST = 6;
   AGGREGATE_FUNCTION_LAST = 7;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_COLLECT_LIST = 8;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_COLLECT_SET = 9;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_VECTOR_SUM = 10;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_VECTOR_AVG = 11;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_BIT_AND = 12;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_BIT_OR = 13;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_BIT_XOR = 14;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_COUNT = 15;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_AVGX = 16;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_AVGY = 17;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_SXX = 18;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_SYY = 19;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_SXY = 20;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_SLOPE = 21;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_INTERCEPT = 22;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_REGR_R2 = 23;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_MODE = 24;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_MODE_MIN = 25;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_MODE_MAX = 26;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_LISTAGG = 27;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_TRY_SUM = 28;
+  // feature: mode_regr_bit_listagg_aggs
+  AGGREGATE_FUNCTION_TRY_AVG = 29;
 }
 
 enum AggregateInput {
@@ -382,6 +426,15 @@ message AggregateExpr {
   // (`FILTER (WHERE ...)`); absent reads all rows.
   // feature: aggregate_filter
   optional uint64 mask = 7;
+  // feature: mode_regr_bit_listagg_aggs (`listagg` only: the fused
+  // delimiter bytes, empty when none or NULL was written).
+  bytes listagg_delimiter = 8;
+  // feature: mode_regr_bit_listagg_aggs (`listagg` only: one per ordering
+  // key, in order: descending).
+  repeated bool listagg_desc = 9;
+  // feature: mode_regr_bit_listagg_aggs (`listagg` only: one per ordering
+  // key, in order: nulls first).
+  repeated bool listagg_nulls_first = 10;
 }
 
 enum JoinType {

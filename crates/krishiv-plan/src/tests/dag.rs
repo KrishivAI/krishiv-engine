@@ -22,6 +22,7 @@ fn and_chain(leaf: Expr) -> Arc<Expr> {
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         })))
     })
 }

@@ -93,6 +93,7 @@ fn call(deterministic: bool) -> Arc<Expr> {
 fn versioned_call(deterministic: bool, version: u32) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
         ResolvedFunction {
+            within_group: Vec::new(),
             id: FunctionId::Udf {
                 name: "my_udf".to_owned(),
                 version,
@@ -183,6 +184,7 @@ fn udf_calls_fold_once_their_arguments_do() {
     fn builtin(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
         Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
             ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Builtin(op),
                 kind: FunctionKind::Scalar,
                 args,
@@ -197,6 +199,7 @@ fn udf_calls_fold_once_their_arguments_do() {
     fn udf(arg: Arc<Expr>) -> Arc<Expr> {
         Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
             ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Udf {
                     name: "my_udf".to_owned(),
                     version: 2,
@@ -303,6 +306,7 @@ impl ScalarUdf for TypedIdentity {
 fn typed_call(data_type: DataType, literal: Literal) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
         ResolvedFunction {
+            within_group: Vec::new(),
             id: FunctionId::Udf {
                 name: "typed_identity".to_owned(),
                 version: 1,
@@ -398,6 +402,7 @@ fn udf_folding_leaves_unfoldables_in_the_plan() {
     ));
     // DISTINCT, FILTER and aggregate calls never fold.
     let base = ResolvedFunction {
+        within_group: Vec::new(),
         id: FunctionId::Udf {
             name: "typed_identity".to_owned(),
             version: 1,
@@ -475,6 +480,7 @@ fn udf_folding_leaves_unfoldables_in_the_plan() {
         input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
         exprs: vec![Arc::new(Expr::new(ExprNode::Resolved(
             ResolvedExpr::Function(ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Udf {
                     name: "failing_udf".to_owned(),
                     version: 1,
@@ -510,6 +516,7 @@ fn udf_folding_leaves_unfoldables_in_the_plan() {
         input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
         exprs: vec![Arc::new(Expr::new(ExprNode::Resolved(
             ResolvedExpr::Function(ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Udf {
                     name: "typed_identity".to_owned(),
                     version: 1,

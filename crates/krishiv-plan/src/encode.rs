@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 7;
+pub const ENCODING_VERSION: u16 = 8;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -1016,6 +1016,28 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// The `WITHIN GROUP` orderings of a call node, as a length prefix
+    /// (empty for almost every node). Takes the node (already bound by
+    /// the caller) rather than the orderings so `expr_fields` grows no
+    /// new local on its recursive path: a plan at `MAX_DEPTH` must
+    /// survive this encoding on a 2 MiB stack.
+    fn call_within_group(&mut self, e: &'a Expr) {
+        // Both call sites are function arms, so this always matches;
+        // the fallback keeps the helper total without growing the
+        // callers' frames.
+        let (ExprNode::Function(FunctionCall { within_group, .. })
+        | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction { within_group, .. }))) =
+            &e.node
+        else {
+            return;
+        };
+        if within_group.is_empty() {
+            self.len(0);
+        } else {
+            self.orders(within_group);
+        }
+    }
+
     fn expr_fields(&mut self, e: &'a Expr) {
         match &e.node {
             ExprNode::Column(ColumnRef { name, plan_id }) => {
@@ -1045,6 +1067,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 arg_names,
                 distinct,
                 filter,
+                ..
             }) => {
                 self.u8(4);
                 self.str(name);
@@ -1060,6 +1083,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     }
                 }
                 self.call(args, *distinct, filter.as_ref());
+                self.call_within_group(e);
             }
             ExprNode::Cast { expr, to, mode } => {
                 self.u8(5);
@@ -1114,7 +1138,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 data_type,
                 nullable,
                 // Follows from the identity (see `ResolvedFunction`).
-                deterministic: _,
+                ..
             })) => {
                 self.u8(10);
                 self.function_id(id);
@@ -1122,6 +1146,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.data_type(data_type);
                 self.bool(*nullable);
                 self.call(args, *distinct, filter.as_ref());
+                self.call_within_group(e);
             }
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
                 self.u8(11);

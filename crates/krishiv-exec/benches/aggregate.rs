@@ -226,7 +226,7 @@ fn bench(c: &mut Criterion) {
             for (suffix, mode) in modes {
                 g.bench_function(format!("decimal_{name}_{keys}_keys{suffix}"), |b| {
                     b.iter(|| {
-                        let p = decimal_plan(&batches, f);
+                        let p = decimal_plan(&batches, f.clone());
                         black_box(run(&runner, &caller, p, 1 << 30, mode))
                     });
                 });

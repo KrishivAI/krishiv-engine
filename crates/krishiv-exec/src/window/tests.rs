@@ -432,7 +432,7 @@ fn reference(
                     // The string column: by bytes; first/last by row.
                     let texts: Vec<Option<String>> = frame_rows.iter().map(|x| text(x.3)).collect();
                     let set: Vec<&String> = texts.iter().flatten().collect();
-                    let v = match a.function {
+                    let v = match &a.function {
                         AggregateFunction::Min => set.iter().min().map(|s| (*s).clone()),
                         AggregateFunction::Max => set.iter().max().map(|s| (*s).clone()),
                         AggregateFunction::First { ignore_nulls: true } => {
@@ -448,14 +448,14 @@ fn reference(
                     v.unwrap_or_else(|| "null".to_owned())
                 } else {
                     let vals: Vec<i64> = frame_rows.iter().filter_map(|x| x.3).collect();
-                    match a.function {
+                    match &a.function {
                         AggregateFunction::Count if a.args.is_empty() => {
                             frame_rows.len().to_string()
                         }
                         AggregateFunction::Count => vals.len().to_string(),
                         AggregateFunction::First { ignore_nulls } => {
                             let mut picked = frame_rows.iter().map(|x| x.3);
-                            let v = if ignore_nulls {
+                            let v = if *ignore_nulls {
                                 vals.first().copied()
                             } else {
                                 picked.next().flatten()
@@ -463,7 +463,7 @@ fn reference(
                             v.map_or_else(|| "null".to_owned(), |v| v.to_string())
                         }
                         AggregateFunction::Last { ignore_nulls } => {
-                            let v = if ignore_nulls {
+                            let v = if *ignore_nulls {
                                 vals.last().copied()
                             } else {
                                 frame_rows.last().and_then(|x| x.3)
@@ -494,7 +494,29 @@ fn reference(
                         | AggregateFunction::Kurtosis
                         | AggregateFunction::Corr
                         | AggregateFunction::CovarSamp
-                        | AggregateFunction::CovarPop => {
+                        | AggregateFunction::CovarPop
+                        | AggregateFunction::RegrCount
+                        | AggregateFunction::RegrAvgx
+                        | AggregateFunction::RegrAvgy
+                        | AggregateFunction::RegrSxx
+                        | AggregateFunction::RegrSyy
+                        | AggregateFunction::RegrSxy
+                        | AggregateFunction::RegrSlope
+                        | AggregateFunction::RegrIntercept
+                        | AggregateFunction::RegrR2
+                        | AggregateFunction::BitAnd
+                        | AggregateFunction::BitOr
+                        | AggregateFunction::BitXor
+                        | AggregateFunction::Mode
+                        | AggregateFunction::ModeMin
+                        | AggregateFunction::ModeMax
+                        | AggregateFunction::ListAgg { .. }
+                        | AggregateFunction::TrySum
+                        | AggregateFunction::TryAvg
+                        | AggregateFunction::CollectList
+                        | AggregateFunction::CollectSet
+                        | AggregateFunction::VectorSum
+                        | AggregateFunction::VectorAvg => {
                             unreachable!("no window test aggregates with this function")
                         }
                     }
@@ -1533,7 +1555,7 @@ async fn exact_and_string_frames_from_disk() {
         for function in [Sum, Avg, Min, Max] {
             functions.push(WindowFunctionPlan {
                 function: WindowFunction::Aggregate(AggregateExpr {
-                    function,
+                    function: function.clone(),
                     args: vec![1],
                     input: AggInput::Raw,
                     mask: None,
