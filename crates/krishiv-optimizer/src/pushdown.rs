@@ -75,7 +75,7 @@ pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     let (lo, ro) = (ids(left), ids(right));
     let (to_left, to_right) = match kind {
         JoinKind::Inner | JoinKind::Cross | JoinKind::LeftSemi => (true, true),
-        JoinKind::LeftOuter | JoinKind::LeftAnti => (false, true),
+        JoinKind::LeftOuter | JoinKind::LeftAnti | JoinKind::Existence(_) => (false, true),
         JoinKind::RightOuter => (true, false),
         _ => (false, false),
     };
@@ -357,6 +357,11 @@ fn push_join(
                     r.extend(implied_by_input(&p, right));
                     on.push(p);
                 }
+            }
+            // A filter on the left input only: every left row survives, so
+            // it is the same above or below. One that reads `exists` stays.
+            JoinKind::Existence(id) if !references(&p).contains(&id) && refs.is_subset(&lo) => {
+                l.push(p);
             }
             JoinKind::LeftOuter if refs.is_subset(&lo) => l.push(p),
             JoinKind::RightOuter if refs.is_subset(&ro) => r.push(p),
