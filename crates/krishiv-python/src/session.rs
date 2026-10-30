@@ -157,9 +157,9 @@ impl PySession {
     /// `kind` (`counter`, `gauge` or `histogram`), `unit` and `labels`;
     /// counters and gauges add `value` (gauges also `worker_id`);
     /// histograms add cumulative `buckets` as `(le, count)` pairs with
-    /// `count` and `sum`. Query series appear only when the session was
-    /// built with `krishiv.metrics.enabled=true`.
-    fn metrics(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+    /// `count` and `sum`. Query series appear only for queries that ran
+    /// while `krishiv.metrics.enabled` was true.
+    fn metrics(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         self.inner
             .metrics()
             .dicts()
@@ -170,31 +170,31 @@ impl PySession {
 }
 
 /// One [`MetricDict`](krishiv_session::MetricDict) as a Python dict.
-fn metric_dict(py: Python<'_>, d: &krishiv_session::MetricDict) -> Py<PyAny> {
+fn metric_dict(py: Python<'_>, d: &krishiv_session::MetricDict) -> PyResult<Py<PyAny>> {
     let out = pyo3::types::PyDict::new(py);
-    let _ = out.set_item("name", d.name);
-    let _ = out.set_item("kind", d.kind);
-    let _ = out.set_item("unit", d.unit);
+    out.set_item("name", d.name)?;
+    out.set_item("kind", d.kind)?;
+    out.set_item("unit", d.unit)?;
     let labels = pyo3::types::PyDict::new(py);
     for (name, value) in &d.labels {
-        let _ = labels.set_item(name, value);
+        labels.set_item(name, value)?;
     }
-    let _ = out.set_item("labels", labels);
+    out.set_item("labels", labels)?;
     if let Some(value) = d.value {
-        let _ = out.set_item("value", value);
+        out.set_item("value", value)?;
     }
     if let Some(worker_id) = &d.worker_id {
-        let _ = out.set_item("worker_id", worker_id);
+        out.set_item("worker_id", worker_id)?;
     }
     if let Some(buckets) = &d.buckets {
         let pairs: Vec<(f64, u64)> = buckets.clone();
-        let _ = out.set_item("buckets", pairs);
+        out.set_item("buckets", pairs)?;
     }
     if let Some(count) = d.count {
-        let _ = out.set_item("count", count);
+        out.set_item("count", count)?;
     }
     if let Some(sum) = d.sum {
-        let _ = out.set_item("sum", sum);
+        out.set_item("sum", sum)?;
     }
-    out.into_any().unbind()
+    Ok(out.into_any().unbind())
 }

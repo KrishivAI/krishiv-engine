@@ -163,7 +163,15 @@ fn push_histogram_labels(out: &mut String, labels: &[(String, String)], le: &str
 /// Pushes a sample value: finite floats in full precision, so a parsed
 /// value compares exactly.
 fn push_value(out: &mut String, value: f64) {
-    out.push_str(&format!("{value}"));
+    use std::fmt::Write as _;
+    if value.is_nan() {
+        out.push_str("NaN");
+    } else if value.is_infinite() {
+        out.push_str(if value > 0.0 { "+Inf" } else { "-Inf" });
+    } else {
+        // Writing to a `String` cannot fail.
+        let _ = write!(out, "{value}");
+    }
 }
 
 /// Pushes an exact count.
@@ -474,6 +482,19 @@ mod tests {
             .iter()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn values_render_in_exposition_syntax() {
+        let render = |v: f64| {
+            let mut out = String::new();
+            push_value(&mut out, v);
+            out
+        };
+        assert_eq!(render(f64::INFINITY), "+Inf");
+        assert_eq!(render(f64::NEG_INFINITY), "-Inf");
+        assert_eq!(render(f64::NAN), "NaN");
+        assert_eq!(render(0.25), "0.25");
     }
 
     #[test]

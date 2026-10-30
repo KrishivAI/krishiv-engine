@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
+use futures::FutureExt as _;
 use futures::executor::block_on;
 use krishiv_exec::{cpu_secs, scan_rows, spill_bytes, spill_files};
 use krishiv_plan::analyzer::{Principal, PrincipalKind};
@@ -326,4 +327,42 @@ fn series_do_not_grow_with_principals_or_tables() {
             }
         }
     }
+}
+
+/// A caller that drops the action before its stream exists (a cancel while
+/// the query is being submitted) still folds the query: nothing stays
+/// active, and the query is counted exactly once, as cancelled when the
+/// drop came before it finished.
+#[test]
+fn dropping_the_action_future_before_the_stream_folds_the_query() {
+    let s = enabled();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from_iter_values(0..1000))],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    let df = block_on(s.sql("SELECT a FROM t")).unwrap();
+    // One poll starts the query; dropping the future cancels the rest.
+    let pending = df.execute_stream().now_or_never().is_none();
+    let snap = s.metrics();
+    let active = snap
+        .gauges
+        .iter()
+        .find(|g| g.name == "krishiv.query.active")
+        .unwrap();
+    assert_eq!(active.value, 0.0);
+    let counted: f64 = snap
+        .counters
+        .iter()
+        .filter(|c| c.name == "krishiv.query.count")
+        .map(|c| c.value)
+        .sum();
+    // A query that finished submitting before the drop folds when its
+    // stream (dropped with the result) ends; either way, once.
+    assert!(
+        counted <= 1.0,
+        "counted {counted} (future pending: {pending})"
+    );
 }

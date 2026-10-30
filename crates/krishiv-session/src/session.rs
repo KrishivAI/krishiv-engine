@@ -1186,9 +1186,15 @@ impl Session {
             ));
         }
         // The fold below runs exactly once per started query; without it a
-        // query is invisible to the registry.
+        // query is invisible to the registry. The guard folds it when this
+        // future is dropped before the stream exists (a cancel during
+        // `submit`).
         self.state.metrics.query_begin(query.class());
-        let start = QueryStart::capture(&self.state);
+        let mut pending = PendingFold(Some(QueryFold {
+            query: Arc::clone(&query),
+            state: Arc::clone(&self.state),
+            start: QueryStart::capture(&self.state),
+        }));
         match self
             .state
             .runner
@@ -1196,18 +1202,15 @@ impl Session {
             .await
         {
             Err(error) => {
-                start.fold(&self.state, &query, Some(&error));
+                if let Some(fold) = pending.0.take() {
+                    fold.finish(Some(&error));
+                }
                 Err(error)
             }
             Ok(stream) => {
-                let fold = Some(QueryFold {
-                    query: Arc::clone(&query),
-                    state: Arc::clone(&self.state),
-                    start,
-                });
                 let stream = MetricStream {
                     inner: stream,
-                    fold,
+                    fold: pending.0.take(),
                 };
                 Ok((
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
@@ -1219,7 +1222,9 @@ impl Session {
 
     /// The engine's metrics snapshot: the folded series of ended queries
     /// plus the gauges read now. Query series appear only when
-    /// `krishiv.metrics.enabled` was true as the queries ran.
+    /// `krishiv.metrics.enabled` was true as the queries ran. Only queries
+    /// that reached execution are counted: statements that fail in parsing,
+    /// analysis or an access check are not.
     ///
     /// ```
     /// let session = krishiv_session::Session::new()?;
@@ -1299,6 +1304,19 @@ struct QueryFold {
 impl QueryFold {
     fn finish(self, error: Option<&KrishivError>) {
         self.start.fold(&self.state, &self.query, error);
+    }
+}
+
+/// The fold of a query whose stream does not exist yet: dropped while still
+/// holding it (the caller cancelled), it cancels the query and folds it.
+struct PendingFold(Option<QueryFold>);
+
+impl Drop for PendingFold {
+    fn drop(&mut self) {
+        if let Some(fold) = self.0.take() {
+            fold.query.cancel();
+            fold.finish(None);
+        }
     }
 }
 

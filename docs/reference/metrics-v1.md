@@ -8,9 +8,11 @@ The prefixes `krishiv.stream.*`, `krishiv.ivm.*` and `krishiv.cluster.*` are res
 
 ## Histogram buckets
 
-One set serves every histogram (seconds for durations, bytes for sizes):
+One set serves every histogram in v1 (the bounds are seconds, so the byte-valued `krishiv.query.memory.peak` lands in the overflow bucket until a byte set is added):
 
 `0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300` (an overflow bucket past 300 holds the rest).
+
+The `denied` value of `status` is reserved: access-policy denials fail before execution and are not folded yet.
 
 ## Catalogue
 

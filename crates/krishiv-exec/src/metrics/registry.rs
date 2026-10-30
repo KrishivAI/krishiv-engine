@@ -146,9 +146,10 @@ impl MetricDef {
     }
 }
 
-/// The histogram bucket upper bounds, in the unit of the metric (seconds
-/// for durations, bytes for sizes): the OTel database-client duration
-/// buckets. One set serves every histogram.
+/// The histogram bucket upper bounds: the OTel database-client duration
+/// buckets, in seconds. One set serves every histogram in v1, so a
+/// byte-valued histogram (`krishiv.query.memory.peak`) puts every realistic
+/// value in the overflow bucket until a byte set is added.
 pub const BUCKETS: &[f64] = &[
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0,
 ];
@@ -473,7 +474,9 @@ pub enum Status {
     Failed,
     /// The query was cancelled.
     Cancelled,
-    /// The query was denied (`KRISHIV_INSUFFICIENT_PERMISSIONS`).
+    /// The query was denied (`KRISHIV_INSUFFICIENT_PERMISSIONS`). Reserved:
+    /// access-policy denials fail before execution, so nothing folds this
+    /// yet.
     Denied,
 }
 
@@ -660,8 +663,7 @@ impl MetricsRegistry {
 
     /// Registers a scrape-time gauge for `metric` with `labels`: `read`
     /// runs inside [`Self::snapshot`], never pushed. Label names and values
-    /// must match the definition (an `error_class` value is capped like a
-    /// folded one); `None` reads emit no sample.
+    /// must match the definition; `None` reads emit no sample.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for an unknown metric, a non-gauge, or labels that
@@ -693,7 +695,12 @@ impl MetricsRegistry {
     /// cancelled queries (with partial metrics).
     pub fn fold(&self, outcome: &QueryOutcome<'_>) {
         self.folds.fetch_add(1, Ordering::Relaxed);
-        self.active[Self::class_index(outcome.class)].fetch_sub(1, Ordering::Relaxed);
+        // Saturating: a fold without a matching `query_begin` must not wrap.
+        let _ = self.active[Self::class_index(outcome.class)].fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |n| Some(n.saturating_sub(1)),
+        );
         let m = outcome.metrics;
         let status = outcome.status.as_str().to_owned();
         let class = outcome.class.as_str().to_owned();
@@ -886,9 +893,13 @@ impl MetricsRegistry {
              reserved for streaming, incremental view maintenance and multi-node clusters; \
              they have no entries yet.\n\n\
              ## Histogram buckets\n\n\
-             One set serves every histogram (seconds for durations, bytes for sizes):\n\n\
+             One set serves every histogram in v1 (the bounds are seconds, so the byte-valued \
+             `krishiv.query.memory.peak` lands in the overflow bucket until a byte set is \
+             added):\n\n\
              `0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300` \
              (an overflow bucket past 300 holds the rest).\n\n\
+             The `denied` value of `status` is reserved: access-policy denials fail before \
+             execution and are not folded yet.\n\n\
              ## Catalogue\n\n\
              | Dotted name | Prometheus | Kind | Unit | Labels | Source | Description |\n\
              |---|---|---|---|---|---|---|\n",

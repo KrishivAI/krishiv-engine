@@ -41,4 +41,3 @@ def test_metrics_counts_queries_when_enabled() -> None:
     finally:
         spark.conf.unset("krishiv.metrics.enabled")
         spark.stop()
-    krishiv.session().stop()
