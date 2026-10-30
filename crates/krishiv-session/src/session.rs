@@ -501,7 +501,7 @@ impl Session {
     }
 
     /// Runs the parsed, authorized `statement`.
-    async fn run_statement(
+    pub(crate) async fn run_statement(
         &self,
         statement: Statement,
         env: QueryEnv,
@@ -526,6 +526,9 @@ impl Session {
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
+            Statement::ExecuteImmediate(e) => {
+                Box::pin(self.exec_execute_immediate(&e, query, redacted, 0)).await
+            }
             Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => self.exec_create_table(&t, query).await,
@@ -542,6 +545,12 @@ impl Session {
             Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
+            Statement::Analyze(a) => self.exec_analyze(&a).await,
+            Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
+            Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
+            Statement::Delete(d) => self.exec_row_level_change(&d.table, "DELETE"),
+            Statement::Update(u) => self.exec_row_level_change(&u.table, "UPDATE TABLE"),
+            Statement::Merge(m) => self.exec_row_level_change(&m.target, "MERGE INTO TABLE"),
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }

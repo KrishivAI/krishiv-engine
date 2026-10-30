@@ -1660,7 +1660,9 @@ impl Lowerer {
                 self.call(b.name(), args, sp)
             }
             ExprKind::Nested(inner) => self.expr(inner)?,
-            ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),
+            ExprKind::Parameter(_) | ExprKind::NamedParameter(_) => {
+                return Err(unsupported("parameter markers", sp));
+            }
             ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
             ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
             ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
