@@ -282,12 +282,17 @@ fn row_layout_joins_report_their_index() {
         Some(&Metric::Text("row-flat+chain".to_owned()))
     );
     assert_eq!(build.extra("hash_entries"), Some(&Metric::Count(4)));
-    // The row-layout index does not count probe lengths.
+    // The row-layout index counts probe lengths too: every probe row with
+    // a key looks up once (2,000 orders, filtered to those over 10).
     let probe = profile
         .metrics
         .operators
         .values()
         .find(|e| e.name == "HashJoinProbe")
         .unwrap();
-    assert_eq!(probe.extra("probe_lookups"), None);
+    let lookups = probe.extra("probe_lookups").and_then(Metric::value);
+    assert!(lookups.is_some_and(|l| l > 0), "{probe:?}");
+    let compares = probe.extra("probe_key_compares").and_then(Metric::value);
+    assert!(compares >= lookups.map(|l| l / 2), "{probe:?}");
+    assert!(probe.extra("max_probe_length").and_then(Metric::value) >= Some(1));
 }

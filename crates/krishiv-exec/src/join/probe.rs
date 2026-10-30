@@ -165,6 +165,9 @@ impl Cursor {
         } else {
             limit.max(4096)
         };
+        // A right semi or anti join only needs to know which build rows
+        // match: a build row already marked needs no other pair.
+        let marks_only = shared.join_type.builds_preserved() && !shared.join_type.emits_build();
         let mut probe = Vec::new();
         let mut build = Vec::new();
         while probe.len() < limit && self.pos < n {
@@ -174,6 +177,9 @@ impl Cursor {
                 if head == NONE || quick {
                     if head != NONE {
                         self.state[i] = MATCHED;
+                        if marks_only && let Some(t) = tables.get(usize::from(self.parts[i])) {
+                            t.mark_chain(head);
+                        }
                     }
                     self.pos += 1;
                     continue;
@@ -181,11 +187,12 @@ impl Cursor {
                 self.chain = head;
             }
             let p = usize::from(self.parts[i]);
-            probe.push(u32::try_from(i).unwrap_or(u32::MAX));
-            build.push((p, self.chain));
-            self.chain = tables
-                .get(p)
-                .map_or(NONE, |t| t.next()[self.chain as usize]);
+            let table = tables.get(p);
+            if !(marks_only && table.is_some_and(|t| t.is_marked(self.chain))) {
+                probe.push(u32::try_from(i).unwrap_or(u32::MAX));
+                build.push((p, self.chain));
+            }
+            self.chain = table.map_or(NONE, |t| t.next()[self.chain as usize]);
             if self.chain == NONE {
                 self.pos += 1;
             }
@@ -235,6 +242,12 @@ impl Cursor {
         };
         for (j, &i) in probe.iter().enumerate() {
             if mask.as_ref().is_none_or(|k| k.value(j)) {
+                if shared.join_type.builds_preserved() {
+                    let (p, r) = build[j];
+                    if let Some(t) = tables.get(p) {
+                        t.mark(r);
+                    }
+                }
                 // A single-match join holds at most one match per probe
                 // row: the pairs of one row arrive in order, so a row that
                 // is already marked matched this row twice. The mark lives
@@ -348,6 +361,56 @@ impl Cursor {
     }
 }
 
+/// Rows a right join scans per emitted batch at most: a right semi join
+/// with few marks returns between scans instead of reading the whole table
+/// in one step.
+const EMIT_SCAN: usize = 64;
+
+/// The next rows a right join returns from `table` once every probe row
+/// is joined, from row `*from` on: a right semi join's marked rows, a right
+/// anti or right outer join's unmatched ones (a right outer join pads them
+/// with NULL probe columns). At most `limit` rows per batch; `true` once
+/// the table is done.
+pub(crate) fn emit_build(
+    shared: &Shared,
+    rows: bool,
+    table: &JoinTable,
+    from: &mut u32,
+    limit: usize,
+) -> Result<(Option<Batch>, bool)> {
+    let marked = shared.join_type == JoinType::RightSemi;
+    let mut ids = Vec::new();
+    let scan = u32::try_from(limit.saturating_mul(EMIT_SCAN)).unwrap_or(u32::MAX);
+    table.rows_marked(marked, from, from.saturating_add(scan), limit, &mut ids);
+    let done = *from as usize >= table.arena().len();
+    Ok((build_rows(shared, rows, table.arena(), &ids)?, done))
+}
+
+/// Rows `ids` of `arena` as the right join's output: the build columns,
+/// after NULL probe columns for a right outer join.
+fn build_rows(shared: &Shared, rows: bool, arena: &RowArena, ids: &[u32]) -> Result<Option<Batch>> {
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let picked: Vec<(usize, u32)> = ids.iter().map(|&r| (0, r)).collect();
+    let mut columns = Vec::new();
+    if shared.join_type == JoinType::RightOuter {
+        columns.extend(
+            shared
+                .probe_schema
+                .fields()
+                .iter()
+                .map(|f| new_null_array(f.data_type(), ids.len())),
+        );
+    }
+    columns.extend(shared.build_columns(rows, &picked, |_| Some(arena))?);
+    Ok(Some(Batch::new(record(
+        &shared.schema,
+        columns,
+        ids.len(),
+    )?)))
+}
+
 fn overflow() -> KrishivError {
     ArithmeticOverflow {
         message: "The product of two join row weights overflows BIGINT".to_owned(),
@@ -391,6 +454,13 @@ impl ProbeOp {
             .built
             .get()
             .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
+        if s.join_type.builds_preserved() && !input.is_unweighted() {
+            // Whether a build row "matched" depends on the net multiplicity
+            // of the probe rows with its key, which marks do not track.
+            return Err(super::unsupported(
+                "a weighted (change-stream) probe side for a join that returns its build rows",
+            ));
+        }
         if s.join_type == JoinType::NullAwareAnti {
             use std::sync::atomic::Ordering;
             if g.null_key.load(Ordering::Acquire) {

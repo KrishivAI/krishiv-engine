@@ -114,6 +114,16 @@ struct BuildLocal {
 /// error, enough to presize an index.
 const SKETCH_BITS: u32 = 10;
 
+/// A well-mixed value for the `seq`-th stored row with a NULL `=` key
+/// (SplitMix64's finalizer): it decides the row's partition at every
+/// grace level, nothing else (the row is never looked up).
+fn null_spread(seq: u64) -> u64 {
+    let mut z = seq.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// Builds each filter from its merged partial and publishes it, reserving
 /// it in `held` (a filter that does not fit keeps only its min/max range);
 /// a filter whose partial was dropped is disabled.
@@ -241,15 +251,17 @@ pub(crate) enum Payload {
     Rows(crate::rows::EncodedKeys),
 }
 
+/// `hashes`: each row's stored hash (its key's, or a spread value for a
+/// row with a NULL `=` key that a right join keeps, see [`null_spread`]).
 pub(crate) fn arena_chunk(
     shared: &Shared,
     hashing: &Hashing,
     keys: &Encoded,
+    hashes: &[u64],
     payload: Option<&Payload>,
     weights: &Weights,
     rows: &[usize],
 ) -> Result<Batch> {
-    let hashes = keys.hashes();
     let mut columns: Vec<ArrayRef> = vec![Arc::new(UInt64Array::from_iter_values(
         rows.iter().map(|&i| hashes[i]),
     ))];
@@ -268,6 +280,12 @@ pub(crate) fn arena_chunk(
             return Err(internal("payload rows without a layout".to_owned()));
         }
         (None, _) => {}
+    }
+    if shared.join_type.keeps_null_build_keys() {
+        // Rows with a NULL `=` key: stored, never indexed.
+        columns.push(Arc::new(arrow_array::BooleanArray::from_iter(
+            rows.iter().map(|&i| Some(!keys.is_valid(i))),
+        )));
     }
     let weights = match weights {
         Weights::Const(w) => Weights::Const(*w),
@@ -359,15 +377,19 @@ impl BuildSink {
 }
 
 /// What indexing a partition's in-memory rows reserves: `(index, copy)`,
-/// its [`JoinTable`] index and its transient concatenation copy (none for a
-/// single chunk); `None` if no rows are in memory.
-fn build_need(part: &Part, row_layout: bool) -> Option<(usize, usize)> {
+/// its [`JoinTable`] index (and match bitmap when `marks`) and its
+/// transient concatenation copy (none for a single chunk); `None` if no
+/// rows are in memory.
+fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
     // Finalize sizes row-layout indexes from estimates: reserve their growth.
-    let index =
-        JoinTable::index_bytes_estimated(part.mem_rows(), key_bytes(&part.chunks), row_layout);
+    let rows = part.mem_rows();
+    let mut index = JoinTable::index_bytes_estimated(rows, key_bytes(&part.chunks), row_layout);
+    if marks {
+        index = index.saturating_add(JoinTable::marks_bytes(rows));
+    }
     let copy = if part.chunks.len() > 1 {
         part.bytes()
     } else {
@@ -510,6 +532,9 @@ impl Sink for BuildSink {
         if n == 0 {
             return Ok(SinkStatus::NeedMoreInput);
         }
+        // Covers the joins that return build rows by their matches too: a
+        // build row's net multiplicity is not tracked, so a negative weight
+        // would come out as one row.
         if !input.is_unweighted() && s.join_type != JoinType::Inner {
             return Err(unsupported(
                 "a weighted (change-stream) build side for a non-inner hash join",
@@ -534,8 +559,31 @@ impl Sink for BuildSink {
             (None, None) => None,
         };
         let mut by_part = vec![Vec::new(); g.hashing.fanout0()];
-        let hashes = keys.hashes();
-        for i in (0..n).filter(|&i| keys.is_valid(i)) {
+        // A NULL `=` key matches nothing: the row is dropped, unless the
+        // join returns unmatched build rows; then it is stored flagged in
+        // its partition (it spills with it), and no index takes it (in the
+        // row layout a NULL `=` key is not told apart from a value). Its
+        // stored hash only places it: every NULL key hashes alike, so a
+        // spread value keeps such rows from piling into one partition that
+        // no repartitioning could split.
+        let keep_null = s.join_type.keeps_null_build_keys();
+        let hashes: std::borrow::Cow<'_, [u64]> = if keep_null && any_invalid(keys.valid.as_ref()) {
+            let key_hashes = keys.hashes();
+            std::borrow::Cow::Owned(
+                (0..n)
+                    .map(|i| {
+                        if keys.is_valid(i) {
+                            key_hashes[i]
+                        } else {
+                            null_spread(l.stored + i as u64)
+                        }
+                    })
+                    .collect(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(keys.hashes())
+        };
+        for i in (0..n).filter(|&i| keep_null || keys.is_valid(i)) {
             by_part[g.hashing.partition(hashes[i], 0)].push(i);
         }
         let mut chunks = Vec::new();
@@ -548,6 +596,7 @@ impl Sink for BuildSink {
                     s,
                     &g.hashing,
                     &keys,
+                    &hashes,
                     payload.as_ref(),
                     input.weights(),
                     rows,
@@ -568,7 +617,8 @@ impl Sink for BuildSink {
         }
         if let Some((sketches, _)) = &mut l.sketches {
             for (sketch, rows) in sketches.iter_mut().zip(&by_part) {
-                for &i in rows {
+                // Distinct keys of the index: NULL-key rows are not in it.
+                for &i in rows.iter().filter(|&&i| keys.is_valid(i)) {
                     sketch.add(hashes[i]);
                 }
             }
@@ -652,7 +702,8 @@ impl Sink for BuildSink {
                     let (indexes, copy) = {
                         let c = lock(&g.collect);
                         let rows = g.hashing.rows();
-                        let needs = c.parts.iter().filter_map(|p| build_need(p, rows));
+                        let marks = s.join_type.builds_preserved();
+                        let needs = c.parts.iter().filter_map(|p| build_need(p, rows, marks));
                         needs.fold((0usize, 0usize), |(i, m), (index, copy)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
@@ -674,7 +725,8 @@ impl Sink for BuildSink {
                     .zip(estimates)
                     .enumerate()
                     .filter_map(|(i, (p, keys))| {
-                        Some((i, build_need(p, g.hashing.rows())?, p, keys))
+                        let marks = s.join_type.builds_preserved();
+                        Some((i, build_need(p, g.hashing.rows(), marks)?, p, keys))
                     })
                     .map(|(i, need, p, keys)| Job {
                         part: i,
@@ -748,7 +800,14 @@ impl Sink for BuildSink {
                                         layout,
                                         hashing.g_seed(),
                                         keys,
-                                    );
+                                    )
+                                    .and_then(|t| {
+                                        if shared.join_type.builds_preserved() {
+                                            t.with_marks()
+                                        } else {
+                                            Ok(t)
+                                        }
+                                    });
                                     let n = &shared.counters;
                                     n.add(Counter::ConcatNs, nanos(t1 - t0));
                                     n.add(Counter::IndexNs, nanos(t1.elapsed()));
@@ -805,6 +864,7 @@ impl Sink for BuildSink {
             c.sketch_memory.clear();
             let mut memory = vec![index, filter_memory];
             let mut grace = Grace::new(g.hashing.fanout0());
+            grace.keep_unprobed = s.join_type.keeps_null_build_keys();
             for (p, part) in c.parts.iter_mut().enumerate() {
                 memory.append(&mut part.memory);
                 if spilled & (1 << p) != 0 {

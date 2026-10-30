@@ -466,7 +466,9 @@ impl HashAggregate {
         drop(inputs);
         let mut queue = VecDeque::with_capacity(plan.len());
         for (t, inputs) in plan.into_iter().zip(per_task) {
-            let table = RowTable::new(&self.core, &g.seed, Mode::Grow, false, bits)?;
+            let table = RowTable::new(&self.core, &g.seed, Mode::Grow, false, bits)?
+                .with_resizes(Arc::clone(&self.counters.resizes))
+                .with_probes(g.probes.clone());
             queue.push_back(Task {
                 need: table.projected_presize(t.groups),
                 presize: t.groups.max(1),

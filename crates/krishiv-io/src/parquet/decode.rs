@@ -724,7 +724,15 @@ impl Decoder for ParquetDecoder {
     }
 
     fn metrics(&self) -> ScanUnitMetrics {
-        self.metrics
+        let (units_filtered, units_unfiltered, row_filter_rows, row_filter_kept) =
+            self.late.report();
+        ScanUnitMetrics {
+            units_filtered,
+            units_unfiltered,
+            row_filter_rows,
+            row_filter_kept,
+            ..self.metrics
+        }
     }
 }
 
