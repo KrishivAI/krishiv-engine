@@ -377,6 +377,12 @@ pub(super) fn cmp(
                 CompareKind::GreaterEq => compare::compare_bool::<GreaterEq>(a, b),
             }?
         }
+        ArrowType::Utf8View | ArrowType::BinaryView
+            if matches!(kind, CompareKind::Equal | CompareKind::NotEqual)
+                && l.array().data_type() == r.array().data_type() =>
+        {
+            view_eq(kind == CompareKind::Equal, l, r, rows)
+        }
         ArrowType::Utf8View | ArrowType::Utf8 | ArrowType::LargeUtf8 => {
             bytes(kind, l, r, rows, |a, i| str_value(a, i).as_bytes())?
         }
@@ -534,12 +540,91 @@ pub(super) fn str_value(a: &dyn Array, i: usize) -> &str {
 }
 
 /// The bytes at row `i` of a binary array.
-fn bin_value(a: &dyn Array, i: usize) -> &[u8] {
+pub(super) fn bin_value(a: &dyn Array, i: usize) -> &[u8] {
     match a.data_type() {
         ArrowType::BinaryView => a.as_binary_view().value(i),
         ArrowType::LargeBinary => a.as_binary::<i64>().value(i),
         _ => a.as_binary::<i32>().value(i),
     }
+}
+
+/// The views and data buffers of a string or binary view array.
+fn view_parts(a: &dyn Array) -> (&[u128], &[arrow_buffer::Buffer]) {
+    match a.data_type() {
+        ArrowType::Utf8View => {
+            let v = a.as_string_view();
+            (v.views(), v.data_buffers())
+        }
+        _ => {
+            let v = a.as_binary_view();
+            (v.views(), v.data_buffers())
+        }
+    }
+}
+
+/// Whether two views hold equal bytes. Arrow's view layout: the low 32
+/// bits are the length; a value of 12 bytes or fewer sits inline,
+/// zero-padded, so equal values have equal views; a longer one keeps its
+/// first 4 bytes in the view (bits 32..64) and the rest in a data buffer
+/// (buffer index in bits 64..96, offset in bits 96..128).
+#[inline]
+#[expect(clippy::cast_possible_truncation, reason = "a view's 32-bit fields")]
+fn views_equal(a: u128, ab: &[arrow_buffer::Buffer], b: u128, bb: &[arrow_buffer::Buffer]) -> bool {
+    let len = a as u32;
+    if len != b as u32 {
+        return false;
+    }
+    if len <= 12 {
+        return a == b;
+    }
+    // Length and prefix first: most unequal values differ there.
+    if a as u64 != b as u64 {
+        return false;
+    }
+    // A view that points outside its buffers equals nothing.
+    matches!((long_bytes(a, ab), long_bytes(b, bb)), (Some(x), Some(y)) if x == y)
+}
+
+/// The bytes of a view of a value longer than 12 bytes, in its data buffer.
+#[inline]
+#[expect(clippy::cast_possible_truncation, reason = "a view's 32-bit fields")]
+fn long_bytes(v: u128, bufs: &[arrow_buffer::Buffer]) -> Option<&[u8]> {
+    let (len, buffer, offset) = (
+        v as u32 as usize,
+        (v >> 64) as u32 as usize,
+        (v >> 96) as u32 as usize,
+    );
+    bufs.get(buffer)?.get(offset..offset.checked_add(len)?)
+}
+
+/// `=` (`equal`) or `<>` of two string or binary view operands of one
+/// type, view against view: no per-row dispatch, and most rows decided
+/// from the 16-byte views alone (the arrow-rs view comparison's method).
+fn view_eq(equal: bool, l: &Value, r: &Value, rows: usize) -> BooleanArray {
+    let (la, ra) = (l.array(), r.array());
+    let ((lv, lb), (rv, rb)) = (view_parts(la.as_ref()), view_parts(ra.as_ref()));
+    let (ls, rs) = (l.is_scalar(), r.is_scalar());
+    let at = |scalar: bool, i: usize| if scalar { 0 } else { i };
+    let values: BooleanBuffer = (0..rows)
+        .map(|i| {
+            let (x, y) = (at(ls, i), at(rs, i));
+            let same = match (lv.get(x), rv.get(y)) {
+                (Some(&a), Some(&b)) => views_equal(a, lb, b, rb),
+                _ => false,
+            };
+            same == equal
+        })
+        .collect();
+    let null_of = |a: &ArrayRef, scalar: bool| -> Option<NullBuffer> {
+        if scalar {
+            // A NULL scalar makes every row NULL.
+            a.is_null(0).then(|| NullBuffer::new_null(rows))
+        } else {
+            a.logical_nulls()
+        }
+    };
+    let nulls = NullBuffer::union(null_of(la, ls).as_ref(), null_of(ra, rs).as_ref());
+    BooleanArray::new(values, nulls)
 }
 
 /// Byte-wise comparison (Spark's `UTF8_BINARY` order for strings).
@@ -888,5 +973,93 @@ mod tests {
             at(CompareKind::LessEq),
             BooleanArray::from(vec![Some(true), Some(true)])
         );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig { cases: 256, ..Default::default() })]
+        /// The view comparison answers `=` and `<>` exactly as the row-wise
+        /// byte comparison does: short (inline) and long values, shared
+        /// prefixes, NULLs, and a scalar on either side.
+        #[test]
+        fn view_equality_matches_the_byte_comparison(
+            left in proptest::collection::vec(proptest::option::of(value()), 0..40),
+            right in proptest::collection::vec(proptest::option::of(value()), 0..40),
+            scalar in 0u8..3,
+            binary in proptest::bool::ANY,
+        ) {
+            let n = left.len().min(right.len());
+            let make = |v: &[Option<String>]| -> ArrayRef {
+                if binary {
+                    Arc::new(arrow_array::BinaryViewArray::from_iter(v.iter().map(|s| s.as_deref().map(str::as_bytes))))
+                } else {
+                    Arc::new(StringViewArray::from_iter(v.iter().map(|s| s.as_deref())))
+                }
+            };
+            let (l, r) = match scalar {
+                0 => (Value::Array(make(&left[..n])), Value::Array(make(&right[..n]))),
+                1 if !right.is_empty() => (Value::Array(make(&left[..n])), Value::Scalar(make(&right[..1]))),
+                _ if !left.is_empty() => (Value::Scalar(make(&left[..1])), Value::Array(make(&right[..n]))),
+                _ => (Value::Array(make(&left[..n])), Value::Array(make(&right[..n]))),
+            };
+            let rows = n;
+            let at: for<'a> fn(&'a dyn Array, usize) -> &'a [u8] = if binary { bin_value } else { |a, i| str_value(a, i).as_bytes() };
+            for (equal, kind) in [(true, CompareKind::Equal), (false, CompareKind::NotEqual)] {
+                let got = view_eq(equal, &l, &r, rows);
+                let want = bytes(kind, &l, &r, rows, at).unwrap();
+                proptest::prop_assert_eq!(got.len(), want.len());
+                for i in 0..rows {
+                    proptest::prop_assert_eq!(got.is_valid(i), want.is_valid(i), "row {}", i);
+                    if want.is_valid(i) {
+                        proptest::prop_assert_eq!(got.value(i), want.value(i), "row {}", i);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sliced view arrays (an offset into shared views and buffers) compare
+    /// as their rows, against a column and against a scalar.
+    #[test]
+    fn sliced_views_compare_their_rows() {
+        let long = "a value longer than twelve bytes";
+        let all = StringViewArray::from(vec![
+            Some("x"),
+            Some(long),
+            None,
+            Some("short"),
+            Some(long),
+            Some("a value longer than twelve bytes, but not equal"),
+        ]);
+        let left: ArrayRef = Arc::new(all.slice(1, 5));
+        let right: ArrayRef = Arc::new(all.slice(0, 5));
+        let lit: ArrayRef = Arc::new(StringViewArray::from(vec![long]));
+        let at: for<'a> fn(&'a dyn Array, usize) -> &'a [u8] = |a, i| str_value(a, i).as_bytes();
+        for (l, r) in [
+            (Value::Array(Arc::clone(&left)), Value::Array(right)),
+            (Value::Array(left), Value::Scalar(lit)),
+        ] {
+            for (equal, kind) in [(true, CompareKind::Equal), (false, CompareKind::NotEqual)] {
+                let got = view_eq(equal, &l, &r, 5);
+                let want = bytes(kind, &l, &r, 5, at).unwrap();
+                assert_eq!(got, want, "{kind:?}");
+            }
+        }
+    }
+
+    /// Values around the 12-byte inline limit, sharing prefixes.
+    fn value() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::strategy::Strategy as _;
+        (
+            proptest::sample::select(vec![
+                "",
+                "ab",
+                "abcd",
+                "abcdefghijkl",
+                "abcdefghijklm",
+                "abcdefghijklmnopqrstuv",
+            ]),
+            0u8..3,
+        )
+            .prop_map(|(base, tail)| format!("{base}{}", "x".repeat(usize::from(tail))))
     }
 }
