@@ -116,6 +116,19 @@ fn unsupported_build_sides_warn() {
             "Hint (strategy=broadcast) is not supported in the query: build left for LEFT OUTER join."
         ]
     );
+    // A FULL OUTER join is never broadcast: it builds the right input,
+    // partitioned, and the hint is reported ignored.
+    let (j, _, w) = join(
+        "SELECT /*+ BROADCAST(y) */ x.s FROM t x FULL JOIN (SELECT * FROM t WHERE b > 50) y \
+         ON x.a = y.a",
+    );
+    assert!(!j.to_string().contains("Broadcast"), "{j}");
+    assert_eq!(
+        w,
+        [
+            "Hint (strategy=broadcast) is not supported in the query: build right for FULL OUTER join."
+        ]
+    );
     // Spark's shuffled hash join builds it; a single-node hash join does
     // not.
     let (_, y, w) = join(
