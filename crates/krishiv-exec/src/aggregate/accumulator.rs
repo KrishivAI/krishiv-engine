@@ -1611,6 +1611,16 @@ impl Accumulator {
                 } else {
                     CompareKind::Less
                 };
+                // Without running-window snapshots the batch is reduced at
+                // once: a tournament per group over whole-chunk comparisons,
+                // then one comparison of the group winners against the
+                // current extrema and one `take` per winning group.
+                if run.is_none() {
+                    struct_extremum_batch(
+                        a, groups, &valid, order, values, bytes, set, heap, kernels,
+                    )?;
+                    return Ok(());
+                }
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
                     if valid(i) {
@@ -2101,6 +2111,145 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
         DataType::Decimal64(..) => prim::<Decimal64Type>(it, t),
         _ => prim::<Decimal128Type>(it, t),
     }
+}
+
+/// Folds one batch of a struct `MIN`/`MAX` into the per-group extrema
+/// without a comparison per row. Per group, the candidate rows (in input
+/// order, NULL structs skipped) meet in rounds: neighbours are compared in
+/// one vectorized comparison across all groups and the strictly better one
+/// advances (so a tie keeps the earlier row, as the row-at-a-time fold
+/// does). The winner of each group then meets the group's current extremum
+/// in one more comparison, and each group that improved takes its winning
+/// row once.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the accumulator's fields travel together"
+)]
+fn struct_extremum_batch(
+    a: &ArrayRef,
+    groups: &[u32],
+    valid: &dyn Fn(usize) -> bool,
+    order: CompareKind,
+    values: &mut [Option<ArrayRef>],
+    bytes: &mut [usize],
+    set: &mut [bool],
+    heap: &mut usize,
+    kernels: &KernelCtx,
+) -> Result<()> {
+    let wins = |candidate: &ArrayRef, current: &ArrayRef| -> Result<Vec<bool>> {
+        let out = cmp(
+            order,
+            &Value::Array(Arc::clone(candidate)),
+            &Value::Array(Arc::clone(current)),
+            kernels,
+        )?;
+        Ok((0..out.len())
+            .map(|k| out.is_valid(k) && out.value(k))
+            .collect())
+    };
+    let take_rows = |rows: &[u32]| -> Result<ArrayRef> {
+        arrow_select::take::take(a.as_ref(), &UInt32Array::from(rows.to_vec()), None)
+            .map_err(|e| internal(e.to_string()))
+    };
+    // The valid rows, grouped (stable: input order within a group).
+    let mut candidates: Vec<(u32, u32)> = Vec::new();
+    for (i, &g) in groups.iter().enumerate() {
+        if valid(i) {
+            let row = u32::try_from(i)
+                .map_err(|_| internal("a struct extremum past row u32::MAX".to_owned()))?;
+            candidates.push((g, row));
+        }
+    }
+    candidates.sort_by_key(|(g, _)| *g);
+    // Tournament rounds until each group has one candidate left.
+    loop {
+        let mut left: Vec<u32> = Vec::new();
+        let mut right: Vec<u32> = Vec::new();
+        let mut next: Vec<(u32, u32)> = Vec::with_capacity(candidates.len());
+        let mut start = 0;
+        let mut pending = false;
+        while start < candidates.len() {
+            let g = candidates[start].0;
+            let mut end = start;
+            while end < candidates.len() && candidates[end].0 == g {
+                end += 1;
+            }
+            let mut k = start;
+            while k + 1 < end {
+                left.push(candidates[k].1);
+                right.push(candidates[k + 1].1);
+                // Placeholder; resolved after the comparison.
+                next.push((g, u32::MAX));
+                k += 2;
+                pending = true;
+            }
+            if k < end {
+                next.push(candidates[k]);
+            }
+            start = end;
+        }
+        if !pending {
+            break;
+        }
+        let better = wins(&take_rows(&right)?, &take_rows(&left)?)?;
+        let mut pair = 0;
+        for slot in &mut next {
+            if slot.1 == u32::MAX {
+                slot.1 = if better[pair] {
+                    right[pair]
+                } else {
+                    left[pair]
+                };
+                pair += 1;
+            }
+        }
+        candidates = next;
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    // Each group's winner against its current extremum.
+    let winners: Vec<u32> = candidates.iter().map(|(_, row)| *row).collect();
+    let winner_rows = take_rows(&winners)?;
+    let held: Vec<usize> = (0..candidates.len())
+        .filter(|k| values[candidates[*k].0 as usize].is_some())
+        .collect();
+    let mut improves = vec![true; candidates.len()];
+    if !held.is_empty() {
+        let candidate = arrow_select::take::take(
+            winner_rows.as_ref(),
+            &UInt32Array::from(
+                held.iter()
+                    .map(|k| u32::try_from(*k).unwrap_or(u32::MAX))
+                    .collect::<Vec<_>>(),
+            ),
+            None,
+        )
+        .map_err(|e| internal(e.to_string()))?;
+        let currents: Vec<ArrayRef> = held
+            .iter()
+            .filter_map(|k| values[candidates[*k].0 as usize].clone())
+            .collect();
+        let refs: Vec<&dyn Array> = currents.iter().map(AsRef::as_ref).collect();
+        let current = arrow_select::concat::concat(&refs).map_err(|e| internal(e.to_string()))?;
+        let better = wins(&candidate, &current)?;
+        for (pos, k) in held.iter().enumerate() {
+            improves[*k] = better[pos];
+        }
+    }
+    for (k, (g, row)) in candidates.iter().enumerate() {
+        if !improves[k] {
+            continue;
+        }
+        let g = *g as usize;
+        let taken = take_rows(&[*row])?;
+        let size = taken.get_buffer_memory_size();
+        *heap = heap.saturating_sub(bytes[g]) + size;
+        bytes[g] = size;
+        values[g] = Some(taken);
+        set[g] = true;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2795,5 +2944,107 @@ mod tests {
             .update_running(&[0, 0], &[ints.slice(0, 2)], &short)
             .unwrap_err();
         assert!(e.to_string().contains("different lengths"), "{e}");
+    }
+}
+
+/// The batch fold of a struct `MIN`/`MAX` against feeding the same rows one
+/// at a time (the row-at-a-time fold the batch path replaces).
+#[cfg(test)]
+#[cfg(not(loom))]
+mod struct_extremum_tests {
+    use super::*;
+    use arrow_array::{Float64Array, Int32Array, StringArray, StructArray};
+    use arrow_schema::Field;
+    use proptest::prelude::*;
+
+    type Cell = Option<(Option<i32>, Option<&'static str>, f64)>;
+
+    fn column(rows: &[(u32, Cell)]) -> ArrayRef {
+        let fields: arrow_schema::Fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+        ]
+        .into();
+        let a = Int32Array::from_iter(rows.iter().map(|(_, c)| c.and_then(|c| c.0)));
+        let b = StringArray::from_iter(rows.iter().map(|(_, c)| c.and_then(|c| c.1)));
+        let c = Float64Array::from_iter(rows.iter().map(|(_, c)| c.map(|c| c.2)));
+        let nulls = NullBuffer::from_iter(rows.iter().map(|(_, c)| c.is_some()));
+        Arc::new(StructArray::new(
+            fields,
+            vec![Arc::new(a) as ArrayRef, Arc::new(b), Arc::new(c)],
+            Some(nulls),
+        ))
+    }
+
+    fn struct_type() -> DataType {
+        column(&[]).data_type().clone()
+    }
+
+    fn run(f: AggregateFunction, batches: &[Vec<(u32, Cell)>]) -> String {
+        run_groups(f, batches, 5)
+    }
+
+    fn run_groups(f: AggregateFunction, batches: &[Vec<(u32, Cell)>], groups: u32) -> String {
+        let t = struct_type();
+        let mut acc = Accumulator::new(&AggregateExpr::new(f, 0, t, "a"), true).unwrap();
+        acc.resize(groups as usize);
+        for rows in batches {
+            let groups: Vec<u32> = rows.iter().map(|r| r.0).collect();
+            acc.update(&groups, &[column(rows)], &Weights::Const(1))
+                .unwrap();
+        }
+        let ids: Vec<u32> = (0..groups).collect();
+        format!("{:?}", acc.evaluate(&ids).unwrap())
+    }
+
+    fn cell() -> impl Strategy<Value = Cell> {
+        let a = prop_oneof![Just(None), (0..3).prop_map(Some)];
+        let b = prop_oneof![Just(None), Just(Some("x")), Just(Some("y")), Just(Some(""))];
+        let c = prop_oneof![Just(f64::NAN), Just(-0.0), Just(0.0), Just(1.0), Just(-1.0)];
+        prop_oneof![1 => Just(None), 4 => (a, b, c).prop_map(Some)]
+    }
+
+    /// Timing note (run with `--ignored --nocapture`): 200,000 rows over 100
+    /// groups folded in batches of 4,096 against one row per batch (the cost
+    /// profile of the row-at-a-time fold).
+    #[test]
+    #[ignore = "timing note, not a check"]
+    fn batch_fold_timing() {
+        let rows: Vec<(u32, Cell)> = (0..200_000u32)
+            .map(|i| {
+                let v = i32::try_from(i.wrapping_mul(2_654_435_761) % 1000).unwrap_or(0);
+                (i % 100, Some((Some(v), Some("x"), f64::from(v))))
+            })
+            .collect();
+        let batched: Vec<Vec<(u32, Cell)>> = rows.chunks(4096).map(<[_]>::to_vec).collect();
+        let single: Vec<Vec<(u32, Cell)>> = rows.iter().map(|r| vec![*r]).collect();
+        let t = std::time::Instant::now();
+        let a = run_groups(AggregateFunction::Max, &batched, 100);
+        let batch_time = t.elapsed();
+        let t = std::time::Instant::now();
+        let b = run_groups(AggregateFunction::Max, &single, 100);
+        let single_time = t.elapsed();
+        assert_eq!(a, b);
+        println!("TIMING batches of 4096: {batch_time:?}; one row per batch: {single_time:?}");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn batch_fold_equals_row_at_a_time(
+            rows in proptest::collection::vec((0u32..5, cell()), 0..48),
+            split in 1usize..6,
+        ) {
+            for f in [AggregateFunction::Max, AggregateFunction::Min] {
+                // Whole batches of `split` rows against one row per batch.
+                let batched: Vec<Vec<(u32, Cell)>> =
+                    rows.chunks(split).map(<[_]>::to_vec).collect();
+                let single: Vec<Vec<(u32, Cell)>> =
+                    rows.iter().map(|r| vec![*r]).collect();
+                prop_assert_eq!(run(f, &batched), run(f, &single));
+            }
+        }
     }
 }
