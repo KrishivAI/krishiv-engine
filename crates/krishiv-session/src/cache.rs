@@ -56,6 +56,8 @@ pub(crate) fn is_cache_name(name: &str) -> bool {
 /// A cached relation: one materialized snapshot.
 #[derive(Debug)]
 pub(crate) struct CacheEntry {
+    /// The hidden table name its scans read.
+    pub(crate) name: String,
     /// The snapshot, as the in-memory table its scans read.
     pub(crate) table: Arc<MemoryTable>,
     /// Bytes reserved from the pool for the snapshot.
@@ -266,6 +268,7 @@ impl RelationCache {
             ),
         };
         let entry = Arc::new(CacheEntry {
+            name: name.clone(),
             table: Arc::new(MemoryTable::new(
                 schema,
                 batches.into_iter().map(Batch::new).collect(),
@@ -391,16 +394,10 @@ impl RelationCache {
                 };
                 let found = {
                     let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    state.names.iter().find_map(|(n, k)| {
-                        (k == &key)
-                            .then(|| {
-                                state
-                                    .entries
-                                    .get(k)
-                                    .map(|e| (n.clone(), Arc::clone(&e.table)))
-                            })
-                            .flatten()
-                    })
+                    state
+                        .entries
+                        .get(&key)
+                        .map(|e| (e.name.clone(), Arc::clone(&e.table)))
                 };
                 let Some((name, table)) = found else {
                     return Ok::<_, Infallible>(node);
