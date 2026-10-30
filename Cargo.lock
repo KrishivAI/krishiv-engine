@@ -1858,6 +1858,7 @@ dependencies = [
  "krishiv",
  "krishiv-alloc",
  "krishiv-common",
+ "krishiv-functions",
  "krishiv-memory",
  "krishiv-server",
  "krishiv-sql",
@@ -2169,6 +2170,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "twox-hash",
 ]
 
 [[package]]
