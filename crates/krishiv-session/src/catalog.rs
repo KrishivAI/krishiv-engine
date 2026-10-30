@@ -314,6 +314,13 @@ pub(crate) struct QueryCatalog {
     namespace: Vec<String>,
 }
 
+impl QueryCatalog {
+    /// The query's namespace snapshot.
+    pub(crate) fn namespace(&self) -> &[String] {
+        &self.namespace
+    }
+}
+
 impl fmt::Debug for QueryCatalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QueryCatalog")
@@ -1087,6 +1094,8 @@ pub(crate) fn expand_temp_views(
 pub(crate) struct StoredViews<'a> {
     pub(crate) parser: krishiv_sql::ParserOptions,
     pub(crate) next_source: &'a dyn Fn() -> krishiv_plan::SourceId,
+    /// The current namespace as the query snapshot saw it: bare names resolve here, whatever `USE` does later.
+    pub(crate) namespace: String,
 }
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
@@ -1228,8 +1237,15 @@ impl Expander<'_> {
         {
             return Ok(plan);
         }
+        // A bare name that is a temporary table or view never reaches a permanent view (Spark's resolution order).
+        if self.view_namespace.is_none()
+            && name.len() == 1
+            && self.catalog.exists(&name[0], self.case_sensitive)
+        {
+            return Ok(plan);
+        }
         let (namespace, table) = match name.as_slice() {
-            [table] => (self.catalog.current_namespace(), table),
+            [table] => (stored.namespace.clone(), table),
             [namespace, table] => (namespace.clone(), table),
             [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
                 (namespace.clone(), table)

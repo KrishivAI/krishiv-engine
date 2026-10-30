@@ -1050,6 +1050,12 @@ impl Session {
             Some(&crate::catalog::StoredViews {
                 parser: env.parser,
                 next_source: &next_source,
+                namespace: env
+                    .catalog
+                    .namespace()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| self.state.catalog.current_namespace()),
             }),
         )?;
         let plan = Plan::try_new(plan)?;

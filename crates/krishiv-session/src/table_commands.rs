@@ -91,6 +91,14 @@ fn unsupported(feature: &str) -> KrishivError {
     .into()
 }
 
+/// An `ALTER` found its table dropped or altered by another statement while it ran.
+fn concurrent_change(name: &TableName) -> KrishivError {
+    internal(format!(
+        "{} was changed by another statement while this one ran; retry",
+        name.quoted()
+    ))
+}
+
 fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
 }
@@ -260,11 +268,19 @@ impl Session {
                         .cache
                         .invalidate_table(&format!("{}.{}", t.namespace, t.name));
                 }
-                for dir in dirs {
-                    remove_dir(&dir)?;
-                }
+                // The metadata is gone: leave the dropped namespace first, then try every directory and report the
+                // first failure.
                 if self.state.catalog.current_namespace() == name {
                     self.state.catalog.use_namespace(DEFAULT_NAMESPACE);
+                }
+                let mut first_error = None;
+                for dir in dirs {
+                    if let Err(e) = remove_dir(&dir) {
+                        first_error.get_or_insert(e);
+                    }
+                }
+                if let Some(e) = first_error {
+                    return Err(e);
                 }
             }
             Err(DropNamespaceError::Default) => {
@@ -366,6 +382,7 @@ impl Session {
             .into());
         }
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let case_sensitive = env.analysis.conf.case_sensitive;
         let analysis = df.analyzed_in(env).await?;
         let query_columns: Vec<String> = analysis
             .analyzed
@@ -386,10 +403,43 @@ impl Session {
             })
             .collect();
         if !v.columns.is_empty() {
-            if v.columns.len() != columns.len() {
-                return Err(unsupported(
-                    "a view column list of another length than its query",
-                ));
+            let mut declared = Vec::with_capacity(v.columns.len());
+            for alias in &v.columns {
+                let ColumnName::Ident(ident) = &alias.name else {
+                    return Err(unsupported("IDENTIFIER() column names"));
+                };
+                declared.push(ident.value.clone());
+            }
+            let quote = |n: &str| format!("`{}`", n.replace('`', "``"));
+            let list = |names: &[String]| {
+                names
+                    .iter()
+                    .map(|n| quote(n))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            match declared.len().cmp(&columns.len()) {
+                std::cmp::Ordering::Greater => {
+                    return Err(
+                        krishiv_common::error::CreateViewColumnArityMismatchNotEnoughDataColumns {
+                            view_name: name.quoted(),
+                            view_columns: list(&declared),
+                            data_columns: list(&query_columns),
+                        }
+                        .into(),
+                    );
+                }
+                std::cmp::Ordering::Less => {
+                    return Err(
+                        krishiv_common::error::CreateViewColumnArityMismatchTooManyDataColumns {
+                            view_name: name.quoted(),
+                            view_columns: list(&declared),
+                            data_columns: list(&query_columns),
+                        }
+                        .into(),
+                    );
+                }
+                std::cmp::Ordering::Equal => {}
             }
             for (column, alias) in columns.iter_mut().zip(&v.columns) {
                 let ColumnName::Ident(ident) = &alias.name else {
@@ -397,6 +447,22 @@ impl Session {
                 };
                 ident.value.clone_into(&mut column.name);
                 column.comment.clone_from(&alias.comment);
+            }
+        }
+        // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`, ignoring case
+        // unless `caseSensitive` (then as written, else in lower case).
+        let mut seen = std::collections::BTreeSet::new();
+        for c in &columns {
+            let key = if case_sensitive {
+                c.name.clone()
+            } else {
+                c.name.to_lowercase()
+            };
+            if !seen.insert(key.clone()) {
+                return Err(krishiv_common::error::ColumnAlreadyExists {
+                    column_name: format!("`{key}`"),
+                }
+                .into());
             }
         }
         let view = CatalogTable {
@@ -546,10 +612,9 @@ impl Session {
             }
             _ => return Err(unsupported("this ALTER VIEW")),
         }
-        self.state
-            .catalog
-            .store
-            .create_table(changed, CreateMode::Replace)?;
+        if !self.state.catalog.store.replace_table(&existing, changed) {
+            return Err(concurrent_change(&name));
+        }
         self.empty_frame().await
     }
 
@@ -616,10 +681,9 @@ impl Session {
             }
             _ => return Err(unsupported("this ALTER TABLE")),
         }
-        self.state
-            .catalog
-            .store
-            .create_table(changed, CreateMode::Replace)?;
+        if !self.state.catalog.store.replace_table(&table, changed) {
+            return Err(concurrent_change(&name));
+        }
         self.empty_frame().await
     }
 
@@ -660,6 +724,10 @@ impl Session {
             let warehouse = self.warehouse_dir()?;
             renamed.location = managed_location(&warehouse, &to.namespace, &to.name);
             renamed.root = warehouse;
+            // Authorized before any file moves: the source must be deletable and the target creatable.
+            self.deletable_dir(table).await?;
+            self.authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
+                .await?;
             if let Some(parent) = renamed.location.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| internal(format!("cannot create {}: {e}", parent.display())))?;
