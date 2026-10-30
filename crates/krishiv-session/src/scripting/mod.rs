@@ -165,7 +165,7 @@ impl Run<'_> {
         for item in items {
             // Where a dropped `sql()` future lands: the script stops at the next statement.
             tokio::task::yield_now().await;
-            let flow = self.item(item).await?;
+            let flow = Box::pin(self.item(item)).await?;
             if flow != Flow::Normal {
                 return Ok(flow);
             }
@@ -175,19 +175,19 @@ impl Run<'_> {
 
     async fn item(&mut self, item: &ScriptStatement) -> Result<Flow, KrishivError> {
         match item {
-            S::Declare(d) => self.declare(d).await.map(|()| Flow::Normal),
+            S::Declare(d) => Box::pin(self.declare(d)).await.map(|()| Flow::Normal),
             S::Condition(_) => Ok(Flow::Normal),
             S::Handler(_) => Err(unsupported("EXIT handlers in SQL scripts")),
             S::Cursor(_) => Err(unsupported("SQL cursors")),
             S::For(_) => Err(unsupported("FOR loops in SQL scripts")),
-            S::Assign(set) => self.assign(set).await.map(|()| Flow::Normal),
-            S::Sql(statement) => self.leaf(statement).await.map(|()| Flow::Normal),
+            S::Assign(set) => Box::pin(self.assign(set)).await.map(|()| Flow::Normal),
+            S::Sql(statement) => Box::pin(self.leaf(statement)).await.map(|()| Flow::Normal),
             S::Compound(c) => Box::pin(self.compound(c)).await,
             S::Leave(j) => Ok(Flow::Leave(self.fold(&j.label.value))),
             S::Iterate(j) => Ok(Flow::Iterate(self.fold(&j.label.value))),
             S::If(i) => {
                 for branch in &i.branches {
-                    if self.condition(&branch.condition).await? {
+                    if Box::pin(self.condition(&branch.condition)).await? {
                         return Box::pin(self.items(&branch.body)).await;
                     }
                 }
@@ -199,8 +199,8 @@ impl Run<'_> {
             S::Case(c) => {
                 for branch in &c.branches {
                     let matched = match &c.subject {
-                        Some(subject) => self.equal(subject, &branch.condition).await?,
-                        None => self.condition(&branch.condition).await?,
+                        Some(subject) => Box::pin(self.equal(subject, &branch.condition)).await?,
+                        None => Box::pin(self.condition(&branch.condition)).await?,
                     };
                     if matched {
                         return Box::pin(self.items(&branch.body)).await;
@@ -213,8 +213,8 @@ impl Run<'_> {
             }
             S::While(w) => {
                 let label = w.label.as_ref().map(|l| self.fold(&l.value));
-                while self.condition(&w.condition).await? {
-                    if let Some(flow) = self.round(&label, &w.body).await? {
+                while Box::pin(self.condition(&w.condition)).await? {
+                    if let Some(flow) = Box::pin(self.round(&label, &w.body)).await? {
                         return Ok(flow);
                     }
                 }
@@ -223,10 +223,10 @@ impl Run<'_> {
             S::Repeat(r) => {
                 let label = r.label.as_ref().map(|l| self.fold(&l.value));
                 loop {
-                    if let Some(flow) = self.round(&label, &r.body).await? {
+                    if let Some(flow) = Box::pin(self.round(&label, &r.body)).await? {
                         return Ok(flow);
                     }
-                    if self.condition(&r.condition).await? {
+                    if Box::pin(self.condition(&r.condition)).await? {
                         return Ok(Flow::Normal);
                     }
                 }
@@ -234,7 +234,7 @@ impl Run<'_> {
             S::Loop(l) => {
                 let label = l.label.as_ref().map(|x| self.fold(&x.value));
                 loop {
-                    if let Some(flow) = self.round(&label, &l.body).await? {
+                    if let Some(flow) = Box::pin(self.round(&label, &l.body)).await? {
                         return Ok(flow);
                     }
                 }

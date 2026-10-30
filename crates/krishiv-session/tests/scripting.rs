@@ -438,7 +438,7 @@ fn review_findings_stay_fixed() {
     assert_eq!(rows(&s, "BEGIN SELECT id FROM range(256); END").len(), 256);
 }
 
-/// Scripts nest at most 8 levels (a divergence: Spark has no limit), at parse time, so neither
+/// Scripts nest at most 32 levels (a divergence: Spark has no limit), at parse time, so neither
 /// the parser nor the interpreter can run out of stack.
 fn nest(n: usize) -> String {
     format!("{}SELECT 1 AS a;{}", "BEGIN ".repeat(n), " END;".repeat(n))
@@ -447,8 +447,8 @@ fn nest(n: usize) -> String {
 #[test]
 fn script_nesting_is_bounded_at_the_limit() {
     let s = Session::new().unwrap();
-    assert_eq!(rows(&s, &nest(8)), ok(&[&["1"]]));
-    assert_eq!(class(&s, &nest(9)), "FAILED_TO_PARSE_TOO_COMPLEX");
+    assert_eq!(rows(&s, &nest(32)), ok(&[&["1"]]));
+    assert_eq!(class(&s, &nest(33)), "FAILED_TO_PARSE_TOO_COMPLEX");
 }
 
 #[test]

@@ -18,7 +18,7 @@ use crate::lexer::{Sym, TokenKind};
 
 /// How deep script statements may nest (a compound in a branch in a loop ...). Spark has no limit;
 /// this one keeps the parser and the interpreter, which recurse once per level, within any stack.
-const MAX_SCRIPT_NESTING: usize = 8;
+const MAX_SCRIPT_NESTING: usize = 32;
 
 /// Words that end a statement list: the statement after them belongs to the enclosing construct.
 const LIST_END: &[&str] = &["END", "ELSE", "ELSEIF", "UNTIL", "WHEN"];
