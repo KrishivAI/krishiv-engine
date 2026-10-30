@@ -1358,6 +1358,7 @@ impl<'s> Parser<'s> {
 
     /// A session variable name: any keyword names one unless keywords are
     /// enforced (`DECLARE all = 1`), as in Spark's grammar.
+    #[inline(never)]
     fn variable_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
         let mut parts = vec![self.name_part(true)?];
@@ -1901,6 +1902,7 @@ impl<'s> Parser<'s> {
     /// The query is any expression; the parenthesized argument list is
     /// tried first and read as one parenthesized argument when it does not
     /// end the statement (`USING (SELECT 1) AS a`).
+    #[inline(never)]
     fn execute_immediate_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
@@ -1946,6 +1948,7 @@ impl<'s> Parser<'s> {
     }
 
     /// One `USING` argument: `expr [[AS] alias]`.
+    #[inline(never)]
     fn using_argument(&mut self) -> PR<UsingArgument> {
         let start = self.start();
         let value = self.expr()?;

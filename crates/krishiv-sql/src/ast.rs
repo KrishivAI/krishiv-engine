@@ -3275,7 +3275,7 @@ pub enum ExprKind {
     /// the statement.
     Parameter(usize),
     /// The named parameter marker `:name`.
-    NamedParameter(Ident),
+    NamedParameter(Box<Ident>),
     /// A keyword argument of a special form: the unit of `TIMESTAMPADD(DAY,
     /// ...)` or the field of `EXTRACT(YEAR FROM ...)` (unlike a string
     /// literal, which Spark rejects there).

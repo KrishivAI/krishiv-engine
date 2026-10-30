@@ -746,7 +746,7 @@ impl Parser<'_> {
         }
         self.bump();
         let name = self.ident()?;
-        Ok(self.mk(ExprKind::NamedParameter(name), start))
+        Ok(self.mk(ExprKind::NamedParameter(Box::new(name)), start))
     }
 
     fn primary(&mut self) -> PR<Expr> {
