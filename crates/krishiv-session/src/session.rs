@@ -434,7 +434,7 @@ impl Session {
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
-            Statement::CreateFunction(f) => self.exec_create_function(&f, &redacted).await,
+            Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }
