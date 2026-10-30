@@ -18,6 +18,16 @@ use krishiv_kernels::reference;
 use krishiv_kernels::string::{LikePattern, StrOperand, like};
 use proptest::prelude::*;
 
+// Miri interprets every case, so it runs a handful.
+#[cfg(not(miri))]
+const LIKE_CASES: u32 = 3000;
+#[cfg(miri)]
+const LIKE_CASES: u32 = 2;
+#[cfg(not(miri))]
+const COMPARE_CASES: u32 = 2000;
+#[cfg(miri)]
+const COMPARE_CASES: u32 = 2;
+
 const ALPHABET: &[&str] = &[
     "a", "b", "é", "😀", "\n", "%", "_", "\\", "$", "A", " ", ".", "*", "(",
 ];
@@ -38,7 +48,7 @@ fn oracle_like(col: &[Option<String>], pat: &str, esc: char) -> BooleanArray {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(3000))]
+    #![proptest_config(ProptestConfig::with_cases(LIKE_CASES))]
 
     #[test]
     fn like_literal_pattern_matches_the_matcher(
@@ -104,7 +114,7 @@ fn null_literal_and_all_null_column() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(2000))]
+    #![proptest_config(ProptestConfig::with_cases(COMPARE_CASES))]
 
     #[test]
     fn compare_columns_matches_the_reference(l in values(), seed in proptest::collection::vec(proptest::option::of(text()), 0..40)) {
@@ -159,12 +169,18 @@ fn a_pattern_over_arrow_strings_regex_limit_still_matches() {
     .unwrap();
     assert_eq!(got, want);
     let long_underscores = format!("{}x", "_".repeat(50_000));
-    like::<i32>(
+    let want = oracle_like(
+        &[Some("a".into()), Some("abcdef".into()), None],
+        &long_underscores,
+        '\\',
+    );
+    let got = like::<i32>(
         StrOperand::Array(&arr),
         StrOperand::Scalar(Some(&long_underscores)),
         '\\',
     )
     .unwrap();
+    assert_eq!(got, want);
 }
 
 #[test]
