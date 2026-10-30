@@ -129,6 +129,7 @@ mod tests;
 mod walk;
 
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash};
+pub use display::Annotated;
 pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,

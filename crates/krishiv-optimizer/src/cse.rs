@@ -163,10 +163,14 @@ fn rewrite_node(node: Arc<LogicalPlan>, next: &mut Fresh<'_>) -> Arc<LogicalPlan
 }
 
 /// Whether `c` is a column CSE extracted (see `fresh_columns`).
+///
+/// The name is `cse_<id>` of the id the column was created with; a
+/// self-join's `Shift` renumbers the column upward and keeps its name, so
+/// the id may exceed the number in the name, never fall below it.
 pub(crate) fn is_cse_column(c: &BoundColumn) -> bool {
     c.name
         .strip_prefix("cse_")
-        .is_some_and(|n| n.parse::<u64>().is_ok_and(|id| id == c.id.0))
+        .is_some_and(|n| n.parse::<u64>().is_ok_and(|id| c.id.0 >= id))
 }
 
 /// `p` without the columns CSE extracted into its output: a filter passes
@@ -1299,6 +1303,23 @@ mod tests {
     /// of `and`/`or`, non-first `coalesce`/`if`/`nanvl` arguments, every
     /// `WHEN` arm but the first condition, lambda bodies, and aggregate
     /// arguments under `FILTER (WHERE ...)`.
+    #[test]
+    fn cse_columns_survive_a_shift_and_user_names_do_not() {
+        let col = |name: &str, id: u64| BoundColumn {
+            id: AttrId(id),
+            name: name.to_owned(),
+            data_type: krishiv_types::DataType::Boolean,
+            nullable: true,
+        };
+        assert!(is_cse_column(&col("cse_9", 9)));
+        // A self-join's `Shift` renumbers upward and keeps the name.
+        assert!(is_cse_column(&col("cse_9", 11)));
+        assert!(!is_cse_column(&col("cse_9", 3)));
+        assert!(!is_cse_column(&col("cse_x", 9)));
+        assert!(!is_cse_column(&col("cse_", 9)));
+        assert!(!is_cse_column(&col("total", 9)));
+    }
+
     #[test]
     fn conditional_positions() {
         let (a, b, c) = (col(0), col(1), col(2));

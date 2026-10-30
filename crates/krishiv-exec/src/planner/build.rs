@@ -25,6 +25,7 @@ use std::sync::Arc;
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::{ColumnPath, FilterId};
+use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan,
     PlanNode, ResolvedExpr, SortDirection, SortOrder, SubqueryKind,
@@ -176,16 +177,20 @@ pub(crate) struct Planner<'a> {
     pub(crate) next_exchange: u64,
     /// The runtime filters each scan receives, by scan.
     pub(crate) scan_filters: HashMap<ScanId, Vec<ScanRuntimeFilter>>,
+    /// The estimates of every relation of the plan, computed once.
+    pub(crate) stats: PlanStats,
 }
 
 impl<'a> Planner<'a> {
-    fn new(cx: &'a PlanningContext, root: &LogicalPlan) -> Self {
+    fn new(cx: &'a PlanningContext, root: &Arc<LogicalPlan>) -> Self {
         let next_id = max_id(root).saturating_add(1).max(1 << 62);
         let mut env = EvalEnv::new(&cx.config, Arc::clone(&cx.user));
         // Planning validates UDF calls against the session's library; the
         // implementation a plan runs comes from its worker.
         env.udfs = cx.udfs.clone();
+        let provided = super::ProviderStatistics(Arc::clone(&cx.tables));
         Self {
+            stats: PlanStats::compute(root, &provided),
             cx,
             env,
             warnings: Vec::new(),
@@ -719,30 +724,17 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// The optimizer's estimate of `plan`'s rows (runtime filter costs).
+    /// The estimate of `plan`'s rows (join and runtime filter costs), read
+    /// from the plan's statistics: each relation is estimated once.
     pub(crate) fn estimated_rows(&self, plan: &Arc<LogicalPlan>) -> f64 {
-        let stats = super::ProviderStatistics(Arc::clone(&self.cx.tables));
-        krishiv_optimizer::estimated_rows(plan, &stats)
+        self.stats.rows(plan)
     }
 
     /// Whether every table `plan` reads reports statistics, so its estimate
     /// does not rest on default row counts. A `WITH` reference counts as
     /// default-sized, as the estimator treats it.
     pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
-        use krishiv_optimizer::Statistics as _;
-        let stats = super::ProviderStatistics(Arc::clone(&self.cx.tables));
-        let mut stack = vec![plan];
-        while let Some(p) = stack.pop() {
-            match &p.node {
-                PlanNode::Scan(scan) if stats.table(scan).is_none() => return false,
-                // The estimator reads a reference to a `WITH` definition
-                // as a default-sized relation, not through its definition.
-                PlanNode::CteRef(_) => return false,
-                _ => {}
-            }
-            p.for_each_child(&mut |c| stack.push(c));
-        }
-        true
+        self.stats.has_statistics(plan)
     }
 
     fn scan(

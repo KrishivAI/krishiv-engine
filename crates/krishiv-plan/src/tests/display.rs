@@ -101,6 +101,29 @@ fn shared_subtrees_print_once() {
     assert!(shown.len() < 70 * 1024 && shown.ends_with("...(truncated)"));
 }
 
+/// `display_with` appends a note after each relation's line (a shared
+/// relation's repeat gets none, a relation without a note none).
+#[test]
+fn notes_follow_each_relations_line() {
+    let note = |p: &LogicalPlan| match &p.node {
+        PlanNode::Read(_) => Some("note".to_owned()),
+        _ => None,
+    };
+    let shown = super::depth::self_joins(2).display_with(&note).to_string();
+    assert_eq!(
+        shown,
+        "Join Inner\n\
+         :- Join Inner (shared #1)\n\
+         :  :- Read t, note (shared #2)\n\
+         :  +- Shared #2, printed above\n\
+         +- Shared #1, printed above\n"
+    );
+    let none = |_: &LogicalPlan| None;
+    let plain = super::depth::self_joins(2);
+    assert_eq!(plain.display_with(&none).to_string(), plain.to_string());
+    assert!(format!("{:?}", plain.display_with(&none)).starts_with("Annotated"));
+}
+
 #[test]
 fn huge_literals_are_cut_at_the_expression_cap() {
     let big = "x".repeat(200 * 1024);

@@ -41,6 +41,7 @@ cargo xtask stack up|down|status [--kafka]       # bench/baselines compose proje
 cargo xtask coverage [--no-branch] [--all-features] [--html]   # cargo-llvm-cov -> target/coverage (branch needs nightly)
 cargo xtask coverage-summary | diff-coverage --base <ref>      # per-crate %; coverage of added lines (report only)
 cargo xtask spdx | source-guard | workflow-lint  # SPDX headers; no ParquetObject{Reader,Writer}; no pull_request_target
+cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]...  # q-error (estimated vs actual rows per join/aggregate) over TPC-H/TPC-DS: median, p95; generated data by default
 cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (10,000 counted lines), DCO sign-off, Rust-job path filter
 taplo fmt --check; typos                         # TOML format, spelling (markdownlint-cli2 for *.md)
 ```
