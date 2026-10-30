@@ -211,8 +211,9 @@ fn negated_in(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
 fn null_literal(e: &Expr) -> bool {
     match &e.node {
         ExprNode::Literal(v) => matches!(v, Literal::Null(_)),
-        ExprNode::Cast { expr, .. } => null_literal(expr),
-        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => null_literal(expr),
+        ExprNode::Cast { expr, .. } | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+            null_literal(expr)
+        }
         _ => false,
     }
 }
@@ -628,7 +629,7 @@ impl Rewriter {
             let replaced = e.transform_down(&mut |x: Arc<Expr>| {
                 Ok::<_, std::convert::Infallible>(match negated_in(&x) {
                     Some(sub) => found.get(&(addr(&**sub), true)).map_or_else(
-                        || x.clone(),
+                        || Arc::clone(&x),
                         |col| boolean(Builtin::Not, vec![Arc::clone(col)]),
                     ),
                     None => found.get(&(addr(&*x), false)).cloned().unwrap_or(x),

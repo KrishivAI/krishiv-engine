@@ -1196,6 +1196,10 @@ mod tests {
                     }),
                 ),
                 ("join-none", join(JoinKind::Cross, JoinCondition::None)),
+                (
+                    "join-existence",
+                    join(JoinKind::Existence(AttrId(1)), JoinCondition::On(lit(1))),
+                ),
                 ("join-on", join(JoinKind::Inner, JoinCondition::On(lit(1)))),
                 (
                     "join-using",
