@@ -1483,6 +1483,9 @@ impl DataFrame {
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
+    /// # for v in ["t", "u"] {
+    /// #     futures::executor::block_on(s.sql(&format!("CREATE TEMPORARY VIEW {v} AS SELECT 1 AS a")))?;
+    /// # }
     /// let df = futures::executor::block_on(s.sql("SELECT t.a FROM t JOIN u ON t.a = u.a"))?;
     /// assert_eq!(df.input_tables(), vec!["t".to_owned(), "u".to_owned()]);
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
