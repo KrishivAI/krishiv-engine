@@ -50,6 +50,11 @@
       51,
       52,
       53
+    ],
+    "sql-commands": [
+      0,
+      1,
+      57
     ]
   },
   "file": "metadata_column_resolution",
