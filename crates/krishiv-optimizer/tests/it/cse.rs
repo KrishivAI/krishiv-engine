@@ -50,7 +50,9 @@ fn case_guarded_division_twice_is_not_hoisted() {
         "SELECT CASE WHEN b <> 0 THEN a / b ELSE NULL END AS x, CASE WHEN b <> 0 THEN a / b ELSE NULL END AS y, (a + b) + (a + b) AS z FROM t",
     );
     let text = on.root().to_string();
-    assert_eq!(extractions(on.root()), 2, "{text}");
+    // The guarded CASE and `a + b`, then (second round) the `CAST(b)` both
+    // now read in the projection below.
+    assert_eq!(extractions(on.root()), 3, "{text}");
     assert_eq!(
         occurrences(on.root(), "CASE WHEN"),
         1,
@@ -217,12 +219,71 @@ fn rule_is_idempotent() {
         "SELECT a / b AS x, CASE WHEN a > 0 THEN a / b ELSE NULL END AS y FROM t",
         "SELECT sum(a * b) AS s, count(a * b) AS n FROM t GROUP BY c",
         "SELECT a FROM t WHERE (a + b) > 1 AND (a + b) < 3",
+        "SELECT (a + b) * 2 AS p, CASE WHEN c > 0 THEN (a + b) * 2 END AS q, a + b AS r, CASE WHEN c > 0 THEN a + b END AS s FROM t",
     ] {
         let plan = support::resolve(sql, &ctx);
         let once = optimize(&plan).unwrap();
         let twice = optimize(&once).unwrap();
         assert!(twice.structurally_eq(&once), "{sql}:\n{}", twice.root());
     }
+}
+
+/// A filter whose predicate is rewritten keeps its input's columns, so a
+/// `UNION ALL` branch (which reads its inputs by position) still resolves.
+#[test]
+fn a_filtered_union_branch_keeps_its_width() {
+    let (on, off) = both(
+        "SELECT a, b, c FROM t WHERE (a + b) > 1 AND (a + b) < 3 UNION ALL SELECT a, b, c FROM t",
+    );
+    let text = on.root().to_string();
+    assert_eq!(extractions(on.root()), 1, "{text}");
+    assert!(on.root().resolved_output().is_some(), "{text}");
+    assert_eq!(on.root().resolved_output(), off.root().resolved_output());
+    for seed in 1..=8 {
+        assert_same_rows(&data::small(seed), on.root(), off.root(), "filtered union");
+    }
+}
+
+/// A post-aggregation scalar over a grouping key is evaluated above the
+/// aggregate, where a `cse_*` column of the input is not available; only
+/// the aggregate calls' own arguments are rewritten.
+#[test]
+fn post_aggregation_scalars_stay_above_the_aggregate() {
+    let (on, off) = both("SELECT c + 1 AS k, sum(c + 1) AS s, count(c + 1) AS n FROM t GROUP BY c");
+    let text = on.root().to_string();
+    assert_eq!(extractions(on.root()), 1, "{text}");
+    assert_eq!(
+        occurrences(on.root(), "c#2 + 1L"),
+        2,
+        "the key expression and the extraction's definition:\n{text}"
+    );
+    for seed in 1..=8 {
+        assert_same_rows(
+            &data::small(seed),
+            on.root(),
+            off.root(),
+            "post-aggregation",
+        );
+    }
+}
+
+/// `IN` list items and the upper bound of `BETWEEN` are evaluated only when
+/// the value is not NULL and no earlier item matched (or the lower bound
+/// held), so repeating one there never hoists it. The unconditional
+/// repeat of `a + b` is the positive control.
+#[test]
+fn in_items_and_between_upper_bounds_are_not_hoisted() {
+    let (on, _) = both(
+        "SELECT a IN (0, c / b) AS p, c IN (0, c / b) AS q, a BETWEEN 0 AND c / b AS r, c BETWEEN 0 AND c / b AS u, (a + b) + (a + b) AS z FROM t",
+    );
+    let text = on.root().to_string();
+    // Casts of the columns hoist; no division does.
+    let hoisted_divisions = text
+        .lines()
+        .filter(|l| l.contains("AS cse_") && l.contains(" / "))
+        .count();
+    assert_eq!(hoisted_divisions, 0, "{text}");
+    assert!(extractions(on.root()) >= 1, "{text}");
 }
 
 /// The per-rule switch really disables the rule: with it off no `cse_*`

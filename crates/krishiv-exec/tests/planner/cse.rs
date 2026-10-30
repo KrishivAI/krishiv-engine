@@ -132,6 +132,7 @@ fn show(a: &ArrayRef, row: usize) -> String {
     match a.data_type() {
         ArrowType::Int32 => a.as_primitive::<Int32Type>().value(row).to_string(),
         ArrowType::Int64 => a.as_primitive::<Int64Type>().value(row).to_string(),
+        ArrowType::Boolean => a.as_boolean().value(row).to_string(),
         ArrowType::Float64 => a
             .as_primitive::<arrow_array::types::Float64Type>()
             .value(row)
@@ -196,5 +197,54 @@ fn try_divide_is_never_extracted() {
         assert_eq!(got, want, "ansi={ansi}");
         assert_eq!(text.matches("try_divide").count(), 2, "{text}");
         assert!(text.contains("AS cse_"), "{text}");
+    }
+}
+
+/// A rewritten filter under a `UNION ALL` branch still plans and returns
+/// the same rows: the union reads its inputs by position, so the
+/// extracted columns must not reach it.
+#[test]
+fn a_filtered_union_branch_plans_and_matches() {
+    let sql = "SELECT a, b FROM t WHERE (a + b) > 1 AND (a + b) < 9 UNION ALL SELECT a, b FROM t";
+    for ansi in [false, true] {
+        let db = make_db(&rows(), 2, ansi);
+        let (want, got, text) = db.both(sql);
+        assert!(want.is_ok(), "{want:?}");
+        assert_eq!(got, want, "ansi={ansi}: {text}");
+        assert!(text.contains("AS cse_"), "{text}");
+    }
+}
+
+/// A post-aggregation scalar over a grouping key is evaluated above the
+/// aggregate, so it never reads an extracted column.
+#[test]
+fn post_aggregation_scalars_plan_and_match() {
+    let sql = "SELECT b + 1 AS k, sum(b + 1) AS s, count(b + 1) AS n FROM t GROUP BY b";
+    for ansi in [false, true] {
+        let db = make_db(&rows(), 2, ansi);
+        let (want, got, text) = db.both(sql);
+        assert!(want.is_ok(), "{want:?}");
+        assert_eq!(got, want, "ansi={ansi}: {text}");
+        assert!(text.contains("AS cse_"), "{text}");
+    }
+}
+
+/// `IN` list items are evaluated only when the value is not NULL and no
+/// earlier item matched, so a repeated division there is not hoisted: with
+/// `a = 0` or `b = 0` rows nothing raises under ANSI, as in the analyzed
+/// plan.
+#[test]
+fn in_items_never_hoist_a_division_that_raises() {
+    let rows = vec![
+        (Some(0), Some(0)),
+        (Some(0), Some(2)),
+        (None, Some(0)),
+        (Some(1), Some(0)),
+    ];
+    let sql = "SELECT a IN (0, 1 / b) AS p, b IN (0, 1 / b) AS q FROM t";
+    for ansi in [false, true] {
+        let db = make_db(&rows, 2, ansi);
+        let (want, got, text) = db.both(sql);
+        assert_eq!(got, want, "ansi={ansi}: {text}");
     }
 }

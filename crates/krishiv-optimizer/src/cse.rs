@@ -56,6 +56,29 @@ use crate::restrict::{MAX_ID, max_id};
 /// Eliminates common subexpressions within one operator, everywhere in
 /// `node` (subquery plans included; shared subtrees once).
 pub(crate) fn eliminate(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    // Extracting a larger expression can leave a smaller one that now
+    // qualifies in the operators around it (`(a + b) * 2` extracted, and
+    // `a + b` still repeated above): run again until the plan stops
+    // changing, so re-optimising returns the same plan. Each round extracts
+    // at least one expression, each new column is read, and the rounds are
+    // capped.
+    let mut current = node;
+    for _ in 0..MAX_ROUNDS {
+        let next = pass(Arc::clone(&current));
+        if Arc::ptr_eq(&next, &current) || next.to_string() == current.to_string() {
+            return next;
+        }
+        current = next;
+    }
+    current
+}
+
+/// The most rounds of [`eliminate`]: nesting deeper than this is not
+/// worth the plan growth.
+const MAX_ROUNDS: usize = 4;
+
+/// One round of [`eliminate`].
+fn pass(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     // Fresh attribute ids come from one plan-wide counter: ids are unique
     // across the whole plan (self-join [`PlanNode::Shift`] ranges
     // included), so an extracted column can never share an id with an
@@ -88,8 +111,77 @@ fn rewrite_node(node: Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan> {
         PlanNode::Project { input, exprs } => rewrite_project(&node, input, exprs, next),
         PlanNode::Filter { input, predicate } => rewrite_filter(&node, input, predicate, next),
         PlanNode::Aggregate { .. } => rewrite_aggregate(&node, next),
+        PlanNode::Union { .. } | PlanNode::SetOp { .. } | PlanNode::WithCte { .. } => {
+            narrow_positional(node)
+        }
         _ => node,
     }
+}
+
+/// Whether `c` is a column CSE extracted (see `fresh_columns`).
+fn is_cse_column(c: &BoundColumn) -> bool {
+    c.name == format!("cse_{}", c.id.0)
+}
+
+/// `p` without the columns CSE extracted into its output: a filter passes
+/// its input through, so a rewritten filter's output grew by them.
+fn narrowed(p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let Some(out) = p.resolved_output() else {
+        return Arc::clone(p);
+    };
+    let keep: Vec<&BoundColumn> = out.iter().filter(|c| !is_cse_column(c)).collect();
+    if keep.len() == out.len() || keep.is_empty() {
+        return Arc::clone(p);
+    }
+    Arc::new(LogicalPlan {
+        node: PlanNode::Project {
+            input: Arc::clone(p),
+            exprs: keep.into_iter().map(column).collect(),
+        },
+        origin: p.origin,
+    })
+}
+
+/// A union, set operation or `WITH` reads its inputs by position (or, for
+/// a CTE reference, by the definition's attributes): their outputs must be
+/// the ones the query wrote, without extracted columns.
+fn narrow_positional(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let mut out = LogicalPlan::clone(&node);
+    match &mut out.node {
+        PlanNode::Union { inputs, .. } => {
+            for i in inputs.iter_mut() {
+                *i = narrowed(i);
+            }
+        }
+        PlanNode::SetOp { left, right, .. } => {
+            *left = narrowed(left);
+            *right = narrowed(right);
+        }
+        PlanNode::WithCte { ctes, .. } => {
+            for c in ctes.iter_mut() {
+                c.plan = narrowed(&c.plan);
+            }
+        }
+        _ => return node,
+    }
+    let changed = match (&node.node, &out.node) {
+        (PlanNode::Union { inputs: a, .. }, PlanNode::Union { inputs: b, .. }) => {
+            a.iter().zip(b).any(|(x, y)| !Arc::ptr_eq(x, y))
+        }
+        (
+            PlanNode::SetOp {
+                left: a, right: b, ..
+            },
+            PlanNode::SetOp {
+                left: c, right: d, ..
+            },
+        ) => !Arc::ptr_eq(a, c) || !Arc::ptr_eq(b, d),
+        (PlanNode::WithCte { ctes: a, .. }, PlanNode::WithCte { ctes: b, .. }) => {
+            a.iter().zip(b).any(|(x, y)| !Arc::ptr_eq(&x.plan, &y.plan))
+        }
+        _ => false,
+    };
+    if changed { Arc::new(out) } else { node }
 }
 
 /// Whether `e` is a `try_*` call or a `TRY_CAST`.
@@ -251,6 +343,22 @@ fn children(e: &Expr) -> Vec<(Arc<Expr>, bool)> {
                         push(b, true);
                         return out;
                     }
+                    // `v IN (a, b, ...)` returns on the first match or on a
+                    // NULL `v`, and `BETWEEN` is `v >= lo AND v <= hi`: only
+                    // `v` (and `lo`) are surely evaluated.
+                    (Builtin::In, [v, list @ ..]) => {
+                        push(v, false);
+                        for a in list {
+                            push(a, true);
+                        }
+                        return out;
+                    }
+                    (Builtin::Between, [v, lo, hi]) => {
+                        push(v, false);
+                        push(lo, false);
+                        push(hi, true);
+                        return out;
+                    }
                     (Builtin::When, branches) => {
                         for (i, b) in branches.iter().enumerate() {
                             push(b, i != 0);
@@ -263,8 +371,9 @@ fn children(e: &Expr) -> Vec<(Arc<Expr>, bool)> {
             match f.id.name() {
                 // `coalesce` and friends evaluate their first argument for
                 // every row and the rest only when needed; `nanvl(a, b)`
-                // evaluates `b` only when `a` is NaN.
-                "coalesce" | "nvl" | "ifnull" | "zeroifnull" | "if" | "nvl2" | "nanvl" => {
+                // evaluates `b` only when `a` is NaN; `elt(n, ...)` only the
+                // selected argument.
+                "coalesce" | "nvl" | "ifnull" | "zeroifnull" | "if" | "nvl2" | "nanvl" | "elt" => {
                     for (i, a) in f.args.iter().enumerate() {
                         push(a, i != 0);
                     }
@@ -536,13 +645,12 @@ fn fingerprints(order: &[Arc<Expr>], edges: &[Vec<Edge>]) -> Vec<u64> {
     out
 }
 
-/// One structurally equal group: its representative, its distinct-node
-/// size, and its capped unconditional and conditional occurrences.
+/// One structurally equal group that qualifies (surely evaluated twice, or
+/// once and conditionally once): its representative and its distinct-node
+/// size.
 struct Group {
     expr: Arc<Expr>,
     size: usize,
-    uncond: u8,
-    cond: u8,
 }
 
 /// Capped occurrence counts of every structurally equal group. Counts
@@ -634,8 +742,6 @@ fn analyze(
                 groups.push(Group {
                     expr: Arc::clone(&order[members[0]]),
                     size,
-                    uncond,
-                    cond,
                 });
             }
         }
@@ -690,6 +796,30 @@ fn replace(e: &Arc<Expr>, map: &[(Arc<Expr>, BoundColumn)]) -> Arc<Expr> {
         Ok::<_, std::convert::Infallible>(match map.iter().find(|(c, _)| same(&x, c)) {
             Some((_, col)) => column(col),
             None => x,
+        })
+    });
+    match out {
+        Ok(v) => v,
+        Err(never) => match never {},
+    }
+}
+
+/// `e` with `map` applied inside its aggregate calls only (their arguments
+/// and `FILTER`): a post-aggregation scalar over the grouping keys is
+/// evaluated above the aggregate, where a `cse_*` column is not available.
+fn replace_in_calls(e: &Arc<Expr>, map: &[(Arc<Expr>, BoundColumn)]) -> Arc<Expr> {
+    if map.is_empty() {
+        return Arc::clone(e);
+    }
+    let out = Arc::clone(e).transform_up(&mut |x| {
+        Ok::<_, std::convert::Infallible>(match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+                let mut g = f.clone();
+                g.args = f.args.iter().map(|a| replace(a, map)).collect();
+                g.filter = f.filter.as_ref().map(|a| replace(a, map));
+                Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(g))))
+            }
+            _ => x,
         })
     });
     match out {
@@ -794,12 +924,13 @@ fn absorb(input: &Arc<LogicalPlan>, keep: &[BoundColumn]) -> Arc<LogicalPlan> {
     base
 }
 
-/// Greedily keeps qualifying groups, largest first, dropping those the
-/// kept larger extractions already cover: an occurrence of a group inside
-/// a kept extraction's definition disappears from the operator once the
-/// larger is extracted. Remaining counts floor at zero, so a kept group
-/// always truly qualifies (coverage only ever under-approximates what is
-/// left, never the reverse).
+/// Greedily keeps qualifying groups, largest first, dropping those that
+/// occur inside a kept larger extraction at all (a graph too large to
+/// count assumes it does). Once the larger is extracted, an occurrence of
+/// the smaller inside its definition is gone; keeping the smaller as well
+/// would need a second extraction level, and replacing bottom-up would
+/// leave the larger one's producer unread. Dropping it loses a little
+/// sharing, never correctness, and keeps the plan a fixed point.
 fn select(mut qualified: Vec<Group>) -> Vec<Arc<Expr>> {
     qualified.sort_by_key(|g| std::cmp::Reverse(g.size));
     let mut kept: Vec<Group> = Vec::new();
@@ -807,20 +938,11 @@ fn select(mut qualified: Vec<Group>) -> Vec<Arc<Expr>> {
         if kept.iter().any(|k: &Group| same(&k.expr, &g.expr)) {
             continue;
         }
-        let mut remaining = (g.uncond, g.cond);
-        for k in &kept {
-            // Occurrences of `g` inside one occurrence of `k`, by
-            // conditionality there; a graph too large assumes full cover.
-            let (in_u, in_c) = occurrences_in(&k.expr, &g.expr).unwrap_or((2, 2));
-            let in_all = in_u.saturating_add(in_c).min(2);
-            let cover_u = k.uncond.saturating_mul(in_u).min(2);
-            let cover_c = (k.uncond.saturating_mul(in_c))
-                .saturating_add(k.cond.saturating_mul(in_all))
-                .min(2);
-            remaining.0 = remaining.0.saturating_sub(cover_u);
-            remaining.1 = remaining.1.saturating_sub(cover_c);
-        }
-        if remaining.0 >= 2 || (remaining.0 >= 1 && remaining.1 >= 1) {
+        let inside = kept.iter().any(|k| {
+            occurrences_in(&k.expr, &g.expr)
+                .is_none_or(|(in_u, in_c)| in_u.saturating_add(in_c) > 0)
+        });
+        if !inside {
             kept.push(g);
         }
     }
@@ -834,19 +956,6 @@ fn rewrite_project(
     next: &mut u64,
 ) -> Arc<LogicalPlan> {
     let normalized: Vec<Arc<Expr>> = exprs.iter().map(normalize).collect();
-    let changed_norm = normalized
-        .iter()
-        .zip(exprs.iter())
-        .any(|(a, b)| !Arc::ptr_eq(a, b));
-    let finish = |exprs: Vec<Arc<Expr>>| -> Arc<LogicalPlan> {
-        Arc::new(LogicalPlan {
-            node: PlanNode::Project {
-                input: Arc::clone(input),
-                exprs,
-            },
-            origin: node.origin,
-        })
-    };
     // Row-evaluated roots: each output's expression without its alias.
     let inners: Vec<Arc<Expr>> = normalized
         .iter()
@@ -856,11 +965,7 @@ fn rewrite_project(
         })
         .collect();
     let Some((order, index, edges, tainted, eligible_map)) = graph(&inners) else {
-        return if changed_norm {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     };
     let qualified = analyze(
         &inners,
@@ -872,26 +977,14 @@ fn rewrite_project(
         &eligible_map,
     );
     if qualified.is_empty() {
-        return if changed_norm {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     }
     let unique = select(qualified);
     if unique.is_empty() {
-        return if changed_norm {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     }
     let Some(cols) = fresh_columns(&unique, &mut *next) else {
-        return if changed_norm {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     };
     let map: Vec<(Arc<Expr>, BoundColumn)> = unique.iter().cloned().zip(cols).collect();
     let rebuilt: Vec<Arc<Expr>> = normalized
@@ -926,51 +1019,23 @@ fn rewrite_filter(
     next: &mut u64,
 ) -> Arc<LogicalPlan> {
     let normalized = normalize(predicate);
-    let changed = !Arc::ptr_eq(&normalized, predicate);
     let roots = vec![Arc::clone(&normalized)];
-    let finish = |predicate: Arc<Expr>| -> Arc<LogicalPlan> {
-        Arc::new(LogicalPlan {
-            node: PlanNode::Filter {
-                input: Arc::clone(input),
-                predicate,
-            },
-            origin: node.origin,
-        })
-    };
     let Some((order, index, edges, tainted, eligible_map)) = graph(&roots) else {
-        return if changed {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     };
     let qualified = analyze(&roots, &[], &order, &index, &edges, &tainted, &eligible_map);
     if qualified.is_empty() {
-        return if changed {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     }
     let unique = select(qualified);
     if unique.is_empty() {
-        return if changed {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     }
     let Some(cols) = fresh_columns(&unique, &mut *next) else {
-        return if changed {
-            finish(normalized)
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     };
     let map: Vec<(Arc<Expr>, BoundColumn)> = unique.iter().cloned().zip(cols).collect();
     let predicate = replace(&normalized, &map);
-    // A filter passes its input through: the projection below keeps every
-    // input column, so the filter's output is unchanged.
     let keep: Vec<BoundColumn> = input.resolved_output().unwrap_or_default();
     let cols: Vec<BoundColumn> = map.into_iter().map(|(_, c)| c).collect();
     let base = absorb(input, &keep);
@@ -1024,16 +1089,6 @@ fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan
     };
     let normalized_keys: Vec<Arc<Expr>> = keys.iter().map(normalize).collect();
     let normalized_aggs: Vec<Arc<Expr>> = aggregates.iter().map(normalize).collect();
-    let finish = || -> Arc<LogicalPlan> {
-        Arc::new(LogicalPlan {
-            node: PlanNode::Aggregate {
-                input: Arc::clone(input),
-                grouping: krishiv_plan::Grouping::GroupBy(normalized_keys.clone()),
-                aggregates: normalized_aggs.clone(),
-            },
-            origin: node.origin,
-        })
-    };
     // Row-evaluated roots: grouping keys plus aggregate args and filters.
     let mut roots: Vec<Arc<Expr>> = normalized_keys.clone();
     let mut conditional_roots: Vec<Arc<Expr>> = Vec::new();
@@ -1058,20 +1113,8 @@ fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan
     if all_roots.is_empty() {
         return Arc::clone(node);
     }
-    let keys_changed = normalized_keys
-        .iter()
-        .zip(keys.iter())
-        .any(|(a, b)| !Arc::ptr_eq(a, b));
-    let aggs_changed = normalized_aggs
-        .iter()
-        .zip(aggregates.iter())
-        .any(|(a, b)| !Arc::ptr_eq(a, b));
     let Some((order, index, edges, tainted, eligible_map)) = graph(&all_roots) else {
-        return if keys_changed || aggs_changed {
-            finish()
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     };
     let qualified = analyze(
         &roots,
@@ -1083,30 +1126,21 @@ fn rewrite_aggregate(node: &Arc<LogicalPlan>, next: &mut u64) -> Arc<LogicalPlan
         &eligible_map,
     );
     if qualified.is_empty() {
-        return if keys_changed || aggs_changed {
-            finish()
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     }
     let unique = select(qualified);
     if unique.is_empty() {
-        return if keys_changed || aggs_changed {
-            finish()
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     }
     let Some(cols) = fresh_columns(&unique, &mut *next) else {
-        return if keys_changed || aggs_changed {
-            finish()
-        } else {
-            Arc::clone(node)
-        };
+        return Arc::clone(node);
     };
     let map: Vec<(Arc<Expr>, BoundColumn)> = unique.iter().cloned().zip(cols).collect();
     let keys_out: Vec<Arc<Expr>> = normalized_keys.iter().map(|k| replace(k, &map)).collect();
-    let aggs_out: Vec<Arc<Expr>> = normalized_aggs.iter().map(|a| replace(a, &map)).collect();
+    let aggs_out: Vec<Arc<Expr>> = normalized_aggs
+        .iter()
+        .map(|a| replace_in_calls(a, &map))
+        .collect();
     let mut read: Vec<Arc<Expr>> = keys_out.clone();
     read.extend(aggs_out.iter().cloned());
     let keep = passthrough(&read, input);
