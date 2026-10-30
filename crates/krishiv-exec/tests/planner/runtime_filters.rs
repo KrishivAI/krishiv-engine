@@ -653,7 +653,7 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
     let t = parquet_files(dir.path(), &sources, true, &rt);
     let waits = |q: &str| {
         let mut out = Vec::new();
-        scan_waits(&t.plan_sql(q).unwrap().plan.root(), &mut out);
+        scan_waits(t.plan_sql(q).unwrap().plan.root(), &mut out);
         out
     };
     let other = waits("SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64");

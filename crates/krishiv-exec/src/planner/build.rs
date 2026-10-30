@@ -801,6 +801,7 @@ impl<'a> Planner<'a> {
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
             let name = source_name(scan);
+            let source = Arc::new(scan.source.clone());
             scan.output
                 .iter()
                 .zip(&projection)
@@ -810,6 +811,7 @@ impl<'a> Planner<'a> {
                     scan: id,
                     scan_rows,
                     scan_name: name.clone(),
+                    source: Arc::clone(&source),
                 })
                 .collect()
         } else {
@@ -1515,7 +1517,7 @@ fn limit_value(e: &Expr) -> Result<u64> {
     }
 }
 
-pub(super) fn source_name(scan: &krishiv_plan::Scan) -> String {
+fn source_name(scan: &krishiv_plan::Scan) -> String {
     match &scan.source {
         krishiv_plan::ReadSource::Table { name, .. } => name.join("."),
         krishiv_plan::ReadSource::Files { format, .. } => format!("{format} files"),

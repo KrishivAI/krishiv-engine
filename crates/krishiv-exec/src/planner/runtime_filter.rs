@@ -56,9 +56,9 @@ use krishiv_common::config::{
     RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
 };
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
-use krishiv_plan::{AttrId, Expr, ExprNode, ResolvedExpr};
+use krishiv_plan::{AttrId, Expr, ExprNode, ReadSource, ResolvedExpr};
 
-use super::build::{Planned, Planner, column_of, source_name};
+use super::build::{Planned, Planner, column_of};
 use crate::operators::RowStageSettings;
 use crate::physical::{JoinFilterPlan, PhysNode, ScanId, ScanRuntimeFilter};
 
@@ -75,6 +75,8 @@ pub(crate) struct Site {
     pub(crate) scan_rows: f64,
     /// The scan's source, for `EXPLAIN`.
     pub(crate) scan_name: String,
+    /// What the scan reads.
+    pub(crate) source: Arc<ReadSource>,
 }
 
 /// The settings planning reads (see the module docs).
@@ -207,7 +209,7 @@ impl Planner<'_> {
                 let bloom = s.bloom
                     && build_rows <= s.bloom_max_items as f64
                     && site.scan_rows >= (4.0 * build_rows).max(s.min_application_rows as f64);
-                let reads_scan_table = reads_table(build, &site.scan_name);
+                let reads_scan_table = reads_source(build, &site.source);
                 let id = FilterId(self.next_filter);
                 self.next_filter += 1;
                 self.scan_filters
@@ -254,10 +256,10 @@ fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> 
     !build_reads_scan_table || scan_rows >= SELECTIVE_BUILD * build_rows.max(1.0)
 }
 
-/// Whether `node`'s plan scans the table called `name`.
-fn reads_table(node: &PhysNode, name: &str) -> bool {
-    matches!(node, PhysNode::Scan(s) if source_name(&s.scan) == name)
-        || node.children().into_iter().any(|c| reads_table(c, name))
+/// Whether `node`'s plan scans `source`.
+fn reads_source(node: &PhysNode, source: &ReadSource) -> bool {
+    matches!(node, PhysNode::Scan(s) if s.scan.source == *source)
+        || node.children().into_iter().any(|c| reads_source(c, source))
 }
 
 /// `sites` that are still columns of `layout`.
@@ -286,7 +288,40 @@ pub(crate) fn renamed(sites: &[Site], from: &[AttrId], to: &[AttrId]) -> Vec<Sit
 
 #[cfg(test)]
 mod tests {
-    use super::scan_waits;
+    use std::collections::BTreeMap;
+
+    use krishiv_common::secret::OptionValue;
+    use krishiv_plan::{ReadSource, Scan};
+
+    use super::{PhysNode, reads_source, scan_waits};
+    use crate::physical::{ScanId, ScanNode};
+
+    fn files(path: &str) -> ReadSource {
+        ReadSource::Files {
+            format: "parquet".to_owned(),
+            paths: vec![OptionValue::from_user("path", path)],
+            options: BTreeMap::new(),
+        }
+    }
+
+    /// Two paths of one format are two sources.
+    #[test]
+    fn a_source_is_its_paths_not_its_format() {
+        let scan = PhysNode::Scan(ScanNode {
+            id: ScanId(0),
+            scan: Scan {
+                source: files("a.parquet"),
+                output: Vec::new(),
+                version: None,
+            },
+            projection: Vec::new(),
+            filter: None,
+            runtime_filters: Vec::new(),
+            row_stage: crate::operators::RowStageSettings::default(),
+        });
+        assert!(reads_source(&scan, &files("a.parquet")));
+        assert!(!reads_source(&scan, &files("b.parquet")));
+    }
 
     #[test]
     fn a_scan_waits_unless_the_build_reads_its_table() {

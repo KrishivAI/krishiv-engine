@@ -255,8 +255,8 @@ fn with_filter_order(
 ) -> Vec<Vec<usize>> {
     for (consumer, filters) in applies.iter().enumerate() {
         for filter in filters {
-            for publisher in 0..publishes.len() {
-                if publishes[publisher].contains(filter)
+            for (publisher, published) in publishes.iter().enumerate() {
+                if published.contains(filter)
                     && !deps[consumer].contains(&publisher)
                     && !runs_with_or_after(publisher, consumer, &deps, sinks)
                 {
