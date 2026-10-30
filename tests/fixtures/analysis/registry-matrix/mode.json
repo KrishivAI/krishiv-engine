@@ -42,11 +42,11 @@
     },
     {
       "id": "mode#cd541b220646/ansi_on",
-      "reason": "SELECT mode(col, map('a', 1)) FROM VALUES (-10), (0), (10) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT mode(col, map('a', 1)) FROM VALUES (-10), (0), (10) AS tab(col) | NON_FOLDABLE_ARGUMENT where Spark has UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mode#cd541b220646/ansi_off",
-      "reason": "SELECT mode(col, map('a', 1)) FROM VALUES (-10), (0), (10) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT mode(col, map('a', 1)) FROM VALUES (-10), (0), (10) AS tab(col) | NON_FOLDABLE_ARGUMENT where Spark has UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mode#f70996153b70/ansi_on",

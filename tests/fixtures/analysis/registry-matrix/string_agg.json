@@ -23,14 +23,6 @@
     {
       "id": "string_agg#8b36678b62be/ansi_off",
       "reason": "SELECT string_agg(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "string_agg#f4eb3ce71165/ansi_on",
-      "reason": "SELECT string_agg(col, map('a', 1)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "string_agg#f4eb3ce71165/ansi_off",
-      "reason": "SELECT string_agg(col, map('a', 1)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

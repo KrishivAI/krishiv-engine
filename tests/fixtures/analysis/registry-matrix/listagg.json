@@ -9,14 +9,6 @@
       "reason": "SELECT listagg(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "listagg#3a7255f47473/ansi_on",
-      "reason": "SELECT listagg(col, map('a', 1)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "listagg#3a7255f47473/ansi_off",
-      "reason": "SELECT listagg(col, map('a', 1)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "listagg#88fe47b35fe5/ansi_on",
       "reason": "SELECT listagg(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
