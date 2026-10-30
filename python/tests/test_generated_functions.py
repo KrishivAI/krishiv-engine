@@ -386,6 +386,19 @@ def test_aggregates_run(df: DataFrame) -> None:
     assert _rows(grouped) == [["2024-01-30", 6]]
 
 
+def test_unix_timestamp_without_a_timestamp_takes_no_arguments() -> None:
+    """``unix_timestamp()`` is the current time: the default format must not be sent as the timestamp."""
+    from krishiv.sql import SparkSession
+
+    spark = SparkSession.builder.config("spark.sql.session.timeZone", "UTC").create()
+    df = spark.createDataFrame([(1,)], ["a"])
+    now = df.select(F.unix_timestamp().alias("t")).collect()[0]["t"]
+    assert isinstance(now, int)
+    assert now > 1_700_000_000
+    parsed = df.select(F.unix_timestamp(F.lit("1970-01-02 00:00:00")).alias("t")).collect()[0]["t"]
+    assert parsed == 86400
+
+
 def test_json_tuple_field_names_are_literals_not_columns() -> None:
     """``json_tuple(col, "a")`` reads the key ``a``; a column that happens to be named ``a`` is not the key."""
     from krishiv.sql import SparkSession

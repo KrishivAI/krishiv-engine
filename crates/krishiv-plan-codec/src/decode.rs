@@ -295,10 +295,14 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         // feature).
         legacy_statistical_aggregate: env.legacy_statistical_aggregate,
         zone: env.zone,
+        zone_name: env.zone_name.as_deref().map(Arc::from),
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),
         map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
     };
+    if !env.zone_name_matches_zone() {
+        return Err(corrupt("a session zone name that is not its offset"));
+    }
     Ok(
         PhysicalPlan::new(root, schema_from(&m.schema)?, explain, env)
             .with_warnings(m.warnings.clone()),
@@ -917,6 +921,7 @@ fn join_type(t: i32) -> Result<JoinType> {
         RightSemi => JoinType::RightSemi,
         RightAnti => JoinType::RightAnti,
         RightOuter => JoinType::RightOuter,
+        FullOuter => JoinType::FullOuter,
     })
 }
 

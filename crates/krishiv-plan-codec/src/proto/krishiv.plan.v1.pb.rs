@@ -77,6 +77,13 @@ pub struct ExprEnv {
     /// feature: map_key_dedup_policy
     #[prost(bool, optional, tag = "6")]
     pub map_key_dedup_last_win: ::core::option::Option<bool>,
+    /// `spark.sql.session.timeZone` as configured, when it differs from what
+    /// `zone` renders (`UTC`, `+05:30`): `current_timezone()` returns it and
+    /// `VV`/`z` print its zone id; a worker without the feature would show the
+    /// rendered offset instead.
+    /// feature: session_zone_name
+    #[prost(string, optional, tag = "7")]
+    pub zone_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
@@ -1338,6 +1345,9 @@ pub enum JoinType {
     /// boolean `exists` (some build row matched).
     /// feature: existence_join
     Existence = 9,
+    /// Both sides preserved: unmatched rows of either side, padded with NULLs.
+    /// feature: join_full_outer
+    FullOuter = 10,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1356,6 +1366,7 @@ impl JoinType {
             Self::RightAnti => "JOIN_TYPE_RIGHT_ANTI",
             Self::RightOuter => "JOIN_TYPE_RIGHT_OUTER",
             Self::Existence => "JOIN_TYPE_EXISTENCE",
+            Self::FullOuter => "JOIN_TYPE_FULL_OUTER",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1371,6 +1382,7 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_ANTI" => Some(Self::RightAnti),
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
             "JOIN_TYPE_EXISTENCE" => Some(Self::Existence),
+            "JOIN_TYPE_FULL_OUTER" => Some(Self::FullOuter),
             _ => None,
         }
     }

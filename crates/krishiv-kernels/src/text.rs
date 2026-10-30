@@ -5,7 +5,7 @@
 //! and Spark's default date and timestamp grammars. Datetime patterns are in
 //! [`crate::datetime_pattern`].
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::KrishivError;
 
 use crate::cast::TimeZoneRules;
 use crate::cast::datetime::{local_to_utc, utc_to_local};
@@ -133,10 +133,9 @@ pub fn spark_string_to_date(s: &str) -> Option<i32> {
 /// Spark's `DateTimeUtils.stringToTimestamp` (the default timestamp
 /// grammar of the CSV and JSON readers) as an instant: a zone or offset in
 /// `s`, else `session`. A time of day without a date (`10:00`) is on
-/// `today` (days since the epoch in the session zone), as in Spark.
-///
-/// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a region zone id in `s`.
+/// `today` (days since the epoch in the session zone), as in Spark. A zone
+/// id the database cannot resolve reads as no timestamp, as in Spark's
+/// lenient readers.
 pub fn spark_string_to_timestamp(
     s: &str,
     session: &dyn TimeZoneRules,
@@ -159,12 +158,14 @@ pub fn spark_string_to_timestamp(
         Parsed::At(local, Zone::Offset(o)) => Ok(i64::from(o)
             .checked_mul(1_000_000)
             .and_then(|d| local.checked_sub(d))),
-        Parsed::At(_, Zone::Region) => Err(KrishivUnsupportedFeature {
-            feature: "a region time zone id in a timestamp string (only UTC and fixed offsets \
-                      are known)"
-                .to_owned(),
+        // A zone id the database cannot resolve reads as no timestamp, as
+        // in Spark's lenient readers.
+        Parsed::At(local, Zone::Region(id)) => {
+            let Ok(zone) = crate::datetime::resolve_zone(&id) else {
+                return Ok(None);
+            };
+            Ok(local_to_utc(local, &zone))
         }
-        .into()),
         Parsed::NeedsClock | Parsed::Malformed => Ok(None),
     }
 }

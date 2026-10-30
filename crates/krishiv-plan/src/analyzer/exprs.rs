@@ -1577,6 +1577,17 @@ impl Resolver<'_> {
                     ));
                 }
                 let n = kids.len() - usize::from(f.filter.is_some());
+                // Spark's `SimpleDateFormat` time parser is not implemented: a
+                // pattern function under it would answer with the new parser.
+                if self.ctx.conf.legacy_time_parser
+                    && !session_qualified
+                    && is_pattern_function(lookup_name, &kids[..n])
+                {
+                    return Err(unsupported(
+                        "spark.sql.legacy.timeParserPolicy=LEGACY (the SimpleDateFormat time parser)",
+                        e.origin,
+                    ));
+                }
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
@@ -5179,6 +5190,26 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
         crate::FrameBound::CurrentRow => 1,
         crate::FrameBound::UnboundedFollowing => 2,
         crate::FrameBound::Offset(_) => 3,
+    }
+}
+
+/// The datetime functions whose pattern the legacy time parser reads: the
+/// formatters, the parsers with a format argument and `from_unixtime`.
+/// `unix_timestamp(str)` and `to_unix_timestamp(str)` parse their string with
+/// the default pattern, so a string argument alone counts too (a timestamp or
+/// date argument has no text to parse).
+fn is_pattern_function(name: &str, args: &[Bound]) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        "date_format" | "from_unixtime" => true,
+        "unix_timestamp" | "to_unix_timestamp" => {
+            args.len() >= 2
+                || args
+                    .first()
+                    .is_some_and(|a| a.ty.data_type == Some(DataType::String))
+        }
+        "to_date" | "try_to_date" | "to_timestamp" | "try_to_timestamp" | "to_timestamp_ntz"
+        | "to_timestamp_ltz" => args.len() >= 2,
+        _ => false,
     }
 }
 

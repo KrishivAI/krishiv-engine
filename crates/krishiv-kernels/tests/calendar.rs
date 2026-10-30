@@ -18,9 +18,9 @@ use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::ErrorClass;
 use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, TimeZoneRules, cast};
 use krishiv_kernels::datetime::{
-    DatePart, TruncUnit, Zones, convert_timezone, day_name, extract_date, extract_timestamp,
-    from_utc_timestamp, last_day, make_date, month_name, months_between, next_day,
-    to_utc_timestamp, trunc_date, trunc_timestamp, unix_date,
+    DatePart, TruncUnit, ZoneRef, Zones, convert_timezone, day_name, extract_date,
+    extract_timestamp, from_utc_timestamp, last_day, make_date, month_name, months_between,
+    next_day, to_utc_timestamp, trunc_date, trunc_timestamp, unix_date,
 };
 use krishiv_kernels::{KernelCtx, SparkVersion};
 use proptest::prelude::*;
@@ -799,7 +799,11 @@ fn utc_to_zone_and_back() {
         ts("2024-11-03 08:30:00")
     );
     // NULL values and NULL zones are NULL; the zone of each row is its own.
-    let zones = [Some(seoul), None, Some(FixedOffset(-3600))];
+    let zones = [
+        Some(ZoneRef::Fixed(seoul)),
+        None,
+        Some(ZoneRef::Fixed(FixedOffset(-3600))),
+    ];
     let t = stamps(&[Some(0), Some(0), None]);
     let out = from_utc_timestamp(&t, &Zones::PerRow(&zones), true).unwrap();
     assert_eq!(out.iter().collect::<Vec<_>>(), [Some(9 * HOUR), None, None]);
@@ -857,8 +861,12 @@ fn convert_timezone_between_zones() {
     .unwrap();
     assert_eq!(out.value(0), ts("2024-07-04 12:00:00"));
     // NULL value, source or target.
-    let pairs = [Some(moscow), None, Some(moscow)];
-    let targets = [Some(la), Some(la), None];
+    let pairs = [
+        Some(ZoneRef::Fixed(moscow)),
+        None,
+        Some(ZoneRef::Fixed(moscow)),
+    ];
+    let targets = [Some(ZoneRef::Fixed(la)), Some(ZoneRef::Fixed(la)), None];
     let t = stamps(&[Some(0), Some(0), Some(0)]);
     let out = convert_timezone(&Zones::PerRow(&pairs), &Zones::PerRow(&targets), &t, true).unwrap();
     assert_eq!(out.null_count(), 2);
@@ -880,7 +888,7 @@ fn convert_timezone_between_zones() {
     .unwrap();
     assert!(out.is_null(0));
     // A zone column must cover the rows.
-    let short = [Some(moscow)];
+    let short = [Some(ZoneRef::Fixed(moscow))];
     let two = stamps(&[Some(0), Some(0)]);
     let e = from_utc_timestamp(&two, &Zones::PerRow(&short), true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
