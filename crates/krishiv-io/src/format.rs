@@ -329,6 +329,15 @@ pub struct ScanUnitMetrics {
     pub rows: u64,
     /// Bytes pushed into the decoder.
     pub bytes_pushed: u64,
+    /// Units decoded with the row filter (predicate columns first, the
+    /// other columns only for the rows it keeps).
+    pub units_filtered: u64,
+    /// Units decoded without it.
+    pub units_unfiltered: u64,
+    /// Rows the row filter evaluated while decoding.
+    pub row_filter_rows: u64,
+    /// Rows it kept (the decoder may still pass a dense batch whole).
+    pub row_filter_kept: u64,
 }
 
 /// A sans-IO decoding state machine (see the module docs).

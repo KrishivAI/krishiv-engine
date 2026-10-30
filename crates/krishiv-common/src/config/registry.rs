@@ -19,6 +19,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_JOIN_ROW_LAYOUT,
+    &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -102,6 +103,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
@@ -362,6 +364,21 @@ pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
           radix-partitioned tables and merge the partitions in parallel. Results are the \
           same either way; aggregations with nested or dictionary keys \
           keep the columnar path.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Hash joins build the smaller input of a semi, anti or left outer join
+/// (P2-T166).
+pub static EXEC_JOIN_BUILD_SIDE: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.buildSide",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a semi, anti or left outer join whose right input is estimated much \
+          larger than its left builds its hash table from the left input (a right semi, \
+          right anti or right outer join). Results are the same either way; false keeps \
+          Spark's side (the right input).",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

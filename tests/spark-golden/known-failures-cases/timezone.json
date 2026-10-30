@@ -1,10 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
-      13
-    ],
     "sql-commands": [
-      0,
       3,
       4,
       5,
@@ -14,8 +10,7 @@
       9,
       10,
       11,
-      12,
-      14
+      12
     ]
   },
   "file": "timezone",

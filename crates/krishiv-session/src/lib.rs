@@ -53,6 +53,8 @@ mod explain_graph;
 pub mod functions;
 mod profile;
 mod session;
+mod store;
+mod table_commands;
 mod udfs;
 mod variables;
 mod window;

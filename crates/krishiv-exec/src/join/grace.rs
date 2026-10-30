@@ -346,6 +346,12 @@ pub(crate) struct Grace {
     /// holding a partition keep joining it; after the retry every driver
     /// claims again, in parallel.
     exclusive: Option<ConsumerId>,
+    /// The join returns unmatched build rows (right anti, right outer): a
+    /// partition with build rows and no probe rows is still joined.
+    pub(crate) keep_unprobed: bool,
+    /// In-memory level-0 partitions whose build rows a right join still
+    /// has to emit by their marks (filled on first use).
+    emit: Option<Vec<usize>>,
 }
 
 impl Grace {
@@ -359,7 +365,21 @@ impl Grace {
             active: 0,
             held: 0,
             exclusive: None,
+            keep_unprobed: false,
+            emit: None,
         }
+    }
+
+    /// The next in-memory partition to emit build rows from, of `tables`
+    /// (right joins, after every probe driver's input ended).
+    fn next_emit(&mut self, tables: &[Option<JoinTable>]) -> Option<usize> {
+        let emit = self.emit.get_or_insert_with(|| {
+            (0..tables.len())
+                .rev()
+                .filter(|&p| tables[p].is_some())
+                .collect()
+        });
+        emit.pop()
     }
 
     /// What a driver holding no task does next.
@@ -380,10 +400,11 @@ impl Grace {
             self.started = true;
             let build = std::mem::take(&mut self.build);
             let probe = std::mem::take(&mut self.probe);
+            let keep = self.keep_unprobed;
             let level0 = build
                 .into_iter()
                 .zip(probe)
-                .filter(|(_, p)| p.rows > 0)
+                .filter(|(b, p)| p.rows > 0 || (keep && b.rows > 0))
                 .map(|(build, probe)| Task {
                     depth: 0,
                     build,
@@ -417,6 +438,9 @@ struct Active {
     files: VecDeque<SpillFile>,
     reader: Option<SpillReader>,
     cursor: Option<Cursor>,
+    /// Every probe row is joined: a right join emits the build rows by
+    /// their marks, from this row on.
+    emit: Option<u32>,
 }
 
 /// What a [`Claim`] holds in [`Grace`].
@@ -770,6 +794,9 @@ impl KeyColumn {
 /// One driver's flush state.
 #[derive(Debug, Default)]
 pub(crate) struct Flush {
+    /// An in-memory partition a right join emits build rows from, and the
+    /// next row.
+    emitting: Option<(usize, u32)>,
     active: Option<Active>,
     /// The memory claim of the partition being loaded or joined.
     slot: Option<Claim>,
@@ -795,7 +822,35 @@ pub(crate) async fn step(
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
     let limit = ctx.query().config().batch_size.max(1);
     let partition = ctx.partition();
+    if shared.join_type.builds_preserved() && st.active.is_none() && st.task.is_none() {
+        // The in-memory partitions' build rows first: every probe driver's
+        // input ended, so their marks are final.
+        if st.emitting.is_none() {
+            st.emitting = lock(&built.grace).next_emit(&built.tables).map(|p| (p, 0));
+        }
+        if let Some((p, from)) = &mut st.emitting {
+            let table = built.tables.get(*p).and_then(Option::as_ref);
+            let (out, done) = match table {
+                Some(t) => super::probe::emit_build(shared, hashing.rows(), t, from, limit)?,
+                None => (None, true),
+            };
+            if done {
+                st.emitting = None;
+            }
+            return Ok(out.map_or(FlushOutput::Continue, FlushOutput::Batch));
+        }
+    }
     if let Some(a) = &mut st.active {
+        if let Some(from) = &mut a.emit {
+            let (out, done) =
+                super::probe::emit_build(shared, hashing.rows(), &a.table, from, limit)?;
+            if done {
+                st.active = None;
+                st.slot = None;
+                ctx.consumer().consumer().release_credit();
+            }
+            return Ok(out.map_or(FlushOutput::Continue, FlushOutput::Batch));
+        }
         if let Some(c) = &mut a.cursor {
             let tables = Tables::Single(&a.table);
             let (out, done) = c.next(shared, &tables, limit, partition)?;
@@ -809,6 +864,11 @@ pub(crate) async fn step(
                 let tables = Tables::Single(&a.table);
                 let detailed = ctx.query().config().detailed_metrics;
                 a.cursor = Some(Cursor::new(shared, hashing, b, &tables, detailed)?.0);
+            }
+            None if shared.join_type.builds_preserved() => {
+                // Every probe row of the partition is joined: emit its
+                // build rows by their marks next.
+                a.emit = Some(0);
             }
             None => {
                 st.active = None;
@@ -1069,6 +1129,7 @@ impl Loading {
             files: probe.files.into(),
             reader: None,
             cursor: None,
+            emit: None,
         }
     }
 
@@ -1133,8 +1194,15 @@ impl Loading {
             0
         };
         let headroom = self.task.probe.read_headroom();
-        let need =
-            JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows()) + concat + headroom;
+        let marks = if shared.join_type.builds_preserved() {
+            JoinTable::marks_bytes(rows)
+        } else {
+            0
+        };
+        let need = JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows())
+            + marks
+            + concat
+            + headroom;
         if self.memory.try_grow(need).is_err() {
             return Ok(Loaded::Need(need));
         }
@@ -1143,7 +1211,10 @@ impl Loading {
         self.chunks.clear();
         self.memory.shrink(concat);
         let layout = shared.keys.layout().filter(|_| hashing.rows());
-        let table = JoinTable::build(arena, layout, hashing.g_seed())?;
+        let mut table = JoinTable::build(arena, layout, hashing.g_seed())?;
+        if shared.join_type.builds_preserved() {
+            table = table.with_marks()?;
+        }
         let (keys, buckets, _) = table.index_size();
         shared.counters.add(Counter::GraceHashEntries, keys as u64);
         shared
@@ -1270,6 +1341,7 @@ async fn split(
     let query = Arc::clone(ctx.query());
     let depth = task.depth + 1;
     let hashing = hashing.clone();
+    let keep = shared.join_type.keeps_null_build_keys();
     ctx.run_blocking(move || {
         let memory = || handle.reservation().releasing_to_credit();
         let query = &query;
@@ -1310,7 +1382,7 @@ async fn split(
             .0
             .into_iter()
             .zip(probe.0)
-            .filter(|(_, p)| p.rows > 0)
+            .filter(|(b, p)| p.rows > 0 || (keep && b.rows > 0))
             .map(|(build, probe)| Task {
                 depth,
                 build,
@@ -1826,6 +1898,7 @@ mod tests {
                 shared,
                 &hashing,
                 &keys,
+                keys.hashes(),
                 Some(&payload),
                 build.weights(),
                 &all,

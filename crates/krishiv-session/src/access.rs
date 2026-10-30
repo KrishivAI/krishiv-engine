@@ -322,7 +322,7 @@ impl Session {
 
 /// The parts of `name`: as written, or the constant string of
 /// `IDENTIFIER('...')` parsed as a multipart name.
-fn ddl_parts(name: &DdlName, env: &QueryEnv) -> Result<Vec<String>, KrishivError> {
+pub(crate) fn ddl_parts(name: &DdlName, env: &QueryEnv) -> Result<Vec<String>, KrishivError> {
     let parts = match name {
         DdlName::Parts(n) => n.parts.iter().map(|p| p.value.clone()).collect(),
         DdlName::Dynamic(d) => match &d.expr.kind {

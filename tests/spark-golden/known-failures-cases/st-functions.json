@@ -1,11 +1,5 @@
 {
   "cases": {
-    "sql-commands": [
-      0,
-      1,
-      2,
-      106
-    ],
     "time-geo-types": [
       3,
       4,

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Live-heap counting for memory measurements (feature `heap-stats`): a
 //! global allocator wrapper that counts the bytes allocated and not yet
-//! freed, and their high-water mark. A measurement build only (one atomic
-//! add per allocation and free): it tells the memory pool's view
+//! freed, their high-water mark, and the number of allocations. A
+//! measurement build only (two atomic adds per allocation, one per free):
+//! it tells the memory pool's view
 //! (reserved bytes) from the heap the process really holds, and that from
 //! what the allocator retains on top (the resident set).
 
@@ -11,12 +12,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// `A`, counting its live bytes ([`live`], [`peak`]).
 #[derive(Debug, Default)]
 pub struct Counting<A>(pub A);
 
 fn grew(bytes: usize) {
+    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     let now = LIVE
         .fetch_add(bytes, Ordering::Relaxed)
         .saturating_add(bytes);
@@ -64,6 +67,12 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
         }
         p
     }
+}
+
+/// Allocations (and reallocations) made through [`Counting`] since the
+/// process started; the difference of two reads counts those in between.
+pub fn allocations() -> usize {
+    ALLOCATIONS.load(Ordering::Relaxed)
 }
 
 /// Bytes allocated and not freed through [`Counting`].
@@ -138,6 +147,16 @@ mod tests {
         });
         assert_eq!(live(), 210);
         assert_eq!(peak(), 210);
+    }
+
+    #[test]
+    fn every_growth_counts_one_allocation() {
+        let _guard = SERIAL.lock().unwrap();
+        let before = allocations();
+        grew(8);
+        grew(0);
+        shrank(8);
+        assert_eq!(allocations() - before, 2);
     }
 
     #[test]

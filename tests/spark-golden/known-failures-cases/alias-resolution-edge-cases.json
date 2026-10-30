@@ -1,18 +1,11 @@
 {
   "cases": {
     "depends-on-command": [
-      6,
-      7
+      6
     ],
     "query-features": [
       4,
       5
-    ],
-    "sql-commands": [
-      0,
-      1,
-      8,
-      9
     ]
   },
   "file": "alias-resolution-edge-cases",
