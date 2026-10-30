@@ -383,6 +383,9 @@ struct Local {
     /// Where the last partition seen starts: an index into `pending` and a
     /// row. Rows before it are complete.
     last_start: Option<(usize, usize)>,
+    /// Rows of the partition open at the end of the last batch taken (a
+    /// growing aggregate's snapshots are priced by position).
+    open_len: usize,
     /// The keys of the last row taken, to compare the next batch's first
     /// row with.
     prev_partition: Option<OwnedRow>,
@@ -574,13 +577,16 @@ impl Window {
             .collect();
         let parts = part_start.iter().filter(|&&s| s).count();
         let peers = peer_start.iter().filter(|&&s| s).count();
+        let (held, open_len) = eval::snapshot_slots(&part_start, l.open_len);
+        let snapshot_bytes = held.saturating_mul(eval::snapshot_width(&env.plan, &batch));
         let cost = batch
             .get_array_memory_size()
             .saturating_add(2 * n)
-            .saturating_add(eval::cost(&env.plan, n, parts, peers)?);
+            .saturating_add(eval::cost(&env.plan, n, parts, peers, snapshot_bytes)?);
         if l.reservation.try_grow(cost).is_err() {
             return Ok(Err(cost));
         }
+        l.open_len = open_len;
         l.started |= n > 0;
         if prev_partition.is_some() {
             l.prev_partition = prev_partition;
@@ -732,6 +738,7 @@ impl Operator for Window {
             spillable: self.spill.is_some(),
             pending: VecDeque::new(),
             last_start: None,
+            open_len: 0,
             prev_partition: None,
             prev_order: None,
             out: VecDeque::new(),

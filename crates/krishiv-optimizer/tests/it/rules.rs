@@ -707,6 +707,7 @@ fn shared_expressions_stay_linear() {
                 args,
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type,
                 nullable: true,
                 deterministic: true,

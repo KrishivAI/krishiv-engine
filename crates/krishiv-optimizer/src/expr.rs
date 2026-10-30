@@ -223,6 +223,7 @@ pub(crate) fn call_builtin(
         args,
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
         data_type,
         nullable,
         deterministic: true,

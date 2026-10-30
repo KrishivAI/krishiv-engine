@@ -641,6 +641,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             arg_names,
             distinct,
             filter,
+            within_group,
         }) => {
             let qualified = if qualifier.is_empty() {
                 name.clone()
@@ -654,6 +655,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 arg_names,
                 *distinct,
                 filter.as_deref(),
+                within_group,
                 out,
             );
         }
@@ -662,13 +664,44 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             args,
             distinct,
             filter,
+            within_group,
             ..
         })) => {
+            // `mode` keeps Spark's `Mode.sql` form: the ordering is the
+            // tie-break (ascending written as descending) and takes no
+            // arguments (`mode() WITHIN GROUP (ORDER BY col DESC)`).
+            if id.name() == "mode" && !within_group.is_empty() {
+                out.push(Piece::Str("mode() WITHIN GROUP (ORDER BY "));
+                if let Some(o) = within_group.first() {
+                    out.push(Piece::Expr(&o.expr));
+                    if o.direction == SortDirection::Descending {
+                        out.push(Piece::Str(" DESC"));
+                    }
+                }
+                out.push(Piece::Str(")"));
+                if let Some(e) = filter {
+                    out.extend([
+                        Piece::Str(" FILTER (WHERE "),
+                        Piece::Expr(e),
+                        Piece::Str(")"),
+                    ]);
+                }
+                return;
+            }
             let op = match id {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
             };
-            call(id.name(), op, args, &[], *distinct, filter.as_deref(), out);
+            call(
+                id.name(),
+                op,
+                args,
+                &[],
+                *distinct,
+                filter.as_deref(),
+                within_group,
+                out,
+            );
         }
         ExprNode::Cast { expr, to, mode } => {
             out.push(Piece::Str(match mode {
@@ -820,7 +853,7 @@ fn bound_pieces<'a>(b: &'a FrameBound, out: &mut Vec<Piece<'a>>) {
 }
 
 /// ` ASC NULLS FIRST` and the like.
-const fn order_suffix(o: &SortOrder) -> &'static str {
+pub(crate) const fn order_suffix(o: &SortOrder) -> &'static str {
     match (o.direction, o.nulls) {
         (SortDirection::Ascending, NullOrdering::NullsFirst) => " ASC NULLS FIRST",
         (SortDirection::Ascending, NullOrdering::NullsLast) => " ASC NULLS LAST",
@@ -832,6 +865,10 @@ const fn order_suffix(o: &SortOrder) -> &'static str {
 /// Appends a call: operators infix or in their SQL form, others as
 /// `name(args)`. A named argument prints as `name => value`; a quantified
 /// `LIKE`/`ILIKE` prints in its SQL form (`a LIKE ANY (p, ...)`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site per expression form, every field of the call"
+)]
 fn call<'a>(
     name: &str,
     op: Option<Builtin>,
@@ -839,6 +876,7 @@ fn call<'a>(
     arg_names: &'a [Option<String>],
     distinct: bool,
     filter: Option<&'a Expr>,
+    within_group: &'a [SortOrder],
     out: &mut Vec<Piece<'a>>,
 ) {
     let arg = |i: usize| Piece::Expr(&args[i]);
@@ -929,6 +967,18 @@ fn call<'a>(
             out.push(Piece::Str(")"));
         }
     }
+    if !within_group.is_empty() {
+        out.push(Piece::Str(" WITHIN GROUP (ORDER BY "));
+        for (i, o) in within_group.iter().enumerate() {
+            if i > 0 {
+                out.push(Piece::Str(", "));
+            }
+            out.push(Piece::Expr(&o.expr));
+            out.push(Piece::Str(order_suffix(o)));
+        }
+        out.push(Piece::Str(")"));
+    }
+    // Spark appends the filter after the whole function text.
     if let Some(e) = filter {
         out.extend([
             Piece::Str(" FILTER (WHERE "),

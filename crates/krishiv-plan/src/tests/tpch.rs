@@ -449,6 +449,7 @@ fn q16() -> LogicalPlan {
         args: vec![Arc::new(c("ps_suppkey"))],
         distinct: true,
         filter: None,
+        within_group: Vec::new(),
     }));
     from(&["partsupp", "part"])
         .filter(and(vec![

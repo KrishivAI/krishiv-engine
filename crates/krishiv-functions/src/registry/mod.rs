@@ -112,6 +112,59 @@ pub enum Aggregate {
     MaxBy,
     /// `min_by(x, y)`.
     MinBy,
+    /// `collect_list(x)` (and `array_agg`, which the analyzer resolves as
+    /// `collect_list` for Spark's display name).
+    CollectList,
+    /// `collect_set(x)`.
+    CollectSet,
+    /// `vector_sum(x)`: element-wise sums over `ARRAY<FLOAT>`.
+    VectorSum,
+    /// `vector_avg(x)`: element-wise means over `ARRAY<FLOAT>`.
+    VectorAvg,
+    /// `bit_and(x)`: the bitwise AND of the non-NULL `TINYINT` ..
+    /// `BIGINT` values; NULL for no non-NULL value. The input type.
+    BitAnd,
+    /// `bit_or(x)`, as `bit_and` for OR.
+    BitOr,
+    /// `bit_xor(x)`, as `bit_and` for XOR.
+    BitXor,
+    /// `regr_count(y, x)`: the number of rows where both are non-NULL.
+    /// `bigint`, never NULL.
+    RegrCount,
+    /// `regr_avgx(y, x)`: the mean of `x` over non-NULL pairs. `double`.
+    RegrAvgx,
+    /// `regr_avgy(y, x)`: the mean of `y` over non-NULL pairs. `double`.
+    RegrAvgy,
+    /// `regr_sxx(y, x)`: `n * var_pop(x)` over non-NULL pairs. `double`.
+    RegrSxx,
+    /// `regr_syy(y, x)`: `n * var_pop(y)` over non-NULL pairs. `double`.
+    RegrSyy,
+    /// `regr_sxy(y, x)`: `n * covar_pop(y, x)` over non-NULL pairs.
+    /// `double`.
+    RegrSxy,
+    /// `regr_slope(y, x)`: the slope of the regression line; NULL when
+    /// `x` does not vary. `double`.
+    RegrSlope,
+    /// `regr_intercept(y, x)`: the intercept of the regression line.
+    /// `double`.
+    RegrIntercept,
+    /// `regr_r2(y, x)`: the coefficient of determination; NULL when `x`
+    /// does not vary, 1 when only `y` does not. `double`.
+    RegrR2,
+    /// `mode(col)`: the most frequent non-NULL value (ties broken as
+    /// Spark breaks them); the analyzer types the `mode(col,
+    /// deterministic)` and `mode() WITHIN GROUP (ORDER BY col)` forms.
+    /// The input type.
+    Mode,
+    /// `listagg(expr[, delimiter])` (and `string_agg`, which the analyzer
+    /// resolves as `listagg` for Spark's display name): the non-NULL
+    /// values joined by the delimiter. The input type (`STRING` or
+    /// `BINARY`), NULL for no value.
+    ListAgg,
+    /// `try_sum(x)`: `sum` that gives NULL instead of an overflow error.
+    TrySum,
+    /// `try_avg(x)`: `avg` that gives NULL instead of an overflow error.
+    TryAvg,
 }
 
 /// A built-in function.

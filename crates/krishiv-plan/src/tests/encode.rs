@@ -235,12 +235,57 @@ fn resolved_call(name: &str, id: u32, kind: FunctionKind, arg: &str) -> LogicalP
         args: vec![Arc::new(Expr::column([arg]))],
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
         data_type: DataType::String,
         nullable: true,
         deterministic: true,
     };
     let call = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(func)));
     LogicalPlan::table(["t"]).project(vec![call])
+}
+
+/// A call's `WITHIN GROUP` keys, directions and null orderings enter both
+/// the canonical encoding and the structural hash.
+#[test]
+fn within_group_orderings_enter_the_key() {
+    use crate::{NullOrdering, SortDirection, SortOrder};
+    let call = |arg: &str, direction: SortDirection, nulls: NullOrdering| {
+        let func = ResolvedFunction {
+            id: FunctionId::Registry {
+                name: "listagg".to_owned(),
+                id: 1,
+            },
+            kind: FunctionKind::Aggregate,
+            args: vec![Arc::new(Expr::column(["v"]))],
+            distinct: false,
+            filter: None,
+            within_group: vec![SortOrder {
+                expr: Arc::new(Expr::column([arg])),
+                direction,
+                nulls,
+            }],
+            data_type: DataType::String,
+            nullable: true,
+            deterministic: true,
+        };
+        let call = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(func)));
+        key(LogicalPlan::table(["t"]).project(vec![call]))
+    };
+    use NullOrdering::{NullsFirst, NullsLast};
+    use SortDirection::{Ascending, Descending};
+    let keys = [
+        call("k", Ascending, NullsFirst),
+        call("k", Descending, NullsFirst),
+        call("k", Ascending, NullsLast),
+        call("j", Ascending, NullsFirst),
+    ];
+    for (i, a) in keys.iter().enumerate() {
+        for b in &keys[i + 1..] {
+            assert_ne!(a.0, b.0);
+            assert_ne!(a.1, b.1);
+        }
+    }
+    assert_eq!(keys[0], call("k", Ascending, NullsFirst));
 }
 
 /// A lambda and its variables enter the key: parameter names, the
@@ -303,6 +348,7 @@ fn lambda_and_its_variables_enter_the_key() {
 fn udf_versions_enter_the_key() {
     let call = |version: u32| {
         let func = ResolvedFunction {
+            within_group: Vec::new(),
             id: FunctionId::Udf {
                 name: "f".to_owned(),
                 version,
@@ -369,8 +415,8 @@ fn keys_are_stable() {
         ))
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
-    assert_eq!(encoding.len(), 493, "{encoding:?}");
-    assert_eq!(hash.to_string(), "eaeeb9e9da010966fde69769c8d36f0f");
+    assert_eq!(encoding.len(), 509, "{encoding:?}");
+    assert_eq!(hash.to_string(), "18fb46a96faba73f2df9c154e49a4f89");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -382,7 +428,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "abc19dd01ab19870f695f43bf481168f");
+    assert_eq!(hash.to_string(), "8b398126fa73d3a01fe43b57c60d0590");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in
@@ -431,6 +477,7 @@ fn shared_expressions_are_encoded_once() {
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         })))
     });
     let plan = Plan::try_new(LogicalPlan::table(["t"]).filter(e)).unwrap();
@@ -458,6 +505,7 @@ fn qualifier_and_arg_names_enter_the_key() {
                     arg_names: names.into_iter().map(|n| n.map(str::to_owned)).collect(),
                     distinct: false,
                     filter: None,
+                    within_group: Vec::new(),
                 },
             ))]),
         )

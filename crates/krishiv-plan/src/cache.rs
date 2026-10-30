@@ -308,6 +308,7 @@ impl Encoder {
                 if let Some(filter) = &f.filter {
                     self.expr(filter, bias);
                 }
+                self.within_group(&f.within_group, bias);
             }
             ExprNode::Lambda { params, body } => {
                 self.tag("lambda");
@@ -391,6 +392,19 @@ impl Encoder {
         }
     }
 
+    /// A call's `WITHIN GROUP` ordering (written only when there is one, so
+    /// the keys of calls without it do not change).
+    fn within_group(&mut self, orders: &[crate::SortOrder], bias: u64) {
+        if orders.is_empty() {
+            return;
+        }
+        self.tag("within-group");
+        self.num(orders.len() as u64);
+        for o in orders {
+            self.order(o, bias);
+        }
+    }
+
     fn order(&mut self, o: &crate::SortOrder, bias: u64) {
         self.expr(&o.expr, bias);
         self.debug(&o.direction);
@@ -424,6 +438,7 @@ impl Encoder {
                 if let Some(filter) = &f.filter {
                     self.expr(filter, bias);
                 }
+                self.within_group(&f.within_group, bias);
                 self.debug(&f.data_type);
                 self.flag(f.nullable);
             }
@@ -870,6 +885,7 @@ mod tests {
     fn gt(left: Arc<Expr>, value: i32) -> Expr {
         Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
             ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Builtin(Builtin::Gt),
                 kind: FunctionKind::Scalar,
                 args: vec![left, Arc::new(Expr::literal(Literal::Integer(value)))],
@@ -895,6 +911,52 @@ mod tests {
             &[rcol(41, "a"), rcol(42, "b")],
         );
         assert_eq!(hash(&a), hash(&b));
+    }
+
+    /// Calls that differ only in their `WITHIN GROUP` ordering hash apart.
+    #[test]
+    fn within_group_orderings_enter_the_hash() {
+        use crate::{NullOrdering, SortDirection, SortOrder};
+        let call = |col: u64, dir: SortDirection, nulls: NullOrdering, ordered: bool| {
+            let within_group = if ordered {
+                vec![SortOrder {
+                    expr: rcol(col, "a"),
+                    direction: dir,
+                    nulls,
+                }]
+            } else {
+                Vec::new()
+            };
+            let f = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    within_group,
+                    id: FunctionId::Builtin(Builtin::Gt),
+                    kind: FunctionKind::Aggregate,
+                    args: vec![rcol(1, "a")],
+                    distinct: false,
+                    filter: None,
+                    data_type: DataType::Boolean,
+                    nullable: true,
+                    deterministic: true,
+                },
+            ))));
+            project(scan(&[1, 2], &["a", "b"]), &[f])
+        };
+        use NullOrdering::{NullsFirst, NullsLast};
+        use SortDirection::{Ascending, Descending};
+        let all = [
+            call(1, Ascending, NullsFirst, true),
+            call(1, Descending, NullsFirst, true),
+            call(1, Ascending, NullsLast, true),
+            call(2, Ascending, NullsFirst, true),
+            call(1, Ascending, NullsFirst, false),
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(hash(a), hash(b));
+            }
+        }
+        assert_eq!(hash(&all[0]), hash(&call(1, Ascending, NullsFirst, true)));
     }
 
     #[test]
@@ -976,6 +1038,7 @@ mod tests {
         let lit = |v: i32| Arc::new(Expr::literal(Literal::Integer(v)));
         let unresolved = |node: ExprNode| Arc::new(Expr::new(node));
         let call = |name: &str| FunctionCall {
+            within_group: Vec::new(),
             name: name.to_owned(),
             qualifier: Vec::new(),
             args: vec![lit(1)],
@@ -1008,6 +1071,7 @@ mod tests {
         let resolved_fn = |filter: Option<Arc<Expr>>| {
             Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
                 ResolvedFunction {
+                    within_group: Vec::new(),
                     id: FunctionId::Builtin(Builtin::Gt),
                     kind: FunctionKind::Scalar,
                     args: vec![a(), lit(1)],

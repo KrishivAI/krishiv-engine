@@ -596,6 +596,83 @@ pub(super) fn picks_bytes(a: &AggregateExpr) -> bool {
         )
 }
 
+/// The heap a running frame's snapshots of a growing state hold: each row
+/// of a partition copies the whole state so far, which is quadratic in the
+/// partition's rows (`collect_list`, `collect_set`, `mode`, `listagg`).
+/// `snapshot_bytes` is the bytes all snapshots hold (see [`snapshot_slots`]
+/// and [`snapshot_width`]), an upper bound for any partition sizes
+/// (distinct keys and peer groups snapshot less).
+fn snapshot_heap(a: &AggregateExpr, shape: Shape, snapshot_bytes: usize) -> usize {
+    if snapshots_grow(a, shape) {
+        snapshot_bytes
+    } else {
+        0
+    }
+}
+
+/// The bytes one snapshotted element of the growing aggregates of `plan`
+/// takes in `batch`: the widest average value of their argument columns
+/// (doubled for `collect_set` and `mode`, which also keep encoded keys), at
+/// least 16. A later batch of a partition may hold wider values than this
+/// one.
+pub(super) fn snapshot_width(plan: &WindowPlan, batch: &RecordBatch) -> usize {
+    let rows = batch.num_rows().max(1);
+    let mut width = 16;
+    for f in &plan.functions {
+        let WindowFunction::Aggregate(a) = &f.function else {
+            continue;
+        };
+        if !f.shape().is_ok_and(|s| snapshots_grow(a, s)) {
+            continue;
+        }
+        let keyed = matches!(
+            a.function,
+            AggregateFunction::CollectSet
+                | AggregateFunction::Mode
+                | AggregateFunction::ModeMin
+                | AggregateFunction::ModeMax
+        );
+        for &i in &a.args {
+            if let Some(col) = batch.columns().get(i) {
+                let per = crate::aggregate::kept_bytes(col).div_ceil(rows);
+                width = width.max(if keyed { per.saturating_mul(2) } else { per });
+            }
+        }
+    }
+    width
+}
+
+/// Whether a running frame of `a` snapshots a state that grows with the
+/// partition (`collect_list`, `collect_set`, `mode`, `listagg`).
+pub(super) fn snapshots_grow(a: &AggregateExpr, shape: Shape) -> bool {
+    use AggregateFunction as F;
+    shape != Shape::Whole
+        && matches!(
+            a.function,
+            F::CollectList | F::CollectSet | F::Mode | F::ModeMin | F::ModeMax | F::ListAgg { .. }
+        )
+}
+
+/// The elements the snapshots of a growing state hold for the rows of one
+/// batch: the row at position `k` of its partition copies `k` elements.
+/// `part_start` flags the rows that start a partition; `open` is the length
+/// of the partition the batch continues (rows of earlier batches).
+/// Additive across batches, so the cost of a partition is the sum of its
+/// batches' costs whatever the skew. Returns the elements and the length of
+/// the partition open at the batch's end.
+pub(super) fn snapshot_slots(part_start: &[bool], open: usize) -> (usize, usize) {
+    let mut held = 0usize;
+    let mut len = open;
+    for &start in part_start {
+        if start {
+            len = 0;
+        }
+        len = len.saturating_add(1);
+        held = held.saturating_add(len);
+    }
+    (held, len)
+}
+
 /// The view type a string or binary argument is read as.
 pub(super) fn view_type(t: &DataType) -> DataType {
     match t {
@@ -673,7 +750,7 @@ fn byte_values(
             if passes(mask.as_ref(), i) {
                 let valid = sources[k].is_valid(i);
                 let picked = state.map(|(sk, si)| sources[sk].is_valid(si).then(|| value(sk, si)));
-                if replaces(a.function, picked, valid, || value(k, i))? {
+                if replaces(&a.function, picked, valid, || value(k, i))? {
                     state = Some((k, i));
                 }
             }
@@ -695,7 +772,7 @@ fn byte_values(
 /// far (`picked`: `None` before any row, `Some(None)` for a picked NULL);
 /// Spark compares by bytes.
 pub(super) fn replaces<'v>(
-    function: AggregateFunction,
+    function: &AggregateFunction,
     picked: Option<Option<&'v [u8]>>,
     valid: bool,
     value: impl FnOnce() -> &'v [u8],
@@ -706,7 +783,7 @@ pub(super) fn replaces<'v>(
         F::Min | F::Max => match picked.flatten() {
             Some(old) => {
                 let order = value().cmp(old);
-                if function == F::Max {
+                if *function == F::Max {
                     order.is_gt()
                 } else {
                     order.is_lt()
@@ -732,8 +809,14 @@ pub(super) fn width(t: &DataType, rows: usize) -> usize {
 /// `rows` rows in `parts` partitions and `peers` peer groups: the row
 /// maps, each function's states and output, and the index vectors that
 /// gather outputs. Linear in its arguments, so the cost of a unit is the
-/// sum of its batches' costs.
-pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -> Result<usize> {
+/// sum of its batches' costs. `held` is [`snapshot_slots`] of the batch.
+pub(super) fn cost(
+    plan: &WindowPlan,
+    rows: usize,
+    parts: usize,
+    peers: usize,
+    held: usize,
+) -> Result<usize> {
     // `part_of`, `peer_of`; `parts` and `first_peer`; `peers`.
     let mut total = rows * 8 + parts * 20 + peers * 16;
     for f in &plan.functions {
@@ -800,6 +883,7 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
                     };
                     let slots = if shape == Shape::Whole { 0 } else { rows * 4 };
                     ids + slots
+                        + snapshot_heap(a, shape, held)
                         + groups * state
                         + width(&out, segments)
                         + if shape == Shape::RunningRows {

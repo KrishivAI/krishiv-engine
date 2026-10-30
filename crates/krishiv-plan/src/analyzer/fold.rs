@@ -884,6 +884,7 @@ mod tests {
                 args: args.into_iter().map(Arc::new).collect(),
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type,
                 nullable: true,
                 deterministic: true,
@@ -909,6 +910,7 @@ mod tests {
     fn udf(name: &str, version: u32, args: Vec<Expr>, deterministic: bool) -> Expr {
         Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
             ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Udf {
                     name: name.to_owned(),
                     version,
@@ -1206,6 +1208,7 @@ mod tests {
                     args: vec![Arc::clone(&e), Arc::clone(&e)],
                     distinct: false,
                     filter: None,
+                    within_group: Vec::new(),
                     data_type: DataType::Long,
                     nullable: false,
                     deterministic: true,
@@ -1558,6 +1561,7 @@ mod tests {
             args: vec![Arc::new(int(1))],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type: DataType::Integer,
             nullable: false,
             deterministic: false,
