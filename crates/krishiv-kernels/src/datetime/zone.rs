@@ -28,6 +28,34 @@ use krishiv_common::error::{InvalidTimezone, KrishivError};
 
 use crate::cast::{FixedOffset, TimeZoneRules};
 
+/// The id `java.time.ZoneId.of` gives a `spark.sql.session.timeZone` value,
+/// which `VV` and `z` patterns print: an offset in full (`+05` is `+05:00`,
+/// `GMT+5` is `GMT+05:00`), a zero offset as its prefix or `Z`. Anything
+/// [`FixedOffset`] does not read stays as written.
+#[must_use]
+pub fn zone_id(configured: &str) -> String {
+    let zone = configured.trim();
+    let Some(FixedOffset(offset)) = FixedOffset::parse(zone) else {
+        return zone.to_owned();
+    };
+    if !zone.contains(['+', '-']) {
+        return zone.to_owned();
+    }
+    let prefix = ["UTC", "GMT"]
+        .into_iter()
+        .find(|p| zone.starts_with(p))
+        .unwrap_or("");
+    if offset == 0 {
+        return if prefix.is_empty() { "Z" } else { prefix }.to_owned();
+    }
+    let (sign, abs) = if offset < 0 {
+        ('-', -offset)
+    } else {
+        ('+', offset)
+    };
+    format!("{prefix}{sign}{:02}:{:02}", abs / 3600, abs / 60 % 60)
+}
+
 /// A resolved zone id: a fixed offset, or a region of the bundled time-zone
 /// database.
 #[derive(Debug, Clone)]
@@ -379,6 +407,32 @@ mod tests {
     /// Asia/Kolkata (no DST since 1945) and Australia/Lord_Howe (a
     /// 30-minute DST): winter and summer offsets, a gap and an overlap.
     /// Unverified against a Spark run.
+    /// Spark 4.2.0's `VV` for each session zone.
+    #[test]
+    fn zone_ids_follow_java_time() {
+        for (configured, id) in [
+            ("UTC", "UTC"),
+            ("GMT", "GMT"),
+            ("Z", "Z"),
+            ("Etc/UTC", "Etc/UTC"),
+            ("+00:00", "Z"),
+            ("-00:00", "Z"),
+            ("GMT+00:00", "GMT"),
+            ("UTC+00:00", "UTC"),
+            ("+05:30", "+05:30"),
+            ("+5:30", "+05:30"),
+            ("+05", "+05:00"),
+            ("-08:00", "-08:00"),
+            ("GMT+5", "GMT+05:00"),
+            ("UTC+05:30", "UTC+05:30"),
+            ("GMT-08:00", "GMT-08:00"),
+            ("America/Los_Angeles", "America/Los_Angeles"),
+            (" GMT ", "GMT"),
+        ] {
+            assert_eq!(zone_id(configured), id, "{configured}");
+        }
+    }
+
     #[test]
     fn kolkata_and_lord_howe_edges() {
         let utc = |y, mo, d, h, mi| {

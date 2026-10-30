@@ -248,6 +248,10 @@ pub struct ExprEnv {
     pub legacy_statistical_aggregate: bool,
     /// The session time zone as a fixed offset in seconds, when it is one.
     pub zone: Option<i32>,
+    /// `spark.sql.session.timeZone` as configured, when it differs from what
+    /// `zone` renders (`UTC`, `+05:30`). A plan that sets it needs the
+    /// `session_zone_name` codec feature.
+    pub zone_name: Option<Arc<str>>,
     /// The query's clock (microseconds since the epoch, UTC), read once at
     /// planning: every instantiation sees the same `current_date()`.
     pub query_start_micros: i64,
@@ -684,6 +688,7 @@ plan_data!(struct ExprEnv {
     ansi,
     legacy_statistical_aggregate,
     zone,
+    zone_name,
     query_start_micros,
     user,
     map_key_dedup_last_win

@@ -39,7 +39,7 @@ pub use format::{
     ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,
     parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
 };
-pub use zone::{ZoneRef, resolve_zone};
+pub use zone::{ZoneRef, resolve_zone, zone_id};
 
 use crate::cast::datetime::{
     MICROS_PER_DAY, civil_from_days, days_from_civil, local_to_utc, utc_to_local,

@@ -32,6 +32,7 @@ fn plus_thirty() -> BindOptions {
     BindOptions::new()
         .with_time_zone(Arc::new(FixedOffset(19_800)))
         .with_time_zone_name(Arc::from("+05:30"))
+        .with_configured_time_zone(Arc::from("+05:30"))
 }
 
 fn stamps(a: &ArrayRef) -> Vec<Option<i64>> {
@@ -584,8 +585,6 @@ fn from_unixtime_renders_seconds_in_the_session_zone() {
 
 #[test]
 fn current_timezone_names_the_session_zone() {
-    // Unverified against a Spark run (the goldens run in a region zone,
-    // which cannot cross the plan boundary yet).
     let f = bind_scalar("current_timezone", &[], &utc()).unwrap();
     assert_eq!(
         text(&f.invoke(&[], 2).unwrap()),
@@ -596,6 +595,10 @@ fn current_timezone_names_the_session_zone() {
         text(&f.invoke(&[], 1).unwrap()),
         [Some("+05:30".to_owned())]
     );
+    // The configured string as is, not the normalised id.
+    let opts = plus_thirty().with_configured_time_zone(Arc::from("+5:30"));
+    let f = bind_scalar("current_timezone", &[], &opts).unwrap();
+    assert_eq!(text(&f.invoke(&[], 1).unwrap()), [Some("+5:30".to_owned())]);
 }
 
 #[test]

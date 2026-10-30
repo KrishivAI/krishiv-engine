@@ -1236,7 +1236,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             })
         }
         ("current_timezone", []) => {
-            let name = Arc::clone(&opts.time_zone_name);
+            let name = Arc::clone(&opts.configured_time_zone);
             Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
                 Ok(Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
                     name.as_ref(),

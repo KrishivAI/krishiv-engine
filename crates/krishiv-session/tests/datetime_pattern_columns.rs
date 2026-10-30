@@ -358,6 +358,49 @@ fn the_legacy_time_parser_is_refused() {
     );
 }
 
+/// `current_timezone()` returns the configured string and the patterns
+/// print its zone id, as Spark 4.2.0 does for each of these.
+#[test]
+fn the_session_zone_name_is_the_configured_one() {
+    let at = "TIMESTAMP '2024-01-01 12:00:00'";
+    for (zone, id, name, long) in [
+        ("UTC", "UTC", "UTC", "Coordinated Universal Time"),
+        ("GMT", "GMT", "GMT", "Greenwich Mean Time"),
+        ("Z", "Z", "Z", "Z"),
+        ("+00:00", "Z", "Z", "Z"),
+        ("-00:00", "Z", "Z", "Z"),
+        ("GMT+00:00", "GMT", "GMT", "Greenwich Mean Time"),
+        ("Etc/UTC", "Etc/UTC", "UTC", "Coordinated Universal Time"),
+        ("+05:30", "+05:30", "+05:30", "+05:30"),
+        ("+5:30", "+05:30", "+05:30", "+05:30"),
+        ("GMT+5", "GMT+05:00", "GMT+05:00", "GMT+05:00"),
+        ("UTC+05:30", "UTC+05:30", "UTC+05:30", "UTC+05:30"),
+    ] {
+        let s = Session::new().unwrap();
+        block_on(s.sql(&format!("SET spark.sql.session.timeZone = {zone}"))).unwrap();
+        assert_eq!(column(&s, "current_timezone()", ""), text(&[Some(zone)]));
+        for (pattern, want) in [("VV", id), ("z", name), ("zzzz", long)] {
+            assert_eq!(
+                column(&s, &format!("date_format({at}, '{pattern}')"), ""),
+                text(&[Some(want)]),
+                "{zone} {pattern}"
+            );
+        }
+    }
+}
+
+/// A region zone has no rules here yet, but `current_timezone()` reads only
+/// its name.
+#[test]
+fn a_region_session_zone_has_its_name() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.session.timeZone = America/Los_Angeles")).unwrap();
+    assert_eq!(
+        column(&s, "current_timezone()", ""),
+        text(&[Some("America/Los_Angeles")])
+    );
+}
+
 /// Under a region session zone the UTC fallback is only right while no zone
 /// is parsed or printed: string inputs, zone-bearing and dynamic patterns
 /// are refused, zone-free DATE / zone-less paths still run.

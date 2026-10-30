@@ -13,7 +13,7 @@ use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
 use krishiv_udf_sdk::ScalarUdf;
 
 use super::strings::to_view;
-use super::{Input, PhysExpr, Value, literal_array, unsupported_expr};
+use super::{Input, PhysExpr, Value, literal_array, rendered_zone, unsupported_expr};
 use crate::error::Result;
 use crate::planner::build::{internal, unsupported};
 
@@ -157,7 +157,6 @@ pub(super) fn compile(
             | "unix_timestamp"
             | "to_unix_timestamp"
             | "from_unixtime"
-            | "current_timezone"
             | "current_date"
             | "curdate"
             | "localtimestamp"
@@ -171,25 +170,21 @@ pub(super) fn compile(
         }
         None => FixedOffset(0),
     };
-    // The zone id Spark normalises the offset to (`UTC`, `+05:30`); a
-    // region session zone reaches here only for functions that do not read
-    // it, which see the UTC fallback.
-    let zone_name: Arc<str> = match input.env.zone {
-        None | Some(0) => Arc::from("UTC"),
-        Some(offset) => {
-            let (sign, abs) = if offset < 0 {
-                ("-", offset.unsigned_abs())
-            } else {
-                ("+", offset.unsigned_abs())
-            };
-            Arc::from(format!("{sign}{:02}:{:02}", abs / 3600, abs / 60 % 60))
-        }
+    // `current_timezone()` returns the configured string; the patterns print
+    // the zone id Spark normalises it to. A region session zone reaches the
+    // patterns only for functions that do not read it, which see the UTC
+    // fallback.
+    let configured: Arc<str> = match &input.env.zone_name {
+        Some(name) => Arc::clone(name),
+        None => Arc::from(rendered_zone(input.env.zone)),
     };
+    let zone_id: Arc<str> = Arc::from(krishiv_kernels::datetime::zone_id(&configured));
     let opts = BindOptions::new()
         .with_ansi(input.env.ansi)
         .with_kernel(input.env.kernels)
         .with_time_zone(Arc::new(zone))
-        .with_time_zone_name(zone_name)
+        .with_time_zone_name(zone_id)
+        .with_configured_time_zone(configured)
         .with_query_start(input.env.query_start_micros)
         .with_map_key_dedup_policy(if input.env.map_key_dedup_last_win {
             DedupPolicy::LastWin

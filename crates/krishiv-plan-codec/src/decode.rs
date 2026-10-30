@@ -295,6 +295,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         // feature).
         legacy_statistical_aggregate: env.legacy_statistical_aggregate,
         zone: env.zone,
+        zone_name: env.zone_name.as_deref().map(Arc::from),
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),
         map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
