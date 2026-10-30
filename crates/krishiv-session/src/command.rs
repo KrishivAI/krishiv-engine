@@ -753,16 +753,14 @@ impl Session {
                 )
                 .await
             }
-            _ => Err(crate::session::unsupported_statement(
-                "statements other than queries",
-            )),
+            _ => self.exec_show_catalog(s).await,
         }
     }
 
     /// A frame of the string columns `columns` with `rows` (`None` is
     /// NULL), as Spark's `SET` commands return. Rows come out ordered by
     /// `key`, as in Spark.
-    async fn string_frame(
+    pub(crate) async fn string_frame(
         &self,
         columns: &[&str],
         rows: Vec<Vec<Option<String>>>,

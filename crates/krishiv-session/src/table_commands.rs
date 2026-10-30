@@ -98,13 +98,13 @@ fn internal(message: String) -> KrishivError {
 /// A table named in a command: its namespace and name, folded unless the
 /// session is case sensitive.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TableName {
-    namespace: String,
-    name: String,
+pub(crate) struct TableName {
+    pub(crate) namespace: String,
+    pub(crate) name: String,
     /// The name as written, quoted part by part, for Spark's "not found" errors.
-    written: String,
+    pub(crate) written: String,
     /// The name had no namespace part.
-    bare: bool,
+    pub(crate) bare: bool,
 }
 
 impl TableName {
@@ -140,12 +140,12 @@ impl TableName {
         })
     }
 
-    fn quoted(&self) -> String {
+    pub(crate) fn quoted(&self) -> String {
         quoted(&self.namespace, &self.name)
     }
 
     /// Spark's `TABLE_OR_VIEW_NOT_FOUND` for this name: as written, with the search path.
-    fn not_found(&self) -> KrishivError {
+    pub(crate) fn not_found(&self) -> KrishivError {
         TableOrViewNotFound {
             relation_name: self.written.clone(),
             search_path: crate::catalog::search_path(),
@@ -155,7 +155,11 @@ impl TableName {
 }
 
 impl Session {
-    fn table_name(&self, name: &DdlName, env: &QueryEnv) -> Result<TableName, KrishivError> {
+    pub(crate) fn table_name(
+        &self,
+        name: &DdlName,
+        env: &QueryEnv,
+    ) -> Result<TableName, KrishivError> {
         TableName::resolve(
             &crate::access::ddl_parts(name, env)?,
             &self.state.catalog.current_namespace(),
@@ -163,7 +167,7 @@ impl Session {
         )
     }
 
-    fn warehouse_dir(&self) -> Result<PathBuf, KrishivError> {
+    pub(crate) fn warehouse_dir(&self) -> Result<PathBuf, KrishivError> {
         let configured = crate::conf::get(&self.state.conf.snapshot(), "spark.sql.warehouse.dir");
         self.state
             .catalog
@@ -174,7 +178,7 @@ impl Session {
 
     /// Whether `name` is a temporary view (or table) that a bare table name
     /// resolves to before any permanent table.
-    fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
+    pub(crate) fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
         name.bare
             && self
                 .state
@@ -183,7 +187,11 @@ impl Session {
     }
 
     /// The namespace named by `name` (one part, or the session catalog and one part).
-    fn namespace_name(&self, name: &DdlName, env: &QueryEnv) -> Result<String, KrishivError> {
+    pub(crate) fn namespace_name(
+        &self,
+        name: &DdlName,
+        env: &QueryEnv,
+    ) -> Result<String, KrishivError> {
         let parts = crate::access::ddl_parts(name, env)?;
         let fold = |s: &str| {
             if env.analysis.conf.case_sensitive {

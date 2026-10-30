@@ -437,6 +437,7 @@ impl Session {
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => self.exec_show(&s).await,
+            Statement::Describe(d) => self.exec_describe(&d).await,
             Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
             Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
