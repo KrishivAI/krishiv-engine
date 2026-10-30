@@ -1,0 +1,37 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Sort [ext_price#165 DESC NULLS FIRST, brand_id#163 ASC NULLS FIRST, t_hour#156 ASC NULLS FIRST], true
++- Aggregate [i_brand#8, i_brand_id#7, t_hour#156, t_minute#157], [i_brand_id#7 AS brand_id#163, i_brand#8 AS brand#164, t_hour#156, t_minute#157, sum(ext_price#84) AS ext_price#165]
+   +- Project [i_brand_id#7, i_brand#8, t_hour#156, t_minute#157, ext_price#84]
+      +- Join Inner, (sold_item_sk#86 == i_item_sk#0)
+         :- Project [i_item_sk#0, i_brand_id#7, i_brand#8]
+         :  +- Filter (i_manager_id#20 == 1)
+         :     +- Scan spark_catalog.default.item [i_item_sk#0, i_brand_id#7, i_brand#8, i_manager_id#20]
+         +- Project [t_hour#156, t_minute#157, ext_price#84, sold_item_sk#86]
+            +- Join Inner, (time_sk#87 == t_time_sk#153)
+               :- Project [t_time_sk#153, t_hour#156, t_minute#157]
+               :  +- Filter ((t_meal_time#162 == 'breakfast') or (t_meal_time#162 == 'dinner'))
+               :     +- Scan spark_catalog.default.time_dim [t_time_sk#153, t_hour#156, t_minute#157, t_meal_time#162]
+               +- Project [ext_price#84, sold_item_sk#86, time_sk#87]
+                  +- Union
+                     :- Union
+                     :  :- Project [ws_ext_sales_price#45 AS ext_price#84, ws_sold_date_sk#22 AS sold_date_sk#85, ws_item_sk#25 AS sold_item_sk#86, ws_sold_time_sk#23 AS time_sk#87]
+                     :  :  +- Join Inner, (d_date_sk#56 == ws_sold_date_sk#22)
+                     :  :     :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#22, ws_sold_time_sk#23, ws_item_sk#25, ws_ext_sales_price#45]
+                     :  :     +- Project [d_date_sk#56]
+                     :  :        +- Filter ((d_moy#64 == 11) and (d_year#62 == 1999))
+                     :  :           +- Scan spark_catalog.default.date_dim [d_date_sk#56, d_year#62, d_moy#64] (shared #1)
+                     :  +- Project [cs_ext_sales_price#111 AS ext_price#122, cs_sold_date_sk#88 AS sold_date_sk#123, cs_item_sk#103 AS sold_item_sk#124, cs_sold_time_sk#89 AS time_sk#125]
+                     :     +- Join Inner, (d_date_sk#56 == cs_sold_date_sk#88)
+                     :        :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#88, cs_sold_time_sk#89, cs_item_sk#103, cs_ext_sales_price#111]
+                     :        +- Project [d_date_sk#56]
+                     :           +- Filter ((d_moy#64 == 11) and (d_year#62 == 1999))
+                     :              +- Shared #1, printed above
+                     +- Project [ss_ext_sales_price#141 AS ext_price#149, ss_sold_date_sk#126 AS sold_date_sk#150, ss_item_sk#128 AS sold_item_sk#151, ss_sold_time_sk#127 AS time_sk#152]
+                        +- Join Inner, (d_date_sk#56 == ss_sold_date_sk#126)
+                           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#126, ss_sold_time_sk#127, ss_item_sk#128, ss_ext_sales_price#141]
+                           +- Project [d_date_sk#56]
+                              +- Filter ((d_moy#64 == 11) and (d_year#62 == 1999))
+                                 +- Shared #1, printed above

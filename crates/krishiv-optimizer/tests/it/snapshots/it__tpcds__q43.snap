@@ -1,0 +1,18 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [s_store_name#56 ASC NULLS FIRST, s_store_id#52 ASC NULLS FIRST, sun_sales#80 ASC NULLS FIRST, mon_sales#81 ASC NULLS FIRST, tue_sales#82 ASC NULLS FIRST, wed_sales#83 ASC NULLS FIRST, thu_sales#84 ASC NULLS FIRST, fri_sales#85 ASC NULLS FIRST, sat_sales#86 ASC NULLS FIRST], true
+   +- Aggregate [s_store_name#56, s_store_id#52], [s_store_name#56, s_store_id#52, sum(CASE WHEN (d_day_name#14 == 'Sunday') THEN ss_sales_price#41 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sun_sales#80, sum(CASE WHEN (d_day_name#14 == 'Monday') THEN ss_sales_price#41 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS mon_sales#81, sum(CASE WHEN (d_day_name#14 == 'Tuesday') THEN ss_sales_price#41 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS tue_sales#82, sum(CASE WHEN (d_day_name#14 == 'Wednesday') THEN ss_sales_price#41 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS wed_sales#83, sum(CASE WHEN (d_day_name#14 == 'Thursday') THEN ss_sales_price#41 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS thu_sales#84, sum(CASE WHEN (d_day_name#14 == 'Friday') THEN ss_sales_price#41 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS fri_sales#85, sum(CASE WHEN (d_day_name#14 == 'Saturday') THEN ss_sales_price#41 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sat_sales#86]
+      +- Project [ss_sales_price#41, d_day_name#14, s_store_id#52, s_store_name#56]
+         +- Join Inner, (s_store_sk#51 == ss_store_sk#35)
+            :- Project [ss_store_sk#35, ss_sales_price#41, d_day_name#14]
+            :  +- Join Inner, (d_date_sk#0 == ss_sold_date_sk#28)
+            :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#28, ss_store_sk#35, ss_sales_price#41]
+            :     +- Project [d_date_sk#0, d_day_name#14]
+            :        +- Filter (d_year#6 == 2000)
+            :           +- Scan spark_catalog.default.date_dim [d_date_sk#0, d_year#6, d_day_name#14]
+            +- Project [s_store_sk#51, s_store_id#52, s_store_name#56]
+               +- Filter (s_gmt_offset#78 == -5.00)
+                  +- Scan spark_catalog.default.store [s_store_sk#51, s_store_id#52, s_store_name#56, s_gmt_offset#78]

@@ -1,0 +1,26 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [i_item_id#61 ASC NULLS FIRST], true
+   +- Aggregate [i_item_id#61], [i_item_id#61, avg(ss_quantity#10) AS agg1#101, avg(ss_list_price#12) AS agg2#102, avg(ss_coupon_amt#19) AS agg3#103, avg(ss_sales_price#13) AS agg4#104]
+      +- Project [i_item_id#61, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+         +- Join Inner, (ss_item_sk#2 == i_item_sk#60)
+            :- Scan spark_catalog.default.item [i_item_sk#60, i_item_id#61]
+            +- Project [ss_item_sk#2, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+               +- Join Inner, (ss_promo_sk#8 == p_promo_sk#82)
+                  :- Project [p_promo_sk#82]
+                  :  +- Filter ((p_channel_email#91 == 'N') or (p_channel_event#96 == 'N'))
+                  :     +- Scan spark_catalog.default.promotion [p_promo_sk#82, p_channel_email#91, p_channel_event#96]
+                  +- Project [ss_item_sk#2, ss_promo_sk#8, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+                     +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#32)
+                        :- Project [d_date_sk#32]
+                        :  +- Filter (d_year#38 == 2000)
+                        :     +- Scan spark_catalog.default.date_dim [d_date_sk#32, d_year#38]
+                        +- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_promo_sk#8, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+                           +- Join Inner, (ss_cdemo_sk#4 == cd_demo_sk#23)
+                              :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_cdemo_sk#4, ss_promo_sk#8, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+                              +- Project [cd_demo_sk#23]
+                                 +- Filter (((cd_gender#24 == 'M') and (cd_marital_status#25 == 'S')) and (cd_education_status#26 == 'College'))
+                                    +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#23, cd_gender#24, cd_marital_status#25, cd_education_status#26]

@@ -1,0 +1,23 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [i_item_id#1 ASC NULLS FIRST], true
+   +- Aggregate [i_item_id#1, i_item_desc#4, i_current_price#5], [i_item_id#1, i_item_desc#4, i_current_price#5]
+      +- Project [i_item_id#1, i_item_desc#4, i_current_price#5]
+         +- Join Inner, (d_date_sk#26 == inv_date_sk#22)
+            :- Project [d_date_sk#26]
+            :  +- Filter ((d_date#28 >= DATE '2000-05-25') and (d_date#28 <= DATE '2000-07-24'))
+            :     +- Scan spark_catalog.default.date_dim [d_date_sk#26, d_date#28]
+            +- Project [inv_date_sk#22, i_item_id#1, i_item_desc#4, i_current_price#5]
+               +- Join Inner, (inv_item_sk#23 == i_item_sk#0)
+                  :- Project [inv_date_sk#22, inv_item_sk#23]
+                  :  +- Filter ((inv_quantity_on_hand#25 >= 100) and (inv_quantity_on_hand#25 <= 500))
+                  :     +- Scan spark_catalog.default.inventory [inv_date_sk#22, inv_item_sk#23, inv_quantity_on_hand#25]
+                  +- Project [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5]
+                     +- Join Inner, (ss_item_sk#56 == i_item_sk#0)
+                        :- Scan spark_catalog.default.store_sales [ss_item_sk#56]
+                        +- Project [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5]
+                           +- Filter (((i_current_price#5 >= 62.00) and (CAST(i_current_price#5 AS DECIMAL(12,2)) <= 92.00)) and (i_manufact_id#13 IN (129, 270, 821, 423)))
+                              +- Scan spark_catalog.default.item [i_item_sk#0, i_item_id#1, i_item_desc#4, i_current_price#5, i_manufact_id#13]

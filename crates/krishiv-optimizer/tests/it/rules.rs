@@ -709,7 +709,18 @@ fn shared_expressions_stay_linear() {
     let started = std::time::Instant::now();
     let optimized = optimize(&Plan::try_new(filter).unwrap()).unwrap();
     assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
-    assert!(matches!(optimized.root().node, PlanNode::Filter { .. }));
+    // The filter stays on top: common-subexpression elimination may only
+    // add its projection (and the output-restoring projection, when the
+    // filter is the root) below it.
+    match &optimized.root().node {
+        PlanNode::Filter { .. } => {}
+        PlanNode::Project { input, exprs }
+            if exprs
+                .iter()
+                .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_))))
+                && matches!(input.node, PlanNode::Filter { .. }) => {}
+        _ => panic!("{}", optimized.root()),
+    }
 }
 
 /// Windows nobody reads are dropped (Spark's `ColumnPruning`), the others
