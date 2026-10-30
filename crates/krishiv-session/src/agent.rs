@@ -1184,7 +1184,7 @@ mod tests {
         };
         assert_eq!(
             footer_line(&cancelled),
-            "-- rows: 0 of ≥ 1 · stopped (cancelled) · 0 ms"
+            "-- rows: 0 of ≥ 0 · stopped (cancelled) · 0 ms"
         );
         // Readers ignore unknown trailing items: the documented order is a prefix.
         let one = Footer {
