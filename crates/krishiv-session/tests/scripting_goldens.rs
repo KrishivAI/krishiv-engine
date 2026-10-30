@@ -140,7 +140,12 @@ fn checksums(s: &Session, tables: &[String]) -> BTreeMap<String, (String, String
 /// its rows is the engine's, so which branch of the script runs can differ between machines (the
 /// goldens come from one Spark run). Such a script is compared and reported, but never fails the test.
 fn order_dependent(script: &str) -> bool {
-    let upper = script.to_ascii_uppercase();
+    // One space between words, so line breaks and indentation do not hide a `FOR ... AS SELECT`.
+    let upper = script
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_uppercase();
     let mut rest = upper.as_str();
     while let Some(at) = rest.find("FOR ") {
         let after = &rest[at + 4..];
