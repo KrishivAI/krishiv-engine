@@ -92,75 +92,71 @@ const GOLDEN_DEVIATIONS: &[(&str, &str)] = &[
     ),
     (
         "EXECUTE IMMEDIATE 'SELCT Fa'",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELCT Fa' INTO res_id",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
-    ),
-    (
-        "EXECUTE IMMEDIATE 'SELECT id, name FROM tbl_view WHERE id = ?' INTO (a, b) USING 10",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE sql_string",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT 1 JOIN SELECT 2' INTO v1",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT 1 VALUES (1)' INTO v1",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT 1 alias garbage garbage garbage' INTO v1",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT 1 WITH abc' INTO v1",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT t1.*, t2.* FROM IDENTIFIER(:t1) t1 JOIN IDENTIFIER(:t2) t2 USING (IDENTIFIER(:col)) ORDER BY ALL'\n  USING 'integration_test' AS t1, 'integration_test2' AS t2, 'c1' AS col",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'INSERT INTO integration_test(IDENTIFIER(:col1), IDENTIFIER(:col2)) VALUES (:val1, :val2)'\n  USING 'c1' AS col1, 'c2' AS col2, 3 AS val1, 'c' AS val2",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT IDENTIFIER(concat(:schema, ''.'', :table, ''.c1'')) FROM VALUES(named_struct(''c1'', 100)) AS IDENTIFIER(:alias)(IDENTIFIER(:schema ''.'' :table))'\n  USING 'identifier_clause_test_schema' AS schema, 'my_table' AS table, 't' AS alias",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'WITH IDENTIFIER(:cte_name)(c1) AS (VALUES(1)) SELECT c1 FROM IDENTIFIER(:cte_name)'\n  USING 'my_cte' AS cte_name",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'CREATE OR REPLACE TEMPORARY VIEW IDENTIFIER(:view_name)(IDENTIFIER(:col_name)) AS VALUES(1)'\n  USING 'test_view' AS view_name, 'test_col' AS col_name",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'ALTER TABLE IDENTIFIER(:tab) ADD COLUMN IDENTIFIER(:new_col) INT'\n  USING 'integration_test' AS tab, 'c4' AS new_col",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'ALTER TABLE IDENTIFIER(:tab) RENAME COLUMN IDENTIFIER(:old_col) TO IDENTIFIER(:new_col)'\n  USING 'integration_test' AS tab, 'c4' AS old_col, 'c5' AS new_col",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT map(:key, :val).IDENTIFIER(:key) AS result'\n  USING 'mykey' AS key, 42 AS val",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT IDENTIFIER(:alias ''.c1'') FROM integration_test AS IDENTIFIER(:alias) ORDER BY ALL'\n  USING 't' AS alias",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "EXECUTE IMMEDIATE 'SELECT 1 AS IDENTIFIER(:schema ''.'' :col)'\n  USING 'identifier_clause_test_schema' AS schema, 'col1' AS col",
-        "`EXECUTE IMMEDIATE` is not a supported statement: the error is at `EXECUTE`, not inside the immediate string",
+        "`EXECUTE IMMEDIATE` parses; Spark's error is raised when the immediate string runs, not by the parser",
     ),
     (
         "SELECT CASE WHEN foo3_1b(rand(0) * 0 < 1 THEN 1 ELSE -1 END",

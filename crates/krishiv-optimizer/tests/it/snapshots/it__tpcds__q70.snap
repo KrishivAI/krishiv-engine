@@ -1,0 +1,38 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Project [total_sum#165, s_state#168, s_county#169, lochierarchy#166, rank_within_parent#167]
++- Limit 100
+   +- Sort [lochierarchy#166 DESC NULLS LAST, CASE WHEN (CAST((CAST(((grouping__id#164 div 2L) % 2L) AS TINYINT) + CAST((grouping__id#164 % 2L) AS TINYINT)) AS INT) == 0) THEN s_state#168 END ASC NULLS FIRST, rank_within_parent#167 ASC NULLS FIRST], true
+      +- Project [total_sum#165, s_state#168, s_county#169, lochierarchy#166, _we0#175 AS rank_within_parent#167, grouping__id#164]
+         +- Window [rank() OVER (PARTITION BY _w0#173, _w1#174 ORDER BY total_sum#165 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#175], [_w0#173, _w1#174], [total_sum#165 DESC NULLS LAST]
+            +- Aggregate [s_state#168, s_county#169, spark_grouping_id#164], [sum(ss_net_profit#22) AS total_sum#165, s_state#168, s_county#169, (CAST(((grouping__id#164 div 2L) % 2L) AS TINYINT) + CAST((grouping__id#164 % 2L) AS TINYINT)) AS lochierarchy#166, grouping__id#164, (CAST(((grouping__id#164 div 2L) % 2L) AS TINYINT) + CAST((grouping__id#164 % 2L) AS TINYINT)) AS _w0#173, CASE WHEN (CAST(CAST((grouping__id#164 % 2L) AS TINYINT) AS INT) == 0) THEN s_state#168 END AS _w1#174]
+               +- Expand [[ss_net_profit#22, s_state#75, s_county#74, 0L], [ss_net_profit#22, s_state#75, CAST(NULL AS STRING), 1L], [ss_net_profit#22, CAST(NULL AS STRING), CAST(NULL AS STRING), 3L]], [ss_net_profit#22, s_state#168, s_county#169, spark_grouping_id#164]
+                  +- Join LeftSemi, (s_state#75 == s_state#160)
+                     :- Project [s_county#74, s_state#75, ss_net_profit#22]
+                     :  +- Join Inner, (s_store_sk#51 == ss_store_sk#7)
+                     :     :- Scan spark_catalog.default.store [s_store_sk#51, s_county#74, s_state#75] (shared #1)
+                     :     +- Project [ss_store_sk#7, ss_net_profit#22]
+                     :        +- Join Inner, (d_date_sk#23 == ss_sold_date_sk#0)
+                     :           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_net_profit#22] (shared #2)
+                     :           +- Project [d_date_sk#23]
+                     :              +- Filter ((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211))
+                     :                 +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_month_seq#26] (shared #3)
+                     +- Project [s_state#160]
+                        +- Filter (_we0#163 <= 5)
+                           +- Window [rank() OVER (PARTITION BY s_state#160 ORDER BY sum(ss_net_profit)#162 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#163], [s_state#160], [sum(ss_net_profit)#162 DESC NULLS LAST]
+                              +- Aggregate [s_state#127], [s_state#127 AS s_state#160, sum(ss_net_profit#102) AS sum(ss_net_profit)#162]
+                                 +- Project [s_state#127, ss_net_profit#102]
+                                    +- Join Inner, (s_store_sk#103 == ss_store_sk#87)
+                                       :- Project [s_store_sk#103, s_state#127]
+                                       :  +- Shift +52
+                                       :     +- Shared #1, printed above
+                                       +- Project [ss_store_sk#87, ss_net_profit#102]
+                                          +- Join Inner, (d_date_sk#132 == ss_sold_date_sk#80)
+                                             :- Shift +80
+                                             :  +- Shared #2, printed above
+                                             +- Project [d_date_sk#132]
+                                                +- Shift +109
+                                                   +- Filter ((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211))
+                                                      +- Shared #3, printed above

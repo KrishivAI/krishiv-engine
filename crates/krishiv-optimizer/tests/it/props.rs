@@ -245,9 +245,25 @@ fn rejects_nulls(pred: &Expr, side: &HashSet<AttrId>) -> bool {
 }
 
 /// Whether filter conjunct `pred` could legally move below `child`.
+///
+/// A common-subexpression projection is opaque to predicate pushdown (see
+/// `pushdown`): pushing anything below it would evaluate the shared
+/// expression again at each use, so every conjunct above such a projection
+/// stays put.
 fn pushable(pred: &Expr, child: &LogicalPlan) -> bool {
     let mut r = HashSet::new();
     refs(pred, &mut r);
+    if let PlanNode::Project { exprs, .. } = &child.node {
+        let cse = exprs.iter().any(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+                output.name.starts_with("cse_")
+            }
+            _ => false,
+        });
+        if cse {
+            return false;
+        }
+    }
     match &child.node {
         PlanNode::Filter { .. }
         | PlanNode::Project { .. }

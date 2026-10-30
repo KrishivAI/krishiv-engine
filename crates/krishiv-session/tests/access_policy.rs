@@ -265,6 +265,13 @@ fn ddl(s: &Session) -> Vec<(&'static str, String)> {
         ("DROP DATABASE", sql("DROP DATABASE default")),
         ("SHOW TABLES", sql("SHOW TABLES")),
         ("DESCRIBE TABLE", sql("DESCRIBE TABLE t")),
+        ("DESCRIBE QUERY", sql("DESCRIBE QUERY SELECT * FROM t")),
+        ("DESCRIBE NAMESPACE", sql("DESCRIBE NAMESPACE default")),
+        ("SHOW VIEWS", sql("SHOW VIEWS")),
+        ("SHOW COLUMNS", sql("SHOW COLUMNS IN t")),
+        ("SHOW NAMESPACES", sql("SHOW NAMESPACES")),
+        ("SHOW TBLPROPERTIES", sql("SHOW TBLPROPERTIES t")),
+        ("SHOW CREATE TABLE", sql("SHOW CREATE TABLE t")),
         ("CLEAR CACHE", sql("CLEAR CACHE")),
         ("ADD JAR", sql("ADD JAR '/tmp/x.jar'")),
     ]
@@ -375,6 +382,9 @@ fn denials_do_not_reveal_existence() {
         "INSERT INTO t VALUES (1)",
         "SELECT * FROM t",
         "DESCRIBE TABLE t",
+        "SHOW COLUMNS IN t",
+        "SHOW TBLPROPERTIES t",
+        "SHOW CREATE TABLE t",
     ] {
         let a = block_on(with_t.sql(sql)).unwrap_err().to_string();
         let b = block_on(without_t.sql(sql)).unwrap_err().to_string();
@@ -715,12 +725,13 @@ fn merge_sources_are_never_read_unchecked() {
         DENIED
     );
     // A query source is read only through analysis, which asks the policy;
-    // the session does not run MERGE yet, so nothing is read at all.
+    // the session does not run MERGE, so nothing is read at all: `t` is a
+    // temporary table, which MERGE refuses as Spark does.
     assert_eq!(
         class(block_on(s.sql(
             "MERGE INTO t USING (SELECT * FROM s) x ON t.a = x.a WHEN MATCHED THEN DELETE"
         ))),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
     );
     // Its reads, as analysis finds them, are denied.
     let e = block_on(s.statement_info(
@@ -773,4 +784,309 @@ fn persisted_function_statements_change_nothing() {
             "{sql}"
         );
     }
+}
+
+static DENY_VIEWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn deny_view_selects(securable: &Securable, p: Privilege) -> AccessDecision {
+    if DENY_VIEWS.load(std::sync::atomic::Ordering::SeqCst)
+        && p == Privilege::Select
+        && matches!(securable, Securable::View(_))
+    {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+static DENY_VIEW_READS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn deny_view_reads(securable: &Securable, p: Privilege) -> AccessDecision {
+    if DENY_VIEW_READS.load(std::sync::atomic::Ordering::SeqCst)
+        && p == Privilege::Select
+        && matches!(securable, Securable::View(v) if v.name == "inner_view")
+    {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// A policy that denies `SELECT` on a permanent view stops a query of it, even through another view,
+/// although every table it reads is allowed.
+#[test]
+fn querying_a_permanent_view_checks_the_view_securable() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(deny_view_reads));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW inner_view AS SELECT a FROM base",
+        "CREATE VIEW outer_view AS SELECT a FROM inner_view",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let read = |sql: &str| class(block_on(s.sql(sql)));
+    assert_eq!(read("SELECT * FROM outer_view"), "OK");
+    DENY_VIEW_READS.store(true, std::sync::atomic::Ordering::SeqCst);
+    let results = [
+        read("SELECT * FROM inner_view"),
+        read("SELECT * FROM outer_view"),
+        read("SELECT * FROM default.inner_view"),
+        read("SELECT * FROM base"),
+    ];
+    DENY_VIEW_READS.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(results[0], DENIED);
+    assert_eq!(results[1], DENIED, "a view read through another view");
+    assert_eq!(results[2], DENIED, "a qualified name");
+    assert_eq!(results[3], "OK", "the base table stays readable");
+}
+
+/// The three tests below share these flags: one at a time.
+static FLAG_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+static DENY_ALL_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static DENY_TABLE_V: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn flagged(securable: &Securable, p: Privilege) -> AccessDecision {
+    use std::sync::atomic::Ordering::SeqCst;
+    if DENY_ALL_NOW.load(SeqCst) && p == Privilege::Select {
+        return deny();
+    }
+    if DENY_TABLE_V.load(SeqCst)
+        && p == Privilege::Select
+        && matches!(securable, Securable::Table(t) if t.name == "v")
+    {
+        return deny();
+    }
+    AccessDecision::Allow
+}
+
+/// A denied read of a permanent view cannot be told from a read of a missing name: the same securable
+/// is named, the policy is asked about the name as written and folded, and a broken stored text is
+/// never reported to a principal that may not read the view.
+#[test]
+fn permanent_view_reads_leak_nothing_to_a_denied_principal() {
+    let _one_at_a_time = FLAG_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(flagged));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+        "CREATE VIEW c1 AS SELECT a FROM base",
+        "CREATE VIEW c2 AS SELECT a FROM c1",
+        // Cycle through ALTER: c1 now reads c2, which reads c1.
+        "ALTER VIEW c1 AS SELECT a FROM c2",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let message = |sql: &str| {
+        block_on(s.sql(sql))
+            .map(|_| "OK".to_owned())
+            .unwrap_or_else(|e| format!("{} {e}", e.error_class().name()))
+    };
+    let allowed = message("SELECT * FROM V");
+    DENY_ALL_NOW.store(true, SeqCst);
+    let existing = message("SELECT * FROM v");
+    let missing = message("SELECT * FROM nope");
+    // The name as the plan spells it is what the denial shows, whichever it is.
+    let upper_existing = message("SELECT * FROM default.V");
+    let upper_missing = message("SELECT * FROM default.NOPE");
+    let cyclic = message("SELECT * FROM c1");
+    let order_existing = message("SELECT * FROM base, v");
+    let order_missing = message("SELECT * FROM base, nope");
+    DENY_ALL_NOW.store(false, SeqCst);
+    assert_eq!(allowed, "OK");
+    assert!(existing.starts_with(DENIED), "{existing}");
+    assert_eq!(
+        existing.replace("`v`", "`X`"),
+        missing.replace("`nope`", "`X`")
+    );
+    assert_eq!(
+        upper_existing.to_lowercase().replace("`v`", "`X`"),
+        upper_missing.to_lowercase().replace("`nope`", "`X`")
+    );
+    assert!(cyclic.starts_with(DENIED), "{cyclic}");
+    // The first denial is the first name in the plan, view or not.
+    assert!(order_existing.contains("base"), "{order_existing}");
+    assert!(order_missing.contains("base"), "{order_missing}");
+    // With the grant back, the cycle is reported.
+    assert!(message("SELECT * FROM c1").starts_with("INTERNAL_ERROR"));
+}
+
+/// A policy that denies the table-named securable of a view stops a query of the view, in any
+/// spelling of its name.
+#[test]
+fn a_table_rule_on_a_view_name_applies_to_queries_of_it() {
+    let _one_at_a_time = FLAG_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(flagged));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    DENY_TABLE_V.store(true, SeqCst);
+    let results = [
+        class(block_on(s.sql("SELECT * FROM v"))),
+        class(block_on(s.sql("SELECT * FROM V"))),
+        class(block_on(s.sql("SELECT * FROM spark_catalog.default.v"))),
+    ];
+    DENY_TABLE_V.store(false, SeqCst);
+    assert_eq!(results, [DENIED, DENIED, DENIED]);
+}
+
+/// `statement_info` lists the view securable of a query of a permanent view.
+#[test]
+fn statement_info_lists_the_view_securable() {
+    let _one_at_a_time = FLAG_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(flagged));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let info = block_on(s.statement_info("SELECT * FROM v")).unwrap();
+    let ident = |name: &str| krishiv_plan::analyzer::TableIdent {
+        catalog: "spark_catalog".to_owned(),
+        namespace: vec!["default".to_owned()],
+        name: name.to_owned(),
+    };
+    let found: Vec<(Securable, Privilege)> = info
+        .securables
+        .iter()
+        .map(|u| (u.securable.clone(), u.privilege))
+        .collect();
+    assert!(
+        found.contains(&(Securable::View(ident("v")), Privilege::Select)),
+        "{found:?}"
+    );
+    assert!(
+        found.contains(&(Securable::Table(ident("base")), Privilege::Select)),
+        "{found:?}"
+    );
+}
+
+/// A grant on the table-named securable does not show a permanent view's definition, columns or
+/// properties: those statements need `SELECT` on the view, as a query of it does.
+#[test]
+fn describing_a_view_needs_the_view_securable() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(deny_view_selects));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    block_on(async {
+        s.sql("CREATE TABLE pt (a INT) USING parquet")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    block_on(async {
+        s.sql("CREATE VIEW pv AS SELECT a FROM pt")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    DENY_VIEWS.store(true, std::sync::atomic::Ordering::SeqCst);
+    let denied = [
+        "SHOW CREATE TABLE pv",
+        "SHOW TBLPROPERTIES pv",
+        "DESCRIBE TABLE pv",
+        "DESCRIBE TABLE EXTENDED pv",
+        "SHOW COLUMNS IN pv",
+    ];
+    let results: Vec<_> = denied
+        .iter()
+        .map(|sql| class(block_on(s.sql(sql))))
+        .collect();
+    let table_ok = block_on(async { s.sql("SHOW CREATE TABLE pt").await?.collect().await }).is_ok();
+    DENY_VIEWS.store(false, std::sync::atomic::Ordering::SeqCst);
+    for (sql, c) in denied.iter().zip(&results) {
+        assert_eq!(c, DENIED, "{sql}");
+    }
+    assert!(table_ok, "the table itself stays readable");
+}
+
+/// An access policy whose rules and version change while a session lives.
+struct Flip {
+    deny_views: std::sync::atomic::AtomicBool,
+    version: std::sync::atomic::AtomicU64,
+}
+
+impl AccessPolicy for Flip {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(
+            self.version.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let deny_now = self.deny_views.load(std::sync::atomic::Ordering::SeqCst)
+            && privilege == Privilege::Select
+            && matches!(securable, Securable::View(_));
+        Box::pin(async move {
+            Ok(if deny_now {
+                deny()
+            } else {
+                AccessDecision::Allow
+            })
+        })
+    }
+}
+
+/// A DataFrame analysed under one policy version is analysed again under the next: reads it was
+/// allowed to make before are checked against the new rules.
+#[test]
+fn a_new_policy_version_invalidates_cached_analysis() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().unwrap();
+    let policy = Arc::new(Flip {
+        deny_views: std::sync::atomic::AtomicBool::new(false),
+        version: std::sync::atomic::AtomicU64::new(1),
+    });
+    let s = session(Arc::clone(&policy) as Arc<dyn AccessPolicy>);
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let df = block_on(s.sql("SELECT * FROM v")).unwrap();
+    block_on(df.collect()).unwrap();
+    policy.deny_views.store(true, SeqCst);
+    policy.version.store(2, SeqCst);
+    assert_eq!(class(block_on(df.collect())), DENIED);
 }

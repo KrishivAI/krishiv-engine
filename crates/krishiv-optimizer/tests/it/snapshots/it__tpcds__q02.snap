@@ -1,0 +1,32 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Sort [d_week_seq1#145 ASC NULLS FIRST], true
++- Project [d_week_seq1#145, round((sun_sales1#146 / sun_sales2#206), 2) AS r1#213, round((mon_sales1#147 / mon_sales2#207), 2) AS r2#214, round((tue_sales1#148 / tue_sales2#208), 2) AS r3#215, round((wed_sales1#149 / wed_sales2#209), 2) AS r4#216, round((thu_sales1#150 / thu_sales2#210), 2) AS r5#217, round((fri_sales1#151 / fri_sales2#211), 2) AS r6#218, round((sat_sales1#152 / sat_sales2#212), 2) AS round((sat_sales1 / sat_sales2), 2)#219]
+   +- Join Inner, (d_week_seq1#145 == (d_week_seq2#205 - 53))
+      :- Project [d_week_seq#109 AS d_week_seq1#145, sun_sales#110 AS sun_sales1#146, mon_sales#111 AS mon_sales1#147, tue_sales#112 AS tue_sales1#148, wed_sales#113 AS wed_sales1#149, thu_sales#114 AS thu_sales1#150, fri_sales#115 AS fri_sales1#151, sat_sales#116 AS sat_sales1#152]
+      :  +- Join Inner, (d_week_seq#121 == d_week_seq#109)
+      :     :- Project [d_week_seq#442 AS d_week_seq#109, sun_sales#466 AS sun_sales#110, mon_sales#467 AS mon_sales#111, tue_sales#468 AS tue_sales#112, wed_sales#469 AS wed_sales#113, thu_sales#470 AS thu_sales#114, fri_sales#471 AS fri_sales#115, sat_sales#472 AS sat_sales#116] (shared #1)
+      :     :  +- Shift +364
+      :     :     +- Aggregate [d_week_seq#78], [d_week_seq#78, sum(CASE WHEN (d_day_name#88 == 'Sunday') THEN sales_price#73 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sun_sales#102, sum(CASE WHEN (d_day_name#88 == 'Monday') THEN sales_price#73 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS mon_sales#103, sum(CASE WHEN (d_day_name#88 == 'Tuesday') THEN sales_price#73 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS tue_sales#104, sum(CASE WHEN (d_day_name#88 == 'Wednesday') THEN sales_price#73 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS wed_sales#105, sum(CASE WHEN (d_day_name#88 == 'Thursday') THEN sales_price#73 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS thu_sales#106, sum(CASE WHEN (d_day_name#88 == 'Friday') THEN sales_price#73 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS fri_sales#107, sum(CASE WHEN (d_day_name#88 == 'Saturday') THEN sales_price#73 ELSE CAST(NULL AS DECIMAL(7,2)) END) AS sat_sales#108]
+      :     :        +- Project [sales_price#73, d_week_seq#78, d_day_name#88]
+      :     :           +- Join Inner, (d_date_sk#74 == sold_date_sk#72)
+      :     :              :- Project [sold_date_sk#326 AS sold_date_sk#72, sales_price#327 AS sales_price#73]
+      :     :              :  +- Shift +292
+      :     :              :     +- Union
+      :     :              :        :- Project [ws_sold_date_sk#0 AS sold_date_sk#34, ws_ext_sales_price#23 AS sales_price#35]
+      :     :              :        :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_ext_sales_price#23]
+      :     :              :        +- Project [cs_sold_date_sk#36 AS sold_date_sk#70, cs_ext_sales_price#59 AS sales_price#71]
+      :     :              :           +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#36, cs_ext_sales_price#59]
+      :     :              +- Scan spark_catalog.default.date_dim [d_date_sk#74, d_week_seq#78, d_day_name#88]
+      :     +- Project [d_week_seq#121]
+      :        +- Filter (d_year#123 == 2001)
+      :           +- Scan spark_catalog.default.date_dim [d_week_seq#121, d_year#123] (shared #2)
+      +- Shift +52
+         +- Project [d_week_seq#109 AS d_week_seq2#153, sun_sales#110 AS sun_sales2#154, mon_sales#111 AS mon_sales2#155, tue_sales#112 AS tue_sales2#156, wed_sales#113 AS wed_sales2#157, thu_sales#114 AS thu_sales2#158, fri_sales#115 AS fri_sales2#159, sat_sales#116 AS sat_sales2#160]
+            +- Join Inner, (d_week_seq#121 == d_week_seq#109)
+               :- Shared #1, printed above
+               +- Project [d_week_seq#121]
+                  +- Filter (d_year#123 == 2002)
+                     +- Shared #2, printed above

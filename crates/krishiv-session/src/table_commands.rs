@@ -38,10 +38,10 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
-    AlterTable, AlterTableAction, AlterView, AlterViewAction, ColumnName, CreateNamespace,
-    CreatePermanentView, CreateTable, CreateTableLike, DdlName, DropBehavior, DropNamespace,
-    DropPermanentView, DropTable, Insert, InsertClause, Query, TableElement, TableOption, Truncate,
-    Use,
+    AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, ColumnName,
+    CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, DdlName, DropBehavior,
+    DropNamespace, DropPermanentView, DropTable, Insert, InsertClause, Query, TableElement,
+    TableOption, Truncate, Use,
 };
 use krishiv_types::DataType;
 
@@ -106,13 +106,13 @@ fn internal(message: String) -> KrishivError {
 /// A table named in a command: its namespace and name, folded unless the
 /// session is case sensitive.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TableName {
-    namespace: String,
-    name: String,
+pub(crate) struct TableName {
+    pub(crate) namespace: String,
+    pub(crate) name: String,
     /// The name as written, quoted part by part, for Spark's "not found" errors.
-    written: String,
+    pub(crate) written: String,
     /// The name had no namespace part.
-    bare: bool,
+    pub(crate) bare: bool,
 }
 
 impl TableName {
@@ -148,12 +148,12 @@ impl TableName {
         })
     }
 
-    fn quoted(&self) -> String {
+    pub(crate) fn quoted(&self) -> String {
         quoted(&self.namespace, &self.name)
     }
 
     /// Spark's `TABLE_OR_VIEW_NOT_FOUND` for this name: as written, with the search path.
-    fn not_found(&self) -> KrishivError {
+    pub(crate) fn not_found(&self) -> KrishivError {
         TableOrViewNotFound {
             relation_name: self.written.clone(),
             search_path: crate::catalog::search_path(),
@@ -163,7 +163,11 @@ impl TableName {
 }
 
 impl Session {
-    fn table_name(&self, name: &DdlName, env: &QueryEnv) -> Result<TableName, KrishivError> {
+    pub(crate) fn table_name(
+        &self,
+        name: &DdlName,
+        env: &QueryEnv,
+    ) -> Result<TableName, KrishivError> {
         TableName::resolve(
             &crate::access::ddl_parts(name, env)?,
             &self.state.catalog.current_namespace(),
@@ -171,7 +175,7 @@ impl Session {
         )
     }
 
-    fn warehouse_dir(&self) -> Result<PathBuf, KrishivError> {
+    pub(crate) fn warehouse_dir(&self) -> Result<PathBuf, KrishivError> {
         let configured = crate::conf::get(&self.state.conf.snapshot(), "spark.sql.warehouse.dir");
         self.state
             .catalog
@@ -182,7 +186,7 @@ impl Session {
 
     /// Whether `name` is a temporary view (or table) that a bare table name
     /// resolves to before any permanent table.
-    fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
+    pub(crate) fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
         name.bare
             && self
                 .state
@@ -191,7 +195,11 @@ impl Session {
     }
 
     /// The namespace named by `name` (one part, or the session catalog and one part).
-    fn namespace_name(&self, name: &DdlName, env: &QueryEnv) -> Result<String, KrishivError> {
+    pub(crate) fn namespace_name(
+        &self,
+        name: &DdlName,
+        env: &QueryEnv,
+    ) -> Result<String, KrishivError> {
         let parts = crate::access::ddl_parts(name, env)?;
         let fold = |s: &str| {
             if env.analysis.conf.case_sensitive {
@@ -1242,6 +1250,97 @@ impl Session {
         self.forget_cached(&name);
         deleted?;
         self.empty_frame().await
+    }
+
+    /// `ANALYZE TABLE name COMPUTE STATISTICS [NOSCAN | FOR COLUMNS ...]`.
+    ///
+    /// The table (and the listed columns) must exist, as in Spark. The engine
+    /// keeps no table statistics, so nothing is computed or stored: the
+    /// command only validates its target.
+    pub(crate) async fn exec_analyze(&self, a: &Analyze) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.table_name(&a.table, &env)?;
+        let table = self.table_for_write(&name, "ANALYZE TABLE", &env)?;
+        if a.partition.is_some() {
+            return Err(unsupported("ANALYZE TABLE ... PARTITION"));
+        }
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let same = |x: &str, y: &str| {
+            if case_sensitive {
+                x == y
+            } else {
+                x.eq_ignore_ascii_case(y)
+            }
+        };
+        // The columns whose statistics are asked for: the listed ones, or all.
+        let chosen: Vec<&crate::store::StoreColumn> = match &a.columns {
+            AnalyzeColumns::All => Vec::new(),
+            AnalyzeColumns::ForAll => table.columns.iter().collect(),
+            AnalyzeColumns::ForColumns(columns) => {
+                let mut found = Vec::with_capacity(columns.len());
+                for c in columns {
+                    let Some(column) = table.columns.iter().find(|t| same(&t.name, &c.value))
+                    else {
+                        return Err(krishiv_common::error::ColumnNotFound {
+                            col_name: format!("`{}`", c.value.replace('`', "``")),
+                            case_sensitive_config: "\"spark.sql.caseSensitive\"".to_owned(),
+                        }
+                        .into());
+                    };
+                    found.push(column);
+                }
+                found
+            }
+            _ => return Err(unsupported("this ANALYZE TABLE form")),
+        };
+        // Spark gathers statistics of numbers, booleans, dates and times, strings and binary only.
+        for column in chosen {
+            let supported = matches!(
+                column.data_type,
+                DataType::Boolean
+                    | DataType::Byte
+                    | DataType::Short
+                    | DataType::Integer
+                    | DataType::Long
+                    | DataType::Float
+                    | DataType::Double
+                    | DataType::Decimal(_)
+                    | DataType::String
+                    | DataType::Binary
+                    | DataType::Date
+                    | DataType::Timestamp
+                    | DataType::TimestampNtz
+                    | DataType::Time { .. }
+            );
+            if !supported {
+                return Err(
+                    krishiv_common::error::UnsupportedFeatureAnalyzeUnsupportedColumnType {
+                        column_type: format!("\"{}\"", column.data_type.sql()),
+                        column_name: format!("`{}`", column.name.replace('`', "``")),
+                        table_name: format!("`{}`.`{}`", table.namespace, table.name),
+                    }
+                    .into(),
+                );
+            }
+        }
+        self.empty_frame().await
+    }
+
+    /// `DELETE FROM`, `UPDATE` and `MERGE INTO` a file-source table: Spark's
+    /// v1 tables support none of them, and says so once the table resolves.
+    pub(crate) fn exec_row_level_change(
+        &self,
+        table: &DdlName,
+        operation: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.table_name(table, &env)?;
+        self.table_for_write(&name, operation, &env)?;
+        Err(UnsupportedFeatureTableOperation {
+            table_name: name.quoted(),
+            operation: operation.to_owned(),
+        }
+        .into())
     }
 
     /// Drops the cached relations that read the permanent table `name`: its data or existence changed.

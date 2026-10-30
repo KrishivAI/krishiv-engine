@@ -625,11 +625,9 @@ fn ordered_t(s: &Session) -> R {
 /// A `WITHIN GROUP` ordering survives the rewrites that rebuild a call: the
 /// distinct-aggregate expansion, `PIVOT` and the `ROLLUP` re-typing.
 /// Checked on Spark 4.2.0 (2026-10-30): the `mode` rows (also under `PIVOT`)
-/// and the `ROLLUP` row match its output. Spark fails the `listagg` rows with an internal
-/// `ClassCastException` (an ordered `listagg` next to two distinct sets, and
-/// under `PIVOT`; a plain `PIVOT (listagg ...)` fails with
-/// `DATATYPE_MISMATCH.NON_FOLDABLE_INPUT` because it wraps the delimiter
-/// too), so those expected values follow from the ordering.
+/// and the `ROLLUP` row match its output. Spark fails an ordered `listagg`
+/// next to two distinct sets with an internal `ClassCastException`, so that
+/// expected value follows from the ordering.
 #[test]
 fn within_group_survives_rewrites() -> R {
     let s = Session::builder().build()?;
@@ -646,13 +644,47 @@ fn within_group_survives_rewrites() -> R {
         "SELECT mode() WITHIN GROUP (ORDER BY y), count(DISTINCT y), count(DISTINCT z) FROM t",
     )?;
     assert_eq!(rows, ["1\t2\t2"]);
-    // `PIVOT`: each pivot value orders its own rows, descending by `o`.
-    let (_, rows) = run(
-        &s,
+    // `PIVOT` wraps every argument of the aggregate in the pivot condition,
+    // so a `listagg` delimiter stops being foldable: Spark 4.2.0 refuses it
+    // with `NON_FOLDABLE_INPUT` (its ordered form fails with an internal
+    // `ClassCastException`; Krishiv gives the same defined error for both).
+    for query in [
+        "SELECT * FROM (SELECT v, p FROM t) PIVOT (listagg(v, ',') FOR p IN ('x', 'y'))",
         "SELECT * FROM (SELECT v, o, p FROM t) \
          PIVOT (listagg(v, ',') WITHIN GROUP (ORDER BY o DESC) FOR p IN ('x', 'y'))",
-    )?;
-    assert_eq!(rows, ["a,b\td,c"]);
+    ] {
+        let e = block_on(async { s.sql(query).await?.collect().await }).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+            "{query}"
+        );
+    }
+    let e = block_on(async {
+        s.sql("SELECT * FROM (SELECT v, p FROM t) PIVOT (listagg(v, ',') FOR p IN ('x', 'y'))")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    let params: std::collections::BTreeMap<String, String> = e
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), v.clone()))
+        .collect();
+    // Spark 4.2.0's parameters, verbatim.
+    let want = [
+        ("inputExpr", "\"(IF((p <=> x), ,, NULL))\""),
+        ("inputName", "`delimiter`"),
+        ("inputType", "\"STRING\""),
+        (
+            "sqlExpr",
+            "\"listagg((IF((p <=> x), v, NULL)), (IF((p <=> x), ,, NULL)))\"",
+        ),
+    ];
+    for (k, v) in want {
+        assert_eq!(params.get(k).map(String::as_str), Some(v), "{k}");
+    }
     // `PIVOT` over an ordered `mode`: Spark 4.2.0 returns `(1, 2)` for the
     // ascending and the descending form alike.
     for order in ["", " DESC"] {

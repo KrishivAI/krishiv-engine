@@ -137,8 +137,11 @@ impl Resolver<'_> {
                     p.origin,
                 ));
             }
-            casts.push((
-                value_name(v, b, t, self),
+            // A value of the pivot column's own type needs no cast (and
+            // shows as the value, as Spark's implicit cast does).
+            let value = if from == Some(&pivot_type) {
+                trim_value_alias(&v.exprs[0])
+            } else {
                 Arc::new(
                     Expr::new(ExprNode::Cast {
                         expr: trim_value_alias(&v.exprs[0]),
@@ -146,8 +149,9 @@ impl Resolver<'_> {
                         mode: CastMode::Default,
                     })
                     .with_origin(b.expr.origin),
-                ),
-            ));
+                )
+            };
+            casts.push((value_name(v, b, t, self), value));
         }
         // The aggregates, bound by the existing machinery (which rejects a
         // nested aggregate, as Spark's `CheckAnalysis` does), then checked
@@ -317,23 +321,14 @@ impl Resolver<'_> {
                     };
                     (args, arg_names)
                 } else {
-                    // A `listagg` delimiter and a `mode` flag are foldable
-                    // literals, which a condition would make a column.
-                    let literal_from = match f.name.to_ascii_lowercase().as_str() {
-                        "listagg" | "string_agg" | "mode" => 1,
-                        _ => usize::MAX,
-                    };
+                    // Every argument takes the condition, as Spark's
+                    // `transformDown` wraps them: a `listagg` delimiter or
+                    // a `mode` flag stops being foldable and is refused by
+                    // the re-bind, as Spark refuses it.
                     let args: Vec<Arc<Expr>> = f
                         .args
                         .iter()
-                        .enumerate()
-                        .map(|(n, a)| {
-                            if n >= literal_from {
-                                Arc::clone(a)
-                            } else {
-                                if_expr(cond, Arc::clone(a), x.origin)
-                            }
-                        })
+                        .map(|a| if_expr(cond, Arc::clone(a), x.origin))
                         .collect();
                     let arg_names = if f.arg_names.is_empty() {
                         Vec::new()

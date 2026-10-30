@@ -501,7 +501,7 @@ impl Session {
     }
 
     /// Runs the parsed, authorized `statement`.
-    async fn run_statement(
+    pub(crate) async fn run_statement(
         &self,
         statement: Statement,
         env: QueryEnv,
@@ -526,6 +526,9 @@ impl Session {
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
+            Statement::ExecuteImmediate(e) => {
+                Box::pin(self.exec_execute_immediate(&e, query, redacted, 0)).await
+            }
             Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => self.exec_create_table(&t, query).await,
@@ -535,12 +538,19 @@ impl Session {
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => self.exec_show(&s).await,
+            Statement::Describe(d) => self.exec_describe(&d).await,
             Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
             Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
             Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
+            Statement::Analyze(a) => self.exec_analyze(&a).await,
+            Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
+            Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
+            Statement::Delete(d) => self.exec_row_level_change(&d.table, "DELETE"),
+            Statement::Update(u) => self.exec_row_level_change(&u.table, "UPDATE TABLE"),
+            Statement::Merge(m) => self.exec_row_level_change(&m.target, "MERGE INTO TABLE"),
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -1023,6 +1033,7 @@ impl Session {
             conf_version,
             catalog_epoch,
             variables_version: variables.version,
+            policy_version: self.state.policy.version().0,
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1042,7 +1053,7 @@ impl Session {
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let next_source = || self.next_source_id();
-        let plan = crate::catalog::expand_views(
+        let expansion = crate::catalog::expand_views(
             &self.state.catalog,
             plan,
             env.analysis.conf.case_sensitive,
@@ -1057,6 +1068,14 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
             }),
         )?;
+        // A permanent view is inlined before binding, so the analyzer never asks the
+        // policy about it: ask here, before any read and before the text of a stored view
+        // can fail, so a principal who may not read it learns nothing from it.
+        let views = self.authorize_reads(&expansion.reads, env).await?;
+        if let Some(e) = expansion.deferred {
+            return Err(e);
+        }
+        let plan = expansion.plan;
         let plan = Plan::try_new(plan)?;
         let analyzed = DefaultAnalyzer
             .analyze(&plan, &env.analysis)
@@ -1071,7 +1090,20 @@ impl Session {
                 attach_analysis(e, own.as_ref().or(text))
             });
         // Analysis checks every read: its denials are the reads' denials.
-        crate::access::audit(self, StatementClass::Read, analyzed)
+        let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
+        for view in views {
+            let securable = krishiv_plan::analyzer::Securable::View(view);
+            if !analyzed.securables.iter().any(|s| s.securable == securable) {
+                analyzed
+                    .securables
+                    .push(krishiv_plan::analyzer::SecurableUse {
+                        securable,
+                        privilege: krishiv_plan::analyzer::Privilege::Select,
+                        columns: std::collections::BTreeSet::new(),
+                    });
+            }
+        }
+        Ok(analyzed)
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -1852,6 +1884,9 @@ pub(crate) struct QueryEnv {
     pub(crate) sql_functions: Arc<QueryFunctions>,
     /// [`FunctionRegistry::version`] of `analysis.functions`.
     pub(crate) functions_version: u64,
+    /// The access policy's version when the query started: an analysis made under another one
+    /// is not reused, since its reads were authorized under the old rules.
+    pub(crate) policy_version: u64,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
