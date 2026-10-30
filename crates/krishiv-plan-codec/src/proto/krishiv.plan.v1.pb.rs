@@ -544,6 +544,9 @@ pub struct KeyFilterOptions {
     pub bloom_fpp: f64,
     #[prost(double, tag = "7")]
     pub bloom_max_fpp: f64,
+    /// ignorable
+    #[prost(bool, tag = "8")]
+    pub scan_waits: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnionNode {

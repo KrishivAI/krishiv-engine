@@ -237,7 +237,8 @@ impl Planner<'_> {
                 .iter()
                 .map(|&k| probe.schema.field(k).data_type().clone())
                 .collect();
-            let rf = self.runtime_filters(&probe, &probe_exprs, &key_types, build_rows);
+            let rf =
+                self.runtime_filters(&probe, &probe_exprs, &key_types, &build.node, build_rows);
             published = rf.explain;
             runtime_filters = rf.filters;
         }

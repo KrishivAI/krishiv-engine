@@ -23,11 +23,16 @@
 //! A site below an aggregate, a sort or another join's build side is read
 //! by a pipeline that may run while the producer's build does: the scan
 //! starts with the filter pending and adopts it at its next check point
-//! (row group, batch) — correct, only less effective. A scheduling-only
-//! dependency that makes such scans wait for the build was measured and
-//! dropped: the executor runs pipelines in dependency waves, so the extra
-//! dependency adds a wave and serializes unrelated pipelines (TPC-DS q30,
-//! q81 and q74 ran 1.6–1.9x slower with it).
+//! (row group, batch) — correct, only less effective. The executor makes
+//! such a scan start after the build when the filter is worth the wait
+//! (`runner.rs`, `with_filter_order`; [`scan_waits`]), which takes away the
+//! time the two pipelines would have overlapped. It is not worth it when the
+//! build reads the scan's own table, as the two sides of an inlined CTE do:
+//! the keys come from one domain, so the filter drops little (TPC-DS q30,
+//! q81, q64 and q74 ran 1.12–1.30x slower waiting). Estimates cannot tell
+//! that case apart alone: q95 and q30 have the same ratio of scan to build
+//! rows, and only q95's filter pays. Even then a build far smaller than the
+//! scan is selective enough (q58's seven dates of `date_dim`).
 //!
 //! # Cost model
 //! min/max and the distinct keys (up to the larger of
@@ -53,9 +58,9 @@ use krishiv_common::config::{
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{AttrId, Expr, ExprNode, ResolvedExpr};
 
-use super::build::{Planned, Planner, column_of};
+use super::build::{Planned, Planner, column_of, source_name};
 use crate::operators::RowStageSettings;
-use crate::physical::{JoinFilterPlan, ScanId, ScanRuntimeFilter};
+use crate::physical::{JoinFilterPlan, PhysNode, ScanId, ScanRuntimeFilter};
 
 /// A scan column a runtime filter from above may target.
 #[derive(Debug, Clone)]
@@ -170,12 +175,13 @@ pub(crate) struct JoinFilters {
 impl Planner<'_> {
     /// The runtime filters an inner or left semi hash join publishes for
     /// its probe keys (`probe_exprs`, of types `key_types`), given the
-    /// estimated build rows.
+    /// build side's plan and estimated rows.
     pub(crate) fn runtime_filters(
         &mut self,
         probe: &Planned,
         probe_exprs: &[Arc<Expr>],
         key_types: &[DataType],
+        build: &PhysNode,
         build_rows: f64,
     ) -> JoinFilters {
         let mut out = JoinFilters {
@@ -201,6 +207,7 @@ impl Planner<'_> {
                 let bloom = s.bloom
                     && build_rows <= s.bloom_max_items as f64
                     && site.scan_rows >= (4.0 * build_rows).max(s.min_application_rows as f64);
+                let reads_scan_table = reads_table(build, &site.scan_name);
                 let id = FilterId(self.next_filter);
                 self.next_filter += 1;
                 self.scan_filters
@@ -224,6 +231,7 @@ impl Planner<'_> {
                         max_values: s.max_values,
                         exact_max_values: s.exact_max_values,
                         bloom,
+                        scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table),
                         bloom_max_items: s.bloom_max_items,
                         bloom_max_bytes: s.bloom_max_bytes,
                         ..KeyFilterOptions::default()
@@ -233,6 +241,23 @@ impl Planner<'_> {
         }
         out
     }
+}
+
+/// How many times the build must be smaller than a scan of the build's own
+/// table for its filter to be worth the scan's wait.
+const SELECTIVE_BUILD: f64 = 1_000.0;
+
+/// Whether a scan of `scan_rows` estimated rows starts after a build of
+/// `build_rows`, given whether the build reads the scan's table (see the
+/// module docs).
+fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> bool {
+    !build_reads_scan_table || scan_rows >= SELECTIVE_BUILD * build_rows.max(1.0)
+}
+
+/// Whether `node`'s plan scans the table called `name`.
+fn reads_table(node: &PhysNode, name: &str) -> bool {
+    matches!(node, PhysNode::Scan(s) if source_name(&s.scan) == name)
+        || node.children().into_iter().any(|c| reads_table(c, name))
 }
 
 /// `sites` that are still columns of `layout`.
@@ -257,4 +282,24 @@ pub(crate) fn renamed(sites: &[Site], from: &[AttrId], to: &[AttrId]) -> Vec<Sit
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_waits;
+
+    #[test]
+    fn a_scan_waits_unless_the_build_reads_its_table() {
+        // Another table: whatever the estimates say (TPC-H q18's are wrong).
+        assert!(scan_waits(15e6, 20e6, false));
+        // The build's own table: a filter across one key domain drops little.
+        assert!(!scan_waits(250_000.0, 120_000.0, true));
+        assert!(!scan_waits(500_000.0, 4_750.0, true));
+        // Unless the build is far smaller.
+        assert!(scan_waits(73_049.0, 7.0, true));
+        assert!(scan_waits(1_000.0, 1.0, true));
+        assert!(!scan_waits(999.0, 1.0, true));
+        // An estimate of less than one row counts as one.
+        assert!(!scan_waits(500.0, 0.0, true));
+    }
 }

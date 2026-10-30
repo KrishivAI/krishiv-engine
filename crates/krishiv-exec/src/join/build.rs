@@ -482,7 +482,12 @@ impl Sink for BuildSink {
         if self.0.publisher.is_none() {
             return Vec::new();
         }
-        self.0.runtime.iter().map(|f| f.filter.id()).collect()
+        self.0
+            .runtime
+            .iter()
+            .filter(|f| f.options.scan_waits)
+            .map(|f| f.filter.id())
+            .collect()
     }
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {

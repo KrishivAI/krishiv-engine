@@ -406,6 +406,7 @@ fn join(join_type: JoinType) -> HashJoinPlan {
                 max_values: 50,
                 exact_max_values: 4096,
                 bloom: true,
+                scan_waits: false,
                 bloom_max_items: 4_000_000,
                 bloom_max_bytes: 8 << 20,
                 bloom_fpp: 0.01,

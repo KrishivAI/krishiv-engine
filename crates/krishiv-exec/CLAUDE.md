@@ -35,8 +35,9 @@ once every producer partition published (count 1 unless the task says otherwise;
 ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
-starts after the pipelines publishing its filters unless they run with or after it (`runner.rs`,
-`with_filter_order`); no driver ever waits on a filter's value.
+starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's
+own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
+ever waits on a filter's value.
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
 `Sort` below it; `planner/window.rs`; over a hash exchange that sort splits its rows into hash buckets merged and read
 by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one

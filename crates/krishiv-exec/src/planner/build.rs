@@ -1515,7 +1515,7 @@ fn limit_value(e: &Expr) -> Result<u64> {
     }
 }
 
-fn source_name(scan: &krishiv_plan::Scan) -> String {
+pub(super) fn source_name(scan: &krishiv_plan::Scan) -> String {
     match &scan.source {
         krishiv_plan::ReadSource::Table { name, .. } => name.join("."),
         krishiv_plan::ReadSource::Files { format, .. } => format!("{format} files"),

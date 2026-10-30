@@ -460,6 +460,8 @@ message KeyFilterOptions {
   uint64 bloom_max_bytes = 5;
   double bloom_fpp = 6;
   double bloom_max_fpp = 7;
+  // ignorable
+  bool scan_waits = 8;
 }
 
 message UnionNode {

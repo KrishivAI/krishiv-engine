@@ -282,8 +282,8 @@ pub trait Sink: Send + Sync {
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
-    /// The runtime filters this sink publishes when it finalizes. Default:
-    /// none.
+    /// The runtime filters this sink publishes when it finalizes that are
+    /// worth a scan's wait (`runner.rs`, `with_filter_order`). Default: none.
     fn published_filters(&self) -> Vec<FilterId> {
         Vec::new()
     }

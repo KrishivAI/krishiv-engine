@@ -242,7 +242,8 @@ impl Drop for Finish {
 }
 
 /// `deps` with each pipeline that applies a runtime filter (`applies`) also
-/// depending on the pipelines that publish it (`publishes`), unless a
+/// depending on the pipelines that publish it and say it is worth the wait
+/// (`publishes`), unless a
 /// publisher already runs after that pipeline, or with it: a filter never
 /// makes a query wait for itself. Pipelines with one sink (`sinks`) start
 /// together, so depending on one means depending on all.

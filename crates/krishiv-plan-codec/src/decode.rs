@@ -963,6 +963,7 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             max_values: usize_of(o.max_values)?,
             exact_max_values: usize_of(o.exact_max_values)?,
             bloom: o.bloom,
+            scan_waits: o.scan_waits,
             bloom_max_items: o.bloom_max_items,
             bloom_max_bytes: usize_of(o.bloom_max_bytes)?,
             bloom_fpp: o.bloom_fpp,
