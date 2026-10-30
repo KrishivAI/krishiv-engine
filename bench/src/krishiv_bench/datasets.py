@@ -311,6 +311,9 @@ def main(argv=None) -> None:
     p.add_argument("directory", type=Path)
     p = sub.add_parser("memcap", help="memcap suite data (seeded star schema) under $KRISHIV_DATA/memcap/v1/<rows>")
     p.add_argument("--rows", nargs="+", default=["10m"], metavar="N", help="whole millions, e.g. 10m 50m 150m")
+    p = sub.add_parser("remote-filter", help="download the FineWeb-Edu sample/10BT mirror (~28 GB)")
+    p.add_argument("--yes", action="store_true", help="confirm the ~28 GB download")
+    p.add_argument("--out", type=Path, default=None, help="mirror directory")
     p = sub.add_parser("manifest", help="(re)write sha256 manifest for a dataset dir")
     p.add_argument("name", choices=["tpch", "tpch-dbgen", "tpcds"])
     p.add_argument("--sf", type=float, default=1)
@@ -357,6 +360,13 @@ def main(argv=None) -> None:
                 generate(label)
         except (ValueError, FileExistsError) as e:
             ap.error(str(e))
+    elif a.cmd == "remote-filter":
+        from .remote_filter import fetch_remote_filter
+
+        try:
+            print(fetch_remote_filter(a.out, a.yes))
+        except (ValueError, RuntimeError, subprocess.CalledProcessError) as e:
+            sys.exit(str(e))
     elif a.cmd == "manifest":
         print(write_manifest(dataset_dir(a.name, a.sf), manifest_stem(a.name, a.sf)))
     elif a.cmd == "clickbench":

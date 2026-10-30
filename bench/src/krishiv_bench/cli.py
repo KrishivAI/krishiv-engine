@@ -175,6 +175,21 @@ def main(argv=None) -> None:
     rr.add_argument("--runner", help=RUNNER_HELP)
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
     _add_memcap_args(rr)
+    rf = sub.add_parser(
+        "remote-filter",
+        help="selective scan over a FineWeb-Edu sample (per-engine time, peak RSS, pass/fail)",
+    )
+    rf.add_argument("--engines", default="krishiv,duckdb,polars", help="comma list of engines")
+    rf.add_argument("--mirror", type=Path, help="local mirror dir (default: $KRISHIV_DATA/remote-filter/sample-10BT)")
+    rf.add_argument("--sources", help="JSON list of Parquet URLs for remote reads (default: the mirror's files)")
+    rf.add_argument(
+        "--memory-limit",
+        action="append",
+        default=None,
+        help="cgroup MemoryMax of each engine process (e.g. 4g); repeatable. Default: an uncapped scope and a 4g one",
+    )
+    rf.add_argument("--reps", type=int, default=5, help="timed repetitions per scope (after one validation pass)")
+    rf.add_argument("--timeout", type=float, default=1800, help="per-engine timeout seconds (0 = none)")
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     add_h2o_args(rp)
@@ -315,6 +330,19 @@ def main(argv=None) -> None:
     elif a.cmd == "run" and a.suite == "memcap":
         a.reps = a.iterations if a.iterations is not None else 3
         _run_memcap(ap, a, [a.engine])
+    elif a.cmd == "remote-filter":
+        from .remote_filter import default_mirror, run_remote_filter
+
+        try:
+            run_remote_filter(
+                a.sources or str(a.mirror or default_mirror()),
+                [e.strip() for e in a.engines.split(",") if e.strip()],
+                a.memory_limit or [None, "4g"],
+                a.timeout or None,
+                reps=a.reps,
+            )
+        except (ValueError, FileNotFoundError) as e:
+            ap.error(str(e))
     elif a.cmd == "run":
         if a.engine == "spark":
             ap.error("--engine spark is a memcap engine; use spark-connect or spark-local elsewhere")
