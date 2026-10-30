@@ -69,8 +69,8 @@ Paths are relative to this crate.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 - `CREATE [OR REPLACE] [TEMPORARY] FUNCTION` / `DROP FUNCTION` (`parser/function.rs`): the parameters are `CREATE TABLE`
-  column definitions, the body keeps its span, `name => value` lowers to a `NAMED_ARGUMENT` call around the value
-  (the analyzer unwraps it for SQL functions and refuses it elsewhere).
+  column definitions, the body keeps its span, `name => value` lowers to the call's `arg_names`
+  (the analyzer uses them for SQL functions and the built-ins with a named signature, and refuses them elsewhere).
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0003, 0008, 0012, 0038

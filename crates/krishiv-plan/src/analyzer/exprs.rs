@@ -1515,6 +1515,14 @@ impl Resolver<'_> {
                 {
                     return self.sql_call(&def, e, f, kids);
                 }
+                // `session.f` / `system.session.f` reach a temporary SQL
+                // function as well as a session UDF.
+                if session_qualified
+                    && let FunctionLookup::Sql(def) =
+                        self.ctx.functions.lookup(&parts, self.ctx.profile)
+                {
+                    return self.sql_call(&def, e, f, kids);
+                }
                 // A call of a function with a named-parameter signature is
                 // rearranged into positional order (Spark's
                 // `FunctionBuilderBase` rearrangement), filling defaults; any

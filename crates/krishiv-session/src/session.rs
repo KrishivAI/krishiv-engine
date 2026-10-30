@@ -105,12 +105,12 @@ pub(crate) struct SessionState {
     pub(crate) catalog: Arc<SessionCatalog>,
     pub(crate) cache: Arc<RelationCache>,
     pub(crate) variables: Arc<SessionVariables>,
-    profile: SparkProfile,
+    pub(crate) profile: SparkProfile,
     /// Fixed for the session's life: caches and fingerprints never mix
     /// identities (a new identity gets a new session).
     pub(crate) principal: Arc<Principal>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
-    functions: Arc<dyn FunctionRegistry>,
+    pub(crate) functions: Arc<dyn FunctionRegistry>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
     udfs: Arc<UdfLibrary>,

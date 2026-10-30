@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use krishiv_types::DataType;
 
@@ -504,6 +505,51 @@ fn a_nondeterministic_argument_is_read_once() {
     assert!(call(vec![f("twice", vec![f("sqrt", vec![int(4)])])], defs()).is_ok());
 }
 
+/// A nondeterministic argument read from a subquery of the body would run
+/// once per row of the subquery; Spark evaluates it once per call.
+#[test]
+fn a_nondeterministic_argument_is_not_read_from_a_subquery() {
+    let sub = func(
+        "sub",
+        vec![param("x", DataType::Double, None)],
+        Some(DataType::Double),
+        scalar_subquery(LogicalPlan::table(["t"]).aggregate(vec![], vec![f("max", vec![c("x")])])),
+    );
+    let (class, _) = err(&call(
+        vec![f("sub", vec![f("rand", vec![int(1)])])],
+        vec![sub.clone()],
+    ));
+    assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE");
+    assert!(call(vec![f("sub", vec![f("sqrt", vec![int(4)])])], vec![sub]).is_ok());
+}
+
+/// Functions that each call the next one twice inline to 2^n bodies; the
+/// budget stops the statement instead of hanging the analyzer.
+#[test]
+fn nested_calls_that_double_are_budgeted() {
+    let levels = 30;
+    let defs: Vec<SqlFunction> = (0..=levels)
+        .map(|i| {
+            let body = if i == levels {
+                c("x")
+            } else {
+                let next = format!("d{}", i + 1);
+                add(f(&next, vec![c("x")]), f(&next, vec![c("x")]))
+            };
+            func(
+                &format!("d{i}"),
+                vec![param("x", DataType::Integer, None)],
+                Some(DataType::Integer),
+                body,
+            )
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    let r = call(vec![f("d0", vec![int(1)])], defs);
+    assert_eq!(err(&r).0, "FAILED_TO_PARSE_TOO_COMPLEX");
+    assert!(started.elapsed() < Duration::from_secs(30));
+}
+
 fn scalar_subquery(plan: LogicalPlan) -> Expr {
     Expr::subquery(SubqueryKind::Scalar, plan)
 }
@@ -672,6 +718,8 @@ fn distinct_and_filter_are_refused() {
 }
 
 #[test]
+/// The registry ranks built-ins first; the session refuses to create such a
+/// function (Spark: `ROUTINE_ALREADY_EXISTS`), so this only guards the order.
 fn builtins_rank_before_session_functions() {
     let abs = func("abs", vec![], Some(DataType::Integer), int(1));
     let r = call(vec![f("abs", vec![int(-5)])], vec![abs]).unwrap();

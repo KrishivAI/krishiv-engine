@@ -253,11 +253,19 @@ fn sql_function_roots(
         let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
             if let Node::Expr(e) = node
                 && let ExprNode::Function(f) = &e.node
-                && f.qualifier.is_empty()
                 && is_registry_call(&f.name)
-                && let FunctionLookup::Sql(def) = ctx
-                    .functions
-                    .lookup(std::slice::from_ref(&f.name), ctx.profile)
+                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
+                    &if is_session_qualifier(&f.qualifier) {
+                        let mut parts = f.qualifier.clone();
+                        parts.push(f.name.clone());
+                        parts
+                    } else if f.qualifier.is_empty() {
+                        vec![f.name.clone()]
+                    } else {
+                        return ControlFlow::Continue(());
+                    },
+                    ctx.profile,
+                )
             {
                 defs.push(def);
             }
@@ -307,6 +315,9 @@ fn check_function(
     if is_session_qualifier(&f.qualifier) {
         let named = f.arg_names.iter().any(Option::is_some);
         let registry = ctx.functions.lookup(&parts, ctx.profile);
+        if matches!(registry, FunctionLookup::Sql(_)) {
+            return Ok(());
+        }
         if matches!(registry, FunctionLookup::NotFound) {
             return Err(AnalysisError::new(
                 UnresolvedRoutine {

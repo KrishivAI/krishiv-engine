@@ -309,9 +309,14 @@ impl Resolver<'_> {
                         }),
                         FunctionLookup::NotFound => false,
                         // A SQL-bodied function is inlined later; its body
-                        // is not checked here, so it is refused (a divergence
-                        // from Spark, which folds it).
-                        FunctionLookup::Sql(_) => true,
+                        // is not checked here. Spark folds such a call, so
+                        // this is a gap, not an error of Spark's.
+                        FunctionLookup::Sql(_) => {
+                            return Err(super::bind::unsupported(
+                                "a SQL function in an inline table",
+                                e.origin,
+                            ));
+                        }
                     }
                 }
                 _ => false,

@@ -148,6 +148,8 @@ pub(super) struct Resolver<'a> {
     pub(super) frame: Option<Arc<super::sqlfn::Frame>>,
     /// The SQL functions open, outermost first, to catch recursion.
     pub(super) fn_path: Vec<String>,
+    /// SQL function calls inlined so far in this analysis (a budget).
+    pub(super) sql_calls: usize,
 }
 
 type Resolved = (
@@ -179,6 +181,7 @@ pub(super) fn resolve(
         lambdas: Vec::new(),
         frame: None,
         fn_path: Vec::new(),
+        sql_calls: 0,
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).

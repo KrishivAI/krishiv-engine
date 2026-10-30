@@ -11,7 +11,8 @@
 //! and message parameters. The statements left out of each list, and why:
 //!
 //! - **`VALUES`** (`CREATE TEMPORARY VIEW t AS VALUES (0) t(a)` and the
-//!   functions reading `t`): the engine has no inline tables yet.
+//!   functions reading `t`): not claimed yet; the statements that need only
+//!   temporary functions are the ones replayed.
 //! - **Persisted functions** (`CREATE FUNCTION` without `TEMPORARY`, and the
 //!   statements that call them): out of scope; they name
 //!   `spark_catalog.default.f` in Spark's output. This is nearly all of
@@ -22,8 +23,8 @@
 //!   created with ANSI on and called with it off): Spark runs the body with
 //!   the SQL configuration captured when the function was created; here the
 //!   body runs under the caller's.
-//! - **Session variables** (`DECLARE x = 999` and the statements that read
-//!   `x`): not implemented.
+//! - **Session variables** in `sql-udf.sql`: not claimed. The precedence
+//!   file's `DECLARE x = 999` and the statements around it are replayed.
 //! - **`outer_vs_param`** (`(SELECT (SELECT x) FROM v1)`): the engine does not
 //!   decorrelate a scalar subquery without an aggregate, which this one
 //!   becomes where the column `x` of `v1` wins over the parameter.
@@ -239,7 +240,17 @@ const PRECEDENCE: &[(usize, &str)] = &[
         "CREATE OR REPLACE TEMPORARY FUNCTION outer_param_pure(x INT)\nRETURNS INT RETURN (SELECT (SELECT x))",
     ),
     (18, "SELECT outer_param_pure(42)"),
+    (19, "DECLARE x = 999"),
     (20, "SELECT identity_fn(42)"),
+    (
+        21,
+        "CREATE OR REPLACE TEMPORARY FUNCTION inner_fn(y INT) RETURNS INT RETURN x",
+    ),
+    (
+        22,
+        "CREATE OR REPLACE TEMPORARY FUNCTION outer_fn(x INT) RETURNS INT RETURN inner_fn(x)",
+    ),
+    (23, "SELECT outer_fn(42)"),
     (27, "DROP VIEW v1"),
     (28, "DROP TEMPORARY FUNCTION identity_fn"),
     (29, "DROP TEMPORARY FUNCTION col_vs_param"),
@@ -496,11 +507,20 @@ fn functions_belong_to_their_session() {
 }
 
 #[test]
-fn built_in_functions_win_over_session_functions() {
+fn a_function_cannot_take_the_name_of_a_built_in() {
     let s = session();
-    ok(
+    let e = fails(
         &s,
         "CREATE TEMPORARY FUNCTION abs(x INT) RETURNS INT RETURN 100",
+    );
+    assert_eq!(e.error_class().name(), "ROUTINE_ALREADY_EXISTS");
+    let e = fails(
+        &s,
+        "CREATE OR REPLACE TEMPORARY FUNCTION abs(x INT) RETURNS INT RETURN 100",
+    );
+    assert_eq!(
+        e.error_class().name(),
+        "USER_DEFINED_FUNCTIONS.CANNOT_REPLACE_NON_SQL_UDF_WITH_SQL_UDF"
     );
     assert_eq!(ok(&s, "SELECT abs(-5)"), ["5"]);
 }

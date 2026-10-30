@@ -28,7 +28,7 @@ Paths are relative to this crate.
 - Each query reads a snapshot of the configuration; a concurrent `conf().set` never changes a running query.
 - Transformations only build IR; actions are `async` and run on the session's executor, so they work from
   any runtime. Dropping an action's future or result stream cancels its query.
-- SQL-bodied temporary functions live in a per-session map (`udf.rs`) replaced on every change (never edited); a
+- SQL-bodied temporary functions live in a per-session map (`sql_functions.rs`) replaced on every change (never edited); a
   query takes the map when it starts and reads one snapshot, and every change bumps the registry version.
 - The IR is reachable only behind the `unstable-ir` feature (not covered by semver).
 - Access control: one principal and one `AccessPolicy` per session, for life. Reads are checked in analysis; what a statement writes, creates or drops (`krishiv_sql::statement_targets`) is checked in `sql` before it is dispatched, and `df.write` paths before `DirectoryWrite::begin`, all through `krishiv_plan::analyzer::authorize` (fail closed, 42501, no reason, no existence oracle). Every denial logs one `krishiv::audit` record. Deny-all and inverse matrices: `tests/access_policy.rs` (merge-blocking).

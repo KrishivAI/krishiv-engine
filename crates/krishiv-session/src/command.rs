@@ -25,13 +25,16 @@ use krishiv_common::error::{
     KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound, RowSubqueryTooManyRows,
     TableOrViewNotFound, TempTableOrViewAlreadyExists, UnresolvedVariable,
     UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetVariableUsingSet,
+    UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
     UserDefinedFunctionsNotAValidDefaultExpression,
     UserDefinedFunctionsNotAValidDefaultParameterPosition,
     UserDefinedFunctionsNotNullOnFunctionParameters,
     UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{SqlFunction, SqlParam, TableColumn, variable_name};
+use krishiv_plan::analyzer::{
+    FunctionLookup, FunctionRegistry as _, SqlFunction, SqlParam, TableColumn, variable_name,
+};
 use krishiv_plan::{
     Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
 };
@@ -777,7 +780,33 @@ impl Session {
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let source = self.next_source_id();
         let entry = self.declare(f, &name, source, case_sensitive, redacted)?;
-        loop {
+        // A built-in or a registered UDF of the name is not ours to replace
+        // or shadow (Spark: `ROUTINE_ALREADY_EXISTS`, or with `OR REPLACE`
+        // `CANNOT_REPLACE_NON_SQL_UDF_WITH_SQL_UDF`).
+        if !matches!(
+            self.state
+                .functions
+                .lookup(std::slice::from_ref(&name), self.state.profile),
+            FunctionLookup::NotFound
+        ) {
+            return Err(if f.or_replace {
+                UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf {
+                    name: quote(&part.value),
+                }
+                .into()
+            } else {
+                RoutineAlreadyExists {
+                    new_routine_type: "function".to_owned(),
+                    routine_name: quote(&part.value),
+                    existing_routine_type: "function".to_owned(),
+                }
+                .into()
+            });
+        }
+        // Another statement may change the functions while the body is
+        // checked; a few laps are enough in practice, and a statement that
+        // keeps losing the race fails instead of looping.
+        for _ in 0..MAX_DEFINE_ATTEMPTS {
             let current = self.state.sql_functions.snapshot();
             if !f.or_replace && current.get(&name).is_some() {
                 return Err(RoutineAlreadyExists {
@@ -807,10 +836,12 @@ impl Session {
             // Another statement changed the functions while the body was
             // checked: check again against the new ones.
             if self.state.sql_functions.define(entry, current.version()) {
-                break;
+                return self.empty_frame().await;
             }
         }
-        self.empty_frame().await
+        Err(crate::session::internal(
+            "the session's functions kept changing while CREATE FUNCTION was checked".to_owned(),
+        ))
     }
 
     /// The function `f` declares, as an entry: the declaration's own
@@ -1082,6 +1113,9 @@ impl Session {
         Ok(df)
     }
 }
+
+/// How often `CREATE FUNCTION` checks a body again after a concurrent change.
+const MAX_DEFINE_ATTEMPTS: usize = 16;
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for `feature`.
 fn unsupported(feature: &str) -> KrishivError {

@@ -58,7 +58,7 @@ use super::catalog::quoted;
 use super::coerce;
 use super::exprs::{Bound, Cx, SPARK_DOC_ROOT, WindowUse, cast_error, pretty};
 use super::resolve::{Attr, Resolver};
-use crate::walk::{MAX_DEPTH, Node, visit_distinct};
+use crate::walk::{Node, visit_distinct};
 use crate::{
     AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, Origin, ResolvedExpr,
     ResolvedFunction, SourceId,
@@ -82,8 +82,9 @@ pub struct SqlParam {
 /// ([`super::FunctionLookup::Sql`]).
 #[derive(Debug, Clone)]
 pub struct SqlFunction {
-    /// The name as the registry keys it (lower case unless the session is
-    /// case sensitive); it shows in errors.
+    /// The name as the registry keys it (lower case: function names are
+    /// case-insensitive whatever `spark.sql.caseSensitive` says); it shows in
+    /// errors.
     pub name: String,
     /// The parameters, in order.
     pub params: Vec<SqlParam>,
@@ -177,7 +178,12 @@ fn is_deterministic(e: &Arc<Expr>) -> bool {
 }
 
 /// How many functions may be open at once.
-const NESTING: usize = MAX_DEPTH;
+const NESTING: usize = 128;
+
+/// How many calls of SQL functions one analysis may inline. Every call
+/// resolves the body afresh, so nested calls grow exponentially without a
+/// budget; past it the statement is `FAILED_TO_PARSE_TOO_COMPLEX`.
+const MAX_INLINED_CALLS: usize = 2_000;
 
 /// Function levels resolved on the caller's stack before hopping to a
 /// fresh one (a level holds several large frames).
@@ -205,9 +211,10 @@ impl Resolver<'_> {
             path.push(def.name.clone());
             return Err(cyclic(&path, e.origin));
         }
-        if self.fn_path.len() >= NESTING {
+        if self.fn_path.len() >= NESTING || self.sql_calls >= MAX_INLINED_CALLS {
             return Err(AnalysisError::new(FailedToParseTooComplex {}, e.origin));
         }
+        self.sql_calls += 1;
         // Open while the defaults resolve too: a default may call the
         // function itself.
         self.fn_path.push(def.name.clone());
@@ -527,6 +534,20 @@ impl Resolver<'_> {
             return Ok(None);
         };
         p.reads.fetch_add(1, Ordering::Relaxed);
+        // A parameter substituted by its argument runs wherever it is read:
+        // once per element of a lambda and once per row of a subquery. Spark
+        // evaluates the argument once per call, so a nondeterministic one
+        // cannot be read from there.
+        if (depth > 0 || !self.lambdas.is_empty()) && !is_deterministic(&p.arg.expr) {
+            return Err(unsupported(
+                format!(
+                    "a nondeterministic argument for parameter {} of function {}, read inside a lambda or a subquery of the body",
+                    quoted(std::slice::from_ref(&p.name)),
+                    quoted(std::slice::from_ref(&frame.name)),
+                ),
+                origin,
+            ));
+        }
         if depth == 0 {
             return Ok(Some(p.arg.clone()));
         }

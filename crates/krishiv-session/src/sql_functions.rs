@@ -191,13 +191,27 @@ impl FunctionRegistry for QueryFunctions {
             FunctionLookup::NotFound => {}
             found => return found,
         }
-        let [name] = name else {
-            return FunctionLookup::NotFound;
+        // Temporary functions also answer under `session.f` and
+        // `system.session.f`, as session UDFs do.
+        let lower: Vec<String> = name.iter().map(|p| p.to_lowercase()).collect();
+        let name = match lower.as_slice() {
+            [f] => f,
+            [q, f] if q == "session" => f,
+            [s, q, f] if s == "system" && q == "session" => f,
+            _ => return FunctionLookup::NotFound,
         };
         match self.map.get(name) {
             Some(entry) => FunctionLookup::Sql(self.expanded(&entry.def)),
             None => FunctionLookup::NotFound,
         }
+    }
+
+    fn spark_deterministic(&self, name: &str) -> Option<bool> {
+        self.base.spark_deterministic(name)
+    }
+
+    fn resolve_udf(&self, name: &str, version: u32) -> Option<Arc<dyn krishiv_udf_sdk::ScalarUdf>> {
+        self.base.resolve_udf(name, version)
     }
 
     /// The built-ins' version and the session map's, mixed: a change to
