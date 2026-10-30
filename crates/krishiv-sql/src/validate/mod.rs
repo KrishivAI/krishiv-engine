@@ -202,6 +202,11 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                 }
                 return Ok(());
             }
+            Statement::ExecuteImmediate(e) => {
+                let checker = Checker { sql, opts };
+                checker.expr(&e.query)?;
+                return e.using.iter().try_for_each(|a| checker.expr(&a.value));
+            }
             Statement::SetVariable(v) => match &v.kind {
                 SetVariableKind::Single { assignments } => {
                     let checker = Checker { sql, opts };

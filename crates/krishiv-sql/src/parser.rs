@@ -26,20 +26,20 @@ use crate::ast::{
     Alias, BucketOn, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
     ConstraintCharacteristic, CreateNamespace, CreateTable, CreateTableLike, CreateView, Cte,
     DataTypeSpec, DdlName, DeclareVariable, DropBehavior, DropNamespace, DropTable, DropVariable,
-    DropView, DynamicName, Explain, ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind,
-    ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement, GeneratedColumn, GeneratedKind,
-    GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, IdentityColumn,
-    IdentityHow, Join, JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow,
-    NamespaceKind, NearestBy, NearestDirection, NumKind, ObjectName, OptionKey, OrderedIdent,
-    PartitionColumn, PartitionField, PartitionFieldKind, PartitionTransform, Pipe, PipeAggregate,
-    PipeAssignment, PipeOp, PipeOpKind, PipeSelect, PipeWhere, Pivot, Query, QueryOrganization,
-    Relation, RelationExt, Reset, RowDelimited, RowFormat, RowFormatKind, RowSerde, SampleMethod,
-    SampleMethodKind, SampleType, Select, SelectItem, Set, SetAssignment, SetExpr, SetExprKind,
-    SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind, SkewSpec, SortItem, Span,
-    Statement, StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement,
-    TableFactor, TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone,
-    TransformKind, TransformOutput, TransformSelect, Unpivot, UnpivotColumns, Use, Values,
-    ViewColumn, With,
+    DropView, DynamicName, ExecuteImmediate, Explain, ExplainMode, Expr, ExprKind, FileFormat,
+    FileFormatKind, ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement,
+    GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet,
+    Hint, Ident, IdentityColumn, IdentityHow, Join, JoinConstraint, JoinKind, LateralView, Limit,
+    Literal, NamedWindow, NamespaceKind, NearestBy, NearestDirection, NumKind, ObjectName,
+    OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
+    PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp, PipeOpKind, PipeSelect,
+    PipeWhere, Pivot, Query, QueryOrganization, Relation, RelationExt, Reset, RowDelimited,
+    RowFormat, RowFormatKind, RowSerde, SampleMethod, SampleMethodKind, SampleType, Select,
+    SelectItem, Set, SetAssignment, SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier,
+    SetVariable, SetVariableKind, SkewSpec, SortItem, Span, Statement, StructField, TableAlias,
+    TableConstraint, TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption,
+    TableSample, TemporalClause, TemporalKind, TimeZone, TransformKind, TransformOutput,
+    TransformSelect, Unpivot, UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -1559,6 +1559,8 @@ impl<'s> Parser<'s> {
             } else {
                 self.set_command()?
             }
+        } else if self.kw_at(0, "EXECUTE") && self.kw_at(1, "IMMEDIATE") {
+            self.execute_immediate_command()?
         } else if self.kw_at(0, "DECLARE") {
             self.declare_command()?
         } else if self.kw_at(0, "RESET") {
@@ -1877,6 +1879,70 @@ impl<'s> Parser<'s> {
                 default,
                 span,
             }))
+        })
+    }
+
+    /// `EXECUTE IMMEDIATE query [INTO v, ...] [USING [(]arg [AS alias], ...[)]]`.
+    /// The query is any expression; the parenthesized argument list is
+    /// tried first and read as one parenthesized argument when it does not
+    /// end the statement (`USING (SELECT 1) AS a`).
+    fn execute_immediate_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("EXECUTE")?;
+            p.expect_kw("IMMEDIATE")?;
+            let query = p.expr()?;
+            let into = if p.eat_kw("INTO") {
+                p.comma_sep(Self::object_name)?
+            } else {
+                Vec::new()
+            };
+            let mut using = Vec::new();
+            if p.eat_kw("USING") {
+                let mut parsed = false;
+                if p.sym_at(0, Sym::LParen) {
+                    let save = p.checkpoint();
+                    p.bump();
+                    let args = p.comma_sep(Self::using_argument);
+                    if let Ok(args) = args
+                        && p.eat_sym(Sym::RParen)
+                        && (p.pos >= p.toks.len() || p.sym_at(0, Sym::Semi))
+                    {
+                        using = args;
+                        parsed = true;
+                        p.commit(save);
+                    } else {
+                        p.restore(save);
+                    }
+                }
+                if !parsed {
+                    using = p.comma_sep(Self::using_argument)?;
+                }
+            }
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::ExecuteImmediate(ExecuteImmediate {
+                query,
+                into,
+                using,
+                span,
+            }))
+        })
+    }
+
+    /// One `USING` argument: `expr [[AS] alias]`.
+    fn using_argument(&mut self) -> PR<UsingArgument> {
+        let start = self.start();
+        let value = self.expr()?;
+        let alias = match self.select_alias()? {
+            Some(Alias::Name(id)) => Some(id),
+            Some(Alias::List(_)) => return self.fail(),
+            None => None,
+        };
+        Ok(UsingArgument {
+            value,
+            alias,
+            span: self.span_from(start),
         })
     }
 

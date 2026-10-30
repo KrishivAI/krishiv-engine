@@ -747,6 +747,13 @@ impl Parser<'_> {
                 self.bump();
                 return Ok(self.mk(ExprKind::Parameter(ordinal), start));
             }
+            Some(TokenKind::Sym(Sym::Colon))
+                if matches!(self.kind(1), Some(TokenKind::Word | TokenKind::QuotedIdent)) =>
+            {
+                self.bump();
+                let name = self.ident()?;
+                return Ok(self.mk(ExprKind::NamedParameter(name), start));
+            }
             Some(TokenKind::Sym(Sym::Star)) => {
                 self.bump();
                 let except = self.star_except()?;

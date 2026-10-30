@@ -501,7 +501,7 @@ impl Session {
     }
 
     /// Runs the parsed, authorized `statement`.
-    async fn run_statement(
+    pub(crate) async fn run_statement(
         &self,
         statement: Statement,
         env: QueryEnv,
@@ -526,6 +526,9 @@ impl Session {
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
+            Statement::ExecuteImmediate(e) => {
+                Box::pin(self.exec_execute_immediate(&e, query, redacted, 0)).await
+            }
             Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => self.exec_create_table(&t, query).await,

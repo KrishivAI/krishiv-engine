@@ -132,6 +132,8 @@ pub enum Statement {
     SetVariable(SetVariable),
     /// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name`.
     DropVariable(DropVariable),
+    /// `EXECUTE IMMEDIATE query [INTO v, ...] [USING args]`.
+    ExecuteImmediate(ExecuteImmediate),
     /// `CREATE [OR REPLACE] [GLOBAL] [TEMPORARY] VIEW ...`: every view
     /// shape the legacy [`CreateView`] node cannot express (a permanent
     /// view, or a temporary view with a qualified or computed name, a
@@ -196,6 +198,7 @@ impl Statement {
             Self::DeclareVariable(d) => d.span,
             Self::SetVariable(s) => s.span,
             Self::DropVariable(d) => d.span,
+            Self::ExecuteImmediate(e) => e.span,
             Self::CreatePermanentView(v) => v.span,
             Self::DropPermanentView(v) => v.span,
             Self::AlterTable(a) => a.span,
@@ -1021,6 +1024,30 @@ pub struct SetAssignment {
     /// The value (`DEFAULT` reads the variable's default).
     pub value: Expr,
     /// Source text, from the name to the end of the expression.
+    pub span: Span,
+}
+
+/// `EXECUTE IMMEDIATE query [INTO v, ...] [USING [(]arg [AS alias], ...[)]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExecuteImmediate {
+    /// The statement text: a string expression or a variable.
+    pub query: Expr,
+    /// The variables receiving the one result row.
+    pub into: Vec<ObjectName>,
+    /// The arguments binding the statement's parameter markers.
+    pub using: Vec<UsingArgument>,
+    /// Source text, from `EXECUTE` to the end of the statement.
+    pub span: Span,
+}
+
+/// One `USING` argument of an [`ExecuteImmediate`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UsingArgument {
+    /// The value.
+    pub value: Expr,
+    /// `AS alias`, naming the `:alias` marker it binds.
+    pub alias: Option<Ident>,
+    /// Source text.
     pub span: Span,
 }
 
@@ -3247,6 +3274,8 @@ pub enum ExprKind {
     /// The positional parameter marker `?`, with its 0-based ordinal in
     /// the statement.
     Parameter(usize),
+    /// The named parameter marker `:name`.
+    NamedParameter(Ident),
     /// A keyword argument of a special form: the unit of `TIMESTAMPADD(DAY,
     /// ...)` or the field of `EXTRACT(YEAR FROM ...)` (unlike a string
     /// literal, which Spark rejects there).
@@ -3472,6 +3501,7 @@ impl Expr {
         match &self.kind {
             ExprKind::Literal(_)
             | ExprKind::Parameter(_)
+            | ExprKind::NamedParameter(_)
             | ExprKind::Keyword(_)
             | ExprKind::Column(_)
             | ExprKind::Wildcard { .. }
