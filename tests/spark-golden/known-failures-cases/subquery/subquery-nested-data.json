@@ -23,10 +23,6 @@
       18,
       19,
       20
-    ],
-    "sql-commands": [
-      3,
-      5
     ]
   },
   "file": "subquery/subquery-nested-data",
