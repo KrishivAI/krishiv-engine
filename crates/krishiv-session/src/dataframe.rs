@@ -2153,7 +2153,7 @@ impl DataFrameWriterV2 {
             .await
     }
 
-    /// Creates the table; an existing table or temporary view fails with
+    /// Creates the table; an existing table fails with
     /// `TABLE_OR_VIEW_ALREADY_EXISTS`. Dropping the future before the write
     /// commits cancels it and deletes its files.
     ///

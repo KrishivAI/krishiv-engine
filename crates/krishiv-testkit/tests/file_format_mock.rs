@@ -306,6 +306,7 @@ fn inverted_ranges_and_failed_finishes_are_handled() {
             target_file_bytes: 0,
             partition_by: Vec::new(),
             partition_names: Vec::new(),
+            zone: Some(0),
         },
         env.reservation("w"),
     )

@@ -377,17 +377,16 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         feature_of(Construct::Node(&node_of(base.clone()))),
         Some(Feature::WritePlan)
     );
-    for write in [WritePlan {
+    let write = WritePlan {
         partition_by: vec![0],
         ..base
-    }] {
-        let node = node_of(write);
-        assert_eq!(
-            feature_of(Construct::Node(&node)),
-            Some(Feature::PartitionedWrites),
-            "{node:?}"
-        );
-    }
+    };
+    let node = node_of(write);
+    assert_eq!(
+        feature_of(Construct::Node(&node)),
+        Some(Feature::PartitionedWrites),
+        "{node:?}"
+    );
     assert_eq!(Feature::PartitionedWrites.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::PartitionedWrites.to_string(), "partitioned_writes");
     assert_eq!(Feature::from_id("no_such_feature"), None);
