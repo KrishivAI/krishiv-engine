@@ -734,6 +734,21 @@ impl Parser<'_> {
         }
     }
 
+    /// The named parameter marker `:name` at the cursor. Kept out of
+    /// [`Self::primary`], whose frame every nesting level of an expression pays for.
+    #[inline(never)]
+    fn named_parameter(&mut self, start: usize) -> PR<Expr> {
+        // ANTLR reads `:IDENTIFIER(` as the start of an identifier
+        // clause and fails at its argument, not at the `(`.
+        if self.kw_at(1, "IDENTIFIER") && self.sym_at(2, Sym::LParen) {
+            self.pos += 3;
+            return self.fail();
+        }
+        self.bump();
+        let name = self.ident()?;
+        Ok(self.mk(ExprKind::NamedParameter(name), start))
+    }
+
     fn primary(&mut self) -> PR<Expr> {
         let start = self.start();
         let kind = match self.kind(0) {
@@ -750,15 +765,7 @@ impl Parser<'_> {
             Some(TokenKind::Sym(Sym::Colon))
                 if matches!(self.kind(1), Some(TokenKind::Word | TokenKind::QuotedIdent)) =>
             {
-                // ANTLR reads `:IDENTIFIER(` as the start of an identifier
-                // clause and fails at its argument, not at the `(`.
-                if self.kw_at(1, "IDENTIFIER") && self.sym_at(2, Sym::LParen) {
-                    self.pos += 3;
-                    return self.fail();
-                }
-                self.bump();
-                let name = self.ident()?;
-                return Ok(self.mk(ExprKind::NamedParameter(name), start));
+                return self.named_parameter(start);
             }
             Some(TokenKind::Sym(Sym::Star)) => {
                 self.bump();

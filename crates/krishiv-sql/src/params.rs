@@ -6,6 +6,13 @@
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, classify};
 use crate::lexer::{Sym, TokenKind, tokenize};
 
+/// Words that are not reserved but take an operand after them, so a `:` that follows is a marker.
+const OPERATOR_WORDS: &[&str] = &[
+    "DIV", "RLIKE", "REGEXP", "LIKE", "ILIKE", "IN", "IS", "NOT", "BETWEEN", "AND", "OR", "ESCAPE",
+    "BY", "THEN", "ELSE", "WHEN", "USING", "LIMIT", "OFFSET", "VALUES", "SET", "AS", "DISTINCT",
+    "ALL", "ANY", "SOME", "INTERVAL", "DEFAULT", "SELECT", "WHERE", "HAVING", "ON", "FROM",
+];
+
 /// One parameter marker in a statement's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParameterMarker {
@@ -40,9 +47,7 @@ pub fn parameter_markers(sql: &str) -> Vec<ParameterMarker> {
                 let Some(next) = toks.get(i + 1) else {
                     continue;
                 };
-                if next.span.start != t.span.end
-                    || !matches!(next.kind, TokenKind::Word | TokenKind::QuotedIdent)
-                {
+                if !matches!(next.kind, TokenKind::Word | TokenKind::QuotedIdent) {
                     continue;
                 }
                 let ends_expression =
@@ -51,7 +56,11 @@ pub fn parameter_markers(sql: &str) -> Vec<ParameterMarker> {
                         .is_some_and(|p| match p.kind {
                             TokenKind::Word => {
                                 let text = sql.get(p.span.start..p.span.end).unwrap_or_default();
-                                classify(text) & (RESERVED_WORD | CLAUSE_WORD) == 0
+                                text.eq_ignore_ascii_case("END")
+                                    || (classify(text) & (RESERVED_WORD | CLAUSE_WORD) == 0
+                                        && !OPERATOR_WORDS
+                                            .iter()
+                                            .any(|w| text.eq_ignore_ascii_case(w)))
                             }
                             TokenKind::QuotedIdent
                             | TokenKind::String
@@ -121,7 +130,14 @@ mod tests {
     }
 
     #[test]
-    fn a_name_after_a_gap_is_not_a_marker() {
-        assert!(found("SELECT : a, :").is_empty());
+    fn a_name_after_a_gap_is_a_marker_only_where_no_expression_ends() {
+        assert_eq!(found("SELECT : a, :"), vec![(7, 10, Some("a".into()))]);
+        assert!(found("SELECT v : a FROM t").is_empty());
+    }
+
+    #[test]
+    fn operator_words_and_end_decide_what_a_colon_is() {
+        assert_eq!(found("SELECT 7 DIV :a, x RLIKE :b").len(), 2);
+        assert!(found("SELECT CASE WHEN x THEN 1 END:f FROM t").is_empty());
     }
 }

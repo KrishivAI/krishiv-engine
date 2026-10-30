@@ -272,3 +272,77 @@ fn the_statement_is_authorized_as_if_typed() {
         class(&denied, "DROP TABLE secret")
     );
 }
+
+#[test]
+fn values_keep_their_type_and_their_own_token() {
+    let s = session();
+    s.conf().set("spark.sql.session.timeZone", "UTC").unwrap();
+    // A negative value after `-` is not a comment, and `?` before a word is not glued to it.
+    assert_eq!(
+        rows(
+            &s,
+            "EXECUTE IMMEDIATE 'SELECT CAST(5-? AS STRING), ''tail'' AS t' USING -3"
+        ),
+        [["8", "tail"]]
+    );
+    assert_eq!(
+        rows(&s, "EXECUTE IMMEDIATE 'SELECT CAST(?AS STRING)' USING 5"),
+        [["5"]]
+    );
+    // Decimals keep their precision and scale.
+    assert_eq!(
+        rows(
+            &s,
+            "EXECUTE IMMEDIATE 'SELECT typeof(?), CAST(? AS STRING)' USING 123.45BD, 123.45BD"
+        ),
+        [["decimal(5,2)", "123.45"]]
+    );
+    // Timestamps travel exactly, into a variable too.
+    assert_eq!(
+        rows(
+            &s,
+            "EXECUTE IMMEDIATE 'SELECT typeof(?), CAST(? AS STRING)' USING TIMESTAMP '2023-12-25 10:30:45.5', TIMESTAMP '2023-12-25 10:30:45.5'"
+        ),
+        [["timestamp", "2023-12-25 10:30:45.5"]]
+    );
+    run(&s, "DECLARE ts TIMESTAMP");
+    run(
+        &s,
+        "EXECUTE IMMEDIATE 'SELECT TIMESTAMP ''2020-02-29 01:02:03''' INTO ts",
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(ts AS STRING)"),
+        [["2020-02-29 01:02:03"]]
+    );
+    // Types the text cannot carry exactly are refused.
+    assert_eq!(
+        class(&s, "EXECUTE IMMEDIATE 'SELECT ?' USING INTERVAL '3' DAY"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}
+
+#[test]
+fn only_written_aliases_can_collide() {
+    let s = session();
+    run(&s, "DECLARE a STRING");
+    run(&s, "SET VAR a = 'x'");
+    assert_eq!(
+        rows(&s, "EXECUTE IMMEDIATE 'SELECT ?, ?' USING a, a"),
+        [["x", "x"]]
+    );
+    assert_eq!(
+        class(&s, "EXECUTE IMMEDIATE 'SELECT :a' USING 1 AS a, 2 AS A"),
+        "EXEC_IMMEDIATE_DUPLICATE_ARGUMENT_ALIASES"
+    );
+}
+
+#[test]
+fn a_backquoted_variable_is_named_once_and_a_char_index_names_the_marker() {
+    let s = session();
+    run(&s, "DECLARE nq STRING");
+    let (c, m) = failure(&s, "EXECUTE IMMEDIATE `nq`");
+    assert_eq!(c, "NULL_QUERY_STRING_EXECUTE_IMMEDIATE");
+    assert!(m.contains("`nq`") && !m.contains("``nq``"), "{m}");
+    let (_, m) = failure(&s, "EXECUTE IMMEDIATE 'SELECT ''é'', ?'");
+    assert!(m.contains("_12"), "{m}");
+}
