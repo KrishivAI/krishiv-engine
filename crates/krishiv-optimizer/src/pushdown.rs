@@ -23,6 +23,7 @@ use crate::expr::{
     implied, is_deterministic, lit, references, same, strip_alias, substitute, unshift,
 };
 use crate::fold::fold;
+use crate::stats::{cse_definitions, reads_cse, resolve_cse};
 use krishiv_types::DataType;
 
 /// The rule at a `Filter`: pushes its conjuncts down; drops true and
@@ -149,12 +150,21 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             (wrap(below, dedupe(rest), plan), Vec::new())
         }
         PlanNode::Project { input, exprs } if exprs.iter().all(|e| is_deterministic(e)) => {
-            let aliases = alias_map(exprs);
-            through(plan, input, movable, |p| {
-                let refs = references(p);
-                let hits = refs.iter().any(|id| aliases.contains_key(id));
-                (!(hits && has_subquery(p))).then(|| substitute(p, &aliases))
-            })
+            // A common-subexpression projection is opaque to predicate
+            // pushdown: pushing anything below it would evaluate the
+            // shared expression again at each use (substituting a
+            // `cse_*` reference back) or split the filter, so the next
+            // run would return a different plan.
+            if cse_outputs(exprs).is_empty() {
+                let aliases = alias_map(exprs);
+                through(plan, input, movable, |p| {
+                    let refs = references(p);
+                    let hits = refs.iter().any(|id| aliases.contains_key(id));
+                    (!(hits && has_subquery(p))).then(|| substitute(p, &aliases))
+                })
+            } else {
+                (Arc::clone(plan), movable)
+            }
         }
         PlanNode::Aggregate {
             input,
@@ -362,7 +372,12 @@ fn push_join(
         _ => Vec::new(),
     };
     cond.extend(on);
-    let out = join(plan, into(left, l), into(right, r), kind, dedupe(cond));
+    let cond = if cond.iter().any(|p| reads_cse(p)) {
+        dedupe_in(cond, &cse_definitions(plan))
+    } else {
+        dedupe(cond)
+    };
+    let out = join(plan, into(left, l), into(right, r), kind, cond);
     (out, stay)
 }
 
@@ -508,14 +523,43 @@ fn alias_map(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
         .collect()
 }
 
+/// The outputs of a common-subexpression projection: its aliases named
+/// `cse_<id>` (see `crate::cse`). Predicates on them never move below it.
+fn cse_outputs(exprs: &[Arc<Expr>]) -> Attrs {
+    exprs
+        .iter()
+        .filter_map(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. })
+                if crate::cse::is_cse_column(output) =>
+            {
+                Some(output.id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Drops literal-true and repeated deterministic conjuncts.
 fn dedupe(preds: Vec<Arc<Expr>>) -> Vec<Arc<Expr>> {
+    dedupe_in(preds, &HashMap::new())
+}
+
+/// As [`dedupe`], comparing predicates with common-subexpression columns
+/// replaced by their definitions (see [`cse_definitions`]): a predicate the
+/// pass derived and one it already holds meet however they are spelled.
+/// Keeps the first spelling (the one already in the plan).
+fn dedupe_in(preds: Vec<Arc<Expr>>, defs: &HashMap<AttrId, Arc<Expr>>) -> Vec<Arc<Expr>> {
     let mut out: Vec<Arc<Expr>> = Vec::with_capacity(preds.len());
     for p in preds {
         if matches!(p.node, ExprNode::Literal(Literal::Boolean(true))) {
             continue;
         }
-        if is_deterministic(&p) && out.iter().any(|q| same(q, &p)) {
+        // Without definitions this compares exactly as [`dedupe`] does.
+        if is_deterministic(&p)
+            && out
+                .iter()
+                .any(|q| same(&resolve_cse(q, defs), &resolve_cse(&p, defs)))
+        {
             continue;
         }
         out.push(p);
@@ -524,7 +568,13 @@ fn dedupe(preds: Vec<Arc<Expr>>) -> Vec<Arc<Expr>> {
 }
 
 /// `plan` filtered by `preds` (none: `plan` itself), with `like`'s origin.
+/// Duplicate conjuncts meet however they are spelled (see [`dedupe_in`]).
 fn wrap(plan: Arc<LogicalPlan>, preds: Vec<Arc<Expr>>, like: &LogicalPlan) -> Arc<LogicalPlan> {
+    let preds = if preds.iter().any(|p| reads_cse(p)) {
+        dedupe_in(preds, &cse_definitions(&plan))
+    } else {
+        dedupe(preds)
+    };
     match and_all(preds) {
         None => plan,
         Some(predicate) => Arc::new(LogicalPlan {

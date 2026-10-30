@@ -1,0 +1,18 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [d_year#6 ASC NULLS FIRST, ext_price#75 DESC NULLS LAST, brand_id#73 ASC NULLS FIRST], true
+   +- Aggregate [d_year#6, i_brand#59, i_brand_id#58], [d_year#6, i_brand_id#58 AS brand_id#73, i_brand#59 AS brand#74, sum(ss_ext_sales_price#43) AS ext_price#75]
+      +- Project [i_brand_id#58, i_brand#59, ss_ext_sales_price#43, d_year#6]
+         +- Join Inner, (ss_item_sk#30 == i_item_sk#51)
+            :- Project [i_item_sk#51, i_brand_id#58, i_brand#59]
+            :  +- Filter (i_manager_id#71 == 1)
+            :     +- Scan spark_catalog.default.item [i_item_sk#51, i_brand_id#58, i_brand#59, i_manager_id#71]
+            +- Project [ss_item_sk#30, ss_ext_sales_price#43, d_year#6]
+               +- Join Inner, (d_date_sk#0 == ss_sold_date_sk#28)
+                  :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#28, ss_item_sk#30, ss_ext_sales_price#43]
+                  +- Project [d_date_sk#0, d_year#6]
+                     +- Filter ((d_moy#8 == 11) and (d_year#6 == 2000))
+                        +- Scan spark_catalog.default.date_dim [d_date_sk#0, d_year#6, d_moy#8]

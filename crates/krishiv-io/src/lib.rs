@@ -37,6 +37,8 @@ pub mod json;
 mod options;
 pub mod parquet;
 mod registry;
+
+pub mod partition;
 mod request;
 pub mod runtime_filter;
 mod scan;
@@ -69,6 +71,12 @@ pub use options::{
     OptionWarning,
 };
 pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
+
+pub use partition::{
+    DEFAULT_PARTITION, check_partition_column, escape_partition_value, partition_dir_name,
+    partition_segment, partition_segments, partition_texts, renders_as_string,
+    spark_partitioned_file_name,
+};
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,
     ROW_INDEX_COLUMN, RowFilterPolicy, RowLevel, RowSelection, ScalarValue, ScanRequest,

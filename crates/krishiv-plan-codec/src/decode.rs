@@ -1037,6 +1037,7 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
         job_uuid: m.job_uuid.clone(),
         max_records_per_file: m.max_records_per_file,
         target_file_bytes: m.target_file_bytes,
+        partition_by: usizes(&m.partition_by)?,
     })
 }
 

@@ -1,12 +1,13 @@
 ---
 source: crates/krishiv-exec/tests/planner/tpch.rs
+assertion_line: 592
 expression: tpch.plan(q).to_string()
 ---
-Project [((100.00 * sum(CASE WHEN (p_type#20 like 'PROMO%') THEN (l_extendedprice#5 * (1 - l_discount#6)) ELSE 0.0000 END)#4611686018427387916) / sum((l_extendedprice#5 * (1 - l_discount#6)))#4611686018427387917) AS promo_revenue#25]
-+- HashAggregate keys=[], functions=[sum(CASE WHEN (p_type#20 like 'PROMO%') THEN (l_extendedprice#5 * (1 - l_discount#6)) ELSE 0.0000 END), sum((l_extendedprice#5 * (1 - l_discount#6)))]
+Project [((100.00 * sum(CASE WHEN (p_type#20 like 'PROMO%') THEN cse_26#26 ELSE 0.0000 END)#4611686018427387916) / sum(cse_26#26)#4611686018427387917) AS promo_revenue#25]
++- HashAggregate keys=[], functions=[sum(CASE WHEN (p_type#20 like 'PROMO%') THEN cse_26#26 ELSE 0.0000 END), sum(cse_26#26)]
    +- Exchange SinglePartition
-      +- Project [CASE WHEN (p_type#20 like 'PROMO%') THEN (l_extendedprice#5 * (1 - l_discount#6)) ELSE 0.0000 END, (l_extendedprice#5 * (1 - l_discount#6))]
-         +- Project [l_extendedprice#5, l_discount#6, p_type#20]
+      +- Project [CASE WHEN (p_type#20 like 'PROMO%') THEN cse_26#26 ELSE 0.0000 END, cse_26#26]
+         +- Project [p_type#20, (l_extendedprice#5 * (1 - l_discount#6)) AS cse_26#26]
             +- HashJoin Inner, [l_partkey#1] = [p_partkey#16], RuntimeFilter #1: l_partkey#1 -> spark_catalog.default.lineitem.l_partkey
                :- Project [l_partkey#1, l_extendedprice#5, l_discount#6]
                :  +- Filter ((l_shipdate#10 >= DATE '1995-09-01') and (l_shipdate#10 < DATE '1995-10-01'))

@@ -1,0 +1,74 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [item_id#415 ASC NULLS FIRST, ss_item_rev#416 ASC NULLS FIRST], true
+   +- Project [item_id#415, ss_item_rev#416, ((ss_item_rev#416 / cse_1244#1244) * 100) AS ss_dev#421, cs_item_rev#418, ((cs_item_rev#418 / cse_1244#1244) * 100) AS cs_dev#422, ws_item_rev#420, ((ws_item_rev#420 / cse_1244#1244) * 100) AS ws_dev#423, cse_1244#1244 AS average#424]
+      +- Project [item_id#415, ss_item_rev#416, ws_item_rev#420, cs_item_rev#418, (((ss_item_rev#416 + cs_item_rev#418) + ws_item_rev#420) / 3) AS cse_1244#1244]
+         +- Join Inner, (((((((((CAST(cs_item_rev#418 AS DECIMAL(19,3)) >= (0.9 * ws_item_rev#420)) and (CAST(cs_item_rev#418 AS DECIMAL(20,3)) <= (1.1 * ws_item_rev#420))) and (CAST(ws_item_rev#420 AS DECIMAL(19,3)) >= (0.9 * cs_item_rev#418))) and (CAST(ws_item_rev#420 AS DECIMAL(20,3)) <= (1.1 * cs_item_rev#418))) and (item_id#415 == item_id#417)) and (CAST(ss_item_rev#416 AS DECIMAL(19,3)) >= (0.9 * cs_item_rev#418))) and (CAST(ss_item_rev#416 AS DECIMAL(20,3)) <= (1.1 * cs_item_rev#418))) and (CAST(cs_item_rev#418 AS DECIMAL(19,3)) >= (0.9 * ss_item_rev#416))) and (CAST(cs_item_rev#418 AS DECIMAL(20,3)) <= (1.1 * ss_item_rev#416)))
+            :- Project [item_id#415, ss_item_rev#416, ws_item_rev#420]
+            :  +- Join Inner, (((((item_id#415 == item_id#419) and (CAST(ss_item_rev#416 AS DECIMAL(19,3)) >= (0.9 * ws_item_rev#420))) and (CAST(ss_item_rev#416 AS DECIMAL(20,3)) <= (1.1 * ws_item_rev#420))) and (CAST(ws_item_rev#420 AS DECIMAL(19,3)) >= (0.9 * ss_item_rev#416))) and (CAST(ws_item_rev#420 AS DECIMAL(20,3)) <= (1.1 * ss_item_rev#416)))
+            :     :- Project [item_id#554 AS item_id#415, ss_item_rev#555 AS ss_item_rev#416]
+            :     :  +- Shift +425
+            :     :     +- Aggregate [i_item_id#24], [i_item_id#24 AS item_id#129, sum(ss_ext_sales_price#15) AS ss_item_rev#130]
+            :     :        +- Project [ss_ext_sales_price#15, i_item_id#24]
+            :     :           +- Join LeftSemi, (d_date#47 == d_date#75)
+            :     :              :- Project [ss_ext_sales_price#15, d_date#47, i_item_id#24]
+            :     :              :  +- Join Inner, (ss_item_sk#2 == i_item_sk#23)
+            :     :              :     :- Project [ss_item_sk#2, ss_ext_sales_price#15, d_date#47]
+            :     :              :     :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#45)
+            :     :              :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15]
+            :     :              :     :     +- Project [d_date_sk#45, d_date#47]
+            :     :              :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_date#47, d_week_seq#49] (shared #1)
+            :     :              :     +- Scan spark_catalog.default.item [i_item_sk#23, i_item_id#24]
+            :     :              +- Project [d_date#75]
+            :     :                 +- Filter (d_week_seq#77 == scalar-subquery)
+            :     :                    :  +- Project [d_week_seq#105]
+            :     :                    :     +- Shift +56
+            :     :                    :        +- Filter (d_date#47 == DATE '2000-01-03')
+            :     :                    :           +- Shared #1, printed above
+            :     :                    +- Shift +28
+            :     :                       +- Shared #1, printed above
+            :     +- Project [item_id#1242 AS item_id#419, ws_item_rev#1243 AS ws_item_rev#420]
+            :        +- Shift +829
+            :           +- Aggregate [i_item_id#308], [i_item_id#308 AS item_id#413, sum(ws_ext_sales_price#296) AS ws_item_rev#414]
+            :              +- Project [ws_ext_sales_price#296, i_item_id#308]
+            :                 +- Join LeftSemi, (d_date#331 == d_date#359)
+            :                    :- Project [ws_ext_sales_price#296, d_date#331, i_item_id#308]
+            :                    :  +- Join Inner, (ws_item_sk#276 == i_item_sk#307)
+            :                    :     :- Project [ws_item_sk#276, ws_ext_sales_price#296, d_date#331]
+            :                    :     :  +- Join Inner, (ws_sold_date_sk#273 == d_date_sk#329)
+            :                    :     :     :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#273, ws_item_sk#276, ws_ext_sales_price#296]
+            :                    :     :     +- Project [d_date_sk#329, d_date#331]
+            :                    :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#329, d_date#331, d_week_seq#333] (shared #2)
+            :                    :     +- Scan spark_catalog.default.item [i_item_sk#307, i_item_id#308]
+            :                    +- Project [d_date#359]
+            :                       +- Filter (d_week_seq#361 == scalar-subquery)
+            :                          :  +- Project [d_week_seq#389]
+            :                          :     +- Shift +56
+            :                          :        +- Filter (d_date#331 == DATE '2000-01-03')
+            :                          :           +- Shared #2, printed above
+            :                          +- Shift +28
+            :                             +- Shared #2, printed above
+            +- Project [item_id#827 AS item_id#417, cs_item_rev#828 AS cs_item_rev#418]
+               +- Shift +556
+                  +- Aggregate [i_item_id#166], [i_item_id#166 AS item_id#271, sum(cs_ext_sales_price#154) AS cs_item_rev#272]
+                     +- Project [cs_ext_sales_price#154, i_item_id#166]
+                        +- Join LeftSemi, (d_date#189 == d_date#217)
+                           :- Project [cs_ext_sales_price#154, d_date#189, i_item_id#166]
+                           :  +- Join Inner, (cs_item_sk#146 == i_item_sk#165)
+                           :     :- Project [cs_item_sk#146, cs_ext_sales_price#154, d_date#189]
+                           :     :  +- Join Inner, (cs_sold_date_sk#131 == d_date_sk#187)
+                           :     :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#131, cs_item_sk#146, cs_ext_sales_price#154]
+                           :     :     +- Project [d_date_sk#187, d_date#189]
+                           :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#187, d_date#189, d_week_seq#191] (shared #3)
+                           :     +- Scan spark_catalog.default.item [i_item_sk#165, i_item_id#166]
+                           +- Project [d_date#217]
+                              +- Filter (d_week_seq#219 == scalar-subquery)
+                                 :  +- Project [d_week_seq#247]
+                                 :     +- Shift +56
+                                 :        +- Filter (d_date#189 == DATE '2000-01-03')
+                                 :           +- Shared #3, printed above
+                                 +- Shift +28
+                                    +- Shared #3, printed above

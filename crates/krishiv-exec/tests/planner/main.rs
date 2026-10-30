@@ -11,6 +11,7 @@
 )]
 
 mod conditionals;
+mod cse;
 mod exchanges;
 mod folding;
 mod group_limit;
@@ -85,11 +86,14 @@ impl Runnable {
     }
 
     /// The plan writing its rows as `write` describes.
-    pub(crate) fn into_write(self, write: krishiv_exec::physical::WritePlan) -> Self {
-        Self {
-            plan: self.plan.into_write(write),
+    pub(crate) fn into_write(
+        self,
+        write: krishiv_exec::physical::WritePlan,
+    ) -> Result<Self, KrishivError> {
+        Ok(Self {
+            plan: self.plan.into_write(write)?,
             worker: self.worker,
-        }
+        })
     }
 
     /// The same plan instantiated with `io`.

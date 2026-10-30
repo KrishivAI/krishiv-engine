@@ -216,6 +216,55 @@ impl Session {
         Ok(())
     }
 
+    /// Asks the policy about the catalog-store lookups of a query, in plan order, before any of
+    /// them is read: permanent views are inlined before binding, so the analyzer never asks about
+    /// them. Each name is asked as the analyzer asks about a table (as written, then folded, whether
+    /// or not it exists, so a denial cannot tell a view from a missing name), then a permanent view
+    /// is asked as a view. Returns the views, for the securables the analysis reports.
+    pub(crate) async fn authorize_reads(
+        &self,
+        reads: &[crate::catalog::ReadCandidate],
+        env: &QueryEnv,
+    ) -> Result<Vec<TableIdent>, KrishivError> {
+        let catalogs = &*env.analysis.catalogs;
+        let fold = !env.analysis.conf.case_sensitive;
+        let mut views = Vec::new();
+        let mut checked: Vec<Securable> = Vec::new();
+        for read in reads {
+            let ident =
+                table_ident(catalogs, &read.written).ok_or_else(|| unplaceable("an empty name"))?;
+            let mut securables = vec![Securable::Table(ident.clone())];
+            if fold {
+                let lower = folded(&ident);
+                if lower != ident {
+                    securables.push(Securable::Table(lower));
+                }
+            }
+            if let Some((namespace, name)) = &read.view {
+                let parts = [namespace.clone(), name.clone()];
+                let view =
+                    table_ident(catalogs, &parts).ok_or_else(|| unplaceable("an empty name"))?;
+                securables.push(Securable::View(view.clone()));
+                views.push(view);
+            }
+            for securable in securables {
+                if checked.contains(&securable) {
+                    continue;
+                }
+                let r = authorize(
+                    &*self.state.policy,
+                    &self.state.principal,
+                    &securable,
+                    Privilege::Select,
+                )
+                .await;
+                audit(self, StatementClass::Read, r)?;
+                checked.push(securable);
+            }
+        }
+        Ok(views)
+    }
+
     /// `SELECT` on the permanent view `namespace.name`: the statements that
     /// show a view's definition, columns or properties need it as a query of
     /// the view does, besides the table-named check made before dispatch.

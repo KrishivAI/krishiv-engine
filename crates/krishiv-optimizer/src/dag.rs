@@ -57,6 +57,11 @@ impl Rewriter {
         e.transform_up(&mut |x| match &x.node {
             ExprNode::Subquery { kind, plan } => {
                 let rewritten = self.up(Arc::clone(plan), step)?;
+                // A subquery's consumer reads its output by position or
+                // width: a rewrite that widened its root (CSE's extracted
+                // columns under a filter) is projected back.
+                let rewritten =
+                    crate::restore_output(rewritten, &plan.resolved_output(), plan.origin);
                 if Arc::ptr_eq(&rewritten, plan) {
                     return Ok(x);
                 }

@@ -1,0 +1,16 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [qoh#55 ASC NULLS FIRST, i_product_name#56 ASC NULLS FIRST, i_brand#57 ASC NULLS FIRST, i_class#58 ASC NULLS FIRST, i_category#59 ASC NULLS FIRST], true
+   +- Aggregate [i_product_name#56, i_brand#57, i_class#58, i_category#59, spark_grouping_id#54], [i_product_name#56, i_brand#57, i_class#58, i_category#59, avg(inv_quantity_on_hand#3) AS qoh#55]
+      +- Expand [[inv_quantity_on_hand#3, i_product_name#53, i_brand#40, i_class#42, i_category#44, 0L], [inv_quantity_on_hand#3, i_product_name#53, i_brand#40, i_class#42, CAST(NULL AS STRING), 1L], [inv_quantity_on_hand#3, i_product_name#53, i_brand#40, CAST(NULL AS STRING), CAST(NULL AS STRING), 3L], [inv_quantity_on_hand#3, i_product_name#53, CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), 7L], [inv_quantity_on_hand#3, CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), 15L]], [inv_quantity_on_hand#3, i_product_name#56, i_brand#57, i_class#58, i_category#59, spark_grouping_id#54]
+         +- Join Inner, (inv_item_sk#1 == i_item_sk#32)
+            :- Scan spark_catalog.default.item [i_item_sk#32, i_brand#40, i_class#42, i_category#44, i_product_name#53]
+            +- Project [inv_item_sk#1, inv_quantity_on_hand#3]
+               +- Join Inner, (inv_date_sk#0 == d_date_sk#4)
+                  :- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_quantity_on_hand#3]
+                  +- Project [d_date_sk#4]
+                     +- Filter ((d_month_seq#7 >= 1200) and (d_month_seq#7 <= 1211))
+                        +- Scan spark_catalog.default.date_dim [d_date_sk#4, d_month_seq#7]

@@ -252,7 +252,7 @@ impl Sink for FileWriteSink {
         let writer = FileWriter::new(
             &self.io,
             Arc::clone(&self.format),
-            Arc::clone(&self.schema),
+            &self.schema,
             self.format_options.clone(),
             self.options.clone(),
             ctx.consumer().reservation(),

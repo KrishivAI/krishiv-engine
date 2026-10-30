@@ -1,0 +1,27 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [ca_zip#61 ASC NULLS FIRST, ca_city#58 ASC NULLS FIRST], true
+   +- Aggregate [ca_zip#61, ca_city#58], [ca_zip#61, ca_city#58, sum(ws_sales_price#21) AS sum(ws_sales_price)#137]
+      +- Project [ca_city#58, ca_zip#61, ws_sales_price#21]
+         +- Filter ((substring(ca_zip#61, 1, 5) IN ('85669', '86197', '88274', '83405', '86475', '85392', '85460', '80348', '81792')) or ((i_item_id#94) IN (list-query)))
+            :  +- Project [i_item_id#116]
+            :     +- Shift +22
+            :        +- Filter (i_item_sk#93 IN (2, 3, 5, 7, 11, 13, 17, 19, 23, 29))
+            :           +- Scan spark_catalog.default.item [i_item_sk#93, i_item_id#94] (shared #1)
+            +- Join Inner, (c_current_addr_sk#38 == ca_address_sk#52)
+               :- Scan spark_catalog.default.customer_address [ca_address_sk#52, ca_city#58, ca_zip#61]
+               +- Project [c_current_addr_sk#38, i_item_id#94, ws_sales_price#21]
+                  +- Join Inner, (ws_bill_customer_sk#4 == c_customer_sk#34)
+                     :- Scan spark_catalog.default.customer [c_customer_sk#34, c_current_addr_sk#38]
+                     +- Project [i_item_id#94, ws_bill_customer_sk#4, ws_sales_price#21]
+                        +- Join Inner, (ws_item_sk#3 == i_item_sk#93)
+                           :- Shared #1, printed above
+                           +- Project [ws_item_sk#3, ws_bill_customer_sk#4, ws_sales_price#21]
+                              +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#65)
+                                 :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_bill_customer_sk#4, ws_sales_price#21]
+                                 +- Project [d_date_sk#65]
+                                    +- Filter ((d_qoy#75 == 2) and (d_year#71 == 2001))
+                                       +- Scan spark_catalog.default.date_dim [d_date_sk#65, d_year#71, d_qoy#75]
