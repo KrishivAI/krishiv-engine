@@ -555,7 +555,9 @@ impl RowTable {
         match self.mode {
             Mode::Grow => {
                 let (gseed, all) = (self.gseed, self.ids(0..self.groups));
+                // The rebuilt index is a reallocation too.
                 self.index.reserve(all.len(), |_| 0);
+                self.count_resize(0);
                 for r in all {
                     let g = fin(word(row_at(&self.parts, stride, refs, r), 0), gseed);
                     let parts = &self.parts;
@@ -777,6 +779,12 @@ impl RowTable {
             .reserve(len.saturating_sub(self.index.len()), |&r| {
                 fin(word(row_at(parts, stride, refs, r), 0), gseed)
             });
+        self.count_resize(before);
+    }
+
+    /// Counts a reallocation of the index (`hash_resizes`) when its
+    /// capacity changed from `before`: every path that reserves calls it.
+    fn count_resize(&self, before: usize) {
         if self.index.capacity() != before
             && let Some(c) = &self.resizes
         {
@@ -1808,9 +1816,11 @@ impl RowTable {
     /// estimate).
     pub(crate) fn presize(&mut self, groups: usize) {
         let (parts, stride, gseed, refs) = (&self.parts, self.stride, self.gseed, self.refs);
+        let before = self.index.capacity();
         self.index.reserve(groups, |&r| {
             fin(word(row_at(parts, stride, refs, r), 0), gseed)
         });
+        self.count_resize(before);
     }
 
     /// [`memory_size`](Self::memory_size) after [`presize`](Self::presize).

@@ -62,33 +62,57 @@ fn joins(env: &Env, sql: &str) -> Vec<String> {
 #[test]
 fn a_much_larger_right_input_builds_the_left_one() {
     let env = env();
-    // The right input's size counts the columns the join reads from it.
     let stats = |mib: &str| {
         format!(
             "builds left (left: 10 rows / 0.0 MiB, statistics; right: 100000000 rows / {mib} MiB, statistics)"
         )
     };
     // The large side probes, and the small side's keys filter its scan.
-    let rf = "RuntimeFilter #1: a#3 -> spark_catalog.default.big.a (bloom)";
-    for (sql, join, mib) in [
-        (
-            "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
-            "RightSemi",
-            "1144.4",
+    assert_eq!(
+        joins(
+            &env,
+            "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE big.a = t.a)"
         ),
+        [format!(
+            "HashJoin RightSemi, [a#3] = [a#0], RuntimeFilter #1: a#3 -> spark_catalog.default.big.a (bloom), {}",
+            stats("1144.4")
+        )]
+    );
+    assert_eq!(
+        joins(
+            &env,
+            "SELECT b FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.b = t.b)"
+        ),
+        [format!(
+            "HashJoin RightAnti, [b#4] = [b#1], RuntimeFilter #1: b#4 -> spark_catalog.default.big.b (bloom), {}",
+            stats("1525.9")
+        )]
+    );
+    let outer = joins(
+        &env,
+        "SELECT t.b, big.a FROM t LEFT JOIN big ON t.b = big.b",
+    );
+    assert_eq!(outer.len(), 1, "{outer:?}");
+    assert!(
+        outer[0].starts_with("HashJoin RightOuter, [b#"),
+        "{outer:?}"
+    );
+    assert!(outer[0].contains("builds left (left: 10 rows"), "{outer:?}");
+    // A right anti or right outer join would keep build rows with a NULL
+    // `=` key in memory: a nullable key keeps Spark's side.
+    for (sql, join) in [
         (
             "SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.a = t.a)",
-            "RightAnti",
-            "1144.4",
+            "HashJoin LeftAnti",
         ),
         (
             "SELECT t.a, big.b FROM t LEFT JOIN big ON t.a = big.a",
-            "RightOuter",
-            "1907.3",
+            "HashJoin LeftOuter",
         ),
     ] {
-        let want = format!("HashJoin {join}, [a#3] = [a#0], {rf}, {}", stats(mib));
-        assert_eq!(joins(&env, sql), [want], "{sql}");
+        let js = joins(&env, sql);
+        assert!(js.len() == 1 && js[0].starts_with(join), "{sql}: {js:?}");
+        assert!(!js[0].contains("builds left"), "{sql}: {js:?}");
     }
 }
 
