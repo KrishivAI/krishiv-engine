@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT * FROM (SELECT a FROM t UNION ALL SELECT c FROM t) x WHERE a > 1
+---
+Union
+:- Project [CAST(a#0 AS BIGINT) AS a#3]
+:  +- Filter (CAST(a#0 AS BIGINT) > 1L)
+:     +- Scan spark_catalog.default.t [a#0, c#2] (shared #1)
++- Project [c#2]
+   +- Filter (c#2 > 1L)
+      +- Shared #1, printed above

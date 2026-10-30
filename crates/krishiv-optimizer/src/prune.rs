@@ -305,8 +305,14 @@ impl Rewrite<'_> {
         }
         let out = e.transform_up(&mut |x| {
             Ok::<_, std::convert::Infallible>(match &x.node {
-                ExprNode::Subquery { kind, plan } => {
-                    let plan = self.node(self.graph.id(plan));
+                ExprNode::Subquery { kind, plan: old } => {
+                    let plan = self.node(self.graph.id(old));
+                    // Unchanged, the expression stays the same (so does
+                    // everything above it): a prune that removes nothing
+                    // returns the plan itself.
+                    if Arc::ptr_eq(&plan, old) {
+                        return Ok(x);
+                    }
                     Arc::new(Expr {
                         node: ExprNode::Subquery {
                             kind: kind.clone(),

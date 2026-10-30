@@ -148,17 +148,25 @@ fn a_default_estimate_needs_a_larger_ratio() {
     );
 }
 
-/// A `WITH` reference reads as a default-sized relation (the estimator
-/// does not look through it), so it is not taken as resting on statistics.
+/// A deterministic `WITH` definition is inlined (Spark's `InlineCTE`), so
+/// its reference reads the statistics of what it scans; a nondeterministic
+/// one read twice stays a reference, a default-sized relation (the
+/// estimator does not look through it), not taken as resting on statistics.
 #[test]
-fn a_cte_reference_is_a_default_estimate() {
+fn an_inlined_cte_reads_statistics_and_a_kept_one_is_a_default_estimate() {
     let env = env();
     let sql = "WITH c AS (SELECT a FROM big) \
                SELECT a FROM t WHERE EXISTS (SELECT 1 FROM c WHERE c.a = t.a)";
     let js = joins(&env, sql);
     assert_eq!(js.len(), 1, "{js:?}");
     assert!(
-        js[0].ends_with("prefers RightSemi (probe: 10 rows / 0.0 MiB, statistics; build: 1000000 rows / 11.4 MiB, default)"),
+        js[0].ends_with("prefers RightSemi (probe: 10 rows / 0.0 MiB, statistics; build: 100000000 rows / 1144.4 MiB, statistics)"),
         "{js:?}"
     );
+    let sql = "WITH c AS (SELECT a, rand() AS r FROM big) \
+               SELECT a FROM t WHERE EXISTS (SELECT 1 FROM c WHERE c.a = t.a) \
+               AND EXISTS (SELECT 1 FROM c WHERE c.a + 1 = t.a)";
+    let js = joins(&env, sql);
+    assert_eq!(js.len(), 2, "{js:?}");
+    assert!(js.iter().all(|j| j.contains("default)")), "{js:?}");
 }

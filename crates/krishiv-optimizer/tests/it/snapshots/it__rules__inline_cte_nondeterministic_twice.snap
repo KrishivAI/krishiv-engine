@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "WITH r AS (SELECT a, rand() AS x FROM t) SELECT p.a FROM r p JOIN r q ON p.a = q.a WHERE p.x > 0.5"
+---
+WithCte [r]
+:- Project [a#0, rand() AS x#3]
+:  +- Scan spark_catalog.default.t [a#0]
++- Project [a#4]
+   +- Join Inner, (a#4 == a#6)
+      :- Project [a#6]
+      :  +- Shift +2
+      :     +- CteRef r [a#4, x#5] (shared #1)
+      +- Project [a#4]
+         +- Filter (x#5 > 0.5D)
+            +- Shared #1, printed above

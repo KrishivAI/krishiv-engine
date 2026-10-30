@@ -643,7 +643,7 @@ pub(crate) fn max_id(p: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan
 }
 
 /// The subquery plans directly inside `e`.
-fn subquery_plans(e: &Arc<Expr>) -> Vec<Arc<LogicalPlan>> {
+pub(crate) fn subquery_plans(e: &Arc<Expr>) -> Vec<Arc<LogicalPlan>> {
     let mut out = Vec::new();
     let mut stack = vec![Arc::clone(e)];
     let mut seen = HashSet::new();

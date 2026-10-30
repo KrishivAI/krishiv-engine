@@ -8,6 +8,8 @@ views at ``setup()`` (no pre-loading, for parity with the other adapters), then 
   around parse + analyse + plan + execute + materialising every batch.
 * ``profile(query)`` -> dict: ``PROFILE``; as ``timed_run`` plus the wall time of the parse+analyse and the
   plan+execute phases (per-operator rows and times wait for the session to expose the executor's metrics).
+* ``plan_profile(query)`` -> dict: ``PLAN``; the ``krishiv.query-profile`` v1 document of one run (physical plan
+  tree and per-operator rows and times), plus ``rows`` and ``seconds``. Detailed metrics are on: not a timing.
 * ``run(query)`` -> rows: ``DUMP`` (the result is written to Parquet outside the timed region, then read back),
   for correctness checks. The generic suite runner times this call, so use ``abba`` for Krishiv timings.
 
@@ -246,6 +248,11 @@ class KrishivEngine(Engine):
         """One ``PROFILE`` run: row count, total seconds and the runner's per-phase wall times."""
         rows, secs, detail = self._command(f"PROFILE {_enc(self._sql_file(query))}").split(" ", 2)
         return {"rows": int(rows), "seconds": float(secs), **json.loads(detail)}
+
+    def plan_profile(self, query: Query) -> dict:
+        """One ``PLAN`` run: the profile document of the query's physical plan, its row count and seconds."""
+        rows, secs, doc = self._command(f"PLAN {_enc(self._sql_file(query))}").split(" ", 2)
+        return {"rows": int(rows), "seconds": float(secs), "profile": json.loads(doc)}
 
     def dump(self, query: Query, out: Path) -> tuple[int, float]:
         """Executes to completion and writes the result as Parquet to ``out``; returns the rows and runner seconds."""
