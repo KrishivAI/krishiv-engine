@@ -88,7 +88,7 @@ use krishiv_memory::SpillScope;
 #[cfg(all(test, not(loom)))]
 pub(crate) use accumulator::plain;
 pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_value};
-pub(crate) use collect::collect_set_supported;
+pub(crate) use collect::{collect_set_supported, kept_bytes};
 pub(crate) use moments::arity;
 pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
 pub use partial::{BypassPolicy, PartialAggregate};

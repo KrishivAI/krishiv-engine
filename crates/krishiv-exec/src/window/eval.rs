@@ -599,15 +599,47 @@ pub(super) fn picks_bytes(a: &AggregateExpr) -> bool {
 /// The heap a running frame's snapshots of a growing state hold: each row
 /// of a partition copies the whole state so far, which is quadratic in the
 /// partition's rows (`collect_list`, `collect_set`, `mode`, `listagg`).
-/// `held` is the number of elements all snapshots hold (see
-/// [`snapshot_slots`]), an upper bound for any partition sizes (distinct
-/// keys and peer groups snapshot less); each is counted at 16 bytes (a
-/// lower bound for long strings and key tables).
-fn snapshot_heap(a: &AggregateExpr, shape: Shape, held: usize) -> usize {
-    if !snapshots_grow(a, shape) {
-        return 0;
+/// `snapshot_bytes` is the bytes all snapshots hold (see [`snapshot_slots`]
+/// and [`snapshot_width`]), an upper bound for any partition sizes
+/// (distinct keys and peer groups snapshot less).
+fn snapshot_heap(a: &AggregateExpr, shape: Shape, snapshot_bytes: usize) -> usize {
+    if snapshots_grow(a, shape) {
+        snapshot_bytes
+    } else {
+        0
     }
-    held.saturating_mul(16)
+}
+
+/// The bytes one snapshotted element of the growing aggregates of `plan`
+/// takes in `batch`: the widest average value of their argument columns
+/// (doubled for `collect_set` and `mode`, which also keep encoded keys), at
+/// least 16. A later batch of a partition may hold wider values than this
+/// one.
+pub(super) fn snapshot_width(plan: &WindowPlan, batch: &RecordBatch) -> usize {
+    let rows = batch.num_rows().max(1);
+    let mut width = 16;
+    for f in &plan.functions {
+        let WindowFunction::Aggregate(a) = &f.function else {
+            continue;
+        };
+        if !f.shape().is_ok_and(|s| snapshots_grow(a, s)) {
+            continue;
+        }
+        let keyed = matches!(
+            a.function,
+            AggregateFunction::CollectSet
+                | AggregateFunction::Mode
+                | AggregateFunction::ModeMin
+                | AggregateFunction::ModeMax
+        );
+        for &i in &a.args {
+            if let Some(col) = batch.columns().get(i) {
+                let per = crate::aggregate::kept_bytes(col).div_ceil(rows);
+                width = width.max(if keyed { per.saturating_mul(2) } else { per });
+            }
+        }
+    }
+    width
 }
 
 /// Whether a running frame of `a` snapshots a state that grows with the

@@ -624,8 +624,8 @@ fn ordered_t(s: &Session) -> R {
 
 /// A `WITHIN GROUP` ordering survives the rewrites that rebuild a call: the
 /// distinct-aggregate expansion, `PIVOT` and the `ROLLUP` re-typing.
-/// Checked on Spark 4.2.0 (2026-10-30): the `mode` rows and the `ROLLUP` row
-/// match its output. Spark fails the `listagg` rows with an internal
+/// Checked on Spark 4.2.0 (2026-10-30): the `mode` rows (also under `PIVOT`)
+/// and the `ROLLUP` row match its output. Spark fails the `listagg` rows with an internal
 /// `ClassCastException` (an ordered `listagg` next to two distinct sets, and
 /// under `PIVOT`; a plain `PIVOT (listagg ...)` fails with
 /// `DATATYPE_MISMATCH.NON_FOLDABLE_INPUT` because it wraps the delimiter
@@ -653,6 +653,18 @@ fn within_group_survives_rewrites() -> R {
          PIVOT (listagg(v, ',') WITHIN GROUP (ORDER BY o DESC) FOR p IN ('x', 'y'))",
     )?;
     assert_eq!(rows, ["a,b\td,c"]);
+    // `PIVOT` over an ordered `mode`: Spark 4.2.0 returns `(1, 2)` for the
+    // ascending and the descending form alike.
+    for order in ["", " DESC"] {
+        let (_, rows) = run(
+            &s,
+            &format!(
+                "SELECT * FROM (SELECT y, p FROM t) \
+                 PIVOT (mode() WITHIN GROUP (ORDER BY y{order}) FOR p IN ('x', 'y'))"
+            ),
+        )?;
+        assert_eq!(rows, ["1\t2"], "{order}");
+    }
     // A grouping call inside the ordering, over `ROLLUP`.
     let (_, rows) = run(
         &s,

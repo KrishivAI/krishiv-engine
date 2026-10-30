@@ -2354,12 +2354,90 @@ fn window_cost_counts_snapshot_elements_of_growing_aggregates() {
     let summing = plan(vec![(agg(AggregateFunction::Sum, Some(3)), running)], true);
     let base = super::eval::cost(&growing, 10, 1, 10, 0).unwrap();
     assert_eq!(
-        super::eval::cost(&growing, 10, 1, 10, 55).unwrap(),
-        base + 55 * 16
+        super::eval::cost(&growing, 10, 1, 10, 880).unwrap(),
+        base + 880
     );
     let sum_base = super::eval::cost(&summing, 10, 1, 10, 0).unwrap();
     assert_eq!(
-        super::eval::cost(&summing, 10, 1, 10, 55).unwrap(),
+        super::eval::cost(&summing, 10, 1, 10, 880).unwrap(),
         sum_base
     );
+}
+
+/// A running `collect_list` charges its snapshots by the width of its
+/// argument: long strings cost more per element than the 16-byte floor, a
+/// narrow integer column does not.
+#[test]
+fn snapshot_width_follows_the_argument_column() {
+    let rows: Vec<Row> = (0..50)
+        .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+        .collect();
+    let b = batch(&rows);
+    let narrow = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(2)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert_eq!(super::eval::snapshot_width(&narrow, b.data()), 16);
+    let mut columns = b.data().columns().to_vec();
+    let long = "x".repeat(200);
+    columns[4] = Arc::new(arrow_array::StringArray::from_iter_values(
+        (0..50).map(|_| long.as_str()),
+    ));
+    let wide = RecordBatch::try_new(b.data().schema(), columns).unwrap();
+    let list = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(4)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert!(super::eval::snapshot_width(&list, &wide) >= 200);
+    // Distinct keys are kept besides the values: twice the width.
+    let set = plan(
+        vec![(
+            agg(AggregateFunction::CollectSet, Some(4)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert!(super::eval::snapshot_width(&set, &wide) >= 400);
+    // A whole-partition frame snapshots nothing.
+    let whole = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(4)),
+            WindowFrame::whole(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert_eq!(super::eval::snapshot_width(&whole, &wide), 16);
+}
+
+/// One large partition under a running `collect_list` needs a quadratic
+/// reservation: under a tight limit the window fails with a memory error
+/// before the snapshots are made, and releases what it reserved.
+#[tokio::test]
+async fn a_running_collect_list_over_a_big_partition_fails_under_a_tight_limit() {
+    let window = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(2)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    let rows: Vec<Row> = (0..3_000)
+        .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+        .collect();
+    let batches: Vec<Batch> = rows.chunks(500).map(batch).collect();
+    let op = Window::new(schema(), window, true, None).unwrap();
+    let limit = 16 << 20;
+    let (root, ctx) = task(limit);
+    let e = drive(&op, &ctx, &batches).unwrap_err();
+    // The window asks for memory (a spill) before it makes the snapshots;
+    // the driver reports that request.
+    assert!(e.to_string().contains("NeedMemory"), "{e}");
+    drop(ctx);
+    assert_eq!(root.reserved(), 0);
 }

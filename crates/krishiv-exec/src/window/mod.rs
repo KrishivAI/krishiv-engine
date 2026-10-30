@@ -578,10 +578,11 @@ impl Window {
         let parts = part_start.iter().filter(|&&s| s).count();
         let peers = peer_start.iter().filter(|&&s| s).count();
         let (held, open_len) = eval::snapshot_slots(&part_start, l.open_len);
+        let snapshot_bytes = held.saturating_mul(eval::snapshot_width(&env.plan, &batch));
         let cost = batch
             .get_array_memory_size()
             .saturating_add(2 * n)
-            .saturating_add(eval::cost(&env.plan, n, parts, peers, held)?);
+            .saturating_add(eval::cost(&env.plan, n, parts, peers, snapshot_bytes)?);
         if l.reservation.try_grow(cost).is_err() {
             return Ok(Err(cost));
         }
