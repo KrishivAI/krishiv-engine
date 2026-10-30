@@ -86,6 +86,33 @@ fn size_and_duration_units() {
 }
 
 #[test]
+fn metrics_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&METRICS_ENABLED).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set("krishiv.metrics.enabled", "true").unwrap();
+    assert_eq!(
+        c.get(&METRICS_ENABLED).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    for bad in ["yes", "1", ""] {
+        let e = c.set("krishiv.metrics.enabled", bad).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            crate::error::ErrorClass::KrishivInvalidConfigValue,
+            "{bad}"
+        );
+    }
+    // A rejected value leaves the setting.
+    assert_eq!(
+        c.get(&METRICS_ENABLED).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
 fn memory_entries_parse_and_default() {
     let mut c = Config::new();
     assert_eq!(c.get(&MEMORY_LIMIT), None);

@@ -3,9 +3,6 @@
     "datetime": [
       11
     ],
-    "depends-on-command": [
-      5
-    ],
     "fn-string": [
       13,
       20,
@@ -27,11 +24,7 @@
       40
     ],
     "sql-commands": [
-      2,
-      3,
-      4,
-      19,
-      41
+      19
     ]
   },
   "file": "postgreSQL/text",

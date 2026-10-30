@@ -124,6 +124,7 @@ __all__ = [
     "isnull",
     "json_array_length",
     "json_object_keys",
+    "json_tuple",
     "kurtosis",
     "lag",
     "last",
@@ -779,6 +780,11 @@ def json_array_length(col: ColumnOrName) -> Column:
 def json_object_keys(col: ColumnOrName) -> Column:
     """Calls the registry function ``json_object_keys``."""
     return _call("json_object_keys", _named(col, "col"))
+
+
+def json_tuple(col: ColumnOrName, *fields: str) -> Column:
+    """Calls the registry function ``json_tuple``."""
+    return _call("json_tuple", _named(col, "col"), *[_lit(value, "fields") for value in fields])
 
 
 def kurtosis(col: ColumnOrName) -> Column:

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `SET`, `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW` and the session
-//! variable commands (`DECLARE`, `SET VARIABLE`, `DROP TEMPORARY
-//! VARIABLE`) as [`Session::sql`](crate::Session::sql) runs them: parsing
+//! `SET`, `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, `CREATE`/`DROP
+//! TEMPORARY FUNCTION` and the session variable commands (`DECLARE`, `SET
+//! VARIABLE`, `DROP TEMPORARY VARIABLE`) as [`Session::sql`](crate::Session::sql) runs them: parsing
 //! is in `krishiv-sql`, and the session state they touch (configuration,
 //! temporary views, variables) is the session's own, through the same APIs
 //! every other surface uses.
@@ -19,19 +19,28 @@ use krishiv_common::error::{
     AssignmentArityMismatch, ColumnAlreadyExists,
     CreateViewColumnArityMismatchNotEnoughDataColumns,
     CreateViewColumnArityMismatchTooManyDataColumns, CreateViewWithIfNotExistsAndReplace,
-    DefaultPlacementInvalid, DuplicateAssignments, DuplicateVariableNameInsideDeclare, ErrorClass,
+    DefaultPlacementInvalid, DuplicateAssignments, DuplicateRoutineParameterNames,
+    DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
     ErrorQueryContext, InvalidDefaultValueSubqueryExpression, KrishivError,
-    KrishivUnsupportedFeature, RowSubqueryTooManyRows, TableOrViewNotFound,
-    TempTableOrViewAlreadyExists, UnresolvedVariable, UnsupportedFeatureSetVariableUsingSet,
-    VariableAlreadyExists, VariableNotFound,
+    KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound, RowSubqueryTooManyRows,
+    TableOrViewNotFound, TempTableOrViewAlreadyExists, UnresolvedVariable,
+    UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetVariableUsingSet,
+    UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
+    UserDefinedFunctionsNotAValidDefaultExpression,
+    UserDefinedFunctionsNotAValidDefaultParameterPosition,
+    UserDefinedFunctionsNotNullOnFunctionParameters,
+    UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{TableColumn, variable_name};
-use krishiv_plan::{Literal, LogicalPlan, PlanNode, SourceId};
+use krishiv_plan::analyzer::{FunctionLookup, SqlFunction, SqlParam, TableColumn, variable_name};
+use krishiv_plan::{
+    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
+};
 use krishiv_sql::ast::{
-    Cache, CacheKind, CreateView, DataTypeSpec, DdlName, DeclareVariable, DropVariable, DropView,
-    Expr, ExprKind, ObjectName, Refresh, RefreshKind, Reset, Set, SetKind, SetVariable,
-    SetVariableKind, Span, TimeZone,
+    Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
+    DataTypeSpec, DdlName, DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind,
+    FunctionBodyKind, FunctionReturnsKind, ObjectName, Refresh, RefreshKind, Reset, Set, SetKind,
+    SetVariable, SetVariableKind, Span, TimeZone,
 };
 use krishiv_types::{DataType, DecimalType};
 
@@ -41,7 +50,8 @@ use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
 use crate::functions::{col, lit, lit_null};
-use crate::session::Session;
+use crate::session::{QueryEnv, Session};
+use crate::sql_functions::{Entry, one_row_project};
 use crate::variables::{
     DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
     variable_key,
@@ -726,9 +736,319 @@ impl Session {
         self.empty_frame().await
     }
 
+    /// Runs `CREATE [OR REPLACE] TEMPORARY FUNCTION name (params) [RETURNS
+    /// type] RETURN body` (`redacted` is the statement, redacted): checks the declaration as Spark does, then resolves a call of
+    /// the new function once, with every parameter a typed `NULL` and every
+    /// default applied, so that the body, the defaults and the return type
+    /// are checked now and recursion is found (the call is made against
+    /// the functions as they will be). The function is defined from the
+    /// statement's text, which the body's spans index. Returns an empty
+    /// frame as in Spark.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for persisted functions (without
+    /// `TEMPORARY`), `LANGUAGE` other than SQL, `IDENTIFIER(...)` names
+    /// and table functions (`RETURNS TABLE`); `ROUTINE_ALREADY_EXISTS`
+    /// without `OR REPLACE`; Spark's `USER_DEFINED_FUNCTIONS.*` and
+    /// `DUPLICATE_ROUTINE_*` errors for the declaration; whatever the
+    /// analysis of the body raises, including `CYCLIC_FUNCTION_REFERENCE`.
+    pub(crate) async fn exec_create_function(
+        &self,
+        f: &CreateFunction,
+        redacted: &RedactedSql,
+    ) -> Result<DataFrame, KrishivError> {
+        if !f.temporary {
+            return Err(unsupported(
+                "persisted functions: CREATE FUNCTION without TEMPORARY",
+            ));
+        }
+        if let Some(language) = &f.characteristics.language
+            && !language.value.eq_ignore_ascii_case("SQL")
+        {
+            return Err(unsupported(&format!(
+                "LANGUAGE {} functions",
+                language.value
+            )));
+        }
+        let [part] = &f.name.parts[..] else {
+            // The parser rejects a qualified temporary function name.
+            return Err(unsupported("qualified function names"));
+        };
+        let name = part.value.to_lowercase();
+        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        let source = self.next_source_id();
+        let entry = self.declare(f, &name, source, case_sensitive, redacted)?;
+        // A built-in or a registered UDF of the name is not ours to replace
+        // or shadow (Spark: `ROUTINE_ALREADY_EXISTS`, or with `OR REPLACE`
+        // `CANNOT_REPLACE_NON_SQL_UDF_WITH_SQL_UDF`).
+        if !matches!(
+            self.state
+                .functions
+                .lookup(std::slice::from_ref(&name), self.state.profile),
+            FunctionLookup::NotFound
+        ) {
+            return Err(if f.or_replace {
+                UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf {
+                    name: quote(&part.value),
+                }
+                .into()
+            } else {
+                RoutineAlreadyExists {
+                    new_routine_type: "function".to_owned(),
+                    routine_name: quote(&part.value),
+                    existing_routine_type: "function".to_owned(),
+                }
+                .into()
+            });
+        }
+        // Another statement may change the functions while the body is
+        // checked; a few laps are enough in practice, and a statement that
+        // keeps losing the race fails instead of looping.
+        for _ in 0..MAX_DEFINE_ATTEMPTS {
+            let current = self.state.sql_functions.snapshot();
+            if !f.or_replace && current.get(&name).is_some() {
+                return Err(RoutineAlreadyExists {
+                    new_routine_type: "function".to_owned(),
+                    routine_name: quote(&part.value),
+                    existing_routine_type: "function".to_owned(),
+                }
+                .into());
+            }
+            let mut env = self.query_env();
+            let candidate = Arc::new(
+                env.sql_functions
+                    .over(Arc::new(current.with(entry.clone()))),
+            );
+            env.analysis.functions = Arc::clone(&candidate) as _;
+            env.sql_functions = Arc::clone(&candidate);
+            env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
+            let output = self.probe(&entry.def, env, redacted).await?;
+            let mut entry = entry.clone();
+            if entry.def.returns.is_none() {
+                let def = SqlFunction {
+                    returns: Some(output),
+                    ..(*entry.def).clone()
+                };
+                entry.def = Arc::new(def);
+            }
+            // Another statement changed the functions while the body was
+            // checked: check again against the new ones.
+            if self.state.sql_functions.define(entry, current.version()) {
+                return self.empty_frame().await;
+            }
+        }
+        Err(crate::session::internal(
+            "the session's functions kept changing while CREATE FUNCTION was checked".to_owned(),
+        ))
+    }
+
+    /// The function `f` declares, as an entry: the declaration's own
+    /// checks, and the lowering of its defaults and body.
+    fn declare(
+        &self,
+        f: &CreateFunction,
+        name: &str,
+        source: krishiv_plan::SourceId,
+        case_sensitive: bool,
+        redacted: &RedactedSql,
+    ) -> Result<Entry, KrishivError> {
+        let fold = |n: &str| {
+            if case_sensitive {
+                n.to_owned()
+            } else {
+                n.to_lowercase()
+            }
+        };
+        let params: Vec<(String, &ColumnDef)> = f
+            .params
+            .iter()
+            .map(|p| match &p.name {
+                ColumnName::Ident(i) => Ok((i.value.clone(), p)),
+                _ => Err(unsupported("IDENTIFIER(...) as a parameter name")),
+            })
+            .collect::<Result<_, _>>()?;
+        let returned = match f.returns.as_ref().map(|r| &r.kind) {
+            Some(FunctionReturnsKind::Table(columns)) => Some(columns.as_deref().unwrap_or(&[])),
+            _ => None,
+        };
+        if f.params.iter().any(|p| p.not_null) {
+            return Err(not_null(redacted, f.params_span));
+        }
+        if let Some(columns) = returned
+            && let (Some(first), Some(last)) = (columns.first(), columns.last())
+            && columns.iter().any(|c| c.not_null)
+        {
+            return Err(not_null(redacted, first.span.to(last.span)));
+        }
+        let duplicates = |names: Vec<String>| {
+            let mut seen = std::collections::HashSet::new();
+            let mut out: Vec<String> = Vec::new();
+            for n in names.iter().map(|n| fold(n)) {
+                if !seen.insert(n.clone()) && !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+            out
+        };
+        let repeated = duplicates(params.iter().map(|(n, _)| n.clone()).collect());
+        if !repeated.is_empty() {
+            return Err(DuplicateRoutineParameterNames {
+                routine_name: name.to_owned(),
+                names: list(&repeated),
+            }
+            .into());
+        }
+        if let Some(columns) = returned {
+            let repeated = duplicates(columns.iter().map(|c| c.name.value.clone()).collect());
+            if !repeated.is_empty() {
+                return Err(DuplicateRoutineReturnsColumns {
+                    routine_name: name.to_owned(),
+                    columns: list(&repeated),
+                }
+                .into());
+            }
+        }
+        // A default is followed only by defaults.
+        for (i, (n, p)) in params.iter().enumerate() {
+            if p.default.is_some()
+                && let Some((next, _)) = params[i + 1..].iter().find(|(_, q)| q.default.is_none())
+            {
+                return Err(UserDefinedFunctionsNotAValidDefaultParameterPosition {
+                    function_name: name.to_owned(),
+                    parameter_name: n.clone(),
+                    next_parameter_name: next.clone(),
+                }
+                .into());
+            }
+        }
+        let lower_err = |e: krishiv_sql::ParseError| e.error;
+        let mut out_params = Vec::with_capacity(params.len());
+        for (n, p) in &params {
+            let default = match &p.default {
+                Some(d) => {
+                    let lowered = krishiv_sql::lower_expression(d, source).map_err(lower_err)?;
+                    if has_subquery(&lowered) {
+                        return Err(UserDefinedFunctionsNotAValidDefaultExpression {
+                            function_name: name.to_owned(),
+                            parameter_name: n.clone(),
+                        }
+                        .into());
+                    }
+                    Some(Arc::new(lowered))
+                }
+                None => None,
+            };
+            out_params.push(SqlParam {
+                name: n.clone(),
+                data_type: data_type(&p.data_type)?,
+                default,
+                comment: p.comment.clone(),
+            });
+        }
+        let returns = match f.returns.as_ref().map(|r| &r.kind) {
+            Some(FunctionReturnsKind::Type(t)) => Some(data_type(t)?),
+            _ => None,
+        };
+        let body = match (&f.body.kind, returned.is_some()) {
+            (FunctionBodyKind::Expr(_), true) => {
+                return Err(UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery {
+                    name: name.to_owned(),
+                }
+                .into());
+            }
+            (_, true) => {
+                return Err(unsupported("SQL table functions: RETURNS TABLE"));
+            }
+            (FunctionBodyKind::Expr(e), false) => {
+                krishiv_sql::lower_expression(e, source).map_err(lower_err)?
+            }
+            // A scalar function's query body is a scalar subquery.
+            (FunctionBodyKind::Query(q), false) => {
+                let plan = krishiv_sql::lower(q, source).map_err(lower_err)?;
+                PlanExpr::new(ExprNode::Subquery {
+                    kind: SubqueryKind::Scalar,
+                    plan: Arc::clone(plan.root()),
+                })
+                .with_origin(origin(source, f.body.span))
+            }
+            _ => return Err(unsupported("this kind of function body")),
+        };
+        let def = SqlFunction {
+            name: name.to_owned(),
+            params: out_params,
+            returns,
+            body: Arc::new(body),
+            body_text: redacted.fragment(f.body.span.range()).to_owned(),
+            source,
+            deterministic: f.characteristics.deterministic.unwrap_or(true),
+        };
+        Ok(Entry {
+            def: Arc::new(def),
+            text: redacted.clone(),
+        })
+    }
+
+    /// Resolves `SELECT name(NULL, ...)` in `env`, calling `def` with a
+    /// typed `NULL` for each parameter it needs (defaults fill the rest):
+    /// the type of the result.
+    async fn probe(
+        &self,
+        def: &SqlFunction,
+        env: QueryEnv,
+        redacted: &RedactedSql,
+    ) -> Result<DataType, KrishivError> {
+        let args = def.params[..def.required()]
+            .iter()
+            .map(|p| PlanExpr::literal(Literal::Null(Some(p.data_type.clone()))))
+            .collect();
+        let call = PlanExpr::function(def.name.clone(), args);
+        let plan = one_row_project(vec![Arc::new(call)]);
+        let df = DataFrame::new(self.clone(), plan);
+        let analysis = df.analyzed_in_with_text(env, Some(redacted)).await?;
+        analysis
+            .analyzed
+            .output
+            .first()
+            .map(|c| c.data_type.clone())
+            .ok_or_else(|| crate::session::internal("a function call without a result".to_owned()))
+    }
+
+    /// Runs `DROP [TEMPORARY] FUNCTION [IF EXISTS] name`, returning an
+    /// empty frame as in Spark. Functions that call the dropped one fail
+    /// when next used.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` without `TEMPORARY` (persisted
+    /// functions); `ROUTINE_NOT_FOUND` for a function the session does not
+    /// define, unless `IF EXISTS`.
+    pub(crate) async fn exec_drop_function(
+        &self,
+        f: &DropFunction,
+    ) -> Result<DataFrame, KrishivError> {
+        if !f.temporary {
+            return Err(unsupported(
+                "persisted functions: DROP FUNCTION without TEMPORARY",
+            ));
+        }
+        // Temporary functions have one-part names: a qualified name is a
+        // function that does not exist.
+        let dropped = match &f.name.parts[..] {
+            [part] => self.state.sql_functions.drop_function(&part.value),
+            _ => false,
+        };
+        if !dropped && !f.if_exists {
+            let parts: Vec<String> = f.name.parts.iter().map(|p| quote(&p.value)).collect();
+            return Err(RoutineNotFound {
+                routine_name: parts.join("."),
+            }
+            .into());
+        }
+        self.empty_frame().await
+    }
+
     /// An empty result with no columns, as Spark's `CREATE VIEW`,
     /// `DROP VIEW` and `RESET` return.
-    async fn empty_frame(&self) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn empty_frame(&self) -> Result<DataFrame, KrishivError> {
         let df = DataFrame::new(
             self.clone(),
             Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
@@ -790,6 +1110,72 @@ impl Session {
         df.analyzed_in(env).await?;
         Ok(df)
     }
+}
+
+/// How often `CREATE FUNCTION` checks a body again after a concurrent change.
+const MAX_DEFINE_ATTEMPTS: usize = 16;
+
+/// `KRISHIV_UNSUPPORTED_FEATURE` for `feature`.
+fn unsupported(feature: &str) -> KrishivError {
+    KrishivUnsupportedFeature {
+        feature: feature.to_owned(),
+    }
+    .into()
+}
+
+/// `NOT_NULL_ON_FUNCTION_PARAMETERS`, quoting `span` of the statement.
+fn not_null(redacted: &RedactedSql, span: Span) -> KrishivError {
+    UserDefinedFunctionsNotNullOnFunctionParameters {
+        input: redacted.fragment(span.range()).to_owned(),
+    }
+    .into()
+}
+
+/// An origin in the statement `source` names.
+fn origin(source: krishiv_plan::SourceId, span: Span) -> Origin {
+    let at = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    Origin::sql(
+        source,
+        krishiv_plan::Span::new(at(span.start), at(span.end)),
+    )
+}
+
+/// The type `spec` names. `CHAR` and `VARCHAR` are for table schemas only:
+/// Spark rejects them in a function's signature.
+fn data_type(spec: &DataTypeSpec) -> Result<DataType, KrishivError> {
+    if has_char_or_varchar(spec) {
+        return Err(UnsupportedCharOrVarcharAsString {}.into());
+    }
+    spec.to_data_type()
+}
+
+fn has_char_or_varchar(spec: &DataTypeSpec) -> bool {
+    match &spec.kind {
+        DataTypeKind::Primitive { name, .. } => matches!(
+            name.split(' ').next().unwrap_or(name),
+            "char" | "character" | "varchar"
+        ),
+        DataTypeKind::Array(Some(e)) => has_char_or_varchar(e),
+        DataTypeKind::Map(Some(kv)) => has_char_or_varchar(&kv.0) || has_char_or_varchar(&kv.1),
+        DataTypeKind::Struct(Some(fields)) => {
+            fields.iter().any(|f| has_char_or_varchar(&f.data_type))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `e` holds a subquery.
+fn has_subquery(e: &PlanExpr) -> bool {
+    let mut found = false;
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        if matches!(x.node, ExprNode::Subquery { .. }) {
+            found = true;
+            break;
+        }
+        x.for_each_child(&mut |c| stack.push(c));
+    }
+    found
 }
 
 /// A name as Spark quotes it in errors: `` `name` ``.

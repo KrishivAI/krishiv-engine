@@ -131,6 +131,18 @@ impl PyColumn {
         )
     }
 
+    fn get_field(&self, name: &str) -> Self {
+        Self::wrap(self.inner.clone().get_field(name))
+    }
+
+    fn with_field(&self, name: &str, value: &Self) -> Self {
+        Self::wrap(self.inner.clone().with_field(name, value.inner.clone()))
+    }
+
+    fn drop_fields(&self, names: Vec<String>) -> Self {
+        Self::wrap(self.inner.clone().drop_fields(names))
+    }
+
     fn between(&self, low: &Self, high: &Self) -> Self {
         Self::wrap(
             self.inner

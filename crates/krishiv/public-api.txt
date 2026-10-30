@@ -1,6 +1,7 @@
 pub mod krishiv
 pub use krishiv::ArgField
 pub use krishiv::Column
+pub use krishiv::CounterSample
 pub use krishiv::DataFrame
 pub use krishiv::DataFrameReader
 pub use krishiv::DataFrameWriter
@@ -8,10 +9,15 @@ pub use krishiv::DataType
 pub use krishiv::Error
 pub use krishiv::ExplainMode
 pub use krishiv::ExplainVerbose
+pub use krishiv::GaugeSample
 pub use krishiv::GraphFormat
 pub use krishiv::GroupedData
+pub use krishiv::HistogramBucket
+pub use krishiv::HistogramSample
 pub use krishiv::InvokeContext
 pub use krishiv::JoinType
+pub use krishiv::MetricDict
+pub use krishiv::MetricsSnapshot
 pub use krishiv::NullHandling
 pub use krishiv::OptimizerStep
 pub use krishiv::QueryProfile

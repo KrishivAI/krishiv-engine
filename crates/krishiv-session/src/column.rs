@@ -6,8 +6,8 @@ use std::ops;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId,
-    SortDirection, SortOrder, Star,
+    Builtin, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FunctionCall, Literal, NullOrdering,
+    PlanId, SortDirection, SortOrder, Star,
 };
 use krishiv_types::DataType;
 
@@ -81,6 +81,17 @@ impl Column {
     #[must_use]
     pub fn cast(self, to: DataType) -> Self {
         Self::new(self.expr.cast(to))
+    }
+
+    /// `CAST(self AS to)` in ANSI mode whatever `spark.sql.ansi.enabled` says: an invalid value or an overflow fails.
+    /// Store assignment is ANSI under Spark's default policy even when the session's own casts are not.
+    #[must_use]
+    pub(crate) fn cast_ansi(self, to: DataType) -> Self {
+        Self::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(self.expr),
+            to,
+            mode: CastMode::Ansi,
+        }))
     }
 
     /// `TRY_CAST(self AS to)`: invalid input becomes `NULL`, even under ANSI.
@@ -255,6 +266,65 @@ impl Column {
         Self::call(Builtin::Between, vec![self, low.into(), high.into()])
     }
 
+    /// The field `name` of this struct (`self.name` in SQL reads the same
+    /// node), as PySpark's `Column.getField`.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::col;
+    /// let c = col("s").get_field("a");
+    /// ```
+    #[must_use]
+    pub fn get_field(self, name: &str) -> Self {
+        Self::new(Expr::new(ExprNode::Field {
+            base: Arc::new(self.expr),
+            name: name.to_owned(),
+        }))
+    }
+
+    /// The struct with the field `name` added or replaced by `value`, as
+    /// PySpark's `Column.withField`: a match (per
+    /// `spark.sql.caseSensitive`) is replaced in place, else the field is
+    /// appended last. A dotted name is a path into nested structs (Spark
+    /// Connect reads it so): `withField("a.b", v)` updates `b` inside `a`,
+    /// a NULL `a` stays NULL, and a missing `a` is `FIELD_NOT_FOUND`.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, lit};
+    /// let c = col("s").with_field("a", lit(1));
+    /// ```
+    #[must_use]
+    pub fn with_field(self, name: &str, value: Self) -> Self {
+        let parts: Vec<&str> = name.split('.').collect();
+        Self::new(with_path(self.expr, &parts, value.expr))
+    }
+
+    /// The struct without the named fields, as PySpark's
+    /// `Column.dropFields`: every match (per `spark.sql.caseSensitive`) is
+    /// removed, names that match nothing are ignored. A dotted name is a
+    /// path into nested structs, applied one name after the other.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::col;
+    /// let c = col("s").drop_fields(vec!["a".to_owned()]);
+    /// ```
+    #[must_use]
+    pub fn drop_fields(self, names: Vec<String>) -> Self {
+        if names.iter().all(|n| !n.contains('.')) {
+            return Self::new(Expr::new(ExprNode::UpdateFields {
+                base: Arc::new(self.expr),
+                ops: names
+                    .into_iter()
+                    .map(|name| FieldOp::Drop { name })
+                    .collect(),
+            }));
+        }
+        let expr = names.iter().fold(self.expr, |acc, name| {
+            let parts: Vec<&str> = name.split('.').collect();
+            drop_path(acc, &parts)
+        });
+        Self::new(expr)
+    }
+
     /// Ascending, nulls first (Spark's default), for `order_by`.
     ///
     /// ```
@@ -394,6 +464,53 @@ impl ops::Not for Column {
     fn not(self) -> Column {
         Column::call(Builtin::Not, vec![self])
     }
+}
+
+/// `base` with the field at `parts` set to `value`: one update for a plain
+/// name, else an update of the first part whose value is the nested update
+/// of that field.
+fn with_path(base: Expr, parts: &[&str], value: Expr) -> Expr {
+    let (first, rest) = parts.split_first().map_or(("", &[][..]), |(f, r)| (*f, r));
+    let new_value = if rest.is_empty() {
+        value
+    } else {
+        let inner = Expr::new(ExprNode::Field {
+            base: Arc::new(base.clone()),
+            name: first.to_owned(),
+        });
+        with_path(inner, rest, value)
+    };
+    Expr::new(ExprNode::UpdateFields {
+        base: Arc::new(base),
+        ops: vec![FieldOp::With {
+            name: first.to_owned(),
+            value: Arc::new(new_value),
+        }],
+    })
+}
+
+/// `base` without the field at `parts` (a nested path updates its parent).
+fn drop_path(base: Expr, parts: &[&str]) -> Expr {
+    let (first, rest) = parts.split_first().map_or(("", &[][..]), |(f, r)| (*f, r));
+    if rest.is_empty() {
+        return Expr::new(ExprNode::UpdateFields {
+            base: Arc::new(base),
+            ops: vec![FieldOp::Drop {
+                name: first.to_owned(),
+            }],
+        });
+    }
+    let inner = Expr::new(ExprNode::Field {
+        base: Arc::new(base.clone()),
+        name: first.to_owned(),
+    });
+    Expr::new(ExprNode::UpdateFields {
+        base: Arc::new(base),
+        ops: vec![FieldOp::With {
+            name: first.to_owned(),
+            value: Arc::new(drop_path(inner, rest)),
+        }],
+    })
 }
 
 #[cfg(test)]

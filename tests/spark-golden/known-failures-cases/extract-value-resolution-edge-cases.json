@@ -11,10 +11,6 @@
     ],
     "query-features": [
       3
-    ],
-    "sql-commands": [
-      0,
-      4
     ]
   },
   "file": "extract-value-resolution-edge-cases",

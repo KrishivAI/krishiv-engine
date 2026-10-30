@@ -2,16 +2,12 @@
   "cases": {
     "depends-on-command": [
       15,
-      96,
       97,
-      98,
       99,
-      100,
       101
     ],
     "fn-aggregate": [
       9,
-      10,
       45
     ],
     "query-features": [
@@ -50,10 +46,6 @@
       93,
       94,
       95
-    ],
-    "sql-commands": [
-      1,
-      102
     ]
   },
   "file": "group-by",

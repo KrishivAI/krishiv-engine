@@ -1101,9 +1101,9 @@ impl DataFrame {
             .await
     }
 
-    /// The analysis to run with: the cached one while the configuration and
-    /// the temporary tables are unchanged, no cache invalidation ran since and
-    /// no files are read (by path or through a file view), else a fresh one,
+    /// The analysis to run with: the cached one while the configuration, the
+    /// temporary tables and the session's functions are unchanged, no cache
+    /// invalidation ran since and no files are read (by path or through a file view), else a fresh one,
     /// which lists them again.
     pub(crate) async fn analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
         let cached = self
@@ -1119,6 +1119,7 @@ impl DataFrame {
             && a.env.catalog_epoch == env.catalog_epoch
             && a.env.variables_version == env.variables_version
             && a.env.cache_generation == env.cache_generation
+            && a.env.functions_version == env.functions_version
         {
             return Ok(a);
         }
@@ -1594,6 +1595,7 @@ impl DataFrame {
                 TempTable::Files {
                     source: source.clone(),
                     columns,
+                    known: false,
                 },
             );
             self.session.state.cache.invalidate_table(name);

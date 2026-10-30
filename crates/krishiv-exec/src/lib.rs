@@ -114,6 +114,14 @@ pub use join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
     NestedLoopJoinNode, NestedLoopSpec,
 };
+pub use metrics::prometheus;
+pub use metrics::registry::{
+    BUCKETS, CACHE_LABEL, CATALOGUE, CLASS_LABEL, CounterSample, ERROR_CLASS_LABEL, GIT_SHA_LABEL,
+    GaugeSample, HistogramBucket, HistogramSample, LABEL_ALLOWLIST, LabelDef,
+    MAX_ERROR_CLASS_VALUES, MetricDef, MetricDict, MetricKind, MetricSource, MetricsRegistry,
+    MetricsSnapshot, OP_LABEL, OTHER_ERROR_CLASS, QueryOutcome, STATUS_LABEL, STORE_KIND_LABEL,
+    Status, VERSION_LABEL, cpu_secs, output_rows, scan_rows, spill_bytes, spill_files,
+};
 pub use metrics::{
     DriverStats, ExtraMetrics, Metric, OperatorEntry, OperatorMetrics, OperatorRole,
     PipelineMetrics, QueryMemory, QueryMetrics,
