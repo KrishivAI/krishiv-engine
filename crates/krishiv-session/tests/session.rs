@@ -1306,3 +1306,150 @@ fn expression_strings_select_filter_and_resolve() {
     );
     assert_eq!(class(expr("id +").map(drop)), ErrorClass::ParseSyntaxError);
 }
+
+/// The four legacy flags flow from `SET` into parsing and analysis, as
+/// Spark's golden `literals`, `count`, `cte-legacy` and `cte-nonlegacy`
+/// files require.
+#[test]
+fn legacy_config_flags_flow_from_set() {
+    use arrow_array::types::Int64Type;
+    let s = session();
+    let set = |sql: &str| {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    };
+    let long = |sql: &str| -> i64 {
+        use arrow_array::types::Int32Type;
+        let batches = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            1,
+            "{sql}"
+        );
+        let col = batches[0].column(0);
+        match col.data_type() {
+            ArrowType::Int64 => col.as_primitive::<Int64Type>().value(0),
+            ArrowType::Int32 => i64::from(col.as_primitive::<Int32Type>().value(0)),
+            other => panic!("{sql}: not an integer column: {other}"),
+        }
+    };
+    // `spark.sql.legacy.consecutiveStringLiterals.enabled`.
+    assert_eq!(row(&s, r#"SELECT "S""par""k""#), [r#"S"par"k"#]);
+    set("SET spark.sql.legacy.consecutiveStringLiterals.enabled=true");
+    assert_eq!(row(&s, r#"SELECT "S""par""k""#), ["Spark"]);
+    set("RESET spark.sql.legacy.consecutiveStringLiterals.enabled");
+    assert_eq!(row(&s, r#"SELECT "S""par""k""#), [r#"S"par"k"#]);
+    // `spark.sql.legacy.allowParameterlessCount`.
+    assert_eq!(
+        class(block_on(s.sql("SELECT count()"))),
+        ErrorClass::WrongNumArgsWithSuggestion
+    );
+    set("SET spark.sql.legacy.allowParameterlessCount=true");
+    assert_eq!(long("SELECT count()"), 0);
+    set("RESET spark.sql.legacy.allowParameterlessCount");
+    assert_eq!(
+        class(block_on(s.sql("SELECT count()"))),
+        ErrorClass::WrongNumArgsWithSuggestion
+    );
+    // `spark.sql.legacy.allowStarWithSingleTableIdentifierInCount`.
+    assert_eq!(
+        class(block_on(s.sql("SELECT count(people.*) FROM people"))),
+        ErrorClass::InvalidUsageOfStarWithTableIdentifierInCount
+    );
+    set("SET spark.sql.legacy.allowStarWithSingleTableIdentifierInCount=true");
+    assert_eq!(long("SELECT count(people.*) FROM people"), 2);
+    set("RESET spark.sql.legacy.allowStarWithSingleTableIdentifierInCount");
+    assert_eq!(
+        class(block_on(s.sql("SELECT count(people.*) FROM people"))),
+        ErrorClass::InvalidUsageOfStarWithTableIdentifierInCount
+    );
+    // `spark.sql.legacy.ctePrecedencePolicy`.
+    let shadow = "WITH t AS (SELECT 1 AS x), t2 AS (WITH t AS (SELECT 2 AS x) \
+        SELECT x FROM t) SELECT x FROM t2";
+    assert_eq!(long(shadow), 2);
+    set("SET spark.sql.legacy.ctePrecedencePolicy=EXCEPTION");
+    assert_eq!(
+        class(block_on(s.sql(shadow))),
+        ErrorClass::AmbiguousAliasInNestedCte
+    );
+    set("SET spark.sql.legacy.ctePrecedencePolicy=LEGACY");
+    assert_eq!(long(shadow), 1);
+    set("RESET spark.sql.legacy.ctePrecedencePolicy");
+    assert_eq!(long(shadow), 2);
+}
+
+/// `SET spark.sql.legacy.ctePrecedencePolicy` accepts each valid value and
+/// rejects anything else through the session configuration, as Spark does
+/// for its other enum configs.
+#[test]
+fn cte_precedence_policy_set_validates_values() {
+    use arrow_array::types::Int64Type;
+    let s = session();
+    let shadow = "WITH t AS (SELECT 1 AS x), t2 AS (WITH t AS (SELECT 2 AS x) \
+        SELECT x FROM t) SELECT x FROM t2";
+    let long = |sql: &str| -> i64 {
+        use arrow_array::types::Int32Type;
+        let batches = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            1,
+            "{sql}"
+        );
+        let col = batches[0].column(0);
+        match col.data_type() {
+            ArrowType::Int64 => col.as_primitive::<Int64Type>().value(0),
+            ArrowType::Int32 => i64::from(col.as_primitive::<Int32Type>().value(0)),
+            other => panic!("{sql}: not an integer column: {other}"),
+        }
+    };
+    // Each valid value sets and behaves as configured.
+    block_on(s.sql("SET spark.sql.legacy.ctePrecedencePolicy=CORRECTED")).unwrap();
+    assert_eq!(
+        s.conf()
+            .get("spark.sql.legacy.ctePrecedencePolicy")
+            .as_deref(),
+        Some("CORRECTED")
+    );
+    assert_eq!(long(shadow), 2);
+    block_on(s.sql("SET spark.sql.legacy.ctePrecedencePolicy=LEGACY")).unwrap();
+    assert_eq!(
+        s.conf()
+            .get("spark.sql.legacy.ctePrecedencePolicy")
+            .as_deref(),
+        Some("LEGACY")
+    );
+    assert_eq!(long(shadow), 1);
+    block_on(s.sql("SET spark.sql.legacy.ctePrecedencePolicy=EXCEPTION")).unwrap();
+    assert_eq!(
+        s.conf()
+            .get("spark.sql.legacy.ctePrecedencePolicy")
+            .as_deref(),
+        Some("EXCEPTION")
+    );
+    assert_eq!(
+        class(block_on(s.sql(shadow))),
+        ErrorClass::AmbiguousAliasInNestedCte
+    );
+    // Values match case-insensitively and are stored canonically.
+    block_on(s.sql("SET spark.sql.legacy.ctePrecedencePolicy=legacy")).unwrap();
+    assert_eq!(
+        s.conf()
+            .get("spark.sql.legacy.ctePrecedencePolicy")
+            .as_deref(),
+        Some("LEGACY")
+    );
+    assert_eq!(long(shadow), 1);
+    // An invalid value fails through the session configuration and leaves
+    // the previous value in place.
+    let e = block_on(s.sql("SET spark.sql.legacy.ctePrecedencePolicy=sometimes")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    assert_eq!(e.sql_state(), Some("22023"));
+    assert!(e.message().contains("sometimes"), "{e}");
+    assert!(e.message().contains("EXCEPTION, LEGACY, CORRECTED"), "{e}");
+    assert_eq!(
+        s.conf()
+            .get("spark.sql.legacy.ctePrecedencePolicy")
+            .as_deref(),
+        Some("LEGACY")
+    );
+    assert_eq!(long(shadow), 1);
+}

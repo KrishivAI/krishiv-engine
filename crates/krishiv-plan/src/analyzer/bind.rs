@@ -403,7 +403,24 @@ fn lower_sql(
         return Err(unsupported("SQL text without a SQL front end", origin));
     };
     let source = SourceId(u32::try_from(b.sql.len()).unwrap_or(u32::MAX));
-    Ok(Arc::clone(frontend.lower(query, source)?.root()))
+    let lowered = Arc::clone(frontend.lower(query, source)?.root());
+    // SQL text follows the session's CTE precedence like the plan around it.
+    let policy = super::legacy::CtePolicy {
+        precedence: ctx.conf.cte_precedence,
+        case_sensitive: ctx.conf.case_sensitive,
+    };
+    match policy.precedence {
+        super::CtePrecedencePolicy::Corrected => Ok(lowered),
+        super::CtePrecedencePolicy::Exception => {
+            match super::legacy::nested_conflict(&lowered, policy)? {
+                Some(conflict) => Err(conflict),
+                None => Ok(lowered),
+            }
+        }
+        super::CtePrecedencePolicy::Legacy => {
+            super::legacy::eliminate(&lowered, policy).map_err(|e| AnalysisError::new(e, origin))
+        }
+    }
 }
 
 /// Where name `parts` live: the catalog and the identity to load.

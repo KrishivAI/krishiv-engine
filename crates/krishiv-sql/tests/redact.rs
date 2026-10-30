@@ -54,6 +54,23 @@ fn leaks(text: &str) -> bool {
     text.contains(CANARY) || text.contains("70319753")
 }
 
+/// A doubled quote inside a key part reads as `pwd` / `password` when the
+/// legacy consecutive-literal mode drops it; the text redactor has no parser
+/// options, so each reading is classified on its own and any sensitive one
+/// hides the value (the lowered plan uses the real options, where the key is
+/// `p'wd`).
+#[test]
+fn a_doubled_quote_in_a_key_part_cannot_hide_a_secret_in_text() {
+    for sql in [
+        "SELECT a FROM t WITH ('p''wd' = 'Canary7f3a9c')",
+        "SELECT a FROM t WITH ('pass''word' = 'Canary7f3a9c')",
+    ] {
+        let r = redact_sql(sql);
+        assert!(!leaks(r.as_str()), "{sql} -> {}", r.as_str());
+        assert!(r.as_str().contains("*********(redacted)"), "{sql}");
+    }
+}
+
 #[test]
 fn query_text_never_holds_the_canary() {
     for sql in SECRETS {

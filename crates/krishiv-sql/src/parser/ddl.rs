@@ -2071,7 +2071,7 @@ fn resource_paths(raw: &str) -> Vec<String> {
             }
             if let Some(end) = end {
                 let quoted: String = s.get(i..=end).unwrap_or_default().iter().collect();
-                out.push(crate::lexer::unescape_string(&quoted, true));
+                out.push(crate::lexer::unescape_string(&quoted, true, false));
                 i = end + 1;
             } else {
                 i += 1;
