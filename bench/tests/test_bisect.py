@@ -88,8 +88,26 @@ def test_commits_between_rejects_unknown_and_non_ancestor(repo):
     shas = git(repo, "rev-list", "--reverse", "HEAD").split()
     with pytest.raises(BisectError, match="unknown revision"):
         bisect.commits_between(repo, "nope", "HEAD")
-    with pytest.raises(BisectError, match="not an ancestor"):
+    with pytest.raises(BisectError, match="not on the first-parent history"):
         bisect.commits_between(repo, shas[3], shas[0])
+
+
+def test_commits_between_rejects_a_good_commit_on_a_merged_branch(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "side")
+    (repo / "s").write_text("1")
+    git(repo, "add", "s")
+    git(repo, "commit", "-q", "-m", "side work")
+    side = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    (repo / "m").write_text("1")
+    git(repo, "add", "m")
+    git(repo, "commit", "-q", "-m", "main work")
+    git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    merge = git(repo, "rev-parse", "HEAD")
+    assert len(bisect.commits_between(repo, base, merge)) == 2  # main work, then the merge: side commits are folded in
+    with pytest.raises(BisectError, match="first-parent"):
+        bisect.commits_between(repo, side, merge)
 
 
 def test_describe_commit(repo):
@@ -329,6 +347,12 @@ def test_run_bisect_refuses_when_the_bad_end_is_fine(tmp_path, repo, monkeypatch
     with pytest.raises(BisectError, match="does not show the problem"):
         run_with(monkeypatch, tmp_path, repo, "correctness", builder)
     assert builder.closed
+
+
+def test_run_bisect_unjudgeable_bad_end_is_not_reported_as_fine(tmp_path, repo, monkeypatch):
+    builder = StubBuilder({})  # nothing builds
+    with pytest.raises(BisectError, match="could not be judged"):
+        run_with(monkeypatch, tmp_path, repo, "correctness", builder)
 
 
 def test_run_bisect_time_mode_needs_a_buildable_good_commit(tmp_path, repo, monkeypatch):

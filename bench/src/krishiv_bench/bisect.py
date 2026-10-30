@@ -112,21 +112,20 @@ def commits_between(repo: Path, good: str, bad: str) -> list[str]:
     """Full SHAs after ``good`` up to and including ``bad``, first-parent, oldest first.
 
     # Errors
-    ``BisectError`` if git rejects either revision or ``good`` is not an ancestor of ``bad``.
+    ``BisectError`` if git rejects either revision or ``good`` is not on the first-parent line of ``bad``
+    (a commit reachable only through a merge's second parent has no place in that order).
     """
     good_sha, bad_sha = resolve(repo, good), resolve(repo, bad)
-    ancestor = subprocess.run(
-        ["git", "-C", str(repo), "merge-base", "--is-ancestor", good_sha, bad_sha], capture_output=True
-    )
-    if ancestor.returncode != 0:
-        raise BisectError(f"--good {good} is not an ancestor of --bad {bad}")
     out = subprocess.run(
-        ["git", "-C", str(repo), "rev-list", "--reverse", "--first-parent", f"{good_sha}..{bad_sha}"],
+        ["git", "-C", str(repo), "rev-list", "--reverse", "--first-parent", bad_sha],
         capture_output=True,
         text=True,
         check=True,
     )
-    return out.stdout.split()
+    line = out.stdout.split()  # the whole first-parent line of --bad, oldest first
+    if good_sha not in line:
+        raise BisectError(f"--good {good} is not on the first-parent history of --bad {bad}")
+    return line[line.index(good_sha) + 1 :]
 
 
 def describe_commit(repo: Path, sha: str) -> dict[str, str]:
@@ -374,7 +373,10 @@ def run_bisect(
                 if good_runner is None:
                     raise BisectError(f"the --good commit {good} does not build")
                 probe = time_probe(builder, ds, query, good_runner, threads, memory, timeout_s, reps, threshold)
-            if probe(shas[-1]) is not True:
+            verdict = probe(shas[-1])
+            if verdict is None:
+                raise BisectError(f"the --bad commit {bad} could not be judged (it does not build, or a runner failed)")
+            if verdict is False:
                 raise BisectError(f"the --bad commit {bad} does not show the problem ({mode}); nothing to bisect")
             culprits, verdicts = first_bad(shas, lambda s: True if s == shas[-1] else probe(s))
             verdicts[shas[-1]] = True  # probed above

@@ -39,7 +39,7 @@ def load_runs(directory: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for path in sorted(directory.glob("*_abba_*.json")):
         try:
-            rec = json.loads(path.read_text())
+            rec = json.loads(path.read_text(encoding="utf-8"))
             if rec.get("kind") != "abba":
                 continue
             queries = rec["queries"]
@@ -48,13 +48,16 @@ def load_runs(directory: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
             if not good:
                 continue
             summary = rec.get("summary", {})
+            when = rec["started_utc"]
+            if not isinstance(when, str) or not when:
+                continue
             geo = summary.get("geomean")
-            if geo is None:
+            if not isinstance(geo, int | float) or isinstance(geo, bool) or not (geo > 0 and math.isfinite(geo)):
                 geo = math.exp(sum(math.log(r) for r in good) / len(good))
             key = (rec["suite"], fmt_sf(rec["dataset"]["scale_factor"]))
             groups[key].append(
                 {
-                    "when": rec["started_utc"],
+                    "when": when,
                     "indicative": bool(summary.get("indicative", False)),
                     "ratios": ratios,
                     "geomean": geo,
@@ -148,7 +151,7 @@ def run_trend(out: Path | None = None, last: int = DEFAULT_LAST, directory: Path
     out = out or directory / "trend.md"
     text = render(load_runs(directory), last)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text)
+    out.write_text(text, encoding="utf-8")
     print(f"trend: {out}")
     return out
 

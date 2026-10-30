@@ -23,13 +23,14 @@ def test_fold_reverses_frames_windows_samples_and_escapes_separators():
 
 
 def test_normalise_scales_to_the_total_and_handles_empty():
-    assert flamediff.normalise(Counter({"a": 1, "b": 3}), 8) == {"a": 2.0, "b": 6.0}
+    assert flamediff.normalise(Counter({"a": 1, "b": 3}), 8) == {"a": 2, "b": 6}
+    assert flamediff.normalise(Counter({"a": 1, "b": 99}), 10) == {"b": 10}  # whole counts; a zero is dropped
     assert flamediff.normalise(Counter(), 8) == {}
 
 
 def test_diff_folded_covers_both_sides():
-    rows = flamediff.diff_folded({"x": 1.0, "y": 2.0}, {"y": 3.0, "z": 4.0})
-    assert rows == [("x", 1.0, 0.0), ("y", 2.0, 3.0), ("z", 0.0, 4.0)]
+    rows = flamediff.diff_folded({"x": 1, "y": 2}, {"y": 3, "z": 4})
+    assert rows == [("x", 1, 0), ("y", 2, 3), ("z", 0, 4)]
 
 
 def test_shares_count_a_recursive_frame_once_per_stack():
@@ -44,7 +45,7 @@ def test_top_changes_ranks_by_absolute_share_change_and_truncates():
     a, b = {"r;x": 8.0, "r;y": 2.0}, {"r;x": 4.0, "r;y": 6.0}
     ch = flamediff.top_changes(a, b, n=1)
     assert ch["self"] == [("x", 0.8, 0.4)]
-    assert len(ch["inclusive"]) == 1
+    assert ch["inclusive"] == [("x", 0.8, 0.4)]
     full = flamediff.top_changes(a, b)
     assert {f for f, *_ in full["self"]} == {"x", "y"}
 
@@ -66,6 +67,10 @@ def test_render_svg_missing_tool_and_tool_failure(tmp_path, monkeypatch):
     fake = tmp_path / "fake-inferno"
     fake.write_text("#!/bin/sh\necho '<svg/>'\n")
     fake.chmod(0o755)
+    (tmp_path / "o.svg").write_text("stale")
+    monkeypatch.setattr(flamediff.shutil, "which", lambda n: None)
+    assert flamediff.render_svg(diff, tmp_path / "o.svg", "t") is False
+    assert not (tmp_path / "o.svg").exists()  # the chart of an earlier run is removed
     monkeypatch.setattr(flamediff.shutil, "which", lambda n: str(fake))
     assert flamediff.render_svg(diff, tmp_path / "o.svg", "t") is True
     assert (tmp_path / "o.svg").read_text() == "<svg/>\n"

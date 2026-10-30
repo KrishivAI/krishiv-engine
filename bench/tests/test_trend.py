@@ -92,10 +92,12 @@ def test_run_trend_default_and_custom_output(tmp_path, monkeypatch, capsys):
 def test_cli_trend_bisect_and_flamediff_dispatch(tmp_path, monkeypatch):
     from krishiv_bench import bisect, cli, flamediff
 
-    write(tmp_path, "a_abba_x.json", "2026-10-01T00:00:00", {"q1": 2.0})
-    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path.parent / "nodata"))
+    results = tmp_path / "data" / "results"
+    results.mkdir(parents=True)
+    write(results, "a_abba_x.json", "2026-10-01T00:00:00", {"q1": 2.0})
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
     cli.main(["trend", "--out", str(tmp_path / "o.md"), "--last", "3"])
-    assert (tmp_path / "o.md").is_file()
+    assert "| q1 | 2.00 |" in (tmp_path / "o.md").read_text(encoding="utf-8")
 
     seen = {}
     monkeypatch.setattr(bisect, "run_bisect", lambda *a: seen.update(bisect=a))

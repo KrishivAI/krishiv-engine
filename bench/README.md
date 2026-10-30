@@ -173,7 +173,9 @@ dir for the run; a binary is reused within the run and everything is removed at 
 fails. `--time`: a paired ABBA (`ab`) of the `--good` build against the probed build; bad when B/A is at least
 `--threshold` (default 1.10) with the 95% CI above 1. A commit that does not build, or whose runner does not start, is skipped, and the result then names
 the range of candidates. The `--bad` commit must reproduce the problem or the run stops. Holds the bench lock. Output
-`$KRISHIV_DATA/results/<ts>_bisect_<suite>_<query>.json`. `nightly-perf.sh` calls it for a flagged regression.
+`$KRISHIV_DATA/results/<ts>_bisect_<suite>_<query>.json`.
+Build settings come from the environment: export the same `RUSTFLAGS` as for the ABBA builds (for example
+`-C target-cpu=x86-64-v3`) before running, or the probed runners are compiled for a different target.
 
 ## Differential flamegraph (`flamediff`)
 
