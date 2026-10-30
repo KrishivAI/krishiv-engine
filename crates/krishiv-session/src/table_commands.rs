@@ -29,15 +29,19 @@ use krishiv_common::error::{
     IncompatibleDataForTableCannotSafelyCast, InsertColumnArityMismatchNotEnoughDataColumns,
     InsertColumnArityMismatchTooManyDataColumns, InternalError, InvalidAttributeNameSyntax,
     InvalidSchemaOrRelationName, KrishivError, KrishivUnsupportedFeature, LocationAlreadyExists,
-    NotSupportedCommandWithoutHiveSupport, SchemaNotFound, TableOrViewNotFound,
-    UnresolvedColumnWithSuggestion, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
+    NotSupportedCommandWithoutHiveSupport, RequiresSinglePartNamespace, SchemaAlreadyExists,
+    SchemaNotEmpty, SchemaNotFound, TableOrViewNotFound, UnresolvedColumnWithSuggestion,
+    UnsupportedFeatureDropDatabase, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
+    WrongCommandForObjectType,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
-    ColumnName, CreateTable, CreateTableLike, DdlName, DropTable, Insert, InsertClause, Query,
-    TableElement, TableOption, Truncate,
+    AlterTable, AlterTableAction, AlterView, AlterViewAction, ColumnName, CreateNamespace,
+    CreatePermanentView, CreateTable, CreateTableLike, DdlName, DropBehavior, DropNamespace,
+    DropPermanentView, DropTable, Insert, InsertClause, Query, TableElement, TableOption, Truncate,
+    Use,
 };
 use krishiv_types::DataType;
 
@@ -45,7 +49,8 @@ use crate::dataframe::DataFrame;
 use crate::functions::{col, expr, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::store::{
-    CatalogStore, CatalogTable, CreateMode, DEFAULT_NAMESPACE, StoreColumn, managed_location,
+    CatalogStore, CatalogTable, CreateMode, DEFAULT_NAMESPACE, DropNamespaceError, NamespaceMeta,
+    StoreColumn, ViewDef, managed_location,
 };
 
 /// The file formats a table can have.
@@ -103,7 +108,7 @@ struct TableName {
 }
 
 impl TableName {
-    fn resolve(parts: &[String], env: &QueryEnv) -> Result<Self, KrishivError> {
+    fn resolve(parts: &[String], current: &str, env: &QueryEnv) -> Result<Self, KrishivError> {
         let fold = |s: &str| {
             if env.analysis.conf.case_sensitive {
                 s.to_owned()
@@ -112,7 +117,7 @@ impl TableName {
             }
         };
         let (namespace, name, bare) = match parts {
-            [name] => (DEFAULT_NAMESPACE.to_owned(), fold(name), true),
+            [name] => (current.to_owned(), fold(name), true),
             [ns, name] => (fold(ns), fold(name), false),
             [catalog, ns, name] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                 (fold(ns), fold(name), false)
@@ -121,12 +126,10 @@ impl TableName {
                 return Err(unsupported(&format!("tables in the catalog `{catalog}`")));
             }
             _ => {
-                return Err(KrishivError::from(
-                    krishiv_common::error::RequiresSinglePartNamespace {
-                        session_catalog: crate::catalog::CATALOG.to_owned(),
-                        identifier: format!("`{}`", parts.join("`.`")),
-                    },
-                ));
+                return Err(KrishivError::from(RequiresSinglePartNamespace {
+                    session_catalog: crate::catalog::CATALOG.to_owned(),
+                    identifier: format!("`{}`", parts.join("`.`")),
+                }));
             }
         };
         Ok(Self {
@@ -153,7 +156,11 @@ impl TableName {
 
 impl Session {
     fn table_name(&self, name: &DdlName, env: &QueryEnv) -> Result<TableName, KrishivError> {
-        TableName::resolve(&crate::access::ddl_parts(name, env)?, env)
+        TableName::resolve(
+            &crate::access::ddl_parts(name, env)?,
+            &self.state.catalog.current_namespace(),
+            env,
+        )
     }
 
     fn warehouse_dir(&self) -> Result<PathBuf, KrishivError> {
@@ -173,6 +180,455 @@ impl Session {
                 .state
                 .catalog
                 .exists(&name.name, env.analysis.conf.case_sensitive)
+    }
+
+    /// The namespace named by `name` (one part, or the session catalog and one part).
+    fn namespace_name(&self, name: &DdlName, env: &QueryEnv) -> Result<String, KrishivError> {
+        let parts = crate::access::ddl_parts(name, env)?;
+        let fold = |s: &str| {
+            if env.analysis.conf.case_sensitive {
+                s.to_owned()
+            } else {
+                s.to_lowercase()
+            }
+        };
+        match parts.as_slice() {
+            [ns] => Ok(fold(ns)),
+            [catalog, ns] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => Ok(fold(ns)),
+            [catalog, _] => Err(unsupported(&format!(
+                "namespaces in the catalog `{catalog}`"
+            ))),
+            _ => Err(RequiresSinglePartNamespace {
+                session_catalog: crate::catalog::CATALOG.to_owned(),
+                identifier: format!("`{}`", parts.join("`.`")),
+            }
+            .into()),
+        }
+    }
+
+    /// `CREATE DATABASE|SCHEMA|NAMESPACE [IF NOT EXISTS] name ...`.
+    pub(crate) async fn exec_create_namespace(
+        &self,
+        n: &CreateNamespace,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.namespace_name(&n.name, &env)?;
+        check_new_name(&name)?;
+        let meta = NamespaceMeta {
+            comment: n.comment.clone(),
+            location: n.location.clone(),
+            properties: options_of(&n.properties, original),
+        };
+        if !self.state.catalog.store.create_namespace(&name, meta) && !n.if_not_exists {
+            return Err(SchemaAlreadyExists {
+                schema_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        self.empty_frame().await
+    }
+
+    /// `DROP DATABASE|SCHEMA|NAMESPACE [IF EXISTS] name [RESTRICT|CASCADE]`.
+    pub(crate) async fn exec_drop_namespace(
+        &self,
+        n: &DropNamespace,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.namespace_name(&n.name, &env)?;
+        let cascade = matches!(n.behavior, Some(DropBehavior::Cascade));
+        match self.state.catalog.store.drop_namespace(&name, cascade) {
+            Ok(tables) => {
+                for t in tables.iter().filter(|t| t.managed) {
+                    remove_dir(&t.location)?;
+                }
+                if self.state.catalog.current_namespace() == name {
+                    self.state.catalog.use_namespace(DEFAULT_NAMESPACE);
+                }
+            }
+            Err(DropNamespaceError::Default) => {
+                return Err(UnsupportedFeatureDropDatabase {
+                    database: format!("`{name}`"),
+                }
+                .into());
+            }
+            Err(DropNamespaceError::Missing) if n.if_exists => {}
+            Err(DropNamespaceError::Missing) => {
+                return Err(SchemaNotFound {
+                    schema_name: format!("`{name}`"),
+                }
+                .into());
+            }
+            Err(DropNamespaceError::NotEmpty) => {
+                return Err(SchemaNotEmpty {
+                    schema_name: format!("`{name}`"),
+                }
+                .into());
+            }
+        }
+        self.empty_frame().await
+    }
+
+    /// `USE [NAMESPACE|DATABASE|SCHEMA] name`.
+    pub(crate) async fn exec_use(&self, u: &Use) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.namespace_name(&u.name, &env)?;
+        if !self.state.catalog.store.has_namespace(&name) {
+            return Err(SchemaNotFound {
+                schema_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        self.state.catalog.use_namespace(&name);
+        self.empty_frame().await
+    }
+
+    /// `CREATE [OR REPLACE] VIEW ...` for a permanent view.
+    pub(crate) async fn exec_create_permanent_view(
+        &self,
+        v: &CreatePermanentView,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        if v.temporary || v.global {
+            return Err(unsupported("global and qualified temporary views"));
+        }
+        if v.using.is_some() || v.query.is_none() {
+            return Err(unsupported("datasource views"));
+        }
+        if v.schema_binding.is_some() {
+            return Err(unsupported("WITH SCHEMA binding modes of views"));
+        }
+        let Some(query) = &v.query else {
+            return Err(unsupported("datasource views"));
+        };
+        let name = self.table_name(&v.name, &env)?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
+        self.check_namespace(&name)?;
+        let mode = match (v.or_replace, v.if_not_exists) {
+            (true, true) => {
+                return Err(krishiv_common::error::CreateViewWithIfNotExistsAndReplace {
+                    view_name: format!("`{}`", name.name),
+                }
+                .into());
+            }
+            (true, false) => CreateMode::Replace,
+            (false, true) => CreateMode::IfNotExists,
+            (false, false) => CreateMode::ErrorIfExists,
+        };
+        if let Some(existing) = self.state.catalog.store.table(&name.namespace, &name.name) {
+            if mode == CreateMode::IfNotExists {
+                return self.empty_frame().await;
+            }
+            if existing.view.is_none() && mode == CreateMode::Replace {
+                return Err(WrongCommandForObjectType {
+                    operation: "CREATE OR REPLACE VIEW".to_owned(),
+                    required_type: "VIEW".to_owned(),
+                    object_name: name.quoted(),
+                    found_type: "TABLE".to_owned(),
+                    alternative: "DROP TABLE".to_owned(),
+                }
+                .into());
+            }
+        }
+        let sql = original
+            .get(query.span.start..query.span.end)
+            .unwrap_or_default()
+            .to_owned();
+        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        if let Some(temp) = crate::catalog::reads_temporary(
+            &self.state.catalog,
+            plan.root(),
+            env.analysis.conf.case_sensitive,
+        ) {
+            return Err(krishiv_common::error::InvalidTempObjReference {
+                obj_name: name.quoted(),
+                obj: "view".to_owned(),
+                temp_obj_name: format!("`{temp}`"),
+                temp_obj: "view".to_owned(),
+            }
+            .into());
+        }
+        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let analysis = df.analyzed_in(env).await?;
+        let mut columns: Vec<StoreColumn> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| StoreColumn {
+                name: c.name.clone(),
+                data_type: c.data_type.clone(),
+                nullable: c.nullable,
+                default: None,
+                comment: None,
+            })
+            .collect();
+        if !v.columns.is_empty() {
+            if v.columns.len() != columns.len() {
+                return Err(unsupported(
+                    "a view column list of another length than its query",
+                ));
+            }
+            for (column, alias) in columns.iter_mut().zip(&v.columns) {
+                let ColumnName::Ident(ident) = &alias.name else {
+                    return Err(unsupported("IDENTIFIER() column names"));
+                };
+                ident.value.clone_into(&mut column.name);
+                column.comment.clone_from(&alias.comment);
+            }
+        }
+        let view = CatalogTable {
+            namespace: name.namespace.clone(),
+            name: name.name.clone(),
+            managed: false,
+            provider: String::new(),
+            location: PathBuf::new(),
+            columns,
+            options: BTreeMap::new(),
+            properties: options_of(&v.tblproperties, original),
+            comment: v.comment.clone(),
+            created_ms: now_ms(),
+            root: PathBuf::new(),
+            view: Some(ViewDef {
+                sql,
+                namespace: self.state.catalog.current_namespace(),
+            }),
+        };
+        self.state.catalog.store.create_table(view, mode)?;
+        self.empty_frame().await
+    }
+
+    /// `DROP VIEW [IF EXISTS] name` for a permanent view (a temporary view of that bare name is dropped first).
+    pub(crate) async fn exec_drop_permanent_view(
+        &self,
+        d: &DropPermanentView,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.table_name(&d.name, &env)?;
+        self.drop_stored_view(&name, d.if_exists)?;
+        self.empty_frame().await
+    }
+
+    /// `DROP VIEW name` after no temporary view of that bare name was found: the stored view in the current
+    /// namespace.
+    pub(crate) fn drop_bare_stored_view(
+        &self,
+        name: &str,
+        if_exists: bool,
+    ) -> Result<(), KrishivError> {
+        let env = self.query_env();
+        let name = TableName::resolve(
+            &[name.to_owned()],
+            &self.state.catalog.current_namespace(),
+            &env,
+        )?;
+        self.drop_stored_view(&name, if_exists)
+    }
+
+    /// Drops the stored view `name`; a table of that name is `WRONG_COMMAND_FOR_OBJECT_TYPE`.
+    fn drop_stored_view(&self, name: &TableName, if_exists: bool) -> Result<(), KrishivError> {
+        match self.state.catalog.store.table(&name.namespace, &name.name) {
+            Some(t) if t.view.is_some() => {
+                self.state
+                    .catalog
+                    .store
+                    .drop_table(&name.namespace, &name.name);
+                Ok(())
+            }
+            Some(_) => Err(WrongCommandForObjectType {
+                operation: "DROP VIEW".to_owned(),
+                required_type: "VIEW".to_owned(),
+                object_name: name.quoted(),
+                found_type: "TABLE".to_owned(),
+                alternative: "DROP TABLE".to_owned(),
+            }
+            .into()),
+            None if if_exists => Ok(()),
+            None => Err(name.not_found()),
+        }
+    }
+
+    /// `ALTER VIEW name ...`: `AS query` and `SET|UNSET TBLPROPERTIES`; `RENAME TO` and the schema binding forms
+    /// are not executed yet.
+    pub(crate) async fn exec_alter_view(
+        &self,
+        a: &AlterView,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.table_name(&a.name, &env)?;
+        let Some(existing) = self.state.catalog.store.table(&name.namespace, &name.name) else {
+            return Err(name.not_found());
+        };
+        if existing.view.is_none() {
+            return Err(WrongCommandForObjectType {
+                operation: "ALTER VIEW".to_owned(),
+                required_type: "VIEW".to_owned(),
+                object_name: name.quoted(),
+                found_type: "TABLE".to_owned(),
+                alternative: "ALTER TABLE".to_owned(),
+            }
+            .into());
+        }
+        let mut changed = (*existing).clone();
+        match &a.action {
+            AlterViewAction::SetQuery {
+                query,
+                schema_binding: None,
+                ..
+            } => {
+                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                if let Some(temp) = crate::catalog::reads_temporary(
+                    &self.state.catalog,
+                    plan.root(),
+                    env.analysis.conf.case_sensitive,
+                ) {
+                    return Err(krishiv_common::error::InvalidTempObjReference {
+                        obj_name: name.quoted(),
+                        obj: "view".to_owned(),
+                        temp_obj_name: format!("`{temp}`"),
+                        temp_obj: "view".to_owned(),
+                    }
+                    .into());
+                }
+                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+                let analysis = df.analyzed_in(env).await?;
+                changed.columns = analysis
+                    .analyzed
+                    .output
+                    .iter()
+                    .map(|c| StoreColumn {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                        nullable: c.nullable,
+                        default: None,
+                        comment: None,
+                    })
+                    .collect();
+                changed.view = Some(ViewDef {
+                    sql: original
+                        .get(query.span.start..query.span.end)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    namespace: self.state.catalog.current_namespace(),
+                });
+            }
+            AlterViewAction::SetTblProperties(props) => {
+                changed.properties.extend(options_of(props, original));
+            }
+            _ => return Err(unsupported("this ALTER VIEW")),
+        }
+        self.state
+            .catalog
+            .store
+            .create_table(changed, CreateMode::Replace)?;
+        self.empty_frame().await
+    }
+
+    /// `ALTER TABLE name ...`: `ADD COLUMNS`, `RENAME TO`, `SET` and `UNSET TBLPROPERTIES`. Spark's file-source
+    /// tables refuse the other changes (or they need the files rewritten), which fail as unsupported here.
+    pub(crate) async fn exec_alter_table(
+        &self,
+        a: &AlterTable,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.table_name(&a.table, &env)?;
+        let table = self.table_for_write(&name, "ALTER TABLE", &env)?;
+        let mut changed = (*table).clone();
+        match &a.action {
+            AlterTableAction::AddColumns(defs) => {
+                for def in defs {
+                    let ColumnName::Ident(ident) = &def.name else {
+                        return Err(unsupported("IDENTIFIER() column names"));
+                    };
+                    if changed
+                        .columns
+                        .iter()
+                        .any(|c| c.name.eq_ignore_ascii_case(&ident.value))
+                    {
+                        return Err(krishiv_common::error::ColumnAlreadyExists {
+                            column_name: format!("`{}`", ident.value.to_lowercase()),
+                        }
+                        .into());
+                    }
+                    changed.columns.push(StoreColumn {
+                        name: ident.value.clone(),
+                        data_type: def.data_type.to_data_type()?,
+                        // Existing files have no such column: it reads as NULL.
+                        nullable: true,
+                        default: None,
+                        comment: def.comment.clone(),
+                    });
+                }
+            }
+            AlterTableAction::SetTblProperties(props) => {
+                changed.properties.extend(options_of(props, original));
+            }
+            AlterTableAction::UnsetTblProperties { keys, .. } => {
+                for key in options_of(keys, original).keys() {
+                    changed.properties.remove(key);
+                }
+            }
+            AlterTableAction::RenameTo { name: to, .. } => {
+                return self.rename_table(&table, &self.table_name(to, &env)?).await;
+            }
+            _ => return Err(unsupported("this ALTER TABLE")),
+        }
+        self.state
+            .catalog
+            .store
+            .create_table(changed, CreateMode::Replace)?;
+        self.empty_frame().await
+    }
+
+    /// `ALTER TABLE old RENAME TO new`: a managed table's directory moves first, then the metadata; a failure in
+    /// between puts the directory back.
+    async fn rename_table(
+        &self,
+        table: &CatalogTable,
+        to: &TableName,
+    ) -> Result<DataFrame, KrishivError> {
+        check_new_name(&to.namespace)?;
+        check_new_name(&to.name)?;
+        self.check_namespace(to)?;
+        let store = &self.state.catalog.store;
+        if store.table(&to.namespace, &to.name).is_some() {
+            return Err(krishiv_common::error::TableOrViewAlreadyExists {
+                relation_name: to.quoted(),
+            }
+            .into());
+        }
+        let mut renamed = table.clone();
+        renamed.namespace.clone_from(&to.namespace);
+        renamed.name.clone_from(&to.name);
+        if table.managed {
+            let warehouse = self.warehouse_dir()?;
+            renamed.location = managed_location(&warehouse, &to.namespace, &to.name);
+            renamed.root = warehouse;
+            if let Some(parent) = renamed.location.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| internal(format!("cannot create {}: {e}", parent.display())))?;
+            }
+            std::fs::rename(&table.location, &renamed.location).map_err(|e| {
+                internal(format!(
+                    "cannot move {} to {}: {e}",
+                    table.location.display(),
+                    renamed.location.display()
+                ))
+            })?;
+        }
+        let moved_to = renamed.location.clone();
+        store.drop_table(&table.namespace, &table.name);
+        if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
+            let _ = store.create_table(table.clone(), CreateMode::Replace);
+            if table.managed {
+                let _ = std::fs::rename(&moved_to, &table.location);
+            }
+            return Err(e);
+        }
+        self.empty_frame().await
     }
 
     /// `CREATE [OR REPLACE] [EXTERNAL] TABLE ...`, with or without columns
@@ -276,6 +732,7 @@ impl Session {
             comment: t.comment.clone(),
             created_ms: now_ms(),
             root: warehouse.clone(),
+            view: None,
         };
         match &t.as_query {
             Some(query) => self.create_table_as(table, query, mode).await?,
@@ -600,6 +1057,7 @@ impl Session {
             comment: None,
             created_ms: now_ms(),
             root: warehouse.clone(),
+            view: None,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -614,6 +1072,22 @@ impl Session {
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
+        if self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some_and(|t| t.view.is_some())
+        {
+            return Err(WrongCommandForObjectType {
+                operation: "DROP TABLE".to_owned(),
+                required_type: "EXTERNAL or MANAGED".to_owned(),
+                object_name: name.quoted(),
+                found_type: "VIEW".to_owned(),
+                alternative: "DROP VIEW".to_owned(),
+            }
+            .into());
+        }
         if self.temp_entry_of(&name, &env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
@@ -676,7 +1150,14 @@ impl Session {
         if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name)
             && !self.temp_entry_of(name, env)
         {
-            return Ok(table);
+            if table.view.is_none() {
+                return Ok(table);
+            }
+            return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                operation: format!("`{operation}`"),
+                view_name: name.quoted(),
+            }
+            .into());
         }
         if self.temp_entry_of(name, env) {
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {

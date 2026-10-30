@@ -330,12 +330,8 @@ impl Session {
         {
             self.state.catalog.drop_table(&v.name.value);
             self.state.cache.invalidate_table(&v.name.value);
-        } else if !v.if_exists {
-            return Err(TableOrViewNotFound {
-                relation_name: quote(&v.name.value),
-                search_path: search_path(),
-            }
-            .into());
+        } else {
+            self.drop_bare_stored_view(&v.name.value, v.if_exists)?;
         }
         self.empty_frame().await
     }
@@ -740,6 +736,29 @@ impl Session {
         Ok(df)
     }
 
+    /// `SHOW ...`: only `SHOW CURRENT NAMESPACE` runs for now; the rest is
+    /// unsupported.
+    pub(crate) async fn exec_show(
+        &self,
+        s: &krishiv_sql::ast::Show,
+    ) -> Result<DataFrame, KrishivError> {
+        match &s.kind {
+            krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
+                self.string_frame(
+                    &["catalog", "namespace"],
+                    vec![vec![
+                        Some(CATALOG.to_owned()),
+                        Some(self.state.catalog.current_namespace()),
+                    ]],
+                )
+                .await
+            }
+            _ => Err(crate::session::unsupported_statement(
+                "statements other than queries",
+            )),
+        }
+    }
+
     /// A frame of the string columns `columns` with `rows` (`None` is
     /// NULL), as Spark's `SET` commands return. Rows come out ordered by
     /// `key`, as in Spark.
@@ -785,7 +804,11 @@ impl Session {
         };
         // Rows come out ordered by key: unions read in any order, so the
         // frame sorts.
-        let df = df.order_by([col("key")]);
+        let df = if columns.contains(&"key") {
+            df.order_by([col("key")])
+        } else {
+            df // callers without a `key` column pass at most one row
+        };
         let env = self.query_env();
         df.analyzed_in(env).await?;
         Ok(df)

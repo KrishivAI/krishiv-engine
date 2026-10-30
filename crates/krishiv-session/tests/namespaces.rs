@@ -1,0 +1,162 @@
+// SPDX-License-Identifier: Apache-2.0
+//! `CREATE|DROP DATABASE|SCHEMA|NAMESPACE`, `USE` and `SHOW CURRENT NAMESPACE` through `Session::sql`.
+#![cfg(test)]
+
+use arrow_array::Array;
+use arrow_array::cast::AsArray;
+use arrow_schema::DataType as ArrowType;
+use futures::executor::block_on;
+use krishiv_session::Session;
+
+fn session(dir: &std::path::Path) -> Session {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .unwrap();
+    s
+}
+
+fn run(s: &Session, sql: &str) {
+    block_on(async { s.sql(sql).await?.collect().await }).unwrap_or_else(|e| panic!("{sql}: {e}"));
+}
+
+fn class(s: &Session, sql: &str) -> String {
+    block_on(async { s.sql(sql).await?.collect().await })
+        .unwrap_err()
+        .error_class()
+        .name()
+        .to_owned()
+}
+
+/// Every cell of `sql` as strings, row by row.
+fn rows(s: &Session, sql: &str) -> Vec<Vec<String>> {
+    let batches = block_on(async { s.sql(sql).await?.collect().await })
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let mut out = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            out.push(
+                b.columns()
+                    .iter()
+                    .map(|c| {
+                        if c.is_null(i) {
+                            "~".to_owned()
+                        } else {
+                            match c.data_type() {
+                                ArrowType::Utf8View => c.as_string_view().value(i).to_owned(),
+                                _ => c.as_string::<i32>().value(i).to_owned(),
+                            }
+                        }
+                    })
+                    .collect(),
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn use_changes_where_bare_names_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    assert_eq!(
+        rows(&s, "SHOW CURRENT NAMESPACE"),
+        [["spark_catalog", "default"]]
+    );
+    run(&s, "CREATE DATABASE db1");
+    run(&s, "USE db1");
+    assert_eq!(rows(&s, "SHOW CURRENT SCHEMA"), [["spark_catalog", "db1"]]);
+    run(&s, "CREATE TABLE t (a INT)");
+    assert!(dir.path().join("db1.db").join("t").is_dir());
+    run(&s, "INSERT INTO t VALUES (1)");
+    assert_eq!(rows(&s, "SELECT CAST(a AS STRING) FROM db1.t"), [["1"]]);
+    assert_eq!(rows(&s, "SELECT CAST(a AS STRING) FROM t"), [["1"]]);
+    run(&s, "USE NAMESPACE default");
+    assert_eq!(class(&s, "SELECT * FROM t"), "TABLE_OR_VIEW_NOT_FOUND");
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING) FROM spark_catalog.db1.t"),
+        [["1"]]
+    );
+    run(&s, "USE DATABASE db1");
+    run(&s, "DROP TABLE t");
+    assert!(!dir.path().join("db1.db").join("t").exists());
+}
+
+#[test]
+fn namespace_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE SCHEMA IF NOT EXISTS s1 COMMENT 'c' WITH DBPROPERTIES (k = 'v')",
+    );
+    assert_eq!(class(&s, "CREATE NAMESPACE s1"), "SCHEMA_ALREADY_EXISTS");
+    run(&s, "CREATE NAMESPACE IF NOT EXISTS s1");
+    assert_eq!(class(&s, "USE missing"), "SCHEMA_NOT_FOUND");
+    assert_eq!(class(&s, "DROP DATABASE missing"), "SCHEMA_NOT_FOUND");
+    run(&s, "DROP DATABASE IF EXISTS missing");
+    assert_eq!(
+        class(&s, "CREATE TABLE missing.t (a INT)"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, "DROP DATABASE default"),
+        "UNSUPPORTED_FEATURE.DROP_DATABASE"
+    );
+    assert_eq!(class(&s, "USE a.b.c"), "REQUIRES_SINGLE_PART_NAMESPACE");
+    assert_eq!(
+        class(&s, "USE other_catalog.s1"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    run(&s, "USE spark_catalog.s1");
+    assert_eq!(
+        rows(&s, "SHOW CURRENT NAMESPACE"),
+        [["spark_catalog", "s1"]]
+    );
+}
+
+#[test]
+fn dropping_a_namespace_with_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE d");
+    run(&s, "CREATE TABLE d.t (a INT)");
+    run(&s, "INSERT INTO d.t VALUES (1)");
+    assert_eq!(class(&s, "DROP DATABASE d"), "SCHEMA_NOT_EMPTY");
+    assert_eq!(class(&s, "DROP DATABASE d RESTRICT"), "SCHEMA_NOT_EMPTY");
+    run(&s, "USE d");
+    run(&s, "DROP DATABASE d CASCADE");
+    assert!(!dir.path().join("d.db").join("t").exists());
+    // The dropped namespace was current: back in `default`.
+    assert_eq!(
+        rows(&s, "SHOW CURRENT NAMESPACE"),
+        [["spark_catalog", "default"]]
+    );
+    assert_eq!(class(&s, "SELECT * FROM d.t"), "TABLE_OR_VIEW_NOT_FOUND");
+    run(&s, "CREATE DATABASE d");
+    run(&s, "DROP SCHEMA d");
+}
+
+#[test]
+fn other_show_commands_are_not_executed_yet() {
+    let s = Session::new().unwrap();
+    assert_eq!(class(&s, "SHOW TABLES"), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[test]
+fn namespace_names_that_could_be_paths_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    assert_eq!(
+        class(&s, "CREATE DATABASE `a/b`"),
+        "INVALID_SCHEMA_OR_RELATION_NAME"
+    );
+    assert_eq!(
+        class(&s, "CREATE SCHEMA `..`"),
+        "INVALID_ATTRIBUTE_NAME_SYNTAX"
+    );
+    assert_eq!(
+        class(&s, "CREATE NAMESPACE `x y`"),
+        "INVALID_SCHEMA_OR_RELATION_NAME"
+    );
+}
