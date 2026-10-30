@@ -1363,7 +1363,7 @@ fn simple_aggregates() {
     );
     for nested in [
         map.clone(),
-        DataType::Array(ArrayType::new(map.clone(), true).into()),
+        DataType::Array(ArrayType::new(map, true).into()),
     ] {
         let err = result("collect_set", &[ty(nested.clone())], &[]).unwrap_err();
         assert_eq!(
