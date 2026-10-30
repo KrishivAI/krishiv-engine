@@ -30,6 +30,7 @@ krishiv-common = { path = "../krishiv-common" }
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-types = { path = "../krishiv-types" }
 krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
+quick-xml.workspace = true
 
 [dev-dependencies]
 arrow-buffer.workspace = true
