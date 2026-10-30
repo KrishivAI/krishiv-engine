@@ -12,6 +12,12 @@ def test_double_quoted_identifiers_become_backticks():
     assert backtick_identifiers(sql) == "SELECT 'say \"hi\"', 'it''s' AS `a`"
     # A backtick inside a quoted name is doubled; an unterminated quote is left for the engine to reject.
     assert backtick_identifiers('SELECT 1 AS "a`b"') == "SELECT 1 AS `a``b`"
+    # DuckDB writes a double quote inside an identifier as "": it stays one quote in the backtick name.
+    assert backtick_identifiers('SELECT "a""b" FROM t') == 'SELECT `a"b` FROM t'
+    assert backtick_identifiers('SELECT 1 AS """x"""') == 'SELECT 1 AS `"x"`'
+    assert backtick_identifiers('SELECT "a""b`c" FROM t') == 'SELECT `a"b``c` FROM t'
+    # An unterminated identifier (here ending in an escaped quote) is left for the engine to reject.
+    assert backtick_identifiers('SELECT "a"" FROM t') == 'SELECT "a"" FROM t'
     assert backtick_identifiers('SELECT 1 AS "open') == 'SELECT 1 AS "open'
     assert backtick_identifiers("SELECT 'unterminated") == "SELECT 'unterminated"
 
