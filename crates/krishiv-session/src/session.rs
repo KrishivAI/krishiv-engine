@@ -1024,6 +1024,7 @@ impl Session {
             conf_version,
             catalog_epoch,
             variables_version: variables.version,
+            policy_version: self.state.policy.version().0,
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1874,6 +1875,9 @@ pub(crate) struct QueryEnv {
     pub(crate) sql_functions: Arc<QueryFunctions>,
     /// [`FunctionRegistry::version`] of `analysis.functions`.
     pub(crate) functions_version: u64,
+    /// The access policy's version when the query started: an analysis made under another one
+    /// is not reused, since its reads were authorized under the old rules.
+    pub(crate) policy_version: u64,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

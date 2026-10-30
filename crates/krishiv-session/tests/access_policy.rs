@@ -843,6 +843,9 @@ fn querying_a_permanent_view_checks_the_view_securable() {
     assert_eq!(results[3], "OK", "the base table stays readable");
 }
 
+/// The three tests below share these flags: one at a time.
+static FLAG_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static DENY_ALL_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static DENY_TABLE_V: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -865,6 +868,9 @@ fn flagged(securable: &Securable, p: Privilege) -> AccessDecision {
 /// never reported to a principal that may not read the view.
 #[test]
 fn permanent_view_reads_leak_nothing_to_a_denied_principal() {
+    let _one_at_a_time = FLAG_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::sync::atomic::Ordering::SeqCst;
     let dir = tempfile::tempdir().unwrap();
     let s = session(Policy::new(flagged));
@@ -919,6 +925,9 @@ fn permanent_view_reads_leak_nothing_to_a_denied_principal() {
 /// spelling of its name.
 #[test]
 fn a_table_rule_on_a_view_name_applies_to_queries_of_it() {
+    let _one_at_a_time = FLAG_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::sync::atomic::Ordering::SeqCst;
     let dir = tempfile::tempdir().unwrap();
     let s = session(Policy::new(flagged));
@@ -944,6 +953,9 @@ fn a_table_rule_on_a_view_name_applies_to_queries_of_it() {
 /// `statement_info` lists the view securable of a query of a permanent view.
 #[test]
 fn statement_info_lists_the_view_securable() {
+    let _one_at_a_time = FLAG_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let s = session(Policy::new(flagged));
     s.conf()
@@ -956,22 +968,23 @@ fn statement_info_lists_the_view_securable() {
         block_on(async { s.sql(sql).await?.collect().await }).unwrap();
     }
     let info = block_on(s.statement_info("SELECT * FROM v")).unwrap();
-    let names: Vec<String> = info
+    let ident = |name: &str| krishiv_plan::analyzer::TableIdent {
+        catalog: "spark_catalog".to_owned(),
+        namespace: vec!["default".to_owned()],
+        name: name.to_owned(),
+    };
+    let found: Vec<(Securable, Privilege)> = info
         .securables
         .iter()
-        .map(|u| format!("{:?}", u.securable))
+        .map(|u| (u.securable.clone(), u.privilege))
         .collect();
     assert!(
-        names
-            .iter()
-            .any(|n| n.starts_with("View") && n.contains("\"v\"")),
-        "{names:?}"
+        found.contains(&(Securable::View(ident("v")), Privilege::Select)),
+        "{found:?}"
     );
     assert!(
-        names
-            .iter()
-            .any(|n| n.starts_with("Table") && n.contains("base")),
-        "{names:?}"
+        found.contains(&(Securable::Table(ident("base")), Privilege::Select)),
+        "{found:?}"
     );
 }
 
@@ -1016,4 +1029,63 @@ fn describing_a_view_needs_the_view_securable() {
         assert_eq!(c, DENIED, "{sql}");
     }
     assert!(table_ok, "the table itself stays readable");
+}
+
+/// An access policy whose rules and version change while a session lives.
+struct Flip {
+    deny_views: std::sync::atomic::AtomicBool,
+    version: std::sync::atomic::AtomicU64,
+}
+
+impl AccessPolicy for Flip {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(
+            self.version.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let deny_now = self.deny_views.load(std::sync::atomic::Ordering::SeqCst)
+            && privilege == Privilege::Select
+            && matches!(securable, Securable::View(_));
+        Box::pin(async move {
+            Ok(if deny_now {
+                deny()
+            } else {
+                AccessDecision::Allow
+            })
+        })
+    }
+}
+
+/// A DataFrame analysed under one policy version is analysed again under the next: reads it was
+/// allowed to make before are checked against the new rules.
+#[test]
+fn a_new_policy_version_invalidates_cached_analysis() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().unwrap();
+    let policy = Arc::new(Flip {
+        deny_views: std::sync::atomic::AtomicBool::new(false),
+        version: std::sync::atomic::AtomicU64::new(1),
+    });
+    let s = session(Arc::clone(&policy) as Arc<dyn AccessPolicy>);
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let df = block_on(s.sql("SELECT * FROM v")).unwrap();
+    block_on(df.collect()).unwrap();
+    policy.deny_views.store(true, SeqCst);
+    policy.version.store(2, SeqCst);
+    assert_eq!(class(block_on(df.collect())), DENIED);
 }
