@@ -1417,6 +1417,7 @@ fn every_context_input_changes_the_key() {
             .into_iter()
             .collect(),
             version: 1,
+            ..VariableSnapshot::default()
         });
     });
     let key = digest(&base, &[("spark_catalog", 1)]);
@@ -1911,6 +1912,7 @@ fn session_variables_resolve_after_columns() {
                 },
             )]),
             version: 3,
+            ..VariableSnapshot::default()
         });
         ctx
     };
@@ -1956,6 +1958,7 @@ fn variable_versions_change_the_fingerprint() {
             },
         )]),
         version: base.variables.version + 1,
+        ..VariableSnapshot::default()
     });
     assert_ne!(key, digest(&changed));
 }
