@@ -9,10 +9,6 @@
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
     },
     {
-      "query": "select json_tuple(a, a) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function json_tuple"
-    },
-    {
       "query": "select to_timestamp('2018-01-01', a) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
     },

@@ -144,8 +144,6 @@ tracing = { version = "0.1.44", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 opentelemetry = { version = "0.33.1", default-features = false }
 opentelemetry-otlp = { version = "0.33.1", default-features = false }
-metrics = { version = "0.24.6", default-features = false }
-metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # Benchmarks: drop-in criterion replacement that CodSpeed instruments (dev-dependency only).
 criterion = { package = "codspeed-criterion-compat", version = "5.0", default-features = false }
 insta = { version = "1.48", default-features = false }

@@ -3,9 +3,15 @@ pub use krishiv_session::AccessDecision
 pub use krishiv_session::AccessPolicy
 pub use krishiv_session::AllowAll
 pub use krishiv_session::ArgField
+pub use krishiv_session::CounterSample
 pub use krishiv_session::DenyAll
 pub use krishiv_session::ExplainKind
+pub use krishiv_session::GaugeSample
+pub use krishiv_session::HistogramBucket
+pub use krishiv_session::HistogramSample
 pub use krishiv_session::InvokeContext
+pub use krishiv_session::MetricDict
+pub use krishiv_session::MetricsSnapshot
 pub use krishiv_session::NullHandling
 pub use krishiv_session::Principal
 pub use krishiv_session::PrincipalKind
@@ -329,6 +335,7 @@ pub fn krishiv_session::Session::conf(&self) -> krishiv_session::RuntimeConf
 pub fn krishiv_session::Session::drop_temp_view(&self, &str) -> bool
 pub fn krishiv_session::Session::expr(&self, &str) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::memory_reserved(&self) -> usize
+pub fn krishiv_session::Session::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::Session::new() -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::range(&self, i64, i64, i64, core::option::Option<u32>) -> krishiv_session::DataFrame
 pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader

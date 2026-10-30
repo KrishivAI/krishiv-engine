@@ -9,7 +9,9 @@ Admin and UI API server (REST, OpenAPI), serves the web UI. Today: `/api/v1/vers
 ## Key files
 Paths are relative to this crate.
 - `src/lib.rs` `router()`, `serve` and `run_blocking`
+- `src/metrics.rs` `router_with_metrics` and `render` (feature `metrics-prometheus` only)
 - `tests/serve.rs` server tests
+- `tests/metrics.rs` `/metrics` exposition tests (feature `metrics-prometheus` only)
 
 ## Extension points
 - New route: add it to `router()` in `src/lib.rs` under `/api/v1/` with its OpenAPI entry.
@@ -18,6 +20,9 @@ Paths are relative to this crate.
 - Admin REST is a versioned surface (OpenAPI via utoipa).
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
+- The metrics exporter only reads snapshots (`SnapshotProvider`): it never
+  holds the registry, and `/metrics` is registered only with the
+  `metrics-prometheus` feature and `krishiv.metrics.enabled` (else 404).
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0024, 0004, 0026

@@ -1,9 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      12,
-      46
-    ],
     "grouping-sets": [
       27,
       34

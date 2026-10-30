@@ -689,6 +689,30 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 Name(std::slice::from_ref(name))
             )));
         }
+        ExprNode::UpdateFields { base, ops } => {
+            out.push(Piece::Str("update_fields("));
+            out.push(Piece::Expr(base));
+            for op in ops {
+                out.push(Piece::Str(", "));
+                match op {
+                    crate::FieldOp::With { name, value } => {
+                        out.push(Piece::Owned(format!(
+                            "WithField({}, ",
+                            Name(std::slice::from_ref(name))
+                        )));
+                        out.push(Piece::Expr(value));
+                        out.push(Piece::Str(")"));
+                    }
+                    crate::FieldOp::Drop { name } => {
+                        out.push(Piece::Owned(format!(
+                            "DropField({})",
+                            Name(std::slice::from_ref(name))
+                        )));
+                    }
+                }
+            }
+            out.push(Piece::Str(")"));
+        }
         ExprNode::Resolved(ResolvedExpr::Field {
             base,
             name,

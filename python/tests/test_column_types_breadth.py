@@ -179,11 +179,6 @@ def test_isnan_matches_sql(spark: SparkSession) -> None:
 def test_nested_access_is_unsupported(df: DataFrame) -> None:
     for build in (
         lambda: F.col("l").getItem(0),
-        lambda: F.col("r").getField("b"),
-        lambda: F.col("a").withField("b", F.lit(3)),
-        lambda: F.col("a").dropFields("b"),
-        lambda: F.col("a").dropFields("b", "c"),
-        lambda: df.name.foo,
         lambda: df.name["key"],
     ):
         with pytest.raises(errors.UnsupportedOperationException) as bad:
@@ -191,16 +186,79 @@ def test_nested_access_is_unsupported(df: DataFrame) -> None:
         assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
     with pytest.warns(FutureWarning), pytest.raises(errors.UnsupportedOperationException):
         F.col("l").getItem(F.col("k"))
-    with pytest.warns(FutureWarning), pytest.raises(errors.UnsupportedOperationException):
-        F.col("r").getField(F.col("n"))
-    with pytest.raises(errors.PySparkTypeError):
-        F.col("a").withField(1, F.lit(1))  # ty: ignore[invalid-argument-type]
-    with pytest.raises(errors.PySparkTypeError):
-        F.col("a").withField("b", 1)  # ty: ignore[invalid-argument-type]
-    with pytest.raises(errors.PySparkTypeError):
-        F.col("a").dropFields(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(AttributeError):
         _ = df.name.__dunder__
+    # Field access on a non-struct builds, then fails analysis as the SQL does.
+    with pytest.raises(errors.AnalysisException) as bad:
+        df.select(df.name.foo).collect()
+    assert bad.value.getCondition() == "INVALID_EXTRACT_BASE_FIELD_TYPE"
+
+
+def struct_frame(spark: SparkSession) -> DataFrame:
+    # `createDataFrame` takes no struct columns yet, so the doc examples run
+    # on structs the engine builds: the same rows PySpark documents.
+    return spark.sql("SELECT named_struct('b', 1, 'c', 2, 'd', 3, 'e', named_struct('f', 4, 'g', 5, 'h', 6)) AS a")
+
+
+def test_get_field_reads_by_name(spark: SparkSession) -> None:
+    df = spark.sql("SELECT named_struct('a', 1, 'b', 'x') AS r")
+    assert df.select(df.r.getField("b")).collect() == [Row(**{"r.b": "x"})]
+    assert df.select(df.r.a).collect() == [Row(**{"r.a": 1})]
+    assert df.select(df.r.getField("a")).collect() == [Row(**{"r.a": 1})]
+    with pytest.warns(FutureWarning), pytest.raises(errors.PySparkTypeError):
+        df.r.getField(F.col("n"))
+    with pytest.raises(errors.PySparkTypeError):
+        df.r.getField(1)
+
+
+def test_with_field_replaces_and_adds(spark: SparkSession) -> None:
+    df = struct_frame(spark).select("a")
+    assert df.withColumn("a", df["a"].withField("b", F.lit(3))).select("a.b").collect() == [Row(b=3)]
+    assert df.withColumn("a", df["a"].withField("d", F.lit(4))).select("a.d").collect() == [Row(d=4)]
+    with pytest.raises(errors.PySparkTypeError):
+        df["a"].withField(1, F.lit(1))
+    with pytest.raises(errors.PySparkTypeError):
+        df["a"].withField("b", 1)
+
+
+def test_drop_fields_drops_one_and_several(spark: SparkSession) -> None:
+    df = struct_frame(spark)
+    assert df.withColumn("a", df["a"].dropFields("b")).collect() == [Row(a=Row(c=2, d=3, e=Row(f=4, g=5, h=6)))]
+    assert df.withColumn("a", df["a"].dropFields("b", "c")).collect() == [Row(a=Row(d=3, e=Row(f=4, g=5, h=6)))]
+    # Dropping a missing field is a no-op.
+    assert df.withColumn("a", df["a"].dropFields("zzz")).collect() == df.collect()
+    with pytest.raises(errors.PySparkTypeError):
+        df["a"].dropFields(1)
+
+
+def test_struct_field_updates_follow_case_sensitivity(spark: SparkSession) -> None:
+    df = spark.sql("SELECT named_struct('b', 1, 'c', 2) AS a")
+    assert df.withColumn("a", df["a"].withField("B", F.lit(3))).select("a.b").collect() == [Row(b=3)]
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        got = df.withColumn("a", df["a"].withField("B", F.lit(3))).select("a.B").collect()
+        assert got == [Row(B=3)]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+# docstring examples as doctests --------------------------------------------------------------
+
+
+def test_docstring_examples_run_as_documented(spark: SparkSession) -> None:
+    import doctest
+
+    from krishiv.sql import column as columns
+
+    for name in ("getField", "withField", "dropFields"):
+        method = getattr(columns.Column, name)
+        assert method.__doc__
+        test = doctest.DocTestParser().get_doctest(method.__doc__, {"spark": spark}, name, None, 0)
+        assert test.examples
+        runner = doctest.DocTestRunner(verbose=False)
+        runner.run(test, out=lambda _: None)
+        assert runner.failures == 0, name
+        assert runner.tries > 0, name
 
 
 # try_cast ----------------------------------------------------------------------

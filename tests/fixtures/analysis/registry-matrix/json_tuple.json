@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "json_tuple#1cbde65aab99/ansi_on",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', 'a', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#1cbde65aab99/ansi_off",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', 'a', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#2a3529c4df9b/ansi_on",
+      "reason": "SELECT json_tuple(INTERVAL '1-2' YEAR TO MONTH, 'a', 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#2a3529c4df9b/ansi_off",
+      "reason": "SELECT json_tuple(INTERVAL '1-2' YEAR TO MONTH, 'a', 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#441f9435da4a/ansi_on",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', INTERVAL '1-2' YEAR TO MONTH, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#441f9435da4a/ansi_off",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', INTERVAL '1-2' YEAR TO MONTH, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#53f55dad68e5/ansi_on",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', 'a', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#53f55dad68e5/ansi_off",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', 'a', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#7e1bb6386a04/ansi_on",
+      "reason": "SELECT json_tuple(INTERVAL '1 02:03:04' DAY TO SECOND, 'a', 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#7e1bb6386a04/ansi_off",
+      "reason": "SELECT json_tuple(INTERVAL '1 02:03:04' DAY TO SECOND, 'a', 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#ebe8eac4be5f/ansi_on",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', INTERVAL '1 02:03:04' DAY TO SECOND, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    },
+    {
+      "id": "json_tuple#ebe8eac4be5f/ansi_off",
+      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', INTERVAL '1 02:03:04' DAY TO SECOND, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "json_tuple"
+}

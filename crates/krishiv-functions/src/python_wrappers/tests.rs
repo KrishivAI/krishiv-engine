@@ -33,6 +33,13 @@ fn parses_optional_defaulted_and_variadic_parameters() {
     let v = parse_params("*cols: ColumnOrName").expect("parses");
     assert_eq!(v[0].declaration(), "*cols: ColumnOrName");
     assert_eq!(v[0].argument(false), "*_cols(cols)");
+    // A variadic `str` is a list of literals (`json_tuple`'s key names).
+    let f = parse_params("*fields: str").expect("parses");
+    assert_eq!(f[0].declaration(), "*fields: str");
+    assert_eq!(
+        f[0].argument(false),
+        "*[_lit(value, \"fields\") for value in fields]"
+    );
     assert!(parse_params("").expect("parses").is_empty());
 }
 
@@ -41,6 +48,7 @@ fn rejects_malformed_parameters() {
     assert!(parse_params("col").is_err());
     assert!(parse_params("col: Sequence").is_err());
     assert!(parse_params("*cols: int").is_err());
+    assert!(parse_params("*cols: str = None").is_err());
 }
 
 #[test]

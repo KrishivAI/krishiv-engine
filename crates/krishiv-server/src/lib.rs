@@ -18,6 +18,11 @@ use tokio::net::TcpListener;
 /// Crate (and workspace) version reported by `/api/v1/version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Prometheus exposition over the engine metrics snapshot (feature
+/// `metrics-prometheus`).
+#[cfg(feature = "metrics-prometheus")]
+pub mod metrics;
+
 async fn version() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],

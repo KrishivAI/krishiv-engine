@@ -6,7 +6,7 @@
 
 use std::ops::ControlFlow;
 
-use krishiv_common::error::UnsupportedTimeType;
+use krishiv_common::error::{UnsupportedGeneratorOutsideSelect, UnsupportedTimeType};
 use krishiv_types::DataType;
 
 use super::AnalysisError;
@@ -36,6 +36,21 @@ fn feature(t: &DataType) -> Option<&'static str> {
 pub(super) fn check(root: &LogicalPlan) -> Result<(), AnalysisError> {
     let mut error = None;
     let _ = visit_distinct(Node::Plan(root), |node| {
+        // A generator the select-list rewrite did not take (in a filter, a
+        // sort key, a grouping, an aggregate argument, ...) is outside the
+        // SELECT clause, which Spark rejects at analysis.
+        if let Node::Expr(e) = node
+            && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+            && f.kind == crate::FunctionKind::Generator
+        {
+            error = Some(AnalysisError::new(
+                UnsupportedGeneratorOutsideSelect {
+                    plan: format!("'{}'", super::exprs::pretty(e, None)),
+                },
+                e.origin,
+            ));
+            return ControlFlow::Break(());
+        }
         let (types, origin) = match node {
             Node::Plan(p) => match &p.node {
                 PlanNode::Scan(scan) => {

@@ -108,6 +108,10 @@ pub enum Statement {
     CreateView(CreateView),
     /// `DROP VIEW [IF EXISTS] name`.
     DropView(DropView),
+    /// `CREATE [OR REPLACE] [TEMPORARY] FUNCTION name (...) ... RETURN body`.
+    CreateFunction(Box<CreateFunction>),
+    /// `DROP [TEMPORARY] FUNCTION [IF EXISTS] name`.
+    DropFunction(DropFunction),
     /// `CREATE [OR REPLACE] [TEMPORARY] [EXTERNAL] TABLE ...`.
     CreateTable(Box<CreateTable>),
     /// `CREATE TABLE ... LIKE ...`.
@@ -181,6 +185,8 @@ impl Statement {
             Self::Reset(r) => r.span,
             Self::CreateView(v) => v.span,
             Self::DropView(v) => v.span,
+            Self::CreateFunction(f) => f.span,
+            Self::DropFunction(f) => f.span,
             Self::CreateTable(t) => t.span,
             Self::CreateTableLike(t) => t.span,
             Self::DropTable(t) => t.span,
@@ -353,6 +359,147 @@ pub struct DropView {
     pub if_exists: bool,
     /// The view name (temporary views take one part).
     pub name: Ident,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
+/// `CREATE [OR REPLACE] [TEMPORARY] FUNCTION [IF NOT EXISTS] name
+/// ([parameters]) [RETURNS {type | TABLE [(columns)]}] [characteristics]
+/// RETURN {expression | query}`: a SQL-bodied user function.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateFunction {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// `TEMPORARY` (`TEMP`).
+    pub temporary: bool,
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The function name.
+    pub name: ObjectName,
+    /// The parameters: column definitions, as Spark's grammar reads them
+    /// (`NOT NULL`, `GENERATED` and constraints parse and are rejected
+    /// after parsing).
+    pub params: Vec<ColumnDef>,
+    /// The text between the parentheses of the parameter list (Spark's
+    /// `NOT_NULL_ON_FUNCTION_PARAMETERS` quotes it).
+    pub params_span: Span,
+    /// `RETURNS ...`; omitted, the type is that of the body.
+    pub returns: Option<FunctionReturns>,
+    /// The routine characteristics, in whatever order they were written.
+    pub characteristics: RoutineCharacteristics,
+    /// The body after `RETURN`.
+    pub body: FunctionBody,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// The `RETURNS` clause of a [`CreateFunction`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionReturns {
+    /// What it returns.
+    pub kind: FunctionReturnsKind,
+    /// Source text, from `RETURNS` to the end of the clause.
+    pub span: Span,
+}
+
+/// The kinds of [`FunctionReturns`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FunctionReturnsKind {
+    /// `RETURNS type`: a scalar function.
+    Type(DataTypeSpec),
+    /// `RETURNS TABLE [(columns)]`: a table function; without a column
+    /// list the columns are those of the body.
+    Table(Option<Vec<ReturnColumn>>),
+}
+
+/// `name type [NOT NULL] [COMMENT '...']` in `RETURNS TABLE (...)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReturnColumn {
+    /// The column name.
+    pub name: Ident,
+    /// Its type.
+    pub data_type: DataTypeSpec,
+    /// `NOT NULL` (parsed; Spark rejects it after parsing).
+    pub not_null: bool,
+    /// `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The routine characteristics of a [`CreateFunction`]: each at most once
+/// (a repeat is kept in [`Self::duplicate`] and fails after parsing, as in
+/// Spark).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct RoutineCharacteristics {
+    /// `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// `LANGUAGE name`.
+    pub language: Option<Ident>,
+    /// `DETERMINISTIC` (`true`) or `NOT DETERMINISTIC` (`false`).
+    pub deterministic: Option<bool>,
+    /// `CONTAINS SQL` or `READS SQL DATA`.
+    pub data_access: Option<SqlDataAccess>,
+    /// `SQL SECURITY INVOKER` or `DEFINER`.
+    pub security: Option<SqlSecurity>,
+    /// The first characteristic written twice, as Spark names its clause
+    /// in `DUPLICATE_CLAUSES`.
+    pub duplicate: Option<&'static str>,
+    /// Source text of the characteristics (empty when there are none).
+    pub span: Span,
+}
+
+/// `CONTAINS SQL` or `READS SQL DATA`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SqlDataAccess {
+    /// `CONTAINS SQL`.
+    ContainsSql,
+    /// `READS SQL DATA`.
+    ReadsSqlData,
+}
+
+/// `SQL SECURITY INVOKER` or `SQL SECURITY DEFINER`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SqlSecurity {
+    /// `SQL SECURITY INVOKER`.
+    Invoker,
+    /// `SQL SECURITY DEFINER`.
+    Definer,
+}
+
+/// What follows `RETURN` in a [`CreateFunction`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionBody {
+    /// An expression or a query.
+    pub kind: FunctionBodyKind,
+    /// Source text of the body, which the function's plan keeps so errors
+    /// raised while the function is used point into it.
+    pub span: Span,
+}
+
+/// The kinds of [`FunctionBody`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FunctionBodyKind {
+    /// `RETURN expression`.
+    Expr(Box<Expr>),
+    /// `RETURN query`: a table function's body (a scalar function's is a
+    /// scalar subquery).
+    Query(Box<Query>),
+}
+
+/// `DROP [TEMPORARY] FUNCTION [IF EXISTS] name`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropFunction {
+    /// `TEMPORARY` (`TEMP`).
+    pub temporary: bool,
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The function name.
+    pub name: ObjectName,
     /// Source text, from `DROP` to the end of the statement.
     pub span: Span,
 }

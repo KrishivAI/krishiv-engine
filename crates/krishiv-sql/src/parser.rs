@@ -17,6 +17,7 @@
 
 mod ddl;
 mod expr;
+mod function;
 mod types;
 
 use std::collections::HashMap;
@@ -2054,8 +2055,8 @@ impl<'s> Parser<'s> {
         }))
     }
 
-    /// `CREATE ...`: a temporary view, a table (or `TABLE ... LIKE`), or
-    /// a namespace. Anything else (`CREATE VIEW`, `CREATE FUNCTION`,
+    /// `CREATE ...`: a temporary view, a table (or `TABLE ... LIKE`), a
+    /// function, or a namespace. Anything else (`CREATE VIEW`,
     /// `CREATE GLOBAL ...`, ...) fails where it stands, as in Spark.
     fn create_command(&mut self) -> PR<Statement> {
         // The legacy shapes first (temporary views, tables, namespaces);
@@ -2107,14 +2108,23 @@ impl<'s> Parser<'s> {
         };
         if or_replace {
             if self.eat_kw("TEMP") || self.eat_kw("TEMPORARY") {
+                if self.kw_at(0, "FUNCTION") {
+                    return self.create_function_command(start, true, true);
+                }
                 return self.create_temp_view_command(start, true);
             }
             if self.kw_at(0, "TABLE") {
                 return self.create_table_command(start, true, false, false);
             }
+            if self.kw_at(0, "FUNCTION") {
+                return self.create_function_command(start, true, false);
+            }
             return self.fail();
         }
         let temporary = self.eat_kw("TEMP") || self.eat_kw("TEMPORARY");
+        if self.kw_at(0, "FUNCTION") {
+            return self.create_function_command(start, false, temporary);
+        }
         let external = self.eat_kw("EXTERNAL");
         if self.kw_at(0, "TABLE") {
             return self.create_table_command(start, false, temporary, external);
@@ -2194,7 +2204,7 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
+    /// `DROP ...`: a view, a table, a function, a namespace, or a temporary variable.
     /// Anything else fails where it stands, as in Spark. A `DROP VIEW`
     /// the legacy reading rejects reads as a full view statement instead.
     fn drop_command(&mut self) -> PR<Statement> {
@@ -2222,6 +2232,11 @@ impl<'s> Parser<'s> {
     fn drop_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("DROP")?;
+        if self.kw_at(0, "FUNCTION")
+            || (self.any_kw_at(0, &["TEMP", "TEMPORARY"]) && self.kw_at(1, "FUNCTION"))
+        {
+            return self.drop_function_command(start);
+        }
         if self.kw_at(0, "VIEW") {
             return self.drop_view_command(start);
         }

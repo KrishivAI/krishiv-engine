@@ -1,0 +1,246 @@
+{
+  "entries": [
+    {
+      "id": "to_csv#01a1759f31fe/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#01a1759f31fe/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#024eef9ae1f5/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#024eef9ae1f5/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#0b27651ecf6f/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), true) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#0b27651ecf6f/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), true) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#1af8aee7f92e/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#1af8aee7f92e/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#273e6dc4366b/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
+    },
+    {
+      "id": "to_csv#273e6dc4366b/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
+    },
+    {
+      "id": "to_csv#28518f47b28f/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#28518f47b28f/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#28c8415a45bb/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#28c8415a45bb/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#2e623705f8ac/ansi_on",
+      "reason": "SELECT to_csv(NULL, map('timestampFormat', 'dd/MM/yyyy')) | DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#2e623705f8ac/ansi_off",
+      "reason": "SELECT to_csv(NULL, map('timestampFormat', 'dd/MM/yyyy')) | DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#30b47cd41bbd/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#30b47cd41bbd/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#328dd52fea6a/ansi_on",
+      "reason": "SELECT to_csv(INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#328dd52fea6a/ansi_off",
+      "reason": "SELECT to_csv(INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#3e7b64b08a72/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(map() AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#3e7b64b08a72/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(map() AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#452361cd6d09/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 1) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#452361cd6d09/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 1) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#46568e43d2f5/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 1L) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#46568e43d2f5/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), 1L) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#4a2f8ff127ca/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(NULL AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#4a2f8ff127ca/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(NULL AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#4ab4f54286a6/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#4ab4f54286a6/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#4c2e6253e03c/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#4c2e6253e03c/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#6031164c5a14/ansi_on",
+      "reason": "SELECT to_csv(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#6031164c5a14/ansi_off",
+      "reason": "SELECT to_csv(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#60b0960b0706/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), '1') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#60b0960b0706/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), '1') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#693fdb1cd73b/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#693fdb1cd73b/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#7c0fc9c7250b/ansi_on",
+      "reason": "SELECT to_csv(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#7c0fc9c7250b/ansi_off",
+      "reason": "SELECT to_csv(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#94354a806019/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_STRING_TYPE"
+    },
+    {
+      "id": "to_csv#94354a806019/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_STRING_TYPE"
+    },
+    {
+      "id": "to_csv#b6cef18f3749/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#b6cef18f3749/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#cd3264eb33e3/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), X'01') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#cd3264eb33e3/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), X'01') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#dbe4c9d549a7/ansi_on",
+      "reason": "SELECT to_csv(NULL) | DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#dbe4c9d549a7/ansi_off",
+      "reason": "SELECT to_csv(NULL) | DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#e5beddaa41d0/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#e5beddaa41d0/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#ed99829c571a/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#ed99829c571a/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#f1f38a4aa1f4/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#f1f38a4aa1f4/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#f46d1c14e36e/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#f46d1c14e36e/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#f5610589692e/ansi_on",
+      "reason": "SELECT to_csv(INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#f5610589692e/ansi_off",
+      "reason": "SELECT to_csv(INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_csv#fa732aec8ae8/ansi_on",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_csv#fa732aec8ae8/ansi_off",
+      "reason": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_csv"
+}

@@ -49,6 +49,10 @@ pub(crate) struct StoreColumn {
 pub(crate) struct ViewDef {
     pub(crate) sql: String,
     pub(crate) namespace: String,
+    /// The names the query's output had when the view was created (before a column list renamed them): a
+    /// read projects the stored columns from the query's output by these names, so a base table that gained
+    /// columns does not change the view (Spark's schema compensation).
+    pub(crate) query_columns: Vec<String>,
 }
 
 /// A table in the catalog.

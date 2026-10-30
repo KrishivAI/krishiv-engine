@@ -160,3 +160,24 @@ fn namespace_names_that_could_be_paths_are_refused() {
         "INVALID_SCHEMA_OR_RELATION_NAME"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn drop_cascade_never_deletes_outside_the_warehouse() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("keep.txt"), "x").unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE d");
+    run(&s, "CREATE TABLE d.a (a INT)");
+    run(&s, "CREATE TABLE d.b (a INT)");
+    // One table's directory is swapped for a link that leaves the warehouse.
+    let b = dir.path().join("d.db").join("b");
+    std::fs::remove_dir_all(&b).unwrap();
+    std::os::unix::fs::symlink(outside.path(), &b).unwrap();
+    assert_eq!(class(&s, "DROP DATABASE d CASCADE"), "INTERNAL_ERROR");
+    // Nothing changed: both tables are still there, and so is the other directory.
+    assert!(dir.path().join("d.db").join("a").is_dir());
+    assert!(outside.path().join("keep.txt").is_file());
+    run(&s, "INSERT INTO d.a VALUES (1)");
+}

@@ -13,9 +13,6 @@
       20,
       21,
       22
-    ],
-    "fn-json": [
-      30
     ]
   },
   "file": "typeCoercion/native/stringCastAndExpressions",
