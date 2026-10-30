@@ -10,7 +10,7 @@ use krishiv_common::secret::OptionValue;
 
 use crate::dag::{self, Memo};
 use crate::walk::{self, Node};
-use crate::{BoundColumn, Expr, Origin, SortOrder};
+use crate::{AttrId, BoundColumn, Expr, Origin, SortOrder};
 
 /// The IR version a [`Plan`] is written in. It changes when a node changes
 /// meaning; adding a node or field does not change it before 1.0.
@@ -562,6 +562,24 @@ pub enum JoinKind {
     LeftAnti,
     /// `CROSS`.
     Cross,
+    /// Every left row plus a non-nullable boolean column (the attribute)
+    /// that says whether the condition matched any right row. Spark's
+    /// `ExistenceJoin(exists)`: how an `EXISTS` or `IN` subquery that is
+    /// not a whole filter conjunct is evaluated.
+    Existence(AttrId),
+}
+
+impl JoinKind {
+    /// The `exists` column an [`JoinKind::Existence`] join appends.
+    #[must_use]
+    pub fn existence_column(id: AttrId) -> BoundColumn {
+        BoundColumn {
+            id,
+            name: "exists".to_owned(),
+            data_type: krishiv_types::DataType::Boolean,
+            nullable: false,
+        }
+    }
 }
 
 /// Join condition.
@@ -1048,7 +1066,9 @@ impl LogicalPlan {
                         l,
                         matches!(kind, JoinKind::RightOuter | JoinKind::FullOuter),
                     );
-                    if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                    if let JoinKind::Existence(id) = kind {
+                        out.push(JoinKind::existence_column(*id));
+                    } else if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
                         let r =
                             nullable(r, matches!(kind, JoinKind::LeftOuter | JoinKind::FullOuter));
                         out.extend(r);

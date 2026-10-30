@@ -469,7 +469,10 @@ impl Interp<'_> {
                 if ok {
                     hit = true;
                     right_hit[j] = true;
-                    if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                    if !matches!(
+                        kind,
+                        JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+                    ) {
                         rows.push(row);
                     }
                 }
@@ -477,6 +480,9 @@ impl Interp<'_> {
             match kind {
                 JoinKind::LeftSemi if hit => rows.push(lr.clone()),
                 JoinKind::LeftAnti if !hit => rows.push(lr.clone()),
+                JoinKind::Existence(_) => {
+                    rows.push(lr.iter().cloned().chain([V::Bool(hit)]).collect());
+                }
                 JoinKind::LeftOuter | JoinKind::FullOuter if !hit => {
                     rows.push(lr.iter().cloned().chain(nulls(r.cols.len())).collect());
                 }
@@ -495,7 +501,9 @@ impl Interp<'_> {
                 }
             }
         }
-        let cols = if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+        let cols = if let JoinKind::Existence(id) = kind {
+            l.cols.iter().copied().chain([*id]).collect()
+        } else if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
             l.cols
         } else {
             cols

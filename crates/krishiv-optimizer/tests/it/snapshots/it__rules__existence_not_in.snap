@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE a NOT IN (SELECT a FROM u) OR b = 'x'"
+---
+Project [a#0]
++- Filter ((NOT exists#5) or (b#1 == 'x'))
+   +- Join ExistenceJoin(exists#5), ((a#0 == a#3) or isnull((a#0 == a#3)))
+      :- Scan spark_catalog.default.t [a#0, b#1]
+      +- Scan spark_catalog.default.u [a#3]

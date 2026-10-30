@@ -28,8 +28,8 @@ use twox_hash::XxHash3_128;
 
 use crate::analyzer::{PolicyVersion, TableIdent};
 use crate::{
-    AttrId, BoundColumn, Expr, ExprNode, FieldOp, Grouping, JoinCondition, LogicalPlan, Plan,
-    PlanNode, ReadSource, ResolvedExpr, SqlArgs, TableVersion,
+    AttrId, BoundColumn, Expr, ExprNode, FieldOp, Grouping, JoinCondition, JoinKind, LogicalPlan,
+    Plan, PlanNode, ReadSource, ResolvedExpr, SqlArgs, TableVersion,
 };
 
 /// A cache key: the normalized hash, the pinned table versions, who runs
@@ -586,7 +586,12 @@ impl Encoder {
                 condition,
             } => {
                 self.tag("Join");
-                self.debug(kind);
+                if let JoinKind::Existence(id) = kind {
+                    self.tag("existence");
+                    self.attr(*id, bias);
+                } else {
+                    self.debug(kind);
+                }
                 match condition {
                     JoinCondition::None => self.tag("no-cond"),
                     JoinCondition::On(e) => {

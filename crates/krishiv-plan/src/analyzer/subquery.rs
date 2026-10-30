@@ -182,6 +182,70 @@ fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
+/// `e`'s operand when `e` is `NOT x`.
+fn not_arg(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id == FunctionId::Builtin(Builtin::Not) && f.args.len() == 1 =>
+        {
+            Some(&f.args[0])
+        }
+        _ => None,
+    }
+}
+
+/// The `IN` subquery when `e` is `NOT (v IN (q))`.
+fn negated_in(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
+    not_arg(e).filter(|x| {
+        matches!(
+            &x.node,
+            ExprNode::Subquery {
+                kind: SubqueryKind::In(_),
+                ..
+            }
+        )
+    })
+}
+
+/// Whether `e` is a NULL literal or a cast of one.
+fn null_literal(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Literal(v) => matches!(v, Literal::Null(_)),
+        ExprNode::Cast { expr, .. } => null_literal(expr),
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => null_literal(expr),
+        _ => false,
+    }
+}
+
+/// Whether `p` is one row of expressions over no relation: `SELECT 1`,
+/// `VALUES (1)`, through aliases and projections.
+fn one_row_literals(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::OneRowRelation => true,
+        PlanNode::InlineTable { rows, .. } => rows.len() == 1,
+        PlanNode::Project { input, .. } | PlanNode::SubqueryAlias { input, .. } => {
+            one_row_literals(input)
+        }
+        _ => false,
+    }
+}
+
+/// The `IN` forms Spark folds before any join (`NullPropagation`, the
+/// one-row literal rewrite): `v IN (q)` with a NULL `v`, or over a one-row
+/// literal relation. They are refused rather than answered two-valued.
+fn check_in(values: &[Arc<Expr>], plan: &Arc<LogicalPlan>, origin: Origin) -> R<()> {
+    if values.iter().any(|v| null_literal(v)) {
+        return Err(unsupported("IN (subquery) with a NULL value", origin));
+    }
+    if one_row_literals(plan) {
+        return Err(unsupported(
+            "IN (subquery) over a one-row relation of literals",
+            origin,
+        ));
+    }
+    Ok(())
+}
+
 /// The type and nullability of a resolved expression.
 pub(super) fn typed(e: &Expr) -> (Option<DataType>, bool) {
     match &e.node {
@@ -416,19 +480,17 @@ impl Rewriter {
         let mut above = Vec::new();
         let mut joins = Vec::new();
         let mut scalars = Vec::new();
+        let mut existential = Vec::new();
         for c in conjuncts(predicate) {
             if let Some(pred) = self.predicate(&c) {
                 joins.push(pred);
                 continue;
             }
-            let subs = subqueries(&c);
-            let nested = |s: &&Arc<Expr>| matches!(&s.node, ExprNode::Subquery { kind, .. } if !matches!(kind, SubqueryKind::Scalar));
-            if subs.iter().filter(nested).any(|s| self.correlated(s)) {
-                return Err(unsupported(
-                    "correlated EXISTS and IN subqueries inside OR, NOT or other expressions",
-                    c.origin,
-                ));
+            if self.existential(&c) {
+                existential.push(c);
+                continue;
             }
+            let subs = subqueries(&c);
             if subs.iter().any(|s| self.correlated(s)) {
                 scalars.push(c);
             } else if has_outer(Node::Expr(&c)) {
@@ -437,7 +499,7 @@ impl Rewriter {
                 plain.push(c);
             }
         }
-        if joins.is_empty() && scalars.is_empty() {
+        if joins.is_empty() && scalars.is_empty() && existential.is_empty() {
             return Ok(Arc::clone(p));
         }
         let out = output(&input)?;
@@ -454,6 +516,11 @@ impl Rewriter {
                 (base, pred.values, widened) = (joined, values, true);
             }
             base = self.semi(base, &pred)?;
+        }
+        if !existential.is_empty() {
+            let (joined, conds) = self.existence(base, existential)?;
+            (base, widened) = (joined, true);
+            scalars.extend(conds);
         }
         if !scalars.is_empty() {
             let (joined, conds) = self.scalars(base, scalars)?;
@@ -483,11 +550,129 @@ impl Rewriter {
         input: Arc<LogicalPlan>,
         exprs: Vec<Arc<Expr>>,
     ) -> R<Arc<LogicalPlan>> {
-        if !exprs.iter().any(|e| self.reads_correlated(e)) {
+        if !exprs
+            .iter()
+            .any(|e| self.reads_correlated(e) || self.existential(e))
+        {
             return Ok(Arc::clone(p));
         }
-        let (base, exprs) = self.scalars(input, exprs)?;
+        let (base, exprs) = self.existence(input, exprs)?;
+        let (base, exprs) = self.scalars(base, exprs)?;
         Ok(node(PlanNode::Project { input: base, exprs }, p.origin))
+    }
+
+    /// Whether `e` holds an `EXISTS` or `IN` subquery that an existence
+    /// join computes: a correlated `EXISTS`, or any `IN`. (An uncorrelated
+    /// `EXISTS` stays an expression computed once.)
+    fn existential(&mut self, e: &Arc<Expr>) -> bool {
+        subqueries(e).iter().any(|s| match &s.node {
+            ExprNode::Subquery {
+                kind: SubqueryKind::Exists,
+                ..
+            } => self.correlated(s),
+            ExprNode::Subquery {
+                kind: SubqueryKind::In(_),
+                ..
+            } => true,
+            _ => false,
+        })
+    }
+
+    /// The `EXISTS` / `IN` subqueries of `exprs` that [`Self::existential`]
+    /// finds, each a left existence join of `base` with it (one per
+    /// distinct subquery expression, and per `NOT IN` form); `exprs` read
+    /// the joins' `exists` columns. A `NOT` that directly wraps an `IN`
+    /// reads `NOT exists` over a null-aware join, as Spark plans it.
+    fn existence(
+        &mut self,
+        base: Arc<LogicalPlan>,
+        exprs: Vec<Arc<Expr>>,
+    ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
+        let mut base = base;
+        // (subquery address, null-aware) -> its `exists` column.
+        let mut found: HashMap<(usize, bool), Arc<Expr>> = HashMap::new();
+        for e in &exprs {
+            for (sub, null_aware) in self.predicates(e)? {
+                if found.contains_key(&(addr(&*sub), null_aware)) {
+                    continue;
+                }
+                let ExprNode::Subquery { kind, plan } = &sub.node else {
+                    continue;
+                };
+                let values = match kind {
+                    SubqueryKind::In(values) => values.clone(),
+                    _ => Vec::new(),
+                };
+                let id = self.fresh();
+                let mut pred = Pred {
+                    kind: JoinKind::Existence(id),
+                    null_aware,
+                    values,
+                    plan: Arc::clone(plan),
+                };
+                // `(correlated scalar subquery) IN (q)`: its value first.
+                if pred.values.iter().any(|v| self.reads_correlated(v)) {
+                    let (joined, values) = self.scalars(base, std::mem::take(&mut pred.values))?;
+                    (base, pred.values) = (joined, values);
+                }
+                base = self.semi(base, &pred)?;
+                found.insert(
+                    (addr(&*sub), null_aware),
+                    col_expr(&JoinKind::existence_column(id), Origin::UNKNOWN),
+                );
+            }
+        }
+        let mut out = Vec::new();
+        for e in exprs {
+            let replaced = e.transform_down(&mut |x: Arc<Expr>| {
+                Ok::<_, std::convert::Infallible>(match negated_in(&x) {
+                    Some(sub) => found.get(&(addr(&**sub), true)).map_or_else(
+                        || x.clone(),
+                        |col| boolean(Builtin::Not, vec![Arc::clone(col)]),
+                    ),
+                    None => found.get(&(addr(&*x), false)).cloned().unwrap_or(x),
+                })
+            });
+            out.push(replaced.unwrap_or_else(|never| match never {}));
+        }
+        Ok((base, out))
+    }
+
+    /// The subqueries of `e` an existence join computes, in the order they
+    /// read (left to right, depth first), each with whether a `NOT` wraps
+    /// it directly (an `IN` only: the null-aware form). Refuses the forms
+    /// Spark decides before any join, where a two-valued join would answer
+    /// FALSE for Spark's NULL.
+    fn predicates(&mut self, e: &Arc<Expr>) -> R<Vec<(Arc<Expr>, bool)>> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(e)];
+        while let Some(x) = stack.pop() {
+            if not_arg(&x).is_some_and(|y| negated_in(y).is_some()) {
+                return Err(unsupported("NOT IN under a further NOT", x.origin));
+            }
+            let (sub, null_aware) = match negated_in(&x) {
+                Some(sub) => (Arc::clone(sub), true),
+                None => (Arc::clone(&x), false),
+            };
+            if let ExprNode::Subquery { kind, plan } = &sub.node {
+                let wanted = match kind {
+                    SubqueryKind::Exists => self.correlated(&sub),
+                    SubqueryKind::In(values) => {
+                        check_in(values, plan, sub.origin)?;
+                        true
+                    }
+                    SubqueryKind::Scalar => false,
+                };
+                if wanted && seen.insert((addr(&*sub), null_aware)) {
+                    out.push((Arc::clone(&sub), null_aware));
+                }
+            }
+            let mut kids = Vec::new();
+            sub.for_each_child(&mut |k| kids.push(Arc::clone(k)));
+            stack.extend(kids.into_iter().rev());
+        }
+        Ok(out)
     }
 
     /// A predicate subquery as a semi or anti join of `left` with it.
