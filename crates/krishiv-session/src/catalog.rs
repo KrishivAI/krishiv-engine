@@ -19,7 +19,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use crate::store::{CatalogStore, InMemoryCatalogStore, Warehouse};
+use crate::store::{CatalogStore, CatalogTable, InMemoryCatalogStore, ViewDef, Warehouse};
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::{
@@ -1087,7 +1087,11 @@ pub(crate) fn expand_temp_views(
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    expand_views(catalog, plan, case_sensitive, None).map(|(plan, _)| plan)
+    let expansion = expand_views(catalog, plan, case_sensitive, None)?;
+    match expansion.deferred {
+        Some(e) => Err(e),
+        None => Ok(expansion.plan),
+    }
 }
 
 /// What expanding a permanent view needs: its SQL is parsed again with the session's parser options.
@@ -1108,25 +1112,44 @@ pub(crate) fn expand_views(
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
     stored: Option<&StoredViews<'_>>,
-) -> Result<(Arc<LogicalPlan>, Vec<StoredViewRead>), KrishivError> {
+) -> Result<Expansion, KrishivError> {
     let mut expander = Expander {
         catalog,
         case_sensitive,
         path: Vec::new(),
         stored,
         view_namespace: None,
-        read: Vec::new(),
+        reads: Vec::new(),
+        deferred: None,
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
-    Ok((plan, expander.read))
+    Ok(Expansion {
+        plan,
+        reads: expander.reads,
+        deferred: expander.deferred,
+    })
 }
 
-/// A permanent view the expansion inlined: its namespace and name as the catalog stores them. The
-/// analyzer never sees these reads, so the session authorizes each as a view.
+/// A table-like name the expansion looked up in the catalog store, in plan order. The analyzer never
+/// sees an inlined permanent view, so the session asks the policy about every candidate itself, as the
+/// analyzer asks about a table: the name as written and folded first (whether or not it exists), then,
+/// for a permanent view, the view.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StoredViewRead {
-    pub(crate) namespace: String,
-    pub(crate) name: String,
+pub(crate) struct ReadCandidate {
+    /// The name parts as the plan spells them.
+    pub(crate) written: Vec<String>,
+    /// The namespace and name the catalog stores, when the name is a permanent view.
+    pub(crate) view: Option<(String, String)>,
+}
+
+/// What [`expand_views`] found besides the expanded plan.
+pub(crate) struct Expansion {
+    pub(crate) plan: Arc<LogicalPlan>,
+    /// The catalog-store lookups, in plan order, without repeats.
+    pub(crate) reads: Vec<ReadCandidate>,
+    /// A failure inside a stored view's text (it no longer parses, reads itself, ...). It is raised only
+    /// after the reads are authorized, so a principal who may not read the view never sees its text's errors.
+    pub(crate) deferred: Option<KrishivError>,
 }
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
@@ -1138,8 +1161,10 @@ struct Expander<'a> {
     stored: Option<&'a StoredViews<'a>>,
     /// Inside a stored view: the namespace its bare table names belong to.
     view_namespace: Option<String>,
-    /// The permanent views inlined so far, in expansion order, without repeats.
-    read: Vec<StoredViewRead>,
+    /// The catalog-store lookups so far, in plan order, without repeats.
+    reads: Vec<ReadCandidate>,
+    /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
+    deferred: Option<KrishivError>,
 }
 
 impl Expander<'_> {
@@ -1269,19 +1294,52 @@ impl Expander<'_> {
         } else {
             (namespace.to_lowercase(), table.to_lowercase())
         };
-        let Some(entry) = self.catalog.store.table(&namespace, &table_key) else {
+        let entry = self.catalog.store.table(&namespace, &table_key);
+        let candidate = ReadCandidate {
+            written: name.clone(),
+            view: entry
+                .as_ref()
+                .filter(|e| e.view.is_some())
+                .map(|e| (e.namespace.clone(), e.name.clone())),
+        };
+        if !self.reads.contains(&candidate) {
+            self.reads.push(candidate);
+        }
+        let Some(entry) = entry else {
             return Ok(plan);
         };
         let Some(view) = &entry.view else {
             return Ok(plan);
         };
-        let read = StoredViewRead {
-            namespace: entry.namespace.clone(),
-            name: entry.name.clone(),
-        };
-        if !self.read.contains(&read) {
-            self.read.push(read);
+        match self.inline_stored(&plan, &entry, view, &namespace, &table_key, scope) {
+            Ok(done) => Ok(done),
+            Err(e) => {
+                // Keep the read as it is; the failure is raised once the reads are authorized.
+                self.deferred.get_or_insert(e);
+                Ok(plan)
+            }
         }
+    }
+
+    /// The query of the stored view `entry`, inlined for the read `plan`.
+    fn inline_stored(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        entry: &Arc<CatalogTable>,
+        view: &ViewDef,
+        namespace: &str,
+        table_key: &str,
+        _scope: &mut [String],
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let Some(stored) = self.stored else {
+            return Ok(Arc::clone(plan));
+        };
+        let table = match &plan.node {
+            PlanNode::Read(ReadSource::Table { name, .. }) => {
+                name.last().cloned().unwrap_or_default()
+            }
+            _ => return Ok(Arc::clone(plan)),
+        };
         let key = format!("{namespace}.{table_key}");
         if self.path.contains(&key) {
             return Err(InternalError {
@@ -1340,7 +1398,7 @@ impl Expander<'_> {
         Ok(Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
                 input,
-                alias: table.clone(),
+                alias: table,
                 columns,
             })
             .with_origin(plan.origin),

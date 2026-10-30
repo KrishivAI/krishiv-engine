@@ -819,3 +819,135 @@ fn querying_a_permanent_view_checks_the_view_securable() {
     assert_eq!(results[2], DENIED, "a qualified name");
     assert_eq!(results[3], "OK", "the base table stays readable");
 }
+
+static DENY_ALL_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static DENY_TABLE_V: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn flagged(securable: &Securable, p: Privilege) -> AccessDecision {
+    use std::sync::atomic::Ordering::SeqCst;
+    if DENY_ALL_NOW.load(SeqCst) && p == Privilege::Select {
+        return deny();
+    }
+    if DENY_TABLE_V.load(SeqCst)
+        && p == Privilege::Select
+        && matches!(securable, Securable::Table(t) if t.name == "v")
+    {
+        return deny();
+    }
+    AccessDecision::Allow
+}
+
+/// A denied read of a permanent view cannot be told from a read of a missing name: the same securable
+/// is named, the policy is asked about the name as written and folded, and a broken stored text is
+/// never reported to a principal that may not read the view.
+#[test]
+fn permanent_view_reads_leak_nothing_to_a_denied_principal() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(flagged));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+        "CREATE VIEW c1 AS SELECT a FROM base",
+        "CREATE VIEW c2 AS SELECT a FROM c1",
+        // Cycle through ALTER: c1 now reads c2, which reads c1.
+        "ALTER VIEW c1 AS SELECT a FROM c2",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let message = |sql: &str| {
+        block_on(s.sql(sql))
+            .map(|_| "OK".to_owned())
+            .unwrap_or_else(|e| format!("{} {e}", e.error_class().name()))
+    };
+    let allowed = message("SELECT * FROM V");
+    DENY_ALL_NOW.store(true, SeqCst);
+    let existing = message("SELECT * FROM v");
+    let missing = message("SELECT * FROM nope");
+    // The name as the plan spells it is what the denial shows, whichever it is.
+    let upper_existing = message("SELECT * FROM default.V");
+    let upper_missing = message("SELECT * FROM default.NOPE");
+    let cyclic = message("SELECT * FROM c1");
+    let order_existing = message("SELECT * FROM base, v");
+    let order_missing = message("SELECT * FROM base, nope");
+    DENY_ALL_NOW.store(false, SeqCst);
+    assert_eq!(allowed, "OK");
+    assert!(existing.starts_with(DENIED), "{existing}");
+    assert_eq!(
+        existing.replace("`v`", "`X`"),
+        missing.replace("`nope`", "`X`")
+    );
+    assert_eq!(
+        upper_existing.to_lowercase().replace("`v`", "`X`"),
+        upper_missing.to_lowercase().replace("`nope`", "`X`")
+    );
+    assert!(cyclic.starts_with(DENIED), "{cyclic}");
+    // The first denial is the first name in the plan, view or not.
+    assert!(order_existing.contains("base"), "{order_existing}");
+    assert!(order_missing.contains("base"), "{order_missing}");
+    // With the grant back, the cycle is reported.
+    assert!(message("SELECT * FROM c1").starts_with("INTERNAL_ERROR"));
+}
+
+/// A policy that denies the table-named securable of a view stops a query of the view, in any
+/// spelling of its name.
+#[test]
+fn a_table_rule_on_a_view_name_applies_to_queries_of_it() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(flagged));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    DENY_TABLE_V.store(true, SeqCst);
+    let results = [
+        class(block_on(s.sql("SELECT * FROM v"))),
+        class(block_on(s.sql("SELECT * FROM V"))),
+        class(block_on(s.sql("SELECT * FROM spark_catalog.default.v"))),
+    ];
+    DENY_TABLE_V.store(false, SeqCst);
+    assert_eq!(results, [DENIED, DENIED, DENIED]);
+}
+
+/// `statement_info` lists the view securable of a query of a permanent view.
+#[test]
+fn statement_info_lists_the_view_securable() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(flagged));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    for sql in [
+        "CREATE TABLE base (a INT) USING parquet",
+        "CREATE VIEW v AS SELECT a FROM base",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let info = block_on(s.statement_info("SELECT * FROM v")).unwrap();
+    let names: Vec<String> = info
+        .securables
+        .iter()
+        .map(|u| format!("{:?}", u.securable))
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n.starts_with("View") && n.contains("\"v\"")),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|n| n.starts_with("Table") && n.contains("base")),
+        "{names:?}"
+    );
+}
