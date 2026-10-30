@@ -696,7 +696,7 @@ impl MetricsRegistry {
     pub fn fold(&self, outcome: &QueryOutcome<'_>) {
         self.folds.fetch_add(1, Ordering::Relaxed);
         // Saturating: a fold without a matching `query_begin` must not wrap.
-        let _ = self.active[Self::class_index(outcome.class)].fetch_update(
+        let _ = self.active[Self::class_index(outcome.class)].try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |n| Some(n.saturating_sub(1)),
