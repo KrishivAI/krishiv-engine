@@ -51,7 +51,7 @@ ENGINES = ["krishiv", "duckdb", "polars"]
 TABLE = "fw"
 FILTER_SQL = "int_score >= 4 AND token_count >= 4000 AND language_score >= 0.95"
 HF_DATASET = "HuggingFaceFW/fineweb-edu"
-HF_REVISION = "main"  # resolved to a commit sha at listing time; the sha is what a mirror records
+HF_REVISION = "main"  # the revision a listing is requested at; the pinned sha is what a mirror records
 HF_SUBDIR = "sample/10BT"
 APPROX_SIZE = "~28 GB"
 EXPECTED_FILE = "expected.json"
@@ -135,7 +135,9 @@ def list_remote_files(timeout_s: float = 60) -> list[tuple[str, str]]:
         raise RuntimeError(f"cannot list {HF_DATASET} ({e}); pass explicit files to fetch_remote_filter") from e
     out = []
     try:
-        revision = meta.get("sha") or HF_REVISION  # the commit the listing describes, so files and counts agree
+        revision = meta.get("sha")  # the commit the listing describes, so files and counts agree
+        if not revision:
+            raise RuntimeError(f"the Hub listing for {HF_DATASET} carries no commit sha")
         siblings = meta.get("siblings", [])
         for sib in siblings:
             name = sib.get("rfilename", "")
@@ -175,7 +177,9 @@ def fetch_remote_filter(
         # download never leaves a truncated file that looks finished.
         part = target.with_name(target.name + ".part")
         print(f"[remote-filter] {url} -> {target}")
-        subprocess.run(["curl", "-fL", "-C", "-", "-o", str(part), url], check=True)
+        # A connection that stalls (under 1 kB/s for 60 s) fails and is retried instead of hanging.
+        cmd = ["curl", "-fL", "-C", "-", "--connect-timeout", "30", "--speed-limit", "1000", "--speed-time", "60"]
+        subprocess.run([*cmd, "--retry", "3", "-o", str(part), url], check=True)
         part.rename(target)
     from .datasets import write_manifest
 
@@ -407,6 +411,11 @@ def run_scope(
                     v = "reference"
                 else:
                     v = judge(ref, rec)
+                    if validation and engine == "duckdb" and v == "pass" and ref is not None:
+                        # expected.json holds counts only: DuckDB's id digest completes the reference.
+                        ref.setdefault("ids_digest", rec.get("ids_digest"))
+                        if ref["ids_digest"] is None:
+                            ref.pop("ids_digest")
                 if v.startswith("fail") or verdict.get(engine, "unverified").startswith("unverified"):
                     verdict[engine] = v
                 rec["verdict"] = v
@@ -451,6 +460,8 @@ def run_remote_filter(
         raise ValueError(f"engines must be a non-empty subset of {', '.join(ENGINES)} (got {names})")
     if reps < 1:
         raise ValueError(f"reps must be at least 1 (got {reps})")
+    if not data_arg.strip().startswith("[") and Path(data_arg).is_dir():
+        mirror_table_files(Path(data_arg))  # fail before the scopes when the mirror was never downloaded
     scopes = list(caps) if caps else [None]
     cap_bytes = [parse_size(c) if c else None for c in scopes]
     expected: dict | None = None

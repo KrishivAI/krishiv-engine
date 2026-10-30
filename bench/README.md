@@ -89,6 +89,34 @@ uv run krishiv-bench report --suite memcap --rows 150m                          
   finished runs, finished n/N, median peak memory (`>cap (killed)` when none finished), spill and the verdict. The newest result per (engine, engine memory) is shown. The run holds `$KRISHIV_DATA/.bench.lock`.
 * Needs systemd user scopes with the memory controller (Linux, cgroup v2), Java 21 for Spark and the `dist` runner for Krishiv (see Adapters). Run 50m/150m on the benchmark server.
 
+### Provenance and licence
+The schema, seed, generator and the four queries are taken from the public MIT-licensed repository `engine-bench` by Firat Celik (https://github.com/firfircelik/engine-bench: `gen_data.py`, `queries.py`),
+adapted here (output layout, content digests, versioned directory, checksums). The licence notice that goes with that use:
+
+```
+MIT License
+
+Copyright (c) 2026 Firat Celik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Selective scan (`remote-filter`)
 One selective scan over a FineWeb-Edu sample, written back as Parquet.
 ```bash

@@ -193,7 +193,7 @@ def _runner_binary() -> Path | None:
     if env:
         p = Path(env)
         return p if p.exists() else None
-    p = Path(__file__).resolve().parents[2].parent / "target" / "dist" / "krishiv-bench-runner"
+    p = Path(__file__).resolve().parents[2] / "target" / "dist" / "krishiv-bench-runner"
     return p if p.exists() else None
 
 
@@ -252,7 +252,7 @@ def test_child_krishiv_passes_only_supported_conf_to_the_runner(tmp_path, monkey
     line = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("RESULT ")][-1]
     res = json.loads(line.removeprefix("RESULT "))
     assert (res["rows_out"], res["sum_tokens"]) == (2, 9000)
-    assert len(res["compression"]) > 0  # the file codec is recorded, whatever the runner wrote
+    assert res["compression"] == ["SNAPPY"]  # the fake runner writes PyArrow's default codec
     args = json.loads(argv_log.read_text())
     assert not any(a.startswith("spark.sql.") for a in args)
     assert f"krishiv.spill.dir={work / 'scratch'}" in args
@@ -395,8 +395,8 @@ def test_suite_runs_validation_then_reps_with_rotation_and_duckdb_as_reference(m
     assert calls[0] == (None, "duckdb")
     assert calls[9] == ("4g", "duckdb")
     # The engine order rotates between timed repetitions: not the same engine first twice in a row.
-    firsts = [calls[i][1] for i in (3, 6)]
-    assert firsts[0] != firsts[1]
+    first_scope = [e for _, e in calls[:9]]
+    assert first_scope == ["duckdb", "krishiv", "polars", "duckdb", "polars", "krishiv", "polars", "krishiv", "duckdb"]
     unc = record["scopes"]["uncapped"]
     assert unc["reference"] == {"rows": 5, "sum_tokens": 50, "ids_digest": "d1"}
     assert unc["engines"]["duckdb"]["verdict"] == "reference"
@@ -455,11 +455,29 @@ def test_expected_json_is_the_reference_and_no_reference_is_unverified(monkeypat
     monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
     mirror = tmp_path / "mirror"
     mirror.mkdir()
+    pq.write_table(pa.table({"text": ["a"]}), mirror / "fw.parquet")
     write_expected(mirror, 5, 50, [])
     f = run_remote_filter(str(mirror), ["polars"], None, 60, run=_scripted({"polars": _fin(tokens=49)}), reps=1)
     sc = json.loads(f.read_text())["scopes"]["uncapped"]
     assert sc["reference"] == {"rows": 5, "sum_tokens": 50, "files": []}
     assert sc["engines"]["polars"]["verdict"].startswith("fail: sum_tokens")
+    # DuckDB passing against the counts completes the reference with its id digest, which then binds the others.
+    f = run_remote_filter(
+        str(mirror),
+        ["duckdb", "polars"],
+        None,
+        60,
+        run=_scripted({"duckdb": _fin(), "polars": _fin(ids="other")}),
+        reps=1,
+    )
+    sc = json.loads(f.read_text())["scopes"]["uncapped"]
+    assert sc["reference"]["ids_digest"] == "d1"
+    assert sc["engines"]["polars"]["verdict"].startswith("fail: ids_digest")
+    # A mirror that was never downloaded fails before any scope starts.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(FileNotFoundError, match="krishiv-datasets remote-filter"):
+        run_remote_filter(str(empty), ["duckdb"], None, 60, run=_scripted({"duckdb": _fin()}), reps=1)
     # Without DuckDB and without counts nothing can be checked.
     f = run_remote_filter("[]", ["polars"], None, 60, run=_scripted({"polars": _fin()}), reps=1)
     polars = json.loads(f.read_text())["scopes"]["uncapped"]["engines"]["polars"]
@@ -520,6 +538,9 @@ def test_listing_pins_the_commit_and_fetch_resumes_through_a_part_file(monkeypat
     assert "/resolve/abc123/" in url
     assert rel == "sample/10BT/000_00000.parquet"
     monkeypatch.setattr(rf.urllib.request, "urlopen", lambda *_a, **_k: io.BytesIO(b'{"siblings": []}'))
+    with pytest.raises(RuntimeError, match="no commit sha"):
+        rf.list_remote_files()
+    monkeypatch.setattr(rf.urllib.request, "urlopen", lambda *_a, **_k: io.BytesIO(b'{"sha": "abc", "siblings": []}'))
     with pytest.raises(RuntimeError, match="no Parquet files"):
         rf.list_remote_files()
     monkeypatch.setattr(rf.urllib.request, "urlopen", lambda *_a, **_k: io.BytesIO(b"[1]"))
@@ -536,6 +557,8 @@ def test_listing_pins_the_commit_and_fetch_resumes_through_a_part_file(monkeypat
     monkeypatch.setattr(rf.subprocess, "run", fake_run)
     dest = rf.fetch_remote_filter(tmp_path / "m", yes=True, files=[("https://h/a.parquet", "a.parquet")])
     assert calls[0][calls[0].index("-o") + 1].endswith("a.parquet.part")
+    assert calls[0][calls[0].index("--speed-limit") + 1] == "1000"  # a stalled transfer fails and retries
+    assert "--connect-timeout" in calls[0]
     assert (dest / "fw" / "a.parquet").is_file()
     assert not (dest / "fw" / "a.parquet.part").exists()
     # A finished file is kept; no second download.
@@ -637,3 +660,65 @@ def test_fetch_downloads_explicit_files(monkeypatch, tmp_path):
     assert seen == ["https://example.com/p0.parquet"]
     with pytest.raises(ValueError, match="no files"):
         remote_filter.fetch_remote_filter(tmp_path / "mirror2", yes=True, files=[])
+
+
+def test_parse_input_accepts_urls_files_directories_and_refuses_the_rest(tmp_path):
+    from krishiv_bench.remote_filter_child import parse_input
+
+    assert parse_input('["https://h/a.parquet"]') == ("urls", ["https://h/a.parquet"])
+    d = tmp_path / "d"
+    d.mkdir()
+    pq.write_table(pa.table({"text": ["a"]}), d / "x.parquet")
+    assert parse_input(json.dumps([str(d), "/elsewhere/y.parquet"])) == (
+        "files",
+        [str(d / "x.parquet"), "/elsewhere/y.parquet"],
+    )
+    assert parse_input(str(d)) == ("files", [str(d / "x.parquet")])
+    assert parse_input(str(d / "x.parquet")) == ("files", [str(d / "x.parquet")])
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    for bad, want in [
+        ("[1]", "non-empty list of strings"),
+        ("[]", "non-empty list of strings"),
+        (str(empty), "no Parquet files"),
+        (str(tmp_path / "missing"), "neither a directory"),
+        (json.dumps([str(empty)]), "no Parquet sources"),
+    ]:
+        with pytest.raises(SystemExit, match=want):
+            parse_input(bad)
+
+
+def test_the_cli_commands_forward_and_report_errors(monkeypatch, tmp_path):
+    from krishiv_bench import cli, datasets
+    from krishiv_bench import remote_filter as rf
+
+    seen: dict = {}
+
+    def fake_run(data_arg, engines, caps, timeout_s, reps):
+        seen.update(data=data_arg, engines=engines, caps=caps, timeout=timeout_s, reps=reps)
+        return tmp_path / "r.json"
+
+    monkeypatch.setattr(rf, "run_remote_filter", fake_run)
+    cli.main(["remote-filter", "--mirror", str(tmp_path), "--engines", "duckdb, polars", "--reps", "2"])
+    assert seen["data"] == str(tmp_path)
+    assert seen["engines"] == ["duckdb", "polars"]
+    assert seen["caps"] == [None, "4g"]
+    assert seen["reps"] == 2
+
+    def refuse(*_a, **_k):
+        raise FileNotFoundError("no mirror")
+
+    monkeypatch.setattr(rf, "run_remote_filter", refuse)
+    with pytest.raises(SystemExit) as e:
+        cli.main(["remote-filter"])
+    assert e.value.code == 2
+
+    monkeypatch.setattr(rf, "fetch_remote_filter", lambda out, yes: tmp_path / "m")
+    datasets.main(["remote-filter", "--yes"])
+
+    def broken(out, yes):
+        raise RuntimeError("cannot list")
+
+    monkeypatch.setattr(rf, "fetch_remote_filter", broken)
+    with pytest.raises(SystemExit, match="cannot list"):
+        datasets.main(["remote-filter", "--yes"])
