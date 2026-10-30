@@ -590,8 +590,10 @@ fn results_are_checked_against_the_binding() {
 
 mod bitwise;
 mod calendar;
+mod csv;
 mod families;
 mod json;
+mod json_tuple;
 mod map;
 mod misc;
 mod number;

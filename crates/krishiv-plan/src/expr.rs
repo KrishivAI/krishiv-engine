@@ -91,6 +91,17 @@ pub enum ExprNode {
         /// The field name, as written.
         name: String,
     },
+    /// An unresolved struct update: the fields `ops` adds to, replaces in
+    /// or drops from the struct `base` (Spark's `UpdateFields`, built by
+    /// `Column.withField`/`Column.dropFields`). The analyzer rewrites it to
+    /// a `CASE WHEN base IS NULL ... ELSE named_struct(...) END` over field
+    /// extractions of the resolved base, so no resolved plan holds it.
+    UpdateFields {
+        /// The struct value.
+        base: Arc<Expr>,
+        /// The field updates, in order.
+        ops: Vec<FieldOp>,
+    },
     /// `CAST(expr AS to)`; `TRY_CAST` is [`CastMode::Try`].
     Cast {
         /// The value to cast.
@@ -136,6 +147,27 @@ pub struct ColumnRef {
     /// encoding records all of those carriers, so plans with equal keys
     /// resolve the reference alike, whichever rule picks among them.
     pub plan_id: Option<PlanId>,
+}
+
+/// One field update of an unresolved [`ExprNode::UpdateFields`] (Spark's
+/// `StructFieldsOperation`): a [`FieldOp::With`] carries its value as a
+/// child, a [`FieldOp::Drop`] carries none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldOp {
+    /// Add the field `name` with `value`, or replace every field matching
+    /// it (Spark's `WithField`). The name is plain, never a dotted path.
+    With {
+        /// The field name, as written.
+        name: String,
+        /// The new value.
+        value: Arc<Expr>,
+    },
+    /// Drop every field matching `name`, ignoring names that match nothing
+    /// (Spark's `DropField`).
+    Drop {
+        /// The field name, as written.
+        name: String,
+    },
 }
 
 /// An unresolved `*` (empty qualifier) or `t.*`.
@@ -576,6 +608,7 @@ impl Expr {
             | ExprNode::Resolved(
                 ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
             ) => f(expr),
+            ExprNode::UpdateFields { .. } => self.update_fields_children(f),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
@@ -622,6 +655,7 @@ impl Expr {
             | ExprNode::Resolved(
                 ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
             ) => f(expr),
+            ExprNode::UpdateFields { .. } => update_fields_children_mut(&mut self.node, f),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter_mut().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
@@ -731,6 +765,41 @@ impl Expr {
 
 /// The operand of `-(x)` (the canonical `negative`, unresolved or
 /// resolved): a frame bound written `x PRECEDING`.
+impl Expr {
+    /// Calls `f` on the base then on each [`FieldOp::With`] value of an
+    /// [`ExprNode::UpdateFields`], in child order (see
+    /// [`Self::for_each_child`]). Out of line so the traversal keeps its
+    /// frame: plans at the depth cap must still fit a 2 MiB stack (see
+    /// `tests::depth`).
+    #[inline(never)]
+    fn update_fields_children<'a, 'b, F>(&'a self, f: &'b mut F)
+    where
+        F: FnMut(&'a Arc<Self>),
+    {
+        if let ExprNode::UpdateFields { base, ops } = &self.node {
+            f(base);
+            for op in ops {
+                if let FieldOp::With { value, .. } = op {
+                    f(value);
+                }
+            }
+        }
+    }
+}
+
+/// As [`Expr::update_fields_children`], for [`Expr::for_each_child_mut`].
+#[inline(never)]
+fn update_fields_children_mut(node: &mut ExprNode, f: &mut dyn FnMut(&mut Arc<Expr>)) {
+    if let ExprNode::UpdateFields { base, ops } = node {
+        f(base);
+        for op in ops.iter_mut() {
+            if let FieldOp::With { value, .. } = op {
+                f(value);
+            }
+        }
+    }
+}
+
 pub(crate) fn negated(e: &Expr) -> Option<&Arc<Expr>> {
     let (name, args) = match &e.node {
         ExprNode::Function(f) => (f.unqualified()?, &f.args),

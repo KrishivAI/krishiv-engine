@@ -16,15 +16,16 @@
 
 use krishiv_common::error::{
     DatatypeMismatchInvalidJsonSchema, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
-    InvalidOptionsNonMapFunction, InvalidOptionsNonStringType, InvalidSchemaNonStringLiteral,
-    KrishivError,
+    DatatypeMismatchNonStringType, DatatypeMismatchUnexpectedInputType,
+    DatatypeMismatchUnexpectedNull, InvalidOptionsNonMapFunction, InvalidOptionsNonStringType,
+    InvalidSchemaNonStringLiteral, KrishivError,
 };
-use krishiv_types::{ArrayType, DataType, parse_data_type};
+use krishiv_types::{ArrayType, DataType, StructField, StructType, parse_data_type};
 
+use super::Execution;
 use super::defs::Spec;
 use super::defs::{exact, scalar};
-use crate::signature::{ArgType, CallTypes, Constant, InputType, Inputs};
+use crate::signature::{ArgType, CallTypes, Constant, FunctionKind, InputType, Inputs};
 
 /// Every JSON function: the schema reads as Spark's DDL (a bare field list
 /// is wrapped in `struct<...>`), the options as Spark's JSON data source
@@ -41,6 +42,13 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(scalar(&["schema_of_json"], &Inputs::Any, schema_of_json));
     out.extend(scalar(&["to_json"], &Inputs::Any, to_json));
     out.extend(scalar(&["from_json"], &Inputs::Any, from_json));
+    out.push(Spec {
+        name: "json_tuple",
+        kind: FunctionKind::Generator,
+        inputs: Inputs::Any,
+        result: json_tuple,
+        execution: Execution::Scalar,
+    });
     out
 }
 
@@ -191,4 +199,44 @@ fn call_sql(c: &CallTypes<'_>, name: &str) -> String {
         .map(|i| c.sql(i).unwrap_or_default())
         .collect();
     format!("\"{name}({})\"", args.join(", "))
+}
+
+/// `json_tuple(json, field1, ...)` (Spark 4.2's `JsonTuple`, a generator):
+/// every argument must be a `STRING` (anything else, an untyped `NULL`
+/// included, is `DATATYPE_MISMATCH.NON_STRING_TYPE`; the analyzer applies no
+/// implicit casts), field names may be non-foldable, and the result is the
+/// struct of N nullable `STRING`s `c0` .. `c(N-1)` the kernel in
+/// `crate::scalar::json_tuple` returns (the struct itself is never null).
+/// The analyzer expands a `json_tuple` select item into field accesses of
+/// one shared struct computation. Arity (`> 1`) comes from Spark's catalog.
+fn json_tuple(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let n = c.args().len();
+    if n < 2 {
+        // Unreachable through the analyzer (its arity check runs first);
+        // the signature stays total for direct callers.
+        return Err(krishiv_common::error::WrongNumArgsWithoutSuggestion {
+            function_name: "`json_tuple`".to_owned(),
+            expected_num: "> 1".to_owned(),
+            actual_num: n.to_string(),
+            docroot: "https://spark.apache.org/docs/latest".to_owned(),
+        }
+        .into());
+    }
+    let shown: Vec<String> = (0..n).map(|i| c.sql(i).unwrap_or_default()).collect();
+    for i in 0..n {
+        if c.data_type(i) != Some(&DataType::String) {
+            return Err(DatatypeMismatchNonStringType {
+                func_name: "`json_tuple`".to_owned(),
+                sql_expr: format!("\"json_tuple({})\"", shown.join(", ")),
+            }
+            .into());
+        }
+    }
+    let fields: Vec<StructField> = (0..n - 1)
+        .map(|i| StructField::new(format!("c{i}"), DataType::String, true))
+        .collect();
+    Ok(ArgType::new(
+        DataType::Struct(StructType::new(fields)),
+        false,
+    ))
 }

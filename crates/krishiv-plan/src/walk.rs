@@ -10,8 +10,9 @@ use std::sync::Arc;
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
 
 use crate::{
-    CastMode, Cte, Expr, ExprNode, FunctionCall, Grouping, JoinCondition, Literal, LogicalPlan,
-    PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, SortOrder, SqlArgs, SubqueryKind,
+    CastMode, Cte, Expr, ExprNode, FieldOp, FunctionCall, Grouping, JoinCondition, Literal,
+    LogicalPlan, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, SortOrder, SqlArgs,
+    SubqueryKind,
 };
 
 /// The deepest nesting the IR accepts, counting every relation and
@@ -171,6 +172,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | ExprNode::TypedLiteral { .. }
                 | ExprNode::Function(_)
                 | ExprNode::Field { .. }
+                | ExprNode::UpdateFields { .. }
                 | ExprNode::Alias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
                     CastMode::Default => false,
@@ -400,6 +402,14 @@ impl Teardown {
             | ExprNode::Resolved(
                 ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
             ) => self.exprs.push(expr),
+            ExprNode::UpdateFields { base, ops } => {
+                self.exprs.push(base);
+                for op in ops {
+                    if let FieldOp::With { value, .. } = op {
+                        self.exprs.push(value);
+                    }
+                }
+            }
             ExprNode::Subquery { kind, plan } => {
                 self.plans.push(plan);
                 match kind {

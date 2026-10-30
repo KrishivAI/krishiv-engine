@@ -13,6 +13,7 @@ mod encode;
 mod files;
 mod function_call_forms;
 mod inventory;
+mod json_tuple;
 mod nodes;
 mod pivot;
 mod props;

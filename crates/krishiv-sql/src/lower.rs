@@ -1696,50 +1696,36 @@ impl Lowerer {
         )
     }
 
-    /// `STRUCT(items)`: `struct(...)` when no item is aliased, else
-    /// `named_struct(name, ...)` with a default for the unaliased items. A
-    /// `*` item passes through for the analyzer to expand against the
-    /// struct's fields, and a multi-name alias is not a field name. An
-    /// unaliased column or field keeps its own name (as Spark's
-    /// `CreateStruct` does); any other expression defaults to `colN`.
+    /// `STRUCT(items)`: `struct(...)` with the items as written (an aliased
+    /// item stays an alias); the analyzer names the fields (an alias, an
+    /// unaliased column or field its own name, anything else `colN`) and
+    /// rewrites a call with any named child to `named_struct(name, ...)`,
+    /// keeping `struct(...)` as the shown form. A `*` item passes through
+    /// for the analyzer to expand, and a multi-name alias is not a field
+    /// name.
     fn struct_ctor(&mut self, items: &[SelectItem], sp: Span) -> R<IrExpr> {
         let mut args = Vec::with_capacity(items.len());
-        let mut names: Vec<String> = Vec::with_capacity(items.len());
-        let mut aliased = false;
-        for (i, item) in items.iter().enumerate() {
+        for item in items.iter() {
             let star = matches!(item.expr.kind, ExprKind::Wildcard { .. });
             if star && item.alias.is_some() {
                 return Err(unsupported("row and struct constructors", sp));
             }
-            let name = match &item.alias {
-                None => match &item.expr.kind {
-                    ExprKind::Column(parts) => parts
-                        .last()
-                        .map(|p| p.value.clone())
-                        .unwrap_or_else(|| format!("col{}", i + 1)),
-                    ExprKind::Field(_, f) => f.value.clone(),
-                    _ => format!("col{}", i + 1),
-                },
-                Some(Alias::Name(id)) => {
-                    aliased = true;
-                    id.value.clone()
-                }
+            let arg = self.arg(&item.expr)?;
+            args.push(match &item.alias {
+                None => arg,
+                Some(Alias::Name(id)) => arc(self.ex(
+                    ExprNode::Alias {
+                        expr: arg,
+                        name: id.value.clone(),
+                    },
+                    sp,
+                )),
                 Some(Alias::List(_)) => {
                     return Err(unsupported("row and struct constructors", sp));
                 }
-            };
-            args.push(self.arg(&item.expr)?);
-            names.push(name);
+            });
         }
-        if !aliased {
-            return Ok(self.call("struct", args, sp));
-        }
-        let mut named: Vec<Arc<IrExpr>> = Vec::with_capacity(args.len() * 2);
-        for (name, arg) in names.into_iter().zip(args) {
-            named.push(arc(self.ex(ExprNode::Literal(IrLiteral::String(name)), sp)));
-            named.push(arg);
-        }
-        Ok(self.call("named_struct", named, sp))
+        Ok(self.call("struct", args, sp))
     }
 }
 

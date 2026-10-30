@@ -28,7 +28,7 @@ mod cond;
 mod field;
 mod func;
 mod hof;
-mod logic;
+pub(crate) mod logic;
 mod nested_cast;
 mod strings;
 
