@@ -525,9 +525,11 @@ impl<'a> Estimator<'a> {
                 .chain(side(r, mr, false, left_only))
                 .collect(),
             JoinKind::LeftSemi => side(l, ml, true, 0.0).into_iter().collect(),
-            JoinKind::LeftAnti => side(l, ml, false, 0.0).into_iter().collect(),
-            // The left rows unchanged; `exists` has no statistics.
-            JoinKind::Existence(_) => side(l, ml, false, 0.0).into_iter().collect(),
+            // An existence join keeps the left rows unchanged (`exists` has
+            // no statistics).
+            JoinKind::LeftAnti | JoinKind::Existence(_) => {
+                side(l, ml, false, 0.0).into_iter().collect()
+            }
             _ => side(l, ml, true, 0.0)
                 .into_iter()
                 .chain(side(r, mr, true, 0.0))
