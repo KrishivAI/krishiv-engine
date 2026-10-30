@@ -750,6 +750,12 @@ impl Parser<'_> {
             Some(TokenKind::Sym(Sym::Colon))
                 if matches!(self.kind(1), Some(TokenKind::Word | TokenKind::QuotedIdent)) =>
             {
+                // ANTLR reads `:IDENTIFIER(` as the start of an identifier
+                // clause and fails at its argument, not at the `(`.
+                if self.kw_at(1, "IDENTIFIER") && self.sym_at(2, Sym::LParen) {
+                    self.pos += 3;
+                    return self.fail();
+                }
                 self.bump();
                 let name = self.ident()?;
                 return Ok(self.mk(ExprKind::NamedParameter(name), start));

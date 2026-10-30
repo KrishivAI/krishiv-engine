@@ -3255,3 +3255,11 @@ fn execute_immediate_statements() {
         assert!(parse_statement(bad, &d).is_err(), "{bad}");
     }
 }
+
+/// `:IDENTIFIER(...)` is not a parameter marker: ANTLR fails at its argument.
+#[test]
+fn identifier_clause_is_not_a_named_marker() {
+    let d = ParserOptions::default();
+    let e = parse_statement("SELECT :IDENTIFIER('param1') FROM t", &d).unwrap_err();
+    assert_eq!(e.span.start, 19);
+}
