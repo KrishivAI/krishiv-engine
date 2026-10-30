@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
-use futures::FutureExt as _;
 use futures::executor::block_on;
 use krishiv_exec::{cpu_secs, scan_rows, spill_bytes, spill_files};
 use krishiv_plan::analyzer::{Principal, PrincipalKind};
@@ -329,12 +328,16 @@ fn series_do_not_grow_with_principals_or_tables() {
     }
 }
 
-/// A caller that drops the action before its stream exists (a cancel while
-/// the query is being submitted) still folds the query: nothing stays
-/// active, and the query is counted exactly once, as cancelled when the
-/// drop came before it finished.
+/// A caller that drops the action while the query is being submitted (after
+/// the query began, before its stream exists) still folds the query: nothing
+/// stays active, and the query is counted exactly once.
+///
+/// The window is short and not under the test's control, so the future is
+/// polled, with pauses, until the active gauge shows the query has begun; if
+/// the future finishes first (a fast machine) there is nothing to check.
 #[test]
-fn dropping_the_action_future_before_the_stream_folds_the_query() {
+fn dropping_the_action_future_while_submitting_folds_the_query() {
+    use std::task::{Context, Poll};
     let s = enabled();
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let batch = RecordBatch::try_new(
@@ -344,25 +347,46 @@ fn dropping_the_action_future_before_the_stream_folds_the_query() {
     .unwrap();
     s.register_batches("t", schema, vec![batch]).unwrap();
     let df = block_on(s.sql("SELECT a FROM t")).unwrap();
-    // One poll starts the query (the result, if there is one, is dropped at
-    // the end of the statement); dropping the future cancels the rest. Either
-    // way the query was started, so it folds exactly once.
-    let _ = df.execute_stream().now_or_never();
-    let snap = s.metrics();
-    let active = snap
-        .gauges
-        .iter()
-        .find(|g| {
-            g.name == "krishiv.query.active"
-                && g.labels == [("class".to_owned(), "interactive".to_owned())]
-        })
-        .unwrap();
-    assert_eq!(active.value, 0.0);
-    let counted: f64 = snap
-        .counters
-        .iter()
-        .filter(|c| c.name == "krishiv.query.count")
-        .map(|c| c.value)
-        .sum();
-    assert_eq!(counted, 1.0);
+    let active = |s: &Session| {
+        s.metrics()
+            .gauges
+            .iter()
+            .find(|g| {
+                g.name == "krishiv.query.active"
+                    && g.labels == [("class".to_owned(), "interactive".to_owned())]
+            })
+            .map(|g| g.value)
+    };
+    let mut fut = Box::pin(df.execute_stream());
+    let waker = futures::task::noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    for _ in 0..2000 {
+        if fut.as_mut().poll(&mut cx).is_ready() {
+            return;
+        }
+        if active(&s) == Some(1.0) {
+            drop(fut);
+            // The action runs on the executor and is aborted by the drop:
+            // wait for the abort to reach the fold.
+            for _ in 0..5000 {
+                if active(&s) == Some(0.0) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(active(&s), Some(0.0));
+            // Folded once: cancelled, or succeeded when the query finished
+            // before the abort reached it.
+            let counted: f64 = s
+                .metrics()
+                .counters
+                .iter()
+                .filter(|c| c.name == "krishiv.query.count")
+                .map(|c| c.value)
+                .sum();
+            assert_eq!(counted, 1.0);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
