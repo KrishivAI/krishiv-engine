@@ -1,0 +1,19 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Aggregate [], [count(1) AS count(1)#10]
++- Project [c#3]
+   +- Join Inner, (c#3 == cd_demo_sk#6)
+      :- Project [c#3]
+      :  +- Join Inner, (d#2 == d_date_sk#4)
+      :     :- Union
+      :     :  :- Project [cs_sold_date_sk#0 AS d#2, cs_bill_cdemo_sk#1 AS c#3]
+      :     :  :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_bill_cdemo_sk#1] (shared #1)
+      :     :  +- Shared #1, printed above
+      :     +- Project [d_date_sk#4]
+      :        +- Filter (d_year#5 == 2000L)
+      :           +- Scan spark_catalog.default.date_dim [d_date_sk#4, d_year#5]
+      +- Project [cd_demo_sk#6]
+         +- Filter (cd_gender#7 == 'F')
+            +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#6, cd_gender#7]
