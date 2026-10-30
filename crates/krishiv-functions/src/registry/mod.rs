@@ -19,6 +19,7 @@ mod collection;
 mod conditional;
 mod csv;
 mod defs;
+mod element;
 mod hashing;
 mod hof;
 mod json;

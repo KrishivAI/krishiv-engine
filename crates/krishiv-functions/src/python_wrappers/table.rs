@@ -481,6 +481,10 @@ pub(super) fn rows() -> Vec<Row> {
             "regexp_extract",
             "str: ColumnOrName, pattern: str, idx: int",
         ),
+        Row::new("array_size", "col: ColumnOrName"),
+        Row::new("get", "col: ColumnOrName, index: Any"),
+        Row::new("element_at", "col: ColumnOrName, extraction: Any"),
+        Row::new("try_element_at", "col: ColumnOrName, extraction: Any"),
         Row::new("size", "col: ColumnOrName"),
         Row::new(
             "split",

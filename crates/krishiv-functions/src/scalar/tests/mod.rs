@@ -592,6 +592,7 @@ mod bitwise;
 mod calendar;
 mod csv;
 mod datetime_format;
+mod element;
 mod families;
 mod json;
 mod json_tuple;

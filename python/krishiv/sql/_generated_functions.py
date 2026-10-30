@@ -31,6 +31,7 @@ __all__ = [
     "acosh",
     "add_months",
     "array",
+    "array_size",
     "ascii",
     "asin",
     "asinh",
@@ -95,6 +96,7 @@ __all__ = [
     "degrees",
     "dense_rank",
     "e",
+    "element_at",
     "elt",
     "encode",
     "endswith",
@@ -110,6 +112,7 @@ __all__ = [
     "from_json",
     "from_unixtime",
     "from_utc_timestamp",
+    "get",
     "get_json_object",
     "getbit",
     "greatest",
@@ -268,6 +271,7 @@ __all__ = [
     "trunc",
     "try_add",
     "try_divide",
+    "try_element_at",
     "try_mod",
     "try_multiply",
     "try_parse_url",
@@ -325,6 +329,11 @@ def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
 def array(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``array``."""
     return _call("array", *_cols(cols))
+
+
+def array_size(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_size``."""
+    return _call("array_size", _named(col, "col"))
 
 
 def ascii(col: ColumnOrName) -> Column:
@@ -648,6 +657,11 @@ def e() -> Column:
     return _call("e")
 
 
+def element_at(col: ColumnOrName, extraction: Any) -> Column:
+    """Calls the registry function ``element_at``."""
+    return _call("element_at", _named(col, "col"), _lit(extraction, "extraction"))
+
+
 def elt(*inputs: ColumnOrName) -> Column:
     """Calls the registry function ``elt``."""
     return _call("elt", *_cols(inputs))
@@ -721,6 +735,11 @@ def from_unixtime(timestamp: ColumnOrName, format: str = "yyyy-MM-dd HH:mm:ss") 
 def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
     """Calls the registry function ``from_utc_timestamp``."""
     return _call("from_utc_timestamp", _named(timestamp, "timestamp"), _lit(tz, "tz"))
+
+
+def get(col: ColumnOrName, index: Any) -> Column:
+    """Calls the registry function ``get``."""
+    return _call("get", _named(col, "col"), _lit(index, "index"))
 
 
 def get_json_object(col: ColumnOrName, path: str) -> Column:
@@ -1543,6 +1562,11 @@ def try_add(left: ColumnOrName, right: ColumnOrName) -> Column:
 def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_divide``."""
     return _call("try_divide", _named(left, "left"), _named(right, "right"))
+
+
+def try_element_at(col: ColumnOrName, extraction: Any) -> Column:
+    """Calls the registry function ``try_element_at``."""
+    return _call("try_element_at", _named(col, "col"), _lit(extraction, "extraction"))
 
 
 def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column:
