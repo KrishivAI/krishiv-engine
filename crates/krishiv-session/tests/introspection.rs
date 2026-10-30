@@ -32,6 +32,9 @@ fn class(s: &Session, sql: &str) -> String {
 fn table(s: &Session, sql: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let batches = block_on(async { s.sql(sql).await?.collect().await })
         .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    if batches.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
     let names = batches[0]
         .schema()
         .fields()
@@ -203,4 +206,68 @@ fn describe_table_query_namespace_and_column() {
     assert_eq!(ns[5], ["Properties", "()"]);
     assert_eq!(rows(&s, "DESCRIBE tv"), [["x", "int", ""]]);
     assert_eq!(class(&s, "DESCRIBE missing"), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+#[test]
+fn temporary_views_and_unsupported_layouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    setup(&s);
+    // A temporary view has columns only, and no properties.
+    assert_eq!(rows(&s, "DESCRIBE EXTENDED tv"), [["x", "int", ""]]);
+    assert!(rows(&s, "SHOW TBLPROPERTIES tv").is_empty());
+    assert_eq!(
+        class(&s, "SHOW CREATE TABLE tv"),
+        "EXPECT_PERMANENT_VIEW_NOT_TEMP"
+    );
+    assert_eq!(
+        class(&s, "DESCRIBE FORMATTED t"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    // The `IN`/`FROM` namespace must agree with a qualified table name.
+    assert_eq!(
+        class(&s, "SHOW COLUMNS IN default.t FROM d1"),
+        "SHOW_COLUMNS_WITH_CONFLICT_NAMESPACE"
+    );
+    assert_eq!(rows(&s, "SHOW COLUMNS IN t FROM default"), [["a"], ["b"]]);
+    assert_eq!(class(&s, "DESCRIBE NAMESPACE nope"), "SCHEMA_NOT_FOUND");
+}
+
+#[test]
+fn create_table_text_round_trips_quotes_and_hides_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE q (a INT) USING parquet TBLPROPERTIES ('it''s' = 'a\\b', 'my.password' = 'hunter2')",
+    );
+    let text = &rows(&s, "SHOW CREATE TABLE q")[0][0];
+    assert!(text.contains("'it\\'s' = 'a\\\\b'"), "{text}");
+    assert!(
+        text.contains("'my.password' = '*********(redacted)'"),
+        "{text}"
+    );
+    assert!(!text.contains("hunter2"));
+    assert_eq!(
+        rows(&s, "SHOW TBLPROPERTIES q ('my.password')"),
+        [["my.password", "*********(redacted)"]]
+    );
+    let ext = rows(&s, "DESCRIBE EXTENDED q");
+    assert!(ext.iter().all(|r| !r[1].contains("hunter2")));
+    run(&s, "CREATE TABLE n (s STRUCT<a: INT>) USING parquet");
+    assert_eq!(
+        class(&s, "SHOW CREATE TABLE n"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}
+
+#[test]
+fn many_stars_in_a_pattern_stay_fast() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab (a INT) USING parquet",
+    );
+    assert!(rows(&s, "SHOW TABLES LIKE '*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*c'").is_empty());
 }

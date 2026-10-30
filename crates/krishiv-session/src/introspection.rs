@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    KrishivError, KrishivUnsupportedFeature, SchemaNotFound, UnresolvedColumnWithSuggestion,
+    ExpectPermanentViewNotTemp, KrishivError, KrishivUnsupportedFeature, SchemaNotFound,
+    ShowColumnsWithConflictNamespace, UnresolvedColumnWithSuggestion,
 };
 use krishiv_sql::ast::{
     DdlName, Describe, DescribeKind, DescribeMode, Show, ShowKind, ShowPattern,
@@ -35,12 +36,24 @@ fn unsupported(feature: &str) -> KrishivError {
 
 /// Spark's `SHOW ... LIKE` pattern: `*` matches anything, `|` separates alternatives, the match ignores case.
 fn matches(pattern: &str, name: &str) -> bool {
+    // `reach[j]`: the pattern so far matches the first `j` characters of the name. O(pattern x name), so a
+    // pattern like `*a*a*a*` cannot blow up.
     fn glob(p: &[char], n: &[char]) -> bool {
-        match p.split_first() {
-            None => n.is_empty(),
-            Some(('*', rest)) => (0..=n.len()).any(|i| glob(rest, &n[i..])),
-            Some((c, rest)) => n.first().is_some_and(|x| x == c) && glob(rest, &n[1..]),
+        let mut reach = vec![false; n.len() + 1];
+        reach[0] = true;
+        for &c in p {
+            if c == '*' {
+                for j in 1..=n.len() {
+                    reach[j] = reach[j] || reach[j - 1];
+                }
+            } else {
+                for j in (1..=n.len()).rev() {
+                    reach[j] = reach[j - 1] && n[j - 1] == c;
+                }
+                reach[0] = false;
+            }
         }
+        reach[n.len()]
     }
     let name: Vec<char> = name.to_lowercase().chars().collect();
     pattern.split('|').any(|alt| {
@@ -82,6 +95,29 @@ fn created_time(ms: i64) -> String {
         rem % 3600 / 60,
         rem % 60,
     )
+}
+
+/// Spark's `spark.redaction.regex` default, `(?i)secret|password|token|access[.]key`, applied to the key.
+fn redact<'a>(key: &str, value: &'a str) -> &'a str {
+    let k = key.to_lowercase();
+    if ["secret", "password", "token", "access.key"]
+        .iter()
+        .any(|w| k.contains(w))
+    {
+        "*********(redacted)"
+    } else {
+        value
+    }
+}
+
+/// A column type as `SHOW CREATE TABLE` prints it. Nested types keep their field names, which an upper-cased
+/// `catalog_string` would change, so they are not printed yet.
+fn type_sql(t: &DataType) -> Result<String, KrishivError> {
+    let text = t.catalog_string();
+    if text.contains('<') {
+        return Err(unsupported("SHOW CREATE TABLE with a nested column type"));
+    }
+    Ok(text.to_uppercase())
 }
 
 fn sql_literal(v: &str) -> String {
@@ -194,7 +230,15 @@ impl Session {
                 let env = self.query_env();
                 let mut name = self.table_name(table, &env)?;
                 if let Some(ns) = namespace {
-                    name.namespace = self.namespace_name(ns, &env)?;
+                    let from = self.namespace_name(ns, &env)?;
+                    if !name.bare && !name.namespace.eq_ignore_ascii_case(&from) {
+                        return Err(ShowColumnsWithConflictNamespace {
+                            namespace_a: from,
+                            namespace_b: name.namespace,
+                        }
+                        .into());
+                    }
+                    name.namespace = from;
                     name.bare = false;
                 }
                 let columns = self.columns_of_relation(&name).await?;
@@ -213,21 +257,28 @@ impl Session {
             ShowKind::TblProperties { name, key, .. } => {
                 let env = self.query_env();
                 let name = self.table_name(name, &env)?;
+                if self.temp_entry_of(&name, &env) {
+                    // A temporary view has no properties.
+                    return self.ordered_frame(&["key", "value"], &[], Vec::new()).await;
+                }
                 let table = self.stored_relation(&name)?;
                 let rows = match key {
                     Some(k) => vec![vec![
                         s(k),
-                        s(table.properties.get(k).cloned().unwrap_or_else(|| {
-                            format!(
-                                "Table spark_catalog.{}.{} does not have property: {k}",
-                                table.namespace, table.name
-                            )
-                        })),
+                        s(table.properties.get(k).map_or_else(
+                            || {
+                                format!(
+                                    "Table spark_catalog.{}.{} does not have property: {k}",
+                                    table.namespace, table.name
+                                )
+                            },
+                            |v| redact(k, v).to_owned(),
+                        )),
                     ]],
                     None => table
                         .properties
                         .iter()
-                        .map(|(k, v)| vec![s(k), s(v)])
+                        .map(|(k, v)| vec![s(k), s(redact(k, v))])
                         .collect(),
                 };
                 self.ordered_frame(&["key", "value"], &[], rows).await
@@ -238,11 +289,18 @@ impl Session {
                 }
                 let env = self.query_env();
                 let name = self.table_name(name, &env)?;
+                if self.temp_entry_of(&name, &env) {
+                    return Err(ExpectPermanentViewNotTemp {
+                        operation: "SHOW CREATE TABLE".to_owned(),
+                        view_name: format!("`{}`", name.name),
+                    }
+                    .into());
+                }
                 let table = self.stored_relation(&name)?;
                 self.ordered_frame(
                     &["createtab_stmt"],
                     &[],
-                    vec![vec![s(create_statement(&table))]],
+                    vec![vec![s(create_statement(&table)?)]],
                 )
                 .await
             }
@@ -329,13 +387,14 @@ impl Session {
                         ]
                     })
                     .collect();
-                if mode.is_some() {
+                if matches!(mode, Some(DescribeMode::Formatted)) {
+                    return Err(unsupported("DESCRIBE FORMATTED"));
+                }
+                // A temporary view has no stored form: only its columns.
+                if mode.is_some() && !self.temp_entry_of(&name, &env) {
                     rows.push(vec![s(""), s(""), s("")]);
                     rows.push(vec![s("# Detailed Table Information"), s(""), s("")]);
-                    let info = self.detailed_information(
-                        &name,
-                        matches!(mode, Some(DescribeMode::Formatted)),
-                    )?;
+                    let info = self.detailed_information(&name)?;
                     rows.extend(info.into_iter().map(|(k, v)| vec![s(k), s(v), s("")]));
                 }
                 self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
@@ -369,7 +428,7 @@ impl Session {
                             schema_name: format!("`{ns}`"),
                         })
                     })?;
-                let mut rows = self.namespace_rows(&ns, &meta);
+                let mut rows = self.namespace_rows(&ns, &meta)?;
                 if *extended {
                     let props = meta
                         .properties
@@ -386,23 +445,30 @@ impl Session {
         }
     }
 
-    fn namespace_rows(&self, ns: &str, meta: &NamespaceMeta) -> Vec<Vec<Cell>> {
-        let location = meta.location.clone().unwrap_or_else(|| {
-            let wh = self.warehouse_dir().unwrap_or_default();
-            let dir = if ns == crate::store::DEFAULT_NAMESPACE {
-                wh
-            } else {
-                wh.join(format!("{ns}.db"))
-            };
-            format!("file:{}", dir.display())
-        });
-        vec![
+    fn namespace_rows(
+        &self,
+        ns: &str,
+        meta: &NamespaceMeta,
+    ) -> Result<Vec<Vec<Cell>>, KrishivError> {
+        let location = match &meta.location {
+            Some(l) => l.clone(),
+            None => {
+                let wh = self.warehouse_dir()?;
+                let dir = if ns == crate::store::DEFAULT_NAMESPACE {
+                    wh
+                } else {
+                    wh.join(format!("{ns}.db"))
+                };
+                format!("file:{}", dir.display())
+            }
+        };
+        Ok(vec![
             vec![s("Catalog Name"), s(crate::catalog::CATALOG)],
             vec![s("Namespace Name"), s(ns)],
             vec![s("Comment"), s(meta.comment.clone().unwrap_or_default())],
             vec![s("Location"), s(location)],
             vec![s("Owner"), s("spark")],
-        ]
+        ])
     }
 
     /// One column's `info_name`/`info_value` rows.
@@ -444,7 +510,6 @@ impl Session {
     fn detailed_information(
         &self,
         name: &TableName,
-        _formatted: bool,
     ) -> Result<Vec<(String, String)>, KrishivError> {
         let t = self.stored_relation(name)?;
         let mut rows = vec![
@@ -495,7 +560,7 @@ impl Session {
                     "[{}]",
                     t.properties
                         .iter()
-                        .map(|(k, v)| format!("{k}={v}"))
+                        .map(|(k, v)| format!("{k}={}", redact(k, v)))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -512,20 +577,22 @@ impl Session {
 }
 
 /// `SHOW CREATE TABLE` text of a table or view, in Spark's layout.
-fn create_statement(t: &CatalogTable) -> String {
-    let column = |c: &crate::store::StoreColumn| {
-        let mut out = format!(
-            "  {} {}",
-            c.name,
-            c.data_type.catalog_string().to_uppercase()
-        );
+fn create_statement(t: &CatalogTable) -> Result<String, KrishivError> {
+    let column = |c: &crate::store::StoreColumn| -> Result<String, KrishivError> {
+        let mut out = format!("  {} {}", c.name, type_sql(&c.data_type)?);
+        if !c.nullable {
+            out.push_str(" NOT NULL");
+        }
         if c.data_type == DataType::String {
             out.push_str(" COLLATE UTF8_BINARY");
+        }
+        if let Some(default) = &c.default {
+            out.push_str(&format!(" DEFAULT {default}"));
         }
         if let Some(comment) = &c.comment {
             out.push_str(&format!(" COMMENT {}", sql_literal(comment)));
         }
-        out
+        Ok(out)
     };
     let name = format!("spark_catalog.{}.{}", t.namespace, t.name);
     if let Some(view) = &t.view {
@@ -545,13 +612,18 @@ fn create_statement(t: &CatalogTable) -> String {
         out.push_str("WITH SCHEMA COMPENSATION\nAS ");
         out.push_str(&view.sql);
         out.push('\n');
-        return out;
+        return Ok(out);
     }
-    let cols = t.columns.iter().map(column).collect::<Vec<_>>().join(",\n");
+    let cols = t
+        .columns
+        .iter()
+        .map(column)
+        .collect::<Result<Vec<_>, _>>()?
+        .join(",\n");
     let mut out = format!("CREATE TABLE {name} (\n{cols})\nUSING {}\n", t.provider);
     let pairs = |m: &std::collections::BTreeMap<String, String>| {
         m.iter()
-            .map(|(k, v)| format!("  '{k}' = '{v}'"))
+            .map(|(k, v)| format!("  {} = {}", sql_literal(k), sql_literal(redact(k, v))))
             .collect::<Vec<_>>()
             .join(",\n")
     };
@@ -573,7 +645,7 @@ fn create_statement(t: &CatalogTable) -> String {
     if !t.properties.is_empty() {
         out.push_str(&format!("TBLPROPERTIES (\n{})\n", pairs(&t.properties)));
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]

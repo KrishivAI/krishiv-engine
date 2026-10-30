@@ -265,6 +265,13 @@ fn ddl(s: &Session) -> Vec<(&'static str, String)> {
         ("DROP DATABASE", sql("DROP DATABASE default")),
         ("SHOW TABLES", sql("SHOW TABLES")),
         ("DESCRIBE TABLE", sql("DESCRIBE TABLE t")),
+        ("DESCRIBE QUERY", sql("DESCRIBE QUERY SELECT * FROM t")),
+        ("DESCRIBE NAMESPACE", sql("DESCRIBE NAMESPACE default")),
+        ("SHOW VIEWS", sql("SHOW VIEWS")),
+        ("SHOW COLUMNS", sql("SHOW COLUMNS IN t")),
+        ("SHOW NAMESPACES", sql("SHOW NAMESPACES")),
+        ("SHOW TBLPROPERTIES", sql("SHOW TBLPROPERTIES t")),
+        ("SHOW CREATE TABLE", sql("SHOW CREATE TABLE t")),
         ("CLEAR CACHE", sql("CLEAR CACHE")),
         ("ADD JAR", sql("ADD JAR '/tmp/x.jar'")),
     ]
@@ -375,6 +382,9 @@ fn denials_do_not_reveal_existence() {
         "INSERT INTO t VALUES (1)",
         "SELECT * FROM t",
         "DESCRIBE TABLE t",
+        "SHOW COLUMNS IN t",
+        "SHOW TBLPROPERTIES t",
+        "SHOW CREATE TABLE t",
     ] {
         let a = block_on(with_t.sql(sql)).unwrap_err().to_string();
         let b = block_on(without_t.sql(sql)).unwrap_err().to_string();
