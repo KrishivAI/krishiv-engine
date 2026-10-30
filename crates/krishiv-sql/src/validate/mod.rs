@@ -1627,7 +1627,6 @@ fn ddl_label(name: &DdlName, sql: &str) -> String {
 /// and cursors, and the checks of every expression, query and statement inside.
 fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
     use crate::ast::{HandlerBody, ScriptStatement as S};
-    let checker = Checker { sql, opts };
     fn list(items: &[S], sql: &str, opts: ParserOptions) -> R {
         items
             .iter()
@@ -1638,6 +1637,10 @@ fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
         match item {
             S::Sql(s) => statement(s, sql, opts),
             S::Declare(d) => {
+                // Neither a type nor a default: refused before anything runs, as for a session variable.
+                if d.data_type.is_none() && d.default.is_none() {
+                    return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, d.span));
+                }
                 if let Some(t) = &d.data_type {
                     data_type(t)?;
                 }
@@ -1695,6 +1698,5 @@ fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
             S::Compound(c) => script(c, sql, opts),
         }
     }
-    let _ = &checker;
     list(&c.body, sql, opts)
 }

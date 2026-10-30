@@ -13,7 +13,12 @@ use crate::ast::{
     HandlerBody, HandlerCondition, Ident, IfStatement, LabelJump, LoopStatement, RepeatStatement,
     ScriptStatement, Statement, WhileStatement,
 };
+use crate::error;
 use crate::lexer::{Sym, TokenKind};
+
+/// How deep script statements may nest (a compound in a branch in a loop ...). Spark has no limit;
+/// this one keeps the parser and the interpreter, which recurse once per level, within any stack.
+const MAX_SCRIPT_NESTING: usize = 8;
 
 /// Words that end a statement list: the statement after them belongs to the enclosing construct.
 const LIST_END: &[&str] = &["END", "ELSE", "ELSEIF", "UNTIL", "WHEN"];
@@ -79,6 +84,18 @@ impl Parser<'_> {
 
     /// One statement of a script body, without its `;`.
     fn script_statement(&mut self) -> PR<ScriptStatement> {
+        if self.script_depth >= MAX_SCRIPT_NESTING {
+            return Self::fatal(error::too_complex(super::statement_span(
+                self.src, &self.toks,
+            )));
+        }
+        self.script_depth += 1;
+        let statement = self.script_statement_inner();
+        self.script_depth -= 1;
+        statement
+    }
+
+    fn script_statement_inner(&mut self) -> PR<ScriptStatement> {
         self.nested(|p| {
             let start = p.start();
             // `label: BEGIN | WHILE | REPEAT | LOOP | FOR`.
@@ -316,7 +333,7 @@ impl Parser<'_> {
             return Ok(ScriptStatement::Cursor(self.span_from(start)));
         }
         match self.declare_command()? {
-            Statement::DeclareVariable(d) => Ok(ScriptStatement::Declare(d)),
+            Statement::DeclareVariable(d) => Ok(ScriptStatement::Declare(Box::new(d))),
             _ => self.fail(),
         }
     }

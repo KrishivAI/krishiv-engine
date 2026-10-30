@@ -53,6 +53,22 @@ impl Session {
         text: &RedactedSql,
         depth: usize,
     ) -> Result<DataFrame, KrishivError> {
+        let frame = self.immediate_frame(e, original, text, depth).await?;
+        if e.into.is_empty() {
+            return Ok(frame);
+        }
+        self.assign_into(e, &frame, text).await
+    }
+
+    /// Everything of `EXECUTE IMMEDIATE` but the `INTO` assignment: the statement, bound and run;
+    /// its frame.
+    pub(crate) async fn immediate_frame(
+        &self,
+        e: &ExecuteImmediate,
+        original: &str,
+        text: &RedactedSql,
+        depth: usize,
+    ) -> Result<DataFrame, KrishivError> {
         let slice = |x: &Expr| original.get(x.span.start..x.span.end).unwrap_or_default();
         let env0 = self.query_env();
         let case_sensitive = env0.analysis.conf.case_sensitive;
@@ -149,10 +165,53 @@ impl Session {
                 Box::pin(plain.run_statement(statement, env, &bound, &inner_text)).await?
             }
         };
-        if e.into.is_empty() {
-            return Ok(frame);
+        Ok(frame)
+    }
+
+    /// The one row of `frame` as raw values, or `None` for no row. `width` is the number of targets:
+    /// a different number of columns is `ASSIGNMENT_ARITY_MISMATCH`, a second row
+    /// `ROW_SUBQUERY_TOO_MANY_ROWS`. Two rows decide the outcome, so no more are read.
+    pub(crate) async fn immediate_row(
+        &self,
+        frame: &DataFrame,
+        width: usize,
+    ) -> Result<Option<Vec<Literal>>, KrishivError> {
+        let columns = frame.schema().await?.fields().len();
+        if columns != width {
+            return Err(AssignmentArityMismatch {
+                num_target: width.to_string(),
+                num_expr: columns.to_string(),
+            }
+            .into());
         }
-        self.assign_into(e, &frame, text).await
+        let batches = frame.limit(2).collect().await?;
+        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        if rows > 1 {
+            return Err(RowSubqueryTooManyRows {}.into());
+        }
+        let Some(batch) = batches.iter().find(|b| b.num_rows() > 0) else {
+            return Ok(None);
+        };
+        (0..width)
+            .map(|i| arrow_value(batch.column(i), 0).map(|(_, v)| v))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
+    }
+
+    /// `raw` cast to `to` by store assignment, as an assigned value is.
+    pub(crate) async fn cast_immediate(
+        &self,
+        raw: &Literal,
+        to: &DataType,
+        text: &RedactedSql,
+        span: krishiv_sql::ast::Span,
+    ) -> Result<Literal, KrishivError> {
+        let sql = format!(
+            "SELECT CAST({} AS {})",
+            render_literal(raw, self.query_env().parser.escaped_string_literals)?,
+            to.simple_string()
+        );
+        Ok(self.eval_variable_value(&sql, text, span, span).await?.1)
     }
 
     /// `INTO v, ...`: the one row of `frame` goes to the variables, cast to
@@ -191,35 +250,18 @@ impl Session {
             };
             stored.push(var);
         }
-        let width = frame.schema().await?.fields().len();
-        if width != keys.len() {
-            return Err(AssignmentArityMismatch {
-                num_target: keys.len().to_string(),
-                num_expr: width.to_string(),
-            }
-            .into());
-        }
-        // Two rows decide the outcome: never buffer more.
-        let batches = frame.limit(2).collect().await?;
-        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-        if rows > 1 {
-            return Err(RowSubqueryTooManyRows {}.into());
-        }
-        let batch = batches.iter().find(|b| b.num_rows() > 0);
+        let row = self.immediate_row(frame, keys.len()).await?;
         let mut pending = Vec::with_capacity(keys.len());
         for (i, (key, var)) in keys.iter().zip(&stored).enumerate() {
-            let value = match batch {
+            let value = match &row {
                 None => Literal::Null(Some(var.data_type.clone())),
-                Some(b) => {
-                    let (_, raw) = arrow_value(b.column(i), 0)?;
-                    let cast = format!(
-                        "SELECT CAST({} AS {})",
-                        render_literal(&raw, self.query_env().parser.escaped_string_literals)?,
-                        var.data_type.simple_string()
-                    );
-                    let span = e.span;
-                    self.eval_variable_value(&cast, text, span, span).await?.1
-                }
+                Some(values) => match values.get(i) {
+                    Some(raw) => {
+                        self.cast_immediate(raw, &var.data_type, text, e.span)
+                            .await?
+                    }
+                    None => Literal::Null(Some(var.data_type.clone())),
+                },
             };
             pending.push((key.clone(), var.clone(), value));
         }

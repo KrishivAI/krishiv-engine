@@ -380,3 +380,96 @@ fn dropping_the_future_stops_a_script() {
         "the script kept running after it was dropped"
     );
 }
+
+#[test]
+fn review_findings_stay_fixed() {
+    let s = Session::new().unwrap();
+    // An empty loop body still yields: dropping the future stops it.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let work = s.sql("BEGIN LOOP END LOOP; END");
+        let timeout = tokio::time::sleep(std::time::Duration::from_millis(200));
+        tokio::pin!(work);
+        tokio::pin!(timeout);
+        futures::future::select(work, timeout).await;
+    });
+    // `DECLARE x;` has neither a type nor a default.
+    assert_eq!(
+        class(&s, "BEGIN DECLARE x; END"),
+        "INVALID_SQL_SYNTAX.VARIABLE_TYPE_OR_DEFAULT_REQUIRED"
+    );
+    // Duplicate targets are named as written, also in the row form.
+    let (c, m) = run(
+        &s,
+        "BEGIN DECLARE a INT; DECLARE b INT; SET a = 1, A = 2; END",
+    )
+    .unwrap_err();
+    assert_eq!(c, "DUPLICATE_ASSIGNMENTS");
+    assert!(m.contains("`A`") && !m.contains("0."), "{m}");
+    assert_eq!(
+        class(&s, "BEGIN DECLARE a INT; SET (a, a) = (SELECT 1, 2); END"),
+        "DUPLICATE_ASSIGNMENTS"
+    );
+    // EXECUTE IMMEDIATE ... INTO reaches a local, and leaves a same-named session variable alone.
+    rows(&s, "DECLARE k INT DEFAULT 1");
+    assert_eq!(
+        rows(
+            &s,
+            "BEGIN DECLARE k INT; EXECUTE IMMEDIATE 'SELECT 41 + 1' INTO k; SELECT k; END"
+        ),
+        ok(&[&["42"]])
+    );
+    assert_eq!(rows(&s, "SELECT k"), ok(&[&["1"]]));
+    // Names are one local whatever the case, with caseSensitive on too.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        rows(&s, "BEGIN DECLARE Abc INT DEFAULT 3; SELECT abc; END").len(),
+        1
+    );
+    s.conf().set("spark.sql.caseSensitive", "false").unwrap();
+    // A result over the cap is refused, not truncated, and not read in full.
+    assert_eq!(
+        class(&s, "BEGIN SELECT id FROM range(100000); END"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(rows(&s, "BEGIN SELECT id FROM range(256); END").len(), 256);
+}
+
+/// Scripts nest at most 8 levels (a divergence: Spark has no limit), at parse time, so neither
+/// the parser nor the interpreter can run out of stack.
+fn nest(n: usize) -> String {
+    format!("{}SELECT 1 AS a;{}", "BEGIN ".repeat(n), " END;".repeat(n))
+}
+
+#[test]
+fn script_nesting_is_bounded_at_the_limit() {
+    let s = Session::new().unwrap();
+    assert_eq!(rows(&s, &nest(8)), ok(&[&["1"]]));
+    assert_eq!(class(&s, &nest(9)), "FAILED_TO_PARSE_TOO_COMPLEX");
+}
+
+#[test]
+fn script_nesting_is_bounded_for_branches_and_loops() {
+    let s = Session::new().unwrap();
+    let deep = format!(
+        "BEGIN {} SELECT 1; {} END",
+        "IF TRUE THEN WHILE TRUE DO ".repeat(40),
+        "END WHILE; END IF;".repeat(40)
+    );
+    assert_eq!(class(&s, &deep), "FAILED_TO_PARSE_TOO_COMPLEX");
+}
+
+#[test]
+fn script_nesting_is_bounded_on_a_small_stack() {
+    let handle = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let s = Session::new().unwrap();
+            run(&s, &nest(1000)).unwrap_err().0
+        })
+        .unwrap();
+    assert_eq!(handle.join().unwrap(), "FAILED_TO_PARSE_TOO_COMPLEX");
+}

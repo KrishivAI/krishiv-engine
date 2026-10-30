@@ -17,7 +17,7 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use krishiv_common::error::{
-    DuplicateVariableNameInsideDeclare, InvalidBooleanStatement,
+    DuplicateAssignments, DuplicateVariableNameInsideDeclare, InvalidBooleanStatement,
     InvalidDefaultValueSubqueryExpression, InvalidVariableDeclarationQualifiedLocalVariable,
     InvalidVariableDeclarationReplaceLocalVariable, KrishivError, KrishivUnsupportedFeature,
     ScalarSubqueryTooManyRows, UnsupportedFeatureSqlScriptingDropTemporaryVariable,
@@ -34,8 +34,8 @@ use krishiv_types::DataType;
 
 use crate::column::Column;
 use crate::command::{
-    arrow_value, contains_default, contains_subquery, duplicate_targets, is_bare_default,
-    padded_select, unresolved_variable,
+    arrow_value, contains_default, contains_subquery, is_bare_default, padded_select,
+    unresolved_variable,
 };
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
@@ -43,7 +43,7 @@ use crate::variables::{RESOLVE_SEARCH_PATH, StoredVariable, quote_normalized};
 
 /// The most rows a script's result may have. The result is returned as literal rows, which keeps
 /// it independent of the script's session; a larger one is refused rather than truncated.
-const MAX_RESULT_ROWS: usize = 256;
+const MAX_RESULT_ROWS: i32 = 256;
 
 /// What a statement tells the statements around it to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +69,7 @@ struct Scope {
 }
 
 /// Where an assignment goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Target {
     Local { scope: usize, key: String },
     Session { key: String },
@@ -83,7 +84,6 @@ struct Run<'a> {
     scopes: Vec<Scope>,
     /// The rows of the last query statement that ran.
     last: Option<(SchemaRef, Vec<RecordBatch>)>,
-    case_sensitive: bool,
 }
 
 impl Session {
@@ -101,7 +101,6 @@ impl Session {
             redacted,
             scopes: Vec::new(),
             last: None,
-            case_sensitive: self.query_env().analysis.conf.case_sensitive,
         };
         run.compound(c).await?;
         run.finish().await
@@ -116,12 +115,11 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 impl Run<'_> {
+    /// A name as the frames key it: in lower case, whatever `spark.sql.caseSensitive` says, as
+    /// `VariableSnapshot::get` looks it up (a divergence when that is on: `a` and `A` are one
+    /// local).
     fn fold(&self, name: &str) -> String {
-        if self.case_sensitive {
-            name.to_owned()
-        } else {
-            name.to_lowercase()
-        }
+        name.to_lowercase()
     }
 
     /// The session handle whose queries see the locals as they are now.
@@ -252,6 +250,8 @@ impl Run<'_> {
         label: &Option<String>,
         body: &[ScriptStatement],
     ) -> Result<Option<Flow>, KrishivError> {
+        // An empty body must not spin past a dropped future.
+        tokio::task::yield_now().await;
         Ok(match Box::pin(self.items(body)).await? {
             Flow::Normal => None,
             Flow::Leave(l) if label.as_deref() == Some(l.as_str()) => Some(Flow::Normal),
@@ -270,6 +270,15 @@ impl Run<'_> {
         let env = handle.query_env();
         let class = krishiv_sql::classify(statement);
         handle.authorize_statement(statement, class, &env).await?;
+        // `EXECUTE IMMEDIATE ... INTO` assigns to locals too, which only this interpreter can do.
+        if let Statement::ExecuteImmediate(e) = statement
+            && !e.into.is_empty()
+        {
+            let frame = handle
+                .immediate_frame(e, self.text, self.redacted, 0)
+                .await?;
+            return self.assign_row(e, &frame).await;
+        }
         let frame = handle
             .run_statement(statement.clone(), env, self.text, self.redacted)
             .await?;
@@ -281,9 +290,55 @@ impl Run<'_> {
         ) {
             let schema = frame.schema().await?;
             if !schema.fields().is_empty() {
-                let batches = frame.collect().await?;
+                // One row more than the cap shows that it was exceeded; no more is read.
+                let batches = frame.limit(MAX_RESULT_ROWS + 1).collect().await?;
                 self.last = Some((schema, batches));
             }
+        }
+        Ok(())
+    }
+
+    /// `EXECUTE IMMEDIATE query INTO v, ...`: the one row of the query goes to the variables (locals
+    /// first, then session variables), cast to their types; no row sets them to NULL.
+    async fn assign_row(
+        &mut self,
+        e: &krishiv_sql::ast::ExecuteImmediate,
+        frame: &DataFrame,
+    ) -> Result<(), KrishivError> {
+        let mut targets = Vec::with_capacity(e.into.len());
+        for name in &e.into {
+            let Some(target) = self.resolve(name) else {
+                return Err(unresolved_variable(
+                    name,
+                    RESOLVE_SEARCH_PATH,
+                    self.redacted,
+                ));
+            };
+            targets.push(target);
+        }
+        let names: Vec<String> = e.into.iter().map(written).collect();
+        distinct(&targets, &names)?;
+        let mut types = Vec::with_capacity(targets.len());
+        for (target, name) in targets.iter().zip(&names) {
+            let Some((t, _)) = self.describe(target) else {
+                return Err(VariableNotFound {
+                    variable_name: name.clone(),
+                }
+                .into());
+            };
+            types.push(t);
+        }
+        let handle = self.handle();
+        let row = handle.immediate_row(frame, targets.len()).await?;
+        let mut values = Vec::with_capacity(targets.len());
+        for (i, t) in types.iter().enumerate() {
+            values.push(match row.as_ref().and_then(|r| r.get(i)) {
+                Some(raw) => handle.cast_immediate(raw, t, self.redacted, e.span).await?,
+                None => Literal::Null(Some(t.clone())),
+            });
+        }
+        for (target, value) in targets.iter().zip(values) {
+            self.store(target, value);
         }
         Ok(())
     }
@@ -536,19 +591,13 @@ impl Run<'_> {
                     };
                     targets.push(target);
                 }
-                let keys: Vec<String> = targets
-                    .iter()
-                    .map(|t| match t {
-                        Target::Local { scope, key } => format!("{scope}.{key}"),
-                        Target::Session { key } => format!("session.{key}"),
-                    })
-                    .collect();
-                duplicate_targets(&keys)?;
+                let names: Vec<String> = assignments.iter().map(|a| written(&a.name)).collect();
+                distinct(&targets, &names)?;
                 let mut values = Vec::with_capacity(targets.len());
                 for (a, target) in assignments.iter().zip(&targets) {
                     let Some((data_type, default_sql)) = self.describe(target) else {
                         return Err(VariableNotFound {
-                            variable_name: quote_normalized(&keys[values.len()]),
+                            variable_name: names[values.len()].clone(),
                         }
                         .into());
                     };
@@ -602,6 +651,8 @@ impl Run<'_> {
                     };
                     resolved.push(target);
                 }
+                let names: Vec<String> = targets.iter().map(written).collect();
+                distinct(&resolved, &names)?;
                 let mut types = Vec::with_capacity(resolved.len());
                 for target in &resolved {
                     let Some((t, _)) = self.describe(target) else {
@@ -668,7 +719,7 @@ impl Run<'_> {
             return session.empty_frame().await;
         };
         let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-        if rows > MAX_RESULT_ROWS {
+        if i32::try_from(rows).map_or(true, |r| r > MAX_RESULT_ROWS) {
             return Err(unsupported("a script result of more than 256 rows"));
         }
         let one = || {
@@ -718,4 +769,26 @@ impl Run<'_> {
         df.analyzed_in(session.query_env()).await?;
         Ok(df)
     }
+}
+
+/// A variable name as the user wrote it, quoted part by part for an error.
+fn written(name: &ObjectName) -> String {
+    name.parts
+        .iter()
+        .map(|p| format!("`{}`", p.value.replace('`', "``")))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// `DUPLICATE_ASSIGNMENTS` when two of `targets` are one variable; `names` are as written.
+fn distinct(targets: &[Target], names: &[String]) -> Result<(), KrishivError> {
+    for (i, target) in targets.iter().enumerate() {
+        if targets[..i].contains(target) {
+            return Err(DuplicateAssignments {
+                name_list: names.get(i).cloned().unwrap_or_default(),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }

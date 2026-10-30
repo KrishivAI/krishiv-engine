@@ -3638,7 +3638,7 @@ pub enum ScriptStatement {
     /// Any SQL statement the parser accepts, except a script.
     Sql(Box<Statement>),
     /// `DECLARE [OR REPLACE] [VARIABLE] names [type] [DEFAULT expr]`, a local variable.
-    Declare(DeclareVariable),
+    Declare(Box<DeclareVariable>),
     /// `DECLARE name CONDITION [FOR SQLSTATE 's']`.
     Condition(DeclareCondition),
     /// `DECLARE {EXIT | CONTINUE} HANDLER FOR conditions body`.
