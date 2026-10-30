@@ -20,6 +20,8 @@
 //! workers decode. Without one they run on the caller's task. Either way,
 //! every future here is drop-safe: dropping it cancels the requests.
 
+#[cfg(unix)]
+pub mod beneath;
 pub mod cache;
 mod coalesce;
 pub mod fault;
