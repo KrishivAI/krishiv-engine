@@ -152,6 +152,17 @@ fn unsupported_build_sides_warn() {
             "Hint (strategy=shuffle_hash) is not supported in the query: build left for LEFT SEMI join."
         ]
     );
+    // An existence join (EXISTS under OR) never builds its left side.
+    let (_, _, w) = join(
+        "SELECT /*+ SHUFFLE_HASH(x) */ x.s FROM t x \
+         WHERE EXISTS (SELECT 1 FROM t y WHERE y.a = x.a AND y.b > 50) OR x.s = 's0'",
+    );
+    assert_eq!(
+        w,
+        [
+            "Hint (strategy=shuffle_hash) is not supported in the query: build left for EXISTENCE join."
+        ]
+    );
     // A nested loop builds either side in Spark.
     let (j, y, w) = join(
         "SELECT /*+ BROADCAST(x) */ x.s FROM t x LEFT JOIN (SELECT * FROM t WHERE b > 50) y \
