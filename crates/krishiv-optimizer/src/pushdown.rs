@@ -163,6 +163,26 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
                     (!(hits && has_subquery(p))).then(|| substitute(p, &aliases))
                 })
             } else {
+                // Nothing moves below it, but a predicate that the filters
+                // directly under it already enforce (spelled over the input
+                // columns there, over the `cse_*` columns here) adds nothing
+                // above: a second `optimize` pass derives such a predicate
+                // from the join condition again, and would stack it.
+                let defs = cse_definitions(plan);
+                let mut held: Vec<Arc<Expr>> = Vec::new();
+                let mut below = input;
+                while let PlanNode::Filter { input, predicate } = &below.node {
+                    held.extend(
+                        conjuncts(predicate)
+                            .iter()
+                            .filter(|c| is_deterministic(c))
+                            .map(|c| resolve_cse(c, &defs)),
+                    );
+                    below = input;
+                }
+                movable.retain(|p| {
+                    !(is_deterministic(p) && held.iter().any(|q| same(q, &resolve_cse(p, &defs))))
+                });
                 (Arc::clone(plan), movable)
             }
         }
