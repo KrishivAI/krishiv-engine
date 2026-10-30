@@ -2,82 +2,137 @@
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
 expression: optimized.root().to_string()
 ---
-WithCte [cs_ui, cross_sales]
-:- Filter (CAST(sale#61 AS DECIMAL(21,2)) > (2 * refund#62))
-:  +- Aggregate [cs_item_sk#15], [cs_item_sk#15, sum(cs_ext_list_price#25) AS sale#61, sum(((cr_refunded_cash#57 + cr_reversed_charge#58) + cr_store_credit#59)) AS refund#62]
-:     +- Project [cs_item_sk#15, cs_ext_list_price#25, cr_refunded_cash#57, cr_reversed_charge#58, cr_store_credit#59]
-:        +- Join Inner, ((cs_item_sk#15 == cr_item_sk#36) and (cs_order_number#17 == cr_order_number#50))
-:           :- Scan spark_catalog.default.catalog_sales [cs_item_sk#15, cs_order_number#17, cs_ext_list_price#25]
-:           +- Scan spark_catalog.default.catalog_returns [cr_item_sk#36, cr_order_number#50, cr_refunded_cash#57, cr_reversed_charge#58, cr_store_credit#59]
-:- Aggregate [i_product_name#340, i_item_sk#319, s_store_name#198, s_zip#218, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, d_year#115, d_year#143, d_year#171], [i_product_name#340 AS product_name#341, i_item_sk#319 AS item_sk#342, s_store_name#198 AS store_name#343, s_zip#218 AS store_zip#344, ca_street_number#289 AS b_street_number#345, ca_street_name#290 AS b_street_name#346, ca_city#293 AS b_city#347, ca_zip#296 AS b_zip#348, ca_street_number#302 AS c_street_number#349, ca_street_name#303 AS c_street_name#350, ca_city#306 AS c_city#351, ca_zip#309 AS c_zip#352, d_year#115 AS syear#353, d_year#143 AS fsyear#354, d_year#171 AS s2year#355, count(1) AS cnt#356, sum(ss_wholesale_cost#74) AS s1#357, sum(ss_list_price#75) AS s2#358, sum(ss_coupon_amt#82) AS s3#359]
-:  +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:     +- Join Inner, (hd_income_band_sk#283 == ib_income_band_sk#316)
-:        :- Shift +3
-:        :  +- Scan spark_catalog.default.income_band [ib_income_band_sk#313] (shared #1)
-:        +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:           +- Join Inner, (hd_income_band_sk#278 == ib_income_band_sk#313)
-:              :- Shared #1, printed above
-:              +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                 +- Join Inner, (c_current_addr_sk#226 == ca_address_sk#300)
-:                    :- Shift +13
-:                    :  +- Scan spark_catalog.default.customer_address [ca_address_sk#287, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296] (shared #2)
-:                    +- Project [ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                       +- Join Inner, (ss_addr_sk#69 == ca_address_sk#287)
-:                          :- Shared #2, printed above
-:                          +- Project [hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                             +- Join Inner, (c_current_hdemo_sk#225 == hd_demo_sk#282)
-:                                :- Shift +5
-:                                :  +- Scan spark_catalog.default.household_demographics [hd_demo_sk#277, hd_income_band_sk#278] (shared #3)
-:                                +- Project [hd_income_band_sk#278, d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                   +- Join Inner, (ss_hdemo_sk#68 == hd_demo_sk#277)
-:                                      :- Shared #3, printed above
-:                                      +- Project [d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_hdemo_sk#68, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                         +- Join Inner, (ss_promo_sk#71 == p_promo_sk#258)
-:                                            :- Scan spark_catalog.default.promotion [p_promo_sk#258]
-:                                            +- Project [d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                               +- Join Inner, ((c_current_cdemo_sk#224 == cd_demo_sk#249) and (NOT (cd_marital_status#242 == cd_marital_status#251)))
-:                                                  :- Shift +9
-:                                                  :  +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#240, cd_marital_status#242] (shared #4)
-:                                                  +- Project [cd_marital_status#242, d_year#171, d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                     +- Join Inner, (ss_cdemo_sk#67 == cd_demo_sk#240)
-:                                                        :- Shared #4, printed above
-:                                                        +- Project [d_year#171, d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                           +- Join Inner, (c_first_shipto_date_sk#227 == d_date_sk#165)
-:                                                              :- Shift +56
-:                                                              :  +- Scan spark_catalog.default.date_dim [d_date_sk#109, d_year#115] (shared #5)
-:                                                              +- Project [d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, s_store_name#198, s_zip#218, d_year#115, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                                 +- Join Inner, (c_first_sales_date_sk#228 == d_date_sk#137)
-:                                                                    :- Shift +28
-:                                                                    :  +- Shared #5, printed above
-:                                                                    +- Project [c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228, s_store_name#198, s_zip#218, d_year#115, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                                       +- Join Inner, (ss_customer_sk#66 == c_customer_sk#222)
-:                                                                          :- Scan spark_catalog.default.customer [c_customer_sk#222, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228]
-:                                                                          +- Project [s_store_name#198, s_zip#218, d_year#115, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                                             +- Join Inner, (ss_store_sk#70 == s_store_sk#193)
-:                                                                                :- Scan spark_catalog.default.store [s_store_sk#193, s_store_name#198, s_zip#218]
-:                                                                                +- Project [d_year#115, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                                                   +- Join Inner, (ss_sold_date_sk#63 == d_date_sk#109)
-:                                                                                      :- Shared #5, printed above
-:                                                                                      +- Project [ss_sold_date_sk#63, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                                                         +- Join Inner, (ss_item_sk#65 == cs_item_sk#106)
-:                                                                                            :- Project [cs_item_sk#106]
-:                                                                                            :  +- CteRef cs_ui [cs_item_sk#106, sale#107, refund#108]
-:                                                                                            +- Project [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82, i_item_sk#319, i_product_name#340]
-:                                                                                               +- Join Inner, ((ss_item_sk#65 == sr_item_sk#88) and (ss_ticket_number#72 == sr_ticket_number#95))
-:                                                                                                  :- Scan spark_catalog.default.store_returns [sr_item_sk#88, sr_ticket_number#95]
-:                                                                                                  +- Join Inner, (ss_item_sk#65 == i_item_sk#319)
-:                                                                                                     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_ticket_number#72, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
-:                                                                                                     +- Project [i_item_sk#319, i_product_name#340]
-:                                                                                                        +- Filter (((((i_color#336 IN ('purple', 'burlywood', 'indian', 'spring', 'floral', 'medium')) and (i_current_price#324 >= 64.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) <= 74.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) >= 65.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) <= 79.00))
-:                                                                                                           +- Scan spark_catalog.default.item [i_item_sk#319, i_current_price#324, i_color#336, i_product_name#340]
-+- Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, cs1syear#398, cs1cnt#399, s11#400, s21#401, s31#402, s12#403, s22#404, s32#405, syear#391, cnt#394]
-   +- Sort [product_name#360 ASC NULLS FIRST, store_name#362 ASC NULLS FIRST, cnt#394 ASC NULLS FIRST, s1#376 ASC NULLS FIRST, s1#395 ASC NULLS FIRST], true
-      +- Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, syear#372 AS cs1syear#398, cnt#375 AS cs1cnt#399, s1#376 AS s11#400, s2#377 AS s21#401, s3#378 AS s31#402, s1#395 AS s12#403, s2#396 AS s22#404, s3#397 AS s32#405, syear#391, cnt#394, s1#376, s1#395]
-         +- Join Inner, ((((item_sk#361 == item_sk#380) and (cnt#394 <= cnt#375)) and (store_name#362 == store_name#381)) and (store_zip#363 == store_zip#382))
-            :- Project [product_name#360, item_sk#361, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, syear#372, cnt#375, s1#376, s2#377, s3#378]
-            :  +- Filter (syear#372 == 1999)
-            :     +- CteRef cross_sales [product_name#360, item_sk#361, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, syear#372, fsyear#373, s2year#374, cnt#375, s1#376, s2#377, s3#378] (shared #6)
-            +- Project [item_sk#380, store_name#381, store_zip#382, syear#391, cnt#394, s1#395, s2#396, s3#397]
-               +- Shift +19
-                  +- Filter (syear#372 == 2000)
-                     +- Shared #6, printed above
+Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, cs1syear#398, cs1cnt#399, s11#400, s21#401, s31#402, s12#403, s22#404, s32#405, syear#391, cnt#394]
++- Sort [product_name#360 ASC NULLS FIRST, store_name#362 ASC NULLS FIRST, cnt#394 ASC NULLS FIRST, s1#376 ASC NULLS FIRST, s1#395 ASC NULLS FIRST], true
+   +- Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, syear#372 AS cs1syear#398, cnt#375 AS cs1cnt#399, s1#376 AS s11#400, s2#377 AS s21#401, s3#378 AS s31#402, s1#395 AS s12#403, s2#396 AS s22#404, s3#397 AS s32#405, syear#391, cnt#394, s1#376, s1#395]
+      +- Join Inner, ((((item_sk#361 == item_sk#380) and (cnt#394 <= cnt#375)) and (store_name#362 == store_name#381)) and (store_zip#363 == store_zip#382))
+         :- Project [product_name#873 AS product_name#360, item_sk#874 AS item_sk#361, store_name#875 AS store_name#362, store_zip#876 AS store_zip#363, b_street_number#877 AS b_street_number#364, b_street_name#878 AS b_street_name#365, b_city#879 AS b_city#366, b_zip#880 AS b_zip#367, c_street_number#881 AS c_street_number#368, c_street_name#882 AS c_street_name#369, c_city#883 AS c_city#370, c_zip#884 AS c_zip#371, syear#885 AS syear#372, cnt#888 AS cnt#375, s1#889 AS s1#376, s2#890 AS s2#377, s3#891 AS s3#378]
+         :  +- Shift +532
+         :     +- Aggregate [i_product_name#340, i_item_sk#319, s_store_name#198, s_zip#218, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, d_year#115, d_year#143, d_year#171], [i_product_name#340 AS product_name#341, i_item_sk#319 AS item_sk#342, s_store_name#198 AS store_name#343, s_zip#218 AS store_zip#344, ca_street_number#289 AS b_street_number#345, ca_street_name#290 AS b_street_name#346, ca_city#293 AS b_city#347, ca_zip#296 AS b_zip#348, ca_street_number#302 AS c_street_number#349, ca_street_name#303 AS c_street_name#350, ca_city#306 AS c_city#351, ca_zip#309 AS c_zip#352, d_year#115 AS syear#353, count(1) AS cnt#356, sum(ss_wholesale_cost#74) AS s1#357, sum(ss_list_price#75) AS s2#358, sum(ss_coupon_amt#82) AS s3#359]
+         :        +- Project [i_item_sk#319, i_product_name#340, ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :           +- Join Inner, (ss_item_sk#65 == i_item_sk#319)
+         :              :- Project [i_item_sk#319, i_product_name#340]
+         :              :  +- Filter (((((i_color#336 IN ('purple', 'burlywood', 'indian', 'spring', 'floral', 'medium')) and (i_current_price#324 >= 64.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) <= 74.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) >= 65.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) <= 79.00))
+         :              :     +- Scan spark_catalog.default.item [i_item_sk#319, i_current_price#324, i_color#336, i_product_name#340] (shared #1)
+         :              +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                 +- Join Inner, (hd_income_band_sk#283 == ib_income_band_sk#316)
+         :                    :- Shift +3 (shared #2)
+         :                    :  +- Scan spark_catalog.default.income_band [ib_income_band_sk#313] (shared #3)
+         :                    +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                       +- Join Inner, (hd_income_band_sk#278 == ib_income_band_sk#313)
+         :                          :- Shared #3, printed above
+         :                          +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                             +- Join Inner, (c_current_addr_sk#226 == ca_address_sk#300)
+         :                                :- Shift +13 (shared #4)
+         :                                :  +- Scan spark_catalog.default.customer_address [ca_address_sk#287, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296] (shared #5)
+         :                                +- Project [ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                   +- Join Inner, (ss_addr_sk#69 == ca_address_sk#287)
+         :                                      :- Shared #5, printed above
+         :                                      +- Project [hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                         +- Join Inner, (c_current_hdemo_sk#225 == hd_demo_sk#282)
+         :                                            :- Shift +5 (shared #6)
+         :                                            :  +- Scan spark_catalog.default.household_demographics [hd_demo_sk#277, hd_income_band_sk#278] (shared #7)
+         :                                            +- Project [hd_income_band_sk#278, d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                               +- Join Inner, (ss_hdemo_sk#68 == hd_demo_sk#277)
+         :                                                  :- Shared #7, printed above
+         :                                                  +- Project [d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_hdemo_sk#68, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                     +- Join Inner, (ss_promo_sk#71 == p_promo_sk#258)
+         :                                                        :- Scan spark_catalog.default.promotion [p_promo_sk#258] (shared #8)
+         :                                                        +- Project [d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                           +- Join Inner, ((c_current_cdemo_sk#224 == cd_demo_sk#249) and (NOT (cd_marital_status#242 == cd_marital_status#251)))
+         :                                                              :- Shift +9 (shared #9)
+         :                                                              :  +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#240, cd_marital_status#242] (shared #10)
+         :                                                              +- Project [cd_marital_status#242, d_year#171, d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                 +- Join Inner, (ss_cdemo_sk#67 == cd_demo_sk#240)
+         :                                                                    :- Shared #10, printed above
+         :                                                                    +- Project [d_year#171, d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                       +- Join Inner, (c_first_shipto_date_sk#227 == d_date_sk#165)
+         :                                                                          :- Shift +56 (shared #11)
+         :                                                                          :  +- Scan spark_catalog.default.date_dim [d_date_sk#109, d_year#115] (shared #12)
+         :                                                                          +- Project [d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                             +- Join Inner, (c_first_sales_date_sk#228 == d_date_sk#137)
+         :                                                                                :- Shift +28 (shared #13)
+         :                                                                                :  +- Shared #12, printed above
+         :                                                                                +- Project [c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                                   +- Join Inner, (ss_customer_sk#66 == c_customer_sk#222)
+         :                                                                                      :- Scan spark_catalog.default.customer [c_customer_sk#222, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228] (shared #14)
+         :                                                                                      +- Project [s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                                         +- Join Inner, (ss_store_sk#70 == s_store_sk#193)
+         :                                                                                            :- Scan spark_catalog.default.store [s_store_sk#193, s_store_name#198, s_zip#218] (shared #15)
+         :                                                                                            +- Project [d_year#115, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                                               +- Join Inner, (ss_sold_date_sk#63 == d_date_sk#109)
+         :                                                                                                  :- Filter (d_year#115 == 1999)
+         :                                                                                                  :  +- Shared #12, printed above
+         :                                                                                                  +- Project [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                                                     +- Join Inner, ((ss_item_sk#65 == sr_item_sk#88) and (ss_ticket_number#72 == sr_ticket_number#95))
+         :                                                                                                        :- Scan spark_catalog.default.store_returns [sr_item_sk#88, sr_ticket_number#95] (shared #16)
+         :                                                                                                        +- Project [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_ticket_number#72, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+         :                                                                                                           +- Join Inner, (ss_item_sk#65 == cs_item_sk#106)
+         :                                                                                                              :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_ticket_number#72, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82] (shared #17)
+         :                                                                                                              +- Project [cs_item_sk#484 AS cs_item_sk#106] (shared #18)
+         :                                                                                                                 +- Shift +469
+         :                                                                                                                    +- Filter (CAST(sale#61 AS DECIMAL(21,2)) > (2 * refund#62))
+         :                                                                                                                       +- Aggregate [cs_item_sk#15], [cs_item_sk#15, sum(cs_ext_list_price#25) AS sale#61, sum(((cr_refunded_cash#57 + cr_reversed_charge#58) + cr_store_credit#59)) AS refund#62]
+         :                                                                                                                          +- Project [cs_item_sk#15, cs_ext_list_price#25, cr_refunded_cash#57, cr_reversed_charge#58, cr_store_credit#59]
+         :                                                                                                                             +- Join Inner, ((cs_item_sk#15 == cr_item_sk#36) and (cs_order_number#17 == cr_order_number#50))
+         :                                                                                                                                :- Scan spark_catalog.default.catalog_sales [cs_item_sk#15, cs_order_number#17, cs_ext_list_price#25]
+         :                                                                                                                                +- Scan spark_catalog.default.catalog_returns [cr_item_sk#36, cr_order_number#50, cr_refunded_cash#57, cr_reversed_charge#58, cr_store_credit#59]
+         +- Shift +19
+            +- Project [item_sk#874 AS item_sk#361, store_name#875 AS store_name#362, store_zip#876 AS store_zip#363, syear#885 AS syear#372, cnt#888 AS cnt#375, s1#889 AS s1#376, s2#890 AS s2#377, s3#891 AS s3#378]
+               +- Shift +532
+                  +- Aggregate [i_product_name#340, i_item_sk#319, s_store_name#198, s_zip#218, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, d_year#115, d_year#143, d_year#171], [i_item_sk#319 AS item_sk#342, s_store_name#198 AS store_name#343, s_zip#218 AS store_zip#344, d_year#115 AS syear#353, count(1) AS cnt#356, sum(ss_wholesale_cost#74) AS s1#357, sum(ss_list_price#75) AS s2#358, sum(ss_coupon_amt#82) AS s3#359]
+                     +- Project [i_item_sk#319, i_product_name#340, ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                        +- Join Inner, (ss_item_sk#65 == i_item_sk#319)
+                           :- Project [i_item_sk#319, i_product_name#340]
+                           :  +- Filter (((((i_color#336 IN ('purple', 'burlywood', 'indian', 'spring', 'floral', 'medium')) and (i_current_price#324 >= 64.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) <= 74.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) >= 65.00)) and (CAST(i_current_price#324 AS DECIMAL(12,2)) <= 79.00))
+                           :     +- Shared #1, printed above
+                           +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                              +- Join Inner, (hd_income_band_sk#283 == ib_income_band_sk#316)
+                                 :- Shared #2, printed above
+                                 +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                    +- Join Inner, (hd_income_band_sk#278 == ib_income_band_sk#313)
+                                       :- Shared #3, printed above
+                                       +- Project [ca_street_number#302, ca_street_name#303, ca_city#306, ca_zip#309, ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                          +- Join Inner, (c_current_addr_sk#226 == ca_address_sk#300)
+                                             :- Shared #4, printed above
+                                             +- Project [ca_street_number#289, ca_street_name#290, ca_city#293, ca_zip#296, hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                +- Join Inner, (ss_addr_sk#69 == ca_address_sk#287)
+                                                   :- Shared #5, printed above
+                                                   +- Project [hd_income_band_sk#283, hd_income_band_sk#278, d_year#171, d_year#143, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                      +- Join Inner, (c_current_hdemo_sk#225 == hd_demo_sk#282)
+                                                         :- Shared #6, printed above
+                                                         +- Project [hd_income_band_sk#278, d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                            +- Join Inner, (ss_hdemo_sk#68 == hd_demo_sk#277)
+                                                               :- Shared #7, printed above
+                                                               +- Project [d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_hdemo_sk#68, ss_addr_sk#69, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                  +- Join Inner, (ss_promo_sk#71 == p_promo_sk#258)
+                                                                     :- Shared #8, printed above
+                                                                     +- Project [d_year#171, d_year#143, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                        +- Join Inner, ((c_current_cdemo_sk#224 == cd_demo_sk#249) and (NOT (cd_marital_status#242 == cd_marital_status#251)))
+                                                                           :- Shared #9, printed above
+                                                                           +- Project [cd_marital_status#242, d_year#171, d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                              +- Join Inner, (ss_cdemo_sk#67 == cd_demo_sk#240)
+                                                                                 :- Shared #10, printed above
+                                                                                 +- Project [d_year#171, d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                                    +- Join Inner, (c_first_shipto_date_sk#227 == d_date_sk#165)
+                                                                                       :- Shared #11, printed above
+                                                                                       +- Project [d_year#143, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                                          +- Join Inner, (c_first_sales_date_sk#228 == d_date_sk#137)
+                                                                                             :- Shared #13, printed above
+                                                                                             +- Project [c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                                                +- Join Inner, (ss_customer_sk#66 == c_customer_sk#222)
+                                                                                                   :- Shared #14, printed above
+                                                                                                   +- Project [s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                                                      +- Join Inner, (ss_store_sk#70 == s_store_sk#193)
+                                                                                                         :- Shared #15, printed above
+                                                                                                         +- Project [d_year#115, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                                                            +- Join Inner, (ss_sold_date_sk#63 == d_date_sk#109)
+                                                                                                               :- Filter (d_year#115 == 2000)
+                                                                                                               :  +- Shared #12, printed above
+                                                                                                               +- Project [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                                                                  +- Join Inner, ((ss_item_sk#65 == sr_item_sk#88) and (ss_ticket_number#72 == sr_ticket_number#95))
+                                                                                                                     :- Shared #16, printed above
+                                                                                                                     +- Project [ss_sold_date_sk#63, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_store_sk#70, ss_promo_sk#71, ss_ticket_number#72, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
+                                                                                                                        +- Join Inner, (ss_item_sk#65 == cs_item_sk#106)
+                                                                                                                           :- Shared #17, printed above
+                                                                                                                           +- Shared #18, printed above

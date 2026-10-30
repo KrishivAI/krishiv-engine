@@ -144,7 +144,14 @@ fn normalize(e: &Arc<Expr>) -> Arc<Expr> {
             ExprNode::Resolved(ResolvedExpr::Function(f))
                 if f.kind == FunctionKind::Scalar && f.filter.is_none() =>
             {
-                match (f.id.name(), f.args.as_slice()) {
+                // Only the registry's own `nvl` and friends: a session UDF
+                // (or SQL-bodied function) of the same name is another
+                // function and must stay a call.
+                let name = match &f.id {
+                    FunctionId::Registry { name, .. } => name.as_str(),
+                    _ => "",
+                };
+                match (name, f.args.as_slice()) {
                     // `nullif` with arguments of different (or unknown) types
                     // would need the analyzer's implicit casts around the
                     // equality to stay well-typed: leave those calls alone

@@ -2,74 +2,76 @@
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
 expression: optimized.root().to_string()
 ---
-WithCte [sr_items, cr_items, wr_items]
-:- Aggregate [i_item_id#21], [i_item_id#21 AS item_id#126, sum(sr_return_quantity#10) AS sr_item_qty#127]
-:  +- Project [sr_return_quantity#10, i_item_id#21]
-:     +- Join LeftSemi, (d_date#44 == d_date#72)
-:        :- Project [sr_return_quantity#10, d_date#44, i_item_id#21]
-:        :  +- Join Inner, (sr_item_sk#2 == i_item_sk#20)
-:        :     :- Project [sr_item_sk#2, sr_return_quantity#10, d_date#44]
-:        :     :  +- Join Inner, (sr_returned_date_sk#0 == d_date_sk#42)
-:        :     :     :- Scan spark_catalog.default.store_returns [sr_returned_date_sk#0, sr_item_sk#2, sr_return_quantity#10]
-:        :     :     +- Project [d_date_sk#42, d_date#44]
-:        :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#42, d_date#44, d_week_seq#46] (shared #1)
-:        :     +- Scan spark_catalog.default.item [i_item_sk#20, i_item_id#21]
-:        +- Project [d_date#72]
-:           +- Join LeftSemi, (d_week_seq#74 == d_week_seq#102)
-:              :- Project [d_date#72, d_week_seq#74]
-:              :  +- Shift +28
-:              :     +- Shared #1, printed above
-:              +- Project [d_week_seq#102]
-:                 +- Shift +56
-:                    +- Filter (d_date#44 IN (DATE '2000-06-30', DATE '2000-09-27', DATE '2000-11-17'))
-:                       +- Shared #1, printed above
-:- Aggregate [i_item_id#156], [i_item_id#156 AS item_id#261, sum(cr_return_quantity#145) AS cr_item_qty#262]
-:  +- Project [cr_return_quantity#145, i_item_id#156]
-:     +- Join LeftSemi, (d_date#179 == d_date#207)
-:        :- Project [cr_return_quantity#145, d_date#179, i_item_id#156]
-:        :  +- Join Inner, (cr_item_sk#130 == i_item_sk#155)
-:        :     :- Project [cr_item_sk#130, cr_return_quantity#145, d_date#179]
-:        :     :  +- Join Inner, (cr_returned_date_sk#128 == d_date_sk#177)
-:        :     :     :- Scan spark_catalog.default.catalog_returns [cr_returned_date_sk#128, cr_item_sk#130, cr_return_quantity#145]
-:        :     :     +- Project [d_date_sk#177, d_date#179]
-:        :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#177, d_date#179, d_week_seq#181] (shared #2)
-:        :     +- Scan spark_catalog.default.item [i_item_sk#155, i_item_id#156]
-:        +- Project [d_date#207]
-:           +- Join LeftSemi, (d_week_seq#209 == d_week_seq#237)
-:              :- Project [d_date#207, d_week_seq#209]
-:              :  +- Shift +28
-:              :     +- Shared #2, printed above
-:              +- Project [d_week_seq#237]
-:                 +- Shift +56
-:                    +- Filter (d_date#179 IN (DATE '2000-06-30', DATE '2000-09-27', DATE '2000-11-17'))
-:                       +- Shared #2, printed above
-:- Aggregate [i_item_id#288], [i_item_id#288 AS item_id#393, sum(wr_return_quantity#277) AS wr_item_qty#394]
-:  +- Project [wr_return_quantity#277, i_item_id#288]
-:     +- Join LeftSemi, (d_date#311 == d_date#339)
-:        :- Project [wr_return_quantity#277, d_date#311, i_item_id#288]
-:        :  +- Join Inner, (wr_item_sk#265 == i_item_sk#287)
-:        :     :- Project [wr_item_sk#265, wr_return_quantity#277, d_date#311]
-:        :     :  +- Join Inner, (wr_returned_date_sk#263 == d_date_sk#309)
-:        :     :     :- Scan spark_catalog.default.web_returns [wr_returned_date_sk#263, wr_item_sk#265, wr_return_quantity#277]
-:        :     :     +- Project [d_date_sk#309, d_date#311]
-:        :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#309, d_date#311, d_week_seq#313] (shared #3)
-:        :     +- Scan spark_catalog.default.item [i_item_sk#287, i_item_id#288]
-:        +- Project [d_date#339]
-:           +- Join LeftSemi, (d_week_seq#341 == d_week_seq#369)
-:              :- Project [d_date#339, d_week_seq#341]
-:              :  +- Shift +28
-:              :     +- Shared #3, printed above
-:              +- Project [d_week_seq#369]
-:                 +- Shift +56
-:                    +- Filter (d_date#311 IN (DATE '2000-06-30', DATE '2000-09-27', DATE '2000-11-17'))
-:                       +- Shared #3, printed above
-+- Limit 100
-   +- Sort [item_id#395 ASC NULLS FIRST, sr_item_qty#396 ASC NULLS FIRST], true
-      +- Project [item_id#395, sr_item_qty#396, ((((CAST(sr_item_qty#396 AS DECIMAL(20,0)) * 1.0000) / cse_405#405) / 3.0000) * 100) AS sr_dev#401, cr_item_qty#398, ((((CAST(cr_item_qty#398 AS DECIMAL(20,0)) * 1.0000) / cse_405#405) / 3.0000) * 100) AS cr_dev#402, wr_item_qty#400, ((((CAST(wr_item_qty#400 AS DECIMAL(20,0)) * 1.0000) / cse_405#405) / 3.0000) * 100) AS wr_dev#403, (cse_405#405 / 3.0) AS average#404]
-         +- Project [item_id#395, sr_item_qty#396, wr_item_qty#400, cr_item_qty#398, CAST(((sr_item_qty#396 + cr_item_qty#398) + wr_item_qty#400) AS DECIMAL(20,0)) AS cse_405#405]
-            +- Join Inner, (item_id#395 == item_id#397)
-               :- Project [item_id#395, sr_item_qty#396, wr_item_qty#400]
-               :  +- Join Inner, (item_id#395 == item_id#399)
-               :     :- CteRef sr_items [item_id#395, sr_item_qty#396]
-               :     +- CteRef wr_items [item_id#399, wr_item_qty#400]
-               +- CteRef cr_items [item_id#397, cr_item_qty#398]
+Limit 100
++- Sort [item_id#395 ASC NULLS FIRST, sr_item_qty#396 ASC NULLS FIRST], true
+   +- Project [item_id#395, sr_item_qty#396, ((((CAST(sr_item_qty#396 AS DECIMAL(20,0)) * 1.0000) / cse_1191#1191) / 3.0000) * 100) AS sr_dev#401, cr_item_qty#398, ((((CAST(cr_item_qty#398 AS DECIMAL(20,0)) * 1.0000) / cse_1191#1191) / 3.0000) * 100) AS cr_dev#402, wr_item_qty#400, ((((CAST(wr_item_qty#400 AS DECIMAL(20,0)) * 1.0000) / cse_1191#1191) / 3.0000) * 100) AS wr_dev#403, (cse_1191#1191 / 3.0) AS average#404]
+      +- Project [item_id#395, sr_item_qty#396, wr_item_qty#400, cr_item_qty#398, CAST(((sr_item_qty#396 + cr_item_qty#398) + wr_item_qty#400) AS DECIMAL(20,0)) AS cse_1191#1191]
+         +- Join Inner, (item_id#395 == item_id#397)
+            :- Project [item_id#395, sr_item_qty#396, wr_item_qty#400]
+            :  +- Join Inner, (item_id#395 == item_id#399)
+            :     :- Project [item_id#531 AS item_id#395, sr_item_qty#532 AS sr_item_qty#396]
+            :     :  +- Shift +405
+            :     :     +- Aggregate [i_item_id#21], [i_item_id#21 AS item_id#126, sum(sr_return_quantity#10) AS sr_item_qty#127]
+            :     :        +- Project [sr_return_quantity#10, i_item_id#21]
+            :     :           +- Join LeftSemi, (d_date#44 == d_date#72)
+            :     :              :- Project [sr_return_quantity#10, d_date#44, i_item_id#21]
+            :     :              :  +- Join Inner, (sr_item_sk#2 == i_item_sk#20)
+            :     :              :     :- Project [sr_item_sk#2, sr_return_quantity#10, d_date#44]
+            :     :              :     :  +- Join Inner, (sr_returned_date_sk#0 == d_date_sk#42)
+            :     :              :     :     :- Scan spark_catalog.default.store_returns [sr_returned_date_sk#0, sr_item_sk#2, sr_return_quantity#10]
+            :     :              :     :     +- Project [d_date_sk#42, d_date#44]
+            :     :              :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#42, d_date#44, d_week_seq#46] (shared #1)
+            :     :              :     +- Scan spark_catalog.default.item [i_item_sk#20, i_item_id#21]
+            :     :              +- Project [d_date#72]
+            :     :                 +- Join LeftSemi, (d_week_seq#74 == d_week_seq#102)
+            :     :                    :- Project [d_date#72, d_week_seq#74]
+            :     :                    :  +- Shift +28
+            :     :                    :     +- Shared #1, printed above
+            :     :                    +- Project [d_week_seq#102]
+            :     :                       +- Shift +56
+            :     :                          +- Filter (d_date#44 IN (DATE '2000-06-30', DATE '2000-09-27', DATE '2000-11-17'))
+            :     :                             +- Shared #1, printed above
+            :     +- Project [item_id#1189 AS item_id#399, wr_item_qty#1190 AS wr_item_qty#400]
+            :        +- Shift +796
+            :           +- Aggregate [i_item_id#288], [i_item_id#288 AS item_id#393, sum(wr_return_quantity#277) AS wr_item_qty#394]
+            :              +- Project [wr_return_quantity#277, i_item_id#288]
+            :                 +- Join LeftSemi, (d_date#311 == d_date#339)
+            :                    :- Project [wr_return_quantity#277, d_date#311, i_item_id#288]
+            :                    :  +- Join Inner, (wr_item_sk#265 == i_item_sk#287)
+            :                    :     :- Project [wr_item_sk#265, wr_return_quantity#277, d_date#311]
+            :                    :     :  +- Join Inner, (wr_returned_date_sk#263 == d_date_sk#309)
+            :                    :     :     :- Scan spark_catalog.default.web_returns [wr_returned_date_sk#263, wr_item_sk#265, wr_return_quantity#277]
+            :                    :     :     +- Project [d_date_sk#309, d_date#311]
+            :                    :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#309, d_date#311, d_week_seq#313] (shared #2)
+            :                    :     +- Scan spark_catalog.default.item [i_item_sk#287, i_item_id#288]
+            :                    +- Project [d_date#339]
+            :                       +- Join LeftSemi, (d_week_seq#341 == d_week_seq#369)
+            :                          :- Project [d_date#339, d_week_seq#341]
+            :                          :  +- Shift +28
+            :                          :     +- Shared #2, printed above
+            :                          +- Project [d_week_seq#369]
+            :                             +- Shift +56
+            :                                +- Filter (d_date#311 IN (DATE '2000-06-30', DATE '2000-09-27', DATE '2000-11-17'))
+            :                                   +- Shared #2, printed above
+            +- Project [item_id#794 AS item_id#397, cr_item_qty#795 AS cr_item_qty#398]
+               +- Shift +533
+                  +- Aggregate [i_item_id#156], [i_item_id#156 AS item_id#261, sum(cr_return_quantity#145) AS cr_item_qty#262]
+                     +- Project [cr_return_quantity#145, i_item_id#156]
+                        +- Join LeftSemi, (d_date#179 == d_date#207)
+                           :- Project [cr_return_quantity#145, d_date#179, i_item_id#156]
+                           :  +- Join Inner, (cr_item_sk#130 == i_item_sk#155)
+                           :     :- Project [cr_item_sk#130, cr_return_quantity#145, d_date#179]
+                           :     :  +- Join Inner, (cr_returned_date_sk#128 == d_date_sk#177)
+                           :     :     :- Scan spark_catalog.default.catalog_returns [cr_returned_date_sk#128, cr_item_sk#130, cr_return_quantity#145]
+                           :     :     +- Project [d_date_sk#177, d_date#179]
+                           :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#177, d_date#179, d_week_seq#181] (shared #3)
+                           :     +- Scan spark_catalog.default.item [i_item_sk#155, i_item_id#156]
+                           +- Project [d_date#207]
+                              +- Join LeftSemi, (d_week_seq#209 == d_week_seq#237)
+                                 :- Project [d_date#207, d_week_seq#209]
+                                 :  +- Shift +28
+                                 :     +- Shared #3, printed above
+                                 +- Project [d_week_seq#237]
+                                    +- Shift +56
+                                       +- Filter (d_date#179 IN (DATE '2000-06-30', DATE '2000-09-27', DATE '2000-11-17'))
+                                          +- Shared #3, printed above
