@@ -138,12 +138,6 @@ fn dropping_a_namespace_with_tables() {
 }
 
 #[test]
-fn other_show_commands_are_not_executed_yet() {
-    let s = Session::new().unwrap();
-    assert_eq!(class(&s, "SHOW TABLES"), "KRISHIV_UNSUPPORTED_FEATURE");
-}
-
-#[test]
 fn namespace_names_that_could_be_paths_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());

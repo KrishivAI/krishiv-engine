@@ -15,7 +15,7 @@ use krishiv_sql::ast::{
 use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
-use crate::functions::col;
+use crate::functions::{col, lit};
 use crate::session::Session;
 use crate::store::{CatalogStore, CatalogTable, NamespaceMeta};
 use crate::table_commands::TableName;
@@ -96,7 +96,7 @@ impl Session {
         booleans: &[&str],
         rows: Vec<Vec<Cell>>,
     ) -> Result<DataFrame, KrishivError> {
-        let mut all = vec!["key"];
+        let mut all = vec!["__krishiv_row_order"];
         all.extend_from_slice(columns);
         let keyed = rows
             .into_iter()
@@ -109,7 +109,7 @@ impl Session {
         let df = self.string_frame(&all, keyed).await?;
         let df = df.select(columns.iter().map(|&c| {
             if booleans.contains(&c) {
-                col(c).cast(DataType::Boolean).alias(c)
+                col(c).eq(lit("true")).alias(c)
             } else {
                 col(c)
             }
