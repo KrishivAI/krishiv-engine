@@ -338,7 +338,10 @@ struct SortedRows {
 /// In-memory slices above which a bucket's merge sorts its rows instead of
 /// running a loser tree: with many small slices each tree step is a chain
 /// of cache misses, while one sort of the rows' key prefixes stays in
-/// cache (most comparisons end at a 16-byte prefix).
+/// cache (most comparisons end at a 16-byte prefix). Only a sort with hash
+/// buckets does: an unbucketed sort's slices are whole sorted batches,
+/// which the tree merges in far fewer comparisons than a sort of all their
+/// rows.
 const SORT_MIN_SLICES: usize = 64;
 
 impl Merger {
@@ -363,7 +366,9 @@ impl Merger {
         Self::slices(schema, encoder, memory, spilled, handle)
     }
 
-    /// A merge of bucket `bucket` of each of `memory`'s batches.
+    /// A merge of bucket `bucket` of each of `memory`'s batches: with hash
+    /// buckets and many slices a sort of the rows, else the loser tree of
+    /// [`Merger::new`].
     pub(crate) fn bucket(
         schema: SchemaRef,
         encoder: Arc<KeyEncoder>,
@@ -376,7 +381,8 @@ impl Merger {
             .map(|s| (Arc::clone(s), s.bucket(bucket)))
             .filter(|(_, r)| !r.is_empty())
             .collect();
-        if memory.len() > SORT_MIN_SLICES {
+        let bucketed = memory.iter().any(|(s, _)| s.bounds.len() > 2);
+        if bucketed && memory.len() > SORT_MIN_SLICES {
             let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
             let mut scratch = handle.reservation();
             // Without the memory for the keyed rows, the loser tree (which
@@ -442,9 +448,15 @@ impl Merger {
         })
     }
 
+    /// Whether this merge sorts its rows instead of running the loser tree.
+    #[cfg(test)]
+    pub(super) fn sorts_rows(&self) -> bool {
+        self.sorted.is_some()
+    }
+
     /// A merge of the `order` ranges of `memory` followed by `spilled`
     /// runs.
-    fn slices(
+    pub(super) fn slices(
         schema: SchemaRef,
         encoder: Arc<KeyEncoder>,
         memory: Vec<(Arc<SortedBatch>, std::ops::Range<usize>)>,
