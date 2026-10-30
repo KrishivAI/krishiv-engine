@@ -374,7 +374,7 @@ fn not_null_is_dropped_for_file_tables_as_in_spark() {
 }
 
 #[test]
-fn a_query_overflow_is_reported_as_the_querys_own() {
+fn a_query_overflow_is_reported_as_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE TABLE t (a BIGINT)");
