@@ -221,6 +221,12 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
                 PlanNode::Scan(s) => s.output.iter().for_each(&mut bump),
                 PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
                 PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
+                // The `exists` column is defined by the join alone: an
+                // unread one appears nowhere else.
+                PlanNode::Join {
+                    kind: crate::JoinKind::Existence(id),
+                    ..
+                } => top = top.max(id.0.saturating_add(1)),
                 _ => {}
             },
             Node::Expr(e) => {

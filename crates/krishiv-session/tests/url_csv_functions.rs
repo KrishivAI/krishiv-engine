@@ -4,8 +4,8 @@
 //! error classes, as do the `schema_of_csv` statements of
 //! `csv-functions.sql` that use no other unimplemented function. The
 //! `from_csv`/`to_csv` statements live in `csv_from_to.rs`; the
-//! `schema_of_csv` options statement (`map`, which is unimplemented) is
-//! skipped.
+//! `schema_of_csv` options statement is covered by
+//! `schema_of_csv_reads_map_options` (values from the Spark 4.2.0 oracle).
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -449,5 +449,149 @@ fn schema_of_csv_of_a_variable_keeps_its_shown_form() {
     assert_eq!(
         run(&s, "select schema_of_csv(v)"),
         ["STRUCT<_c0: INT, _c1: STRING>"]
+    );
+}
+
+/// `schema_of_csv(csv, map(...))` reads the options literal, and the output
+/// name drops it; a non-`map` or a map of other types is refused with
+/// Spark's classes (all checked against Spark 4.2.0).
+#[test]
+fn schema_of_csv_reads_map_options() {
+    let s = session();
+    assert_eq!(
+        run(&s, "select schema_of_csv('1|abc', map('delimiter', '|'))"),
+        ["STRUCT<_c0: INT, _c1: STRING>"]
+    );
+    assert_eq!(
+        names(&s, "select schema_of_csv('1|abc', map('delimiter', '|'))"),
+        ["schema_of_csv(1|abc)"]
+    );
+    // The option changes the answer: with the default separator the record is one string field.
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_csv('1;abc', map('sep', ';', 'inferSchema', 'false'))"
+        ),
+        ["STRUCT<_c0: INT, _c1: STRING>"]
+    );
+    assert_eq!(
+        run(&s, "select schema_of_csv('1;abc')"),
+        ["STRUCT<_c0: STRING>"]
+    );
+    assert_eq!(
+        class_of(&s, "select schema_of_csv('1', 1)"),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    assert_eq!(
+        class_of(&s, "select schema_of_csv('1', map(1, 2))"),
+        ErrorClass::InvalidOptionsNonStringType
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|'))"
+        ),
+        ["1|2"]
+    );
+}
+
+/// The options `map(...)` is evaluated as a map: a repeated key is
+/// `DUPLICATED_MAP_KEY` unless the session keeps the last one; option names
+/// are case-insensitive and the one written last wins (Spark 4.2.0).
+#[test]
+fn option_maps_follow_the_map_key_dedup_policy() {
+    let s = session();
+    assert_eq!(
+        class_of(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|', 'sep', ';'))"
+        ),
+        ErrorClass::DuplicatedMapKey
+    );
+    assert_eq!(
+        class_of(
+            &s,
+            "select from_json('{\"a\":1}', 'a INT', map('mode', 'FAILFAST', 'mode', 'PERMISSIVE'))"
+        ),
+        ErrorClass::DuplicatedMapKey
+    );
+    // Two spellings of one option are distinct map keys; the last written wins.
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_csv('1|2', map('sep', '|', 'SEP', ';'))"
+        ),
+        ["STRUCT<_c0: STRING>"]
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|', 'SEP', ';'))"
+        ),
+        ["1;2"]
+    );
+    block_on(s.sql("set spark.sql.mapKeyDedupPolicy=LAST_WIN")).expect("set policy");
+    assert_eq!(
+        run(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|', 'sep', ';'))"
+        ),
+        ["1;2"]
+    );
+}
+
+/// `to_json`, `from_json` and `schema_of_json` take their options from a
+/// `map(...)` and are named after their first argument (Spark 4.2.0).
+#[test]
+fn json_functions_read_map_options() {
+    let s = session();
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_json('{\"c1\":1}', map('primitivesAsString', 'true'))"
+        ),
+        ["STRUCT<c1: STRING>"]
+    );
+    assert_eq!(
+        names(
+            &s,
+            "select schema_of_json('{\"c1\":1}', map('primitivesAsString', 'true'))"
+        ),
+        ["schema_of_json({\"c1\":1})"]
+    );
+    // Without the option a null field is left out; with it the field is written.
+    assert_eq!(
+        run(
+            &s,
+            "select to_json(named_struct('a', 1, 'b', cast(null as string)))"
+        ),
+        ["{\"a\":1}"]
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_json(named_struct('a', 1, 'b', cast(null as string)), \
+             map('ignoreNullFields', 'false'))"
+        ),
+        ["{\"a\":1,\"b\":null}"]
+    );
+    assert_eq!(
+        names(
+            &s,
+            "select to_json(named_struct('a', 1), map('ignoreNullFields', 'false'))"
+        ),
+        ["to_json(named_struct(a, 1))"]
+    );
+    // A malformed record is null by default and an error under FAILFAST.
+    assert_eq!(
+        run(&s, "select to_json(from_json('{\"a\":', 'a INT'))"),
+        ["{}"]
+    );
+    assert_eq!(
+        class_of(
+            &s,
+            "select from_json('{\"a\":', 'a INT', map('mode', 'FAILFAST'))"
+        ),
+        ErrorClass::MalformedRecordInParsingWithoutSuggestion
     );
 }
