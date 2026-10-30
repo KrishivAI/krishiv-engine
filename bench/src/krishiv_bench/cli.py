@@ -200,8 +200,67 @@ def main(argv=None) -> None:
     mn.add_argument("--full-data", action="store_true", help="shrink the query only, on the full data")
     mn.add_argument("--out", help="case directory (default $KRISHIV_DATA/minimized/<suite>_<query>)")
     mn.add_argument("--runner", help=RUNNER_HELP)
+    bs = sub.add_parser("bisect", help="find the commit that broke a query (wrong rows, or a slowdown) by bisection")
+    bs.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    bs.add_argument("--query", required=True, help="query id, e.g. q07")
+    bs.add_argument("--good", required=True, help="a commit where the query is fine (exclusive)")
+    bs.add_argument("--bad", required=True, help="a commit where the problem shows (inclusive)")
+    mode = bs.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--correctness",
+        dest="mode",
+        action="store_const",
+        const="correctness",
+        help="rows differ from DuckDB (default)",
+    )
+    mode.add_argument(
+        "--time", dest="mode", action="store_const", const="time", help="paired A/B slowdown against --good"
+    )
+    bs.set_defaults(mode="correctness")
+    bs.add_argument("--threshold", type=float, default=1.10, help="--time: B/A ratio that counts as a regression")
+    bs.add_argument("--sf", type=float, default=10)
+    bs.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
+    bs.add_argument("--reps", type=int, default=3, help="--time: ABBA blocks per probed commit")
+    bs.add_argument("--threads", type=int, default=12)
+    bs.add_argument("--memory-limit", default="24g")
+    bs.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    fd = sub.add_parser("flamediff", help="differential flamegraph of one query on two runner builds (perf + inferno)")
+    fd.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    fd.add_argument("--query", required=True, help="query id, e.g. q07")
+    fd.add_argument("--a-runner", required=True, metavar="PATH", help="runner of side A (the baseline); frame pointers")
+    fd.add_argument("--b-runner", required=True, metavar="PATH", help="runner of side B; frame pointers")
+    fd.add_argument("--sf", type=float, default=10)
+    fd.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
+    fd.add_argument("--runs", type=int, default=3, help="timed runs per side after one warm-up")
+    fd.add_argument("--threads", type=int, default=12)
+    fd.add_argument("--memory-limit", default="24g")
+    fd.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    fd.add_argument("--out", help="output directory (default $KRISHIV_DATA/results/flamediff/<ts>_<suite>_<query>)")
+    tr = sub.add_parser("trend", help="per-query Krishiv/DuckDB ratios over time, from the abba results on disk")
+    tr.add_argument("--out", help="Markdown file (default $KRISHIV_DATA/results/trend.md)")
+    tr.add_argument("--last", type=int, default=10, help="runs per suite shown")
     a = ap.parse_args(argv)
     _set_runner(getattr(a, "runner", None))
+    if a.cmd == "bisect":
+        from .bisect import BisectError, run_bisect
+
+        try:
+            run_bisect(a.suite, a.query, a.good, a.bad, a.mode, a.sf, a.dataset, a.threads, a.memory_limit,
+                       a.timeout, a.reps, a.threshold)  # fmt: skip
+        except BisectError as e:
+            sys.exit(f"bisect: {e}")
+        return
+    if a.cmd == "flamediff":
+        from .flamediff import run_flamediff
+
+        run_flamediff(a.suite, a.query, a.a_runner, a.b_runner, a.sf, a.dataset, a.runs, a.threads, a.memory_limit,
+                      a.timeout, Path(a.out) if a.out else None)  # fmt: skip
+        return
+    if a.cmd == "trend":
+        from .trend import run_trend
+
+        run_trend(Path(a.out) if a.out else None, a.last)
+        return
     if a.cmd == "minimize":
         from .minimize import run_minimize
 

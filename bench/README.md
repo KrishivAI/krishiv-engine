@@ -160,6 +160,46 @@ subqueries). `--max-runs` bounds the engine comparisons. Output `$KRISHIV_DATA/m
 `setup.sql` (`CREATE TEMPORARY VIEW ... VALUES`, for the golden runner), `expected.json`, `actual.json`, `data/*.parquet`.
 A difference that needs rows outside the slice is reported as not reproducing; use `--full-data` then.
 
+## Find the commit that broke a query (`bisect`)
+
+```sh
+uv run krishiv-bench bisect --suite tpch --sf 10 --query q07 --good <sha> --bad <sha>            # wrong rows vs DuckDB
+uv run krishiv-bench bisect --suite tpcds --sf 1 --query q14 --good <sha> --bad <sha> --time --threshold 1.15
+```
+
+Bisects the first-parent commits after `--good` up to `--bad` (one commit per merged PR). Each probed commit gets its own
+`krishiv-bench-runner` (`--profile dist`, built in a scratch worktree under `$KRISHIV_DATA/bisect/<ts>`, one shared target
+dir for the run; a binary is reused within the run and everything is removed at the end). `--correctness` (default): the commit is bad when its rows differ from DuckDB's or the engine
+fails. `--time`: a paired ABBA (`ab`) of the `--good` build against the probed build; bad when B/A is at least
+`--threshold` (default 1.10) with the 95% CI above 1. A commit that does not build, or whose runner does not start, is skipped, and the result then names
+the range of candidates. The `--bad` commit must reproduce the problem or the run stops. Holds the bench lock. Output
+`$KRISHIV_DATA/results/<ts>_bisect_<suite>_<query>.json`.
+Build settings come from the environment: export the same `RUSTFLAGS` as for the ABBA builds (for example
+`-C target-cpu=x86-64-v3`) before running, or the probed runners are compiled for a different target.
+
+## Differential flamegraph (`flamediff`)
+
+```sh
+uv run krishiv-bench flamediff --suite tpch --sf 10 --query q07 --a-runner <baseline runner> --b-runner <new runner>
+```
+
+Both runners (built with frame pointers, see the ledger section) run the query under `perf record`: one warm-up and
+`--runs` (3) timed runs, with only the timed window kept. The sides are normalised to the same sample count and merged
+into `inferno-diff-folded` format; `inferno-flamegraph` (`cargo install inferno`) renders `diff.svg` (red: B spends a
+larger share, blue: smaller). `summary.md` lists the frames with the largest share change by self and inclusive time and
+works without inferno. Output `$KRISHIV_DATA/results/flamediff/<ts>_<suite>_<query>/`. Link `summary.md` and the SVG
+from a perf PR's A/B.
+
+## Trend page (`trend`)
+
+```sh
+uv run krishiv-bench trend [--out trend.md] [--last 10]
+```
+
+Per suite and scale factor: the Krishiv/DuckDB ratio of every query in the last `--last` `abba` results (oldest left), a
+sparkline, and the change from the previous run. `x` is a failed query, `*` a run above the load bound (indicative only).
+Reads `$KRISHIV_DATA/results/*_abba_*.json`; other kinds and unreadable files are ignored.
+
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
 RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner
