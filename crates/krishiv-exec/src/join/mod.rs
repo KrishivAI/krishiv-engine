@@ -182,7 +182,8 @@ use crate::values::{LocalValues, Partial, Producer, Value, ValueService};
 /// The join type. The probe (left) side is preserved by the left outer and
 /// anti joins; the build side is preserved by the right semi, right anti
 /// and right outer joins, which build the input whose rows they return
-/// (design P2-T166).
+/// (design P2-T166). The full outer join preserves both sides (design
+/// P2-T052b).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinType {
     /// Matching pairs.

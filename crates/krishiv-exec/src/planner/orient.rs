@@ -162,6 +162,22 @@ mod tests {
     }
 
     #[test]
+    fn a_full_outer_join_flips_to_itself_when_the_right_is_much_larger() {
+        let (small, large) = (known(20.0 * MIB), known(500.0 * MIB));
+        assert_eq!(
+            flipped(JoinType::FullOuter, false),
+            Some(JoinType::FullOuter)
+        );
+        assert_eq!(flipped(JoinType::FullOuter, true), None);
+        assert!(builds_left(&small, &large));
+        assert!(!builds_left(&large, &small));
+        // A tie keeps the right build.
+        assert!(!builds_left(&large, &large));
+        // A broadcastable right input stays the build.
+        assert!(!builds_left(&known(1.0 * MIB), &known(2.0 * MIB)));
+    }
+
+    #[test]
     fn inner_null_aware_and_flipped_joins_keep_their_build() {
         let (small, large) = (known(1.0 * MIB), known(5000.0 * MIB));
         for t in [

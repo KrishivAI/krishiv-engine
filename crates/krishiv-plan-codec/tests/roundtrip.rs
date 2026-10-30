@@ -623,6 +623,14 @@ fn joins_that_build_their_preserved_side_are_a_feature() {
     }
 }
 
+#[test]
+fn the_full_outer_hash_join_is_a_semantic_feature() {
+    assert_eq!(Feature::JoinFullOuter.kind(), FeatureKind::Semantic);
+    let m = message("hash_join_full_outer");
+    assert_eq!(m.features, ["join_full_outer"]);
+    assert_eq!(m.min_reader_version, POST_MIGRATION_READER_VERSION);
+}
+
 /// The existence join type and the single-match flag are two semantic
 /// features (no equivalent plan exists without either), each refused by
 /// name by a reader without it; `distinct_build` needs none.
