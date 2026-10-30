@@ -235,7 +235,7 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{query}",
         labels: &[STATUS_LABEL, CLASS_LABEL, ERROR_CLASS_LABEL],
         description: "Queries that reached execution, by outcome. `error_class` is present on \
-                      failed queries only, from the error-class registry.",
+                      failed and denied queries, from the error-class registry.",
         since: "0.1.0",
         source: MetricSource::QueryFold,
     },

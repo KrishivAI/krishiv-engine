@@ -33,6 +33,13 @@ fn clean_tree_passes() {
 }
 
 #[test]
+fn a_checkout_path_naming_a_forbidden_fragment_is_not_a_dependency() {
+    let tree = "krishiv v0.1.0-alpha (/home/me/prometheus-notes/krishiv)\n\
+                └── serde v1.0.229\n";
+    assert_eq!(check_tree(tree), Ok(()));
+}
+
+#[test]
 fn forbidden_crates_fail_and_are_named() {
     let Err(message) = check_tree(DIRTY_TREE) else {
         panic!("dirty tree passed");

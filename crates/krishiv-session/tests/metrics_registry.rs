@@ -344,13 +344,18 @@ fn dropping_the_action_future_before_the_stream_folds_the_query() {
     .unwrap();
     s.register_batches("t", schema, vec![batch]).unwrap();
     let df = block_on(s.sql("SELECT a FROM t")).unwrap();
-    // One poll starts the query; dropping the future cancels the rest.
-    let pending = df.execute_stream().now_or_never().is_none();
+    // One poll starts the query (the result, if there is one, is dropped at
+    // the end of the statement); dropping the future cancels the rest. Either
+    // way the query was started, so it folds exactly once.
+    let _ = df.execute_stream().now_or_never();
     let snap = s.metrics();
     let active = snap
         .gauges
         .iter()
-        .find(|g| g.name == "krishiv.query.active")
+        .find(|g| {
+            g.name == "krishiv.query.active"
+                && g.labels == [("class".to_owned(), "interactive".to_owned())]
+        })
         .unwrap();
     assert_eq!(active.value, 0.0);
     let counted: f64 = snap
@@ -359,10 +364,5 @@ fn dropping_the_action_future_before_the_stream_folds_the_query() {
         .filter(|c| c.name == "krishiv.query.count")
         .map(|c| c.value)
         .sum();
-    // A query that finished submitting before the drop folds when its
-    // stream (dropped with the result) ends; either way, once.
-    assert!(
-        counted <= 1.0,
-        "counted {counted} (future pending: {pending})"
-    );
+    assert_eq!(counted, 1.0);
 }

@@ -15,6 +15,15 @@ use std::process::Command;
 /// Crate-name fragments forbidden in the default build's dependency tree.
 pub const FORBIDDEN_FRAGMENTS: &[&str] = &["opentelemetry", "prometheus"];
 
+/// The crate name of a `cargo tree` line: the first token after the tree
+/// drawing, so a version or a checkout path never matches.
+fn crate_name(line: &str) -> &str {
+    line.trim_start_matches(|c: char| c.is_whitespace() || "│├└─|`+-\\".contains(c))
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+}
+
 /// Checks captured `cargo tree` output: `Ok` when no line names a
 /// forbidden crate, otherwise the offending lines.
 ///
@@ -23,7 +32,10 @@ pub const FORBIDDEN_FRAGMENTS: &[&str] = &["opentelemetry", "prometheus"];
 pub fn check_tree(output: &str) -> Result<(), String> {
     let hits: Vec<&str> = output
         .lines()
-        .filter(|line| FORBIDDEN_FRAGMENTS.iter().any(|f| line.contains(f)))
+        .filter(|line| {
+            let name = crate_name(line);
+            FORBIDDEN_FRAGMENTS.iter().any(|f| name.contains(f))
+        })
         .collect();
     if hits.is_empty() {
         Ok(())
