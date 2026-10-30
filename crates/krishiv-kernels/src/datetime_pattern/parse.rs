@@ -8,7 +8,7 @@ use crate::cast::datetime::days_from_civil;
 
 /// The zone a string named.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ParsedZone {
+pub(crate) enum ParsedZone {
     None,
     /// Seconds east of UTC.
     Offset(i32),
@@ -36,13 +36,44 @@ struct Raw {
     zone: Option<ParsedZone>,
 }
 
-fn set(slot: &mut Option<i64>, v: i64) -> Option<()> {
+/// How a parse failed, as Spark's `CANNOT_PARSE_TIMESTAMP` message renders
+/// it. `java.time` reports the first failure its matchers meet: [`Fail::At`]
+/// for a matcher that does not match, [`Fail::Trailing`] for text after a
+/// full match. A full match whose fields do not resolve raises inside
+/// `DateTimeFormatter.parse` ([`Fail::InParse`], rendered after
+/// `Text 's' could not be parsed: `), unless Spark's own post-parse step
+/// (missing-field defaults, `LocalDate.ofYearDay`, the day-of-month
+/// cross-check) rejects it ([`Fail::PostParse`], rendered bare).
+/// [`Fail::Overflow`] is a local date-time past the microsecond range
+/// (Java's `ArithmeticException`, which even `try_to_*` does not catch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Fail {
+    /// No match at this character index.
+    At(usize),
+    /// The pattern matched but text remains from this index.
+    Trailing(usize),
+    /// The text matched but `java.time` strict resolution rejects it;
+    /// Java's cause text.
+    InParse(String),
+    /// The text matched and resolved but Spark's post-parse step rejects
+    /// it; the bare cause text.
+    PostParse(String),
+    /// The local date-time is past the microsecond range.
+    Overflow,
+}
+
+/// Stores `v` in `slot` (`java.time`'s `setParsedField`): a differing value
+/// already there fails the match at the field's start `pos`.
+fn set(slot: Option<&mut Option<i64>>, v: i64, pos: usize) -> Result<(), Fail> {
     match slot {
-        Some(old) if *old != v => None,
-        _ => {
-            *slot = Some(v);
-            Some(())
-        }
+        None => Err(Fail::At(pos)),
+        Some(s) => match *s {
+            Some(old) if old != v => Err(Fail::At(pos)),
+            _ => {
+                *s = Some(v);
+                Ok(())
+            }
+        },
     }
 }
 
@@ -68,48 +99,63 @@ impl Raw {
 
 /// A resolved parse: the local date and time, and the zone.
 #[derive(Debug, Clone)]
-pub(super) struct Resolved {
+pub(crate) struct Resolved {
     days: i64,
     time_micros: i64,
     pub(super) zone: ParsedZone,
 }
 
 impl Resolved {
-    pub(super) fn days(&self) -> Option<i64> {
+    pub(crate) fn days(&self) -> Option<i64> {
         Some(self.days)
     }
 
-    pub(super) fn local_micros(&self) -> Option<i64> {
+    pub(crate) fn local_micros(&self) -> Option<i64> {
         self.days
             .checked_mul(MICROS_PER_DAY)?
             .checked_add(self.time_micros)
+    }
+
+    pub(crate) fn zone(&self) -> &ParsedZone {
+        &self.zone
     }
 }
 
 /// Parses all of `s`; `None` if it does not match or its fields do not
 /// resolve to a date-time.
 pub(super) fn parse(items: &[Item], s: &str) -> Option<Resolved> {
+    parse_detailed(items, s).ok()
+}
+
+/// As [`parse`], with Java's failure detail. [`Fail::Overflow`] is a local
+/// date-time past the microsecond range.
+pub(super) fn parse_detailed(items: &[Item], s: &str) -> Result<Resolved, Fail> {
     let text: Vec<char> = s.chars().collect();
     let mut raw = Raw::default();
     let end = parse_items(items, &text, 0, &mut raw)?;
     if end != text.len() {
-        return None;
+        return Err(Fail::Trailing(end));
     }
-    resolve(raw)
+    let resolved = resolve_detailed(raw)?;
+    // Java's `ArithmeticException` past the microsecond range.
+    if resolved.local_micros().is_none() {
+        return Err(Fail::Overflow);
+    }
+    Ok(resolved)
 }
 
-fn parse_items(items: &[Item], s: &[char], mut pos: usize, raw: &mut Raw) -> Option<usize> {
+fn parse_items(items: &[Item], s: &[char], mut pos: usize, raw: &mut Raw) -> Result<usize, Fail> {
     for item in items {
         pos = match item {
-            Item::Literal(lit) => literal(s, pos, lit)?,
+            Item::Literal(lit) => literal(s, pos, lit).ok_or(Fail::At(pos))?,
             Item::Number(n) => {
-                let (v, end) = number(n, s, pos)?;
-                set(raw.slot(n.field)?, v)?;
+                let (v, end) = number(n, s, pos).ok_or(Fail::At(pos))?;
+                set(raw.slot(n.field), v, pos)?;
                 end
             }
             Item::Reduced(field) => {
-                let (v, end) = fixed_digits(s, pos, 2)?;
-                set(raw.slot(*field)?, 2000 + v)?;
+                let (v, end) = fixed_digits(s, pos, 2).ok_or(Fail::At(pos))?;
+                set(raw.slot(*field), 2000 + v, pos)?;
                 end
             }
             Item::Fraction { max, .. } => {
@@ -119,72 +165,81 @@ fn parse_items(items: &[Item], s: &[char], mut pos: usize, raw: &mut Raw) -> Opt
                     .take_while(|c| c.is_ascii_digit())
                     .count();
                 if digits == 0 {
-                    return None;
+                    return Err(Fail::At(pos));
                 }
                 let mut v: i64 = 0;
                 for c in &s[pos..pos + digits] {
-                    v = v * 10 + i64::from(c.to_digit(10)?);
+                    v = v * 10 + i64::from(c.to_digit(10).ok_or(Fail::At(pos))?);
                 }
                 for _ in digits..9 {
                     v *= 10;
                 }
-                set(&mut raw.nanos, v)?;
+                set(Some(&mut raw.nanos), v, pos)?;
                 pos + digits
             }
             Item::Text { text, full } => {
-                let (v, end) = text_field(*text, *full, s, pos)?;
+                let (v, end) = text_field(*text, *full, s, pos).ok_or(Fail::At(pos))?;
                 let slot = match text {
-                    Text::Era => &mut raw.era,
-                    Text::Month => &mut raw.month,
-                    Text::AmPm => &mut raw.ampm,
-                    Text::DayOfWeek | Text::Quarter => return None,
+                    Text::Era => Some(&mut raw.era),
+                    Text::Month => Some(&mut raw.month),
+                    Text::AmPm => Some(&mut raw.ampm),
+                    Text::DayOfWeek | Text::Quarter => None,
                 };
-                set(slot, v)?;
+                set(slot, v, pos)?;
                 end
             }
             Item::Offset(style) => {
-                let (o, end) = offset(style, s, pos)?;
-                set_zone(raw, ParsedZone::Offset(o))?;
+                let (o, end) = offset(style, s, pos).ok_or(Fail::At(pos))?;
+                set_zone(raw, ParsedZone::Offset(o), pos)?;
                 end
             }
             Item::Localized { full } => {
-                let (o, end) = localized(*full, s, pos)?;
-                set_zone(raw, ParsedZone::Offset(o))?;
+                let (o, end) = localized(*full, s, pos).ok_or(Fail::At(pos))?;
+                set_zone(raw, ParsedZone::Offset(o), pos)?;
                 end
             }
             Item::ZoneId => {
-                let (z, end) = zone_id(s, pos, false)?;
-                set_zone(raw, z)?;
+                let (z, end) = zone_id(s, pos, false).ok_or(Fail::At(pos))?;
+                set_zone(raw, z, pos)?;
                 end
             }
             Item::ZoneName { .. } => {
-                let (z, end) = zone_id(s, pos, true)?;
-                set_zone(raw, z)?;
+                let (z, end) = zone_id(s, pos, true).ok_or(Fail::At(pos))?;
+                set_zone(raw, z, pos)?;
                 end
             }
             Item::Optional(inner) => {
                 let mut trial = raw.clone();
                 match parse_items(inner, s, pos, &mut trial) {
-                    Some(end) => {
+                    Ok(end) => {
                         *raw = trial;
                         end
                     }
-                    None => pos,
+                    // An optional section that does not match is skipped,
+                    // as `java.time` backtracks it.
+                    Err(_) => pos,
                 }
             }
         };
     }
-    Some(pos)
+    Ok(pos)
 }
 
-fn set_zone(raw: &mut Raw, z: ParsedZone) -> Option<()> {
-    match &raw.zone {
-        Some(old) if *old != z => None,
-        _ => {
-            raw.zone = Some(z);
-            Some(())
+/// Stores `z` (`java.time`'s `setParsed(ZoneId)` overwrites a region, while
+/// a second offset conflicts with the first; an offset always wins over a
+/// region, as `resolveInstant` prefers it).
+fn set_zone(raw: &mut Raw, z: ParsedZone, pos: usize) -> Result<(), Fail> {
+    let next = match (&raw.zone, z) {
+        (Some(ParsedZone::Region(_)), ParsedZone::Region(new)) => ParsedZone::Region(new),
+        (Some(ParsedZone::Region(_)), ParsedZone::Offset(o)) => ParsedZone::Offset(o),
+        (Some(ParsedZone::Offset(_)), ParsedZone::Region(_)) => {
+            return Ok(());
         }
-    }
+        (Some(old), new) if *old != new => return Err(Fail::At(pos)),
+        (_, new) => new,
+    };
+    raw.zone = Some(next);
+    Ok(())
 }
 
 fn eq_ignore_case(a: char, b: char) -> bool {
@@ -558,87 +613,385 @@ pub(super) fn offset_id(rest: &str) -> Option<i32> {
     (total.abs() <= 18 * 3600).then_some(total)
 }
 
-fn check(v: Option<i64>, lo: i64, hi: i64) -> Option<Option<i64>> {
-    match v {
-        Some(x) if !(lo..=hi).contains(&x) => None,
-        other => Some(other),
-    }
-}
-
 /// `java.time`'s strict resolution, then Spark's defaults for missing
 /// fields (`DateTimeFormatterHelper.toLocalDate` / `toLocalTime`).
-fn resolve(mut r: Raw) -> Option<Resolved> {
-    const MAX_YEAR: i64 = 999_999_999;
-    // Every parsed value must be in its field's range.
-    check(r.year, -MAX_YEAR, MAX_YEAR)?;
-    check(r.year_of_era, 1, MAX_YEAR + 1)?;
-    check(r.month, 1, 12)?;
-    check(r.day, 1, 31)?;
-    check(r.day_of_year, 1, 366)?;
-    check(r.hour_of_day, 0, 23)?;
-    check(r.clock_hour_of_day, 1, 24)?;
-    check(r.hour_of_ampm, 0, 11)?;
-    check(r.clock_hour_of_ampm, 1, 12)?;
-    check(r.minute, 0, 59)?;
-    check(r.second, 0, 59)?;
-    // Era and year of era: the proleptic year.
-    if let (Some(era), Some(yoe)) = (r.era, r.year_of_era) {
-        let y = if era == 1 { yoe } else { 1 - yoe };
-        set(&mut r.year, y)?;
-    }
-    // Hours.
-    if let Some(k) = r.clock_hour_of_day {
-        set(&mut r.hour_of_day, if k == 24 { 0 } else { k })?;
-    }
-    if let Some(h) = r.clock_hour_of_ampm {
-        set(&mut r.hour_of_ampm, if h == 12 { 0 } else { h })?;
-    }
-    if let (Some(ap), Some(h)) = (r.ampm, r.hour_of_ampm) {
-        set(&mut r.hour_of_day, ap * 12 + h)?;
-    }
-    if let (Some(ap), Some(h)) = (r.ampm, r.hour_of_day)
-        && h / 12 != ap
-    {
-        return None;
-    }
-    if let (Some(hod), Some(hoa)) = (r.hour_of_day, r.hour_of_ampm)
-        && hod % 12 != hoa
-    {
-        return None;
-    }
-    // The date.
-    let year = r.year.unwrap_or(1970);
-    let days = match (r.month, r.day, r.day_of_year) {
-        (m, d, Some(doy)) => {
-            let jan1 = days_from_civil(year, 1, 1)?;
-            let date = jan1 + doy - 1;
-            // Day 366 of a common year is the next year's day 1.
-            if days_from_civil(year + 1, 1, 1)? <= date {
-                return None;
+/// [`Fail::InParse`] is a strict-resolution failure inside
+/// `DateTimeFormatter.parse`; [`Fail::PostParse`] is Spark's post-parse
+/// step rejecting the resolved fields.
+fn resolve_detailed(mut r: Raw) -> Result<Resolved, Fail> {
+    let (date, time) = resolve_java(&mut r).map_err(Fail::InParse)?;
+    let days = spark_date(&r, date).map_err(Fail::PostParse)?;
+    Ok(Resolved {
+        days,
+        time_micros: spark_time(&r, time),
+        zone: r.zone.unwrap_or(ParsedZone::None),
+    })
+}
+
+/// `java.time`'s strict resolution (`Parsed.resolve` with
+/// `ResolverStyle.STRICT`): the resolved date and time of day, each
+/// `None` for insufficient fields. Failures carry Java's cause text.
+fn resolve_java(r: &mut Raw) -> Result<(Option<i64>, Option<i64>), String> {
+    resolve_year_of_era(r)?;
+    let date = resolve_java_date(r)?;
+    let time = resolve_java_time(r)?;
+    cross_check_date(r, date)?;
+    cross_check_time(r, time)?;
+    Ok((date, time))
+}
+
+/// `IsoChronology.resolveYearOfEra` in strict mode: with an era the year of
+/// era becomes the proleptic year, without one it is left for Spark's
+/// defaults.
+fn resolve_year_of_era(r: &mut Raw) -> Result<(), String> {
+    if let Some(yoe) = r.year_of_era {
+        check_valid("YearOfEra", yoe, "1 - 999999999", 1, 999_999_999)?;
+        if let Some(era) = r.era {
+            if era != 0 && era != 1 {
+                return Err(format!("Invalid value for era: {era}"));
             }
-            let (_, dm, dd) = crate::cast::datetime::civil_from_days(date);
-            if m.is_some_and(|m| m != i64::from(dm)) || d.is_some_and(|d| d != i64::from(dd)) {
-                return None;
-            }
-            date
+            r.year = Some(if era == 1 { yoe } else { 1 - yoe });
         }
-        (m, d, None) => days_from_civil(
+    }
+    Ok(())
+}
+
+/// `IsoChronology.resolveDate` in strict mode, without week fields (Spark
+/// rejects those patterns): a year-month-day, or a year with a day of
+/// year. Anything less resolves nothing here; Spark defaults it later.
+fn resolve_java_date(r: &mut Raw) -> Result<Option<i64>, String> {
+    if let (Some(y), Some(m), Some(d)) = (r.year, r.month, r.day) {
+        let days = ymd_days(y, m, d)?;
+        r.year = None;
+        r.month = None;
+        r.day = None;
+        return Ok(Some(days));
+    }
+    if let (Some(y), Some(doy)) = (r.year, r.day_of_year) {
+        check_valid(
+            "Year",
+            y,
+            "-999999999 - 999999999",
+            -999_999_999,
+            999_999_999,
+        )?;
+        let days = of_year_day(y, doy)?;
+        r.year = None;
+        r.day_of_year = None;
+        return Ok(Some(days));
+    }
+    Ok(None)
+}
+
+/// `Parsed.resolveTimeFields` plus the strict half of
+/// `resolveTimeLenient`: the micros since midnight, or `None` when the
+/// fields cannot make a time yet. Consumed fields are removed, as
+/// `java.time` removes them.
+fn resolve_java_time(r: &mut Raw) -> Result<Option<i64>, String> {
+    if let Some(k) = r.clock_hour_of_day.take() {
+        check_valid("ClockHourOfDay", k, "1 - 24", 1, 24)?;
+        let v = if k == 24 { 0 } else { k };
+        if r.hour_of_day.is_some_and(|h| h != v) {
+            return Err(conflict_while(
+                "HourOfDay",
+                r.hour_of_day,
+                v,
+                "ClockHourOfDay",
+            ));
+        }
+        r.hour_of_day = Some(v);
+    }
+    if let Some(h) = r.clock_hour_of_ampm.take() {
+        check_valid("ClockHourOfAmPm", h, "1 - 12", 1, 12)?;
+        let v = if h == 12 { 0 } else { h };
+        if r.hour_of_ampm.is_some_and(|old| old != v) {
+            return Err(conflict_while(
+                "HourOfAmPm",
+                r.hour_of_ampm,
+                v,
+                "ClockHourOfAmPm",
+            ));
+        }
+        r.hour_of_ampm = Some(v);
+    }
+    if r.ampm.is_some() && r.hour_of_ampm.is_some() {
+        let (ap, hap) = (
+            r.ampm.take().unwrap_or(0),
+            r.hour_of_ampm.take().unwrap_or(0),
+        );
+        check_valid("AmPmOfDay", ap, "0 - 1", 0, 1)?;
+        check_valid("HourOfAmPm", hap, "0 - 11", 0, 11)?;
+        let v = ap * 12 + hap;
+        if r.hour_of_day.is_some_and(|h| h != v) {
+            return Err(conflict_while("HourOfDay", r.hour_of_day, v, "AmPmOfDay"));
+        }
+        r.hour_of_day = Some(v);
+    }
+    let mut time = None;
+    if let Some(hod) = r.hour_of_day {
+        // A minute-less second or nano cannot default (`resolveTimeLenient`
+        // leaves the time unresolved).
+        let dangling = (r.minute.is_none() && (r.second.is_some() || r.nanos.is_some()))
+            || (r.minute.is_some() && r.second.is_none() && r.nanos.is_some());
+        if !dangling {
+            time = Some(time_of(
+                hod,
+                r.minute.unwrap_or(0),
+                r.second.unwrap_or(0),
+                r.nanos.unwrap_or(0),
+            )?);
+            r.hour_of_day = None;
+            r.minute = None;
+            r.second = None;
+            r.nanos = None;
+        }
+    }
+    // Strict mode validates the time fields left over, whether or not a
+    // time was built.
+    for (field, range, lo, hi, v) in [
+        ("HourOfDay", "0 - 23", 0, 23, r.hour_of_day),
+        ("MinuteOfHour", "0 - 59", 0, 59, r.minute),
+        ("SecondOfMinute", "0 - 59", 0, 59, r.second),
+        ("NanoOfSecond", "0 - 999999999", 0, 999_999_999, r.nanos),
+        ("AmPmOfDay", "0 - 1", 0, 1, r.ampm),
+        ("HourOfAmPm", "0 - 11", 0, 11, r.hour_of_ampm),
+    ] {
+        if let Some(v) = v {
+            check_valid(field, v, range, lo, hi)?;
+        }
+    }
+    Ok(time)
+}
+
+/// `Parsed.crossCheck` over the date: leftover month, day and day-of-year
+/// fields must agree with the resolved `date` (days since the epoch).
+/// Field order is fixed (month, day, day of year); `java.time` iterates a
+/// hash map here.
+fn cross_check_date(r: &Raw, date: Option<i64>) -> Result<(), String> {
+    let Some(days) = date else { return Ok(()) };
+    let (year, month, day) = crate::cast::datetime::civil_from_days(days);
+    let day_of_year = days
+        .checked_sub(days_from_civil(year, 1, 1).unwrap_or(days))
+        .and_then(|d| d.checked_add(1));
+    let target = iso_date(days);
+    if r.month.is_some_and(|m| m != i64::from(month)) {
+        return Err(format!(
+            "Conflict found: Field MonthOfYear {} differs from MonthOfYear {} derived from {target}.",
+            i64::from(month),
+            r.month.unwrap_or(0)
+        ));
+    }
+    if r.day.is_some_and(|d| d != i64::from(day)) {
+        return Err(format!(
+            "Conflict found: Field DayOfMonth {} differs from DayOfMonth {} derived from {target}.",
+            i64::from(day),
+            r.day.unwrap_or(0)
+        ));
+    }
+    if let (Some(doy), Some(derived)) = (r.day_of_year, day_of_year)
+        && doy != derived
+    {
+        return Err(format!(
+            "Conflict found: Field DayOfYear {derived} differs from DayOfYear {doy} derived from {target}."
+        ));
+    }
+    Ok(())
+}
+
+/// `Parsed.crossCheck` over the time: a leftover AM/PM or hour-of-AM/PM
+/// must agree with the resolved `time` (micros since midnight).
+fn cross_check_time(r: &Raw, time: Option<i64>) -> Result<(), String> {
+    let Some(t) = time else { return Ok(()) };
+    let target = iso_time(t);
+    let hour = t.div_euclid(3_600_000_000);
+    if r.ampm.is_some_and(|ap| hour.div_euclid(12) != ap) {
+        return Err(format!(
+            "Conflict found: Field AmPmOfDay {} differs from AmPmOfDay {} derived from {target}.",
+            hour.div_euclid(12),
+            r.ampm.unwrap_or(0)
+        ));
+    }
+    if r.hour_of_ampm.is_some_and(|hoa| hour.rem_euclid(12) != hoa) {
+        return Err(format!(
+            "Conflict found: Field HourOfAmPm {} differs from HourOfAmPm {} derived from {target}.",
+            hour.rem_euclid(12),
+            r.hour_of_ampm.unwrap_or(0)
+        ));
+    }
+    Ok(())
+}
+
+/// Spark's `toLocalDate`: the resolved `date`, else the year (1970 without
+/// one) with a day of year or month and day (January 1st without them).
+/// Failures are Spark's own, rendered bare.
+fn spark_date(r: &Raw, date: Option<i64>) -> Result<i64, String> {
+    if let Some(days) = date {
+        return Ok(days);
+    }
+    let year = r.year.unwrap_or(1970);
+    if let Some(doy) = r.day_of_year {
+        check_valid(
+            "Year",
             year,
-            u32::try_from(m.unwrap_or(1)).ok()?,
-            u32::try_from(d.unwrap_or(1)).ok()?,
-        )?,
-    };
+            "-999999999 - 999999999",
+            -999_999_999,
+            999_999_999,
+        )?;
+        let days = of_year_day(year, doy)?;
+        let (_, month, day) = crate::cast::datetime::civil_from_days(days);
+        let target = iso_date(days);
+        if r.month.is_some_and(|m| m != i64::from(month)) {
+            return Err(format!(
+                "Conflict found: Field MonthOfYear {} differs from MonthOfYear {} derived from {target}.",
+                r.month.unwrap_or(0),
+                i64::from(month)
+            ));
+        }
+        if r.day.is_some_and(|d| d != i64::from(day)) {
+            return Err(format!(
+                "Conflict found: Field DayOfMonth {} differs from DayOfMonth {} derived from {target}.",
+                r.day.unwrap_or(0),
+                i64::from(day)
+            ));
+        }
+        return Ok(days);
+    }
+    let (y, m, d) = (
+        i32::try_from(year).map_err(|_| {
+            format!("Invalid value for Year (valid values -999999999 - 999999999): {year}")
+        })?,
+        i32::try_from(r.month.unwrap_or(1)).map_err(|_| {
+            format!(
+                "Invalid value for MonthOfYear (valid values 1 - 12): {}",
+                r.month.unwrap_or(1)
+            )
+        })?,
+        i32::try_from(r.day.unwrap_or(1)).map_err(|_| {
+            format!(
+                "Invalid value for DayOfMonth (valid values 1 - 28/31): {}",
+                r.day.unwrap_or(1)
+            )
+        })?,
+    );
+    if let Some(message) = crate::datetime::calendar::invalid_date(y, m, d) {
+        return Err(message);
+    }
+    // Validated 1..=12 and 1..=31 above.
+    days_from_civil(i64::from(y), m.cast_unsigned(), d.cast_unsigned()).ok_or_else(|| {
+        crate::datetime::calendar::invalid_date(y, m, d)
+            .unwrap_or_else(|| "Invalid date".to_owned())
+    })
+}
+
+/// Spark's `toLocalTime`: the resolved `time`, else the hour (an AM/PM hour
+/// counts as AM, a lone PM is noon) with minutes, seconds and nanos.
+fn spark_time(r: &Raw, time: Option<i64>) -> i64 {
+    if let Some(t) = time {
+        return t;
+    }
     let hour = r
         .hour_of_day
         .or(r.hour_of_ampm)
         .unwrap_or(if r.ampm == Some(1) { 12 } else { 0 });
-    let time_micros = hour * 3_600_000_000
+    // Every field was range-checked in strict resolution, so the sum fits.
+    hour * 3_600_000_000
         + r.minute.unwrap_or(0) * 60_000_000
         + r.second.unwrap_or(0) * 1_000_000
-        + r.nanos.unwrap_or(0) / 1000;
-    Some(Resolved {
-        days,
-        time_micros,
-        zone: r.zone.unwrap_or(ParsedZone::None),
+        + r.nanos.unwrap_or(0) / 1000
+}
+
+/// `ChronoField.checkValidValue`: Java's range text, or the value.
+/// `range` is the field's `ValueRange` rendering (`1 - 28/31`).
+fn check_valid(field: &str, v: i64, range: &str, lo: i64, hi: i64) -> Result<(), String> {
+    if (lo..=hi).contains(&v) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Invalid value for {field} (valid values {range}): {v}"
+        ))
+    }
+}
+
+/// `Parsed.updateCheckConflict` for a time field: Java's text, including
+/// its double space before the resolving field.
+fn conflict_while(field: &str, old: Option<i64>, new: i64, target: &str) -> String {
+    format!(
+        "Conflict found: {field} {} differs from {field} {new} while resolving  {target}",
+        old.unwrap_or(new)
+    )
+}
+
+/// `LocalDate.of(year, month, day)`: the days, or Java's message.
+fn ymd_days(year: i64, month: i64, day: i64) -> Result<i64, String> {
+    let out_of_range = |field: &str, range: &str, v: i64| {
+        format!("Invalid value for {field} (valid values {range}): {v}")
+    };
+    let (y, m, d) = (
+        i32::try_from(year).map_err(|_| out_of_range("Year", "-999999999 - 999999999", year))?,
+        i32::try_from(month).map_err(|_| out_of_range("MonthOfYear", "1 - 12", month))?,
+        i32::try_from(day).map_err(|_| out_of_range("DayOfMonth", "1 - 28/31", day))?,
+    );
+    if let Some(message) = crate::datetime::calendar::invalid_date(y, m, d) {
+        return Err(message);
+    }
+    // Validated 1..=12 and 1..=31 above.
+    days_from_civil(i64::from(y), m.cast_unsigned(), d.cast_unsigned()).ok_or_else(|| {
+        crate::datetime::calendar::invalid_date(y, m, d)
+            .unwrap_or_else(|| "Invalid date".to_owned())
     })
+}
+
+/// `LocalDate.ofYearDay(year, day_of_year)`: the days, or Java's message.
+fn of_year_day(year: i64, doy: i64) -> Result<i64, String> {
+    check_valid("DayOfYear", doy, "1 - 365/366", 1, 366)?;
+    if doy == 366 && !is_leap(year) {
+        return Err(format!(
+            "Invalid date 'DayOfYear 366' as '{year}' is not a leap year"
+        ));
+    }
+    days_from_civil(year, 1, 1)
+        .and_then(|jan1| jan1.checked_add(doy - 1))
+        .ok_or_else(|| format!("Invalid date 'DayOfYear {doy}' as '{year}' is not a leap year"))
+}
+
+/// `LocalTime.of(hour, minute, second, nano)`: the micros since midnight,
+/// or Java's message.
+fn time_of(hour: i64, minute: i64, second: i64, nano: i64) -> Result<i64, String> {
+    check_valid("HourOfDay", hour, "0 - 23", 0, 23)?;
+    check_valid("MinuteOfHour", minute, "0 - 59", 0, 59)?;
+    check_valid("SecondOfMinute", second, "0 - 59", 0, 59)?;
+    check_valid("NanoOfSecond", nano, "0 - 999999999", 0, 999_999_999)?;
+    Ok(hour * 3_600_000_000 + minute * 60_000_000 + second * 1_000_000 + nano / 1000)
+}
+
+/// Whether `year` is a leap year in the proleptic Gregorian calendar.
+fn is_leap(year: i64) -> bool {
+    year.rem_euclid(4) == 0 && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0)
+}
+
+/// A day number as `LocalDate.toString` renders it.
+fn iso_date(days: i64) -> String {
+    let mut out = String::new();
+    crate::cast::datetime::format_date(days, &mut out);
+    out
+}
+
+/// Micros since midnight as `LocalTime.toString` renders it.
+fn iso_time(micros: i64) -> String {
+    let (h, m, s, n) = (
+        micros.div_euclid(3_600_000_000),
+        micros.div_euclid(60_000_000).rem_euclid(60),
+        micros.div_euclid(1_000_000).rem_euclid(60),
+        micros.rem_euclid(1_000_000) * 1000,
+    );
+    let mut out = format!("{h:02}:{m:02}");
+    if s != 0 || n != 0 {
+        use std::fmt::Write as _;
+        let _ = write!(out, ":{s:02}");
+        if n != 0 {
+            let digits = format!("{n:09}");
+            let _ = write!(out, ".{}", digits.trim_end_matches('0'));
+        }
+    }
+    out
 }

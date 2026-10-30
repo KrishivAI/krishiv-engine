@@ -166,6 +166,7 @@ fn env_data() -> ExprEnv {
         ansi: true,
         legacy_statistical_aggregate: false,
         zone: Some(0),
+        zone_name: None,
         query_start_micros: 0,
         user: Arc::from("u"),
         map_key_dedup_last_win: false,
@@ -284,6 +285,7 @@ fn inconsistent_plans_are_internal_errors() {
             job_uuid: "job-1".to_owned(),
             max_records_per_file: 0,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
         }),
     };
     check(

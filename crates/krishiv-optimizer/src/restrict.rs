@@ -127,7 +127,9 @@ impl Restrict<'_> {
         // Which sides drop their unmatched rows.
         let (l, r) = match kind {
             JoinKind::Inner | JoinKind::Cross | JoinKind::LeftSemi => (true, true),
-            JoinKind::LeftOuter | JoinKind::LeftAnti => (false, true),
+            // An existence join keeps every left row (`exists` says whether
+            // it matched), so only the right side may be restricted.
+            JoinKind::LeftOuter | JoinKind::LeftAnti | JoinKind::Existence(_) => (false, true),
             JoinKind::RightOuter => (true, false),
             _ => (false, false),
         };
@@ -409,8 +411,10 @@ impl Restrict<'_> {
                     left, right, kind, ..
                 } => {
                     let in_left = output_ids(left).is_some_and(|o| want.is_subset(&o));
-                    let in_right = !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti)
-                        && output_ids(right).is_some_and(|o| want.is_subset(&o));
+                    let in_right = !matches!(
+                        kind,
+                        JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+                    ) && output_ids(right).is_some_and(|o| want.is_subset(&o));
                     if in_left {
                         Some(Arc::clone(left))
                     } else if in_right {

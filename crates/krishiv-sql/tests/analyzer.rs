@@ -352,8 +352,9 @@ fn resolution_corpus_matches_spark() {
         failures.len(),
         failures.join("\n")
     );
-    // The gaps stay the statements they are now.
-    assert_eq!(gaps, 132, "statements in documented gaps");
+    // The gaps stay the statements they are now (128 since P2-T115 unit 2a
+    // resolved four correlated `EXISTS` / `IN` under `OR` and `NOT`).
+    assert_eq!(gaps, 128, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -1001,18 +1002,16 @@ fn typed_timestamp_literals_resolve_like_spark() {
         krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
         "region session without zone"
     );
-    // A region id in the value needs the time-zone database.
-    let e = analyze_with(
+    // A region id in the value resolves against the bundled database:
+    // 10:00 in Los Angeles (UTC-08:00 in January) is 18:00 UTC.
+    let a = analyze_with(
         "SELECT TIMESTAMP '2024-01-01 10:00:00 America/Los_Angeles'",
         false,
         utc,
     )
-    .unwrap_err();
-    assert_eq!(
-        e.error.error_class(),
-        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
-        "region value"
-    );
+    .unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    assert_eq!(micros_of(a.plan.root()), 1_704_132_000_000_000);
 }
 
 /// Foldable expressions the analyzer evaluates for typing: casts to string

@@ -814,11 +814,6 @@ fn unexecuted_commands_parse_and_report_unsupported() {
         "CREATE TABLE t (a INT NOT NULL DEFAULT 1, b STRING COMMENT 'x') USING parquet \
          PARTITIONED BY (a) TBLPROPERTIES ('k' = 'v')",
         "CREATE TABLE t USING parquet PARTITIONED BY (a) AS SELECT id AS a FROM people",
-        "CREATE DATABASE IF NOT EXISTS db COMMENT 'c'",
-        "CREATE SCHEMA s",
-        "DROP SCHEMA IF EXISTS s CASCADE",
-        "USE s",
-        "USE NAMESPACE s",
         "EXPLAIN CREATE TABLE t (a INT)",
     ] {
         let e = block_on(s.sql(sql)).unwrap_err();
@@ -834,4 +829,15 @@ fn unexecuted_commands_parse_and_report_unsupported() {
     // Executed since the permanent catalog: table DDL on the session catalog.
     block_on(async { s.sql("CREATE TABLE t LIKE people").await?.collect().await }).unwrap();
     block_on(async { s.sql("DROP TABLE IF EXISTS t PURGE").await?.collect().await }).unwrap();
+    // ... and the namespace commands.
+    for sql in [
+        "CREATE DATABASE IF NOT EXISTS db COMMENT 'c'",
+        "CREATE SCHEMA s",
+        "USE s",
+        "USE NAMESPACE db",
+        "DROP SCHEMA IF EXISTS s CASCADE",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
 }

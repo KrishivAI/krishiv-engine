@@ -43,6 +43,18 @@ pub(crate) struct StoreColumn {
     pub(crate) comment: Option<String>,
 }
 
+/// A permanent view: its query as SQL text, parsed again at each read (so it follows the tables it reads), and the
+/// namespace that was current when it was created, in which its bare table names resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ViewDef {
+    pub(crate) sql: String,
+    pub(crate) namespace: String,
+    /// The names the query's output had when the view was created (before a column list renamed them): a
+    /// read projects the stored columns from the query's output by these names, so a base table that gained
+    /// columns does not change the view (Spark's schema compensation).
+    pub(crate) query_columns: Vec<String>,
+}
+
 /// A table in the catalog.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CatalogTable {
@@ -64,6 +76,27 @@ pub(crate) struct CatalogTable {
     /// The warehouse root the table was created under: `spark.sql.warehouse.dir` can change later, and the
     /// files must be deleted against the root they were created in.
     pub(crate) root: PathBuf,
+    /// Set for a view: it has no provider, location or files.
+    pub(crate) view: Option<ViewDef>,
+}
+
+/// A namespace's metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct NamespaceMeta {
+    pub(crate) comment: Option<String>,
+    pub(crate) location: Option<String>,
+    pub(crate) properties: BTreeMap<String, String>,
+}
+
+/// Why a namespace could not be dropped.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DropNamespaceError {
+    /// `default` is never dropped.
+    Default,
+    /// The namespace does not exist.
+    Missing,
+    /// It holds tables and the drop was a `RESTRICT`.
+    NotEmpty,
 }
 
 /// What `CREATE TABLE` does when the table exists.
@@ -71,6 +104,8 @@ pub(crate) struct CatalogTable {
 pub(crate) enum CreateMode {
     ErrorIfExists,
     IfNotExists,
+    /// Replaces an existing entry (views only: file tables cannot be replaced).
+    Replace,
 }
 
 /// The contract of a permanent catalog (see the module docs).
@@ -79,6 +114,22 @@ pub(crate) trait CatalogStore: Send + Sync {
     fn epoch(&self) -> u64;
     /// Whether the namespace exists.
     fn has_namespace(&self, namespace: &str) -> bool;
+    /// Adds a namespace; `false` when it exists already (nothing changes).
+    fn create_namespace(&self, namespace: &str, meta: NamespaceMeta) -> bool;
+    /// Removes a namespace; with `cascade` also its tables, which are returned so that the caller can delete
+    /// the managed ones' data after the metadata change.
+    ///
+    /// # Errors
+    /// [`DropNamespaceError`] for `default`, a missing namespace, or a `RESTRICT` of a namespace with tables.
+    fn drop_namespace(
+        &self,
+        namespace: &str,
+        cascade: bool,
+    ) -> Result<Vec<Arc<CatalogTable>>, DropNamespaceError>;
+    /// Every namespace with its metadata, by name.
+    fn namespaces(&self) -> Vec<(String, NamespaceMeta)>;
+    /// The tables and views of `namespace`, by name.
+    fn tables_in(&self, namespace: &str) -> Vec<Arc<CatalogTable>>;
     /// The table `namespace.name`.
     fn table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
     /// Adds `table`; `false` when nothing was added (`IfNotExists` on an existing table).
@@ -86,6 +137,9 @@ pub(crate) trait CatalogStore: Send + Sync {
     /// # Errors
     /// `TABLE_OR_VIEW_ALREADY_EXISTS` for `ErrorIfExists`.
     fn create_table(&self, table: CatalogTable, mode: CreateMode) -> Result<bool, KrishivError>;
+    /// Replaces the entry `expected` was read as with `table`; `false` when that entry was dropped or replaced
+    /// since, so a concurrent `DROP` or `ALTER` is never undone by a stale copy.
+    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool;
     /// Removes the table, returning it.
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
 }
@@ -99,7 +153,7 @@ pub(crate) struct InMemoryCatalogStore {
 
 #[derive(Debug)]
 struct StoreState {
-    namespaces: Vec<String>,
+    namespaces: BTreeMap<String, NamespaceMeta>,
     tables: BTreeMap<(String, String), Arc<CatalogTable>>,
 }
 
@@ -107,7 +161,10 @@ impl Default for InMemoryCatalogStore {
     fn default() -> Self {
         Self {
             state: Mutex::new(StoreState {
-                namespaces: vec![DEFAULT_NAMESPACE.to_owned()],
+                namespaces: BTreeMap::from([(
+                    DEFAULT_NAMESPACE.to_owned(),
+                    NamespaceMeta::default(),
+                )]),
                 tables: BTreeMap::new(),
             }),
             epoch: AtomicU64::new(0),
@@ -133,7 +190,64 @@ impl CatalogStore for InMemoryCatalogStore {
     }
 
     fn has_namespace(&self, namespace: &str) -> bool {
-        self.lock().namespaces.iter().any(|n| n == namespace)
+        self.lock().namespaces.contains_key(namespace)
+    }
+
+    fn namespaces(&self) -> Vec<(String, NamespaceMeta)> {
+        self.lock()
+            .namespaces
+            .iter()
+            .map(|(n, m)| (n.clone(), m.clone()))
+            .collect()
+    }
+
+    fn tables_in(&self, namespace: &str) -> Vec<Arc<CatalogTable>> {
+        self.lock()
+            .tables
+            .iter()
+            .filter(|((ns, _), _)| ns == namespace)
+            .map(|(_, t)| Arc::clone(t))
+            .collect()
+    }
+
+    fn create_namespace(&self, namespace: &str, meta: NamespaceMeta) -> bool {
+        let mut state = self.lock();
+        if state.namespaces.contains_key(namespace) {
+            return false;
+        }
+        state.namespaces.insert(namespace.to_owned(), meta);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
+    fn drop_namespace(
+        &self,
+        namespace: &str,
+        cascade: bool,
+    ) -> Result<Vec<Arc<CatalogTable>>, DropNamespaceError> {
+        if namespace == DEFAULT_NAMESPACE {
+            return Err(DropNamespaceError::Default);
+        }
+        let mut state = self.lock();
+        if !state.namespaces.contains_key(namespace) {
+            return Err(DropNamespaceError::Missing);
+        }
+        let held: Vec<(String, String)> = state
+            .tables
+            .keys()
+            .filter(|(ns, _)| ns == namespace)
+            .cloned()
+            .collect();
+        if !held.is_empty() && !cascade {
+            return Err(DropNamespaceError::NotEmpty);
+        }
+        let dropped = held
+            .into_iter()
+            .filter_map(|key| state.tables.remove(&key))
+            .collect();
+        state.namespaces.remove(namespace);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        Ok(dropped)
     }
 
     fn table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>> {
@@ -157,11 +271,23 @@ impl CatalogStore for InMemoryCatalogStore {
                 .into());
             }
             (true, CreateMode::IfNotExists) => return Ok(false),
-            (false, _) => {}
+            (true, CreateMode::Replace) | (false, _) => {}
         }
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
         Ok(true)
+    }
+
+    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool {
+        let key = (table.namespace.clone(), table.name.clone());
+        let mut state = self.lock();
+        match state.tables.get(&key) {
+            Some(current) if Arc::ptr_eq(current, expected) => {}
+            _ => return false,
+        }
+        state.tables.insert(key, Arc::new(table));
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
     }
 
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>> {
@@ -255,7 +381,26 @@ mod tests {
             comment: None,
             created_ms: 0,
             root: PathBuf::new(),
+            view: None,
         }
+    }
+
+    #[test]
+    fn replace_table_refuses_a_stale_copy() {
+        let s = InMemoryCatalogStore::default();
+        s.create_table(table("default", "t"), CreateMode::ErrorIfExists)
+            .unwrap();
+        let read = s.table("default", "t").unwrap();
+        let epoch = s.epoch();
+        assert!(s.replace_table(&read, table("default", "t")));
+        assert_eq!(s.epoch(), epoch + 1);
+        // `read` is stale now.
+        assert!(!s.replace_table(&read, table("default", "t")));
+        // And so is a copy of a dropped table: it is not recreated.
+        let current = s.table("default", "t").unwrap();
+        s.drop_table("default", "t");
+        assert!(!s.replace_table(&current, table("default", "t")));
+        assert!(s.table("default", "t").is_none());
     }
 
     #[test]

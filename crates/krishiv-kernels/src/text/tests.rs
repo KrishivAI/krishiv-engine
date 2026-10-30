@@ -92,7 +92,18 @@ fn default_datetime_grammars() {
     assert_eq!(ts("10:00:00"), Some(10 * 86_400_000_000 + 36_000_000_000));
     assert_eq!(ts("T10:00"), Some(10 * 86_400_000_000 + 36_000_000_000));
     assert_eq!(ts("1577836800"), None);
-    assert!(spark_string_to_timestamp("2020-01-01 10:00:00 America/Los_Angeles", &utc, 0).is_err());
+    // A region id in the text resolves against the bundled database:
+    // 10:00 in Los Angeles (UTC-08:00 in January) is 18:00 UTC.
+    assert_eq!(
+        ts("2020-01-01 10:00:00 America/Los_Angeles"),
+        Some(18_262 * 86_400_000_000 + 18 * 3_600_000_000)
+    );
+    // ... while an unknown one reads as no timestamp, as in Spark's
+    // lenient readers.
+    assert_eq!(
+        spark_string_to_timestamp("2020-01-01 10:00:00 America/Nope", &utc, 0).unwrap(),
+        None
+    );
     assert_eq!(
         spark_string_to_timestamp_ntz("1970-01-01 00:00:01"),
         Some(1_000_000)

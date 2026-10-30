@@ -340,12 +340,8 @@ impl Session {
         {
             self.state.catalog.drop_table(&v.name.value);
             self.state.cache.invalidate_table(&v.name.value);
-        } else if !v.if_exists {
-            return Err(TableOrViewNotFound {
-                relation_name: quote(&v.name.value),
-                search_path: search_path(),
-            }
-            .into());
+        } else {
+            self.drop_bare_stored_view(&v.name.value, v.if_exists)?;
         }
         self.empty_frame().await
     }
@@ -1060,10 +1056,31 @@ impl Session {
         Ok(df)
     }
 
+    /// `SHOW ...`: only `SHOW CURRENT NAMESPACE` runs for now; the rest is
+    /// unsupported.
+    pub(crate) async fn exec_show(
+        &self,
+        s: &krishiv_sql::ast::Show,
+    ) -> Result<DataFrame, KrishivError> {
+        match &s.kind {
+            krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
+                self.string_frame(
+                    &["catalog", "namespace"],
+                    vec![vec![
+                        Some(CATALOG.to_owned()),
+                        Some(self.state.catalog.current_namespace()),
+                    ]],
+                )
+                .await
+            }
+            _ => self.exec_show_catalog(s).await,
+        }
+    }
+
     /// A frame of the string columns `columns` with `rows` (`None` is
     /// NULL), as Spark's `SET` commands return. Rows come out ordered by
     /// `key`, as in Spark.
-    async fn string_frame(
+    pub(crate) async fn string_frame(
         &self,
         columns: &[&str],
         rows: Vec<Vec<Option<String>>>,
@@ -1105,7 +1122,11 @@ impl Session {
         };
         // Rows come out ordered by key: unions read in any order, so the
         // frame sorts.
-        let df = df.order_by([col("key")]);
+        let df = if columns.contains(&"key") {
+            df.order_by([col("key")])
+        } else {
+            df // callers without a `key` column pass at most one row
+        };
         let env = self.query_env();
         df.analyzed_in(env).await?;
         Ok(df)
@@ -1241,7 +1262,11 @@ fn search_path() -> String {
 
 /// `name` on `search_path`, which it is not shaped like, as Spark reports
 /// an unresolvable variable name: the written parts quoted, at the name.
-fn unresolved_variable(name: &ObjectName, search_path: &str, text: &RedactedSql) -> KrishivError {
+pub(crate) fn unresolved_variable(
+    name: &ObjectName,
+    search_path: &str,
+    text: &RedactedSql,
+) -> KrishivError {
     KrishivError::from(UnresolvedVariable {
         variable_name: quote_name(name),
         search_path: search_path.to_owned(),
@@ -1289,7 +1314,7 @@ fn assign_variable_parts(key: &str, key_span: Span, text: &RedactedSql) -> Optio
 /// `prefix + slice + suffix` with `slice` starting at its offset in the
 /// command: spaces pad the gap, so error spans inside `slice` keep the
 /// command's coordinates.
-fn padded_select(prefix: &str, slice: &str, slice_start: usize, suffix: &str) -> String {
+pub(crate) fn padded_select(prefix: &str, slice: &str, slice_start: usize, suffix: &str) -> String {
     let mut sql = String::new();
     sql.push_str(prefix);
     for _ in 0..slice_start.saturating_sub(prefix.len()) {
@@ -1345,7 +1370,7 @@ impl Session {
     /// leaves it), anything else at the default or assigned expression.
     /// Errors that already have a context (analysis errors, whose aligned
     /// spans point into the command) are kept.
-    async fn eval_variable_value(
+    pub(crate) async fn eval_variable_value(
         &self,
         sql: &str,
         text: &RedactedSql,
@@ -1408,7 +1433,7 @@ fn map_variable_error(
 /// the single [`arrow_krishiv_type`] map, so a NULL slot and a value never
 /// disagree; anything the engine cannot hold in a variable fails there,
 /// naming its Arrow type.
-fn arrow_value(
+pub(crate) fn arrow_value(
     array: &arrow_array::ArrayRef,
     row: usize,
 ) -> Result<(DataType, Literal), KrishivError> {

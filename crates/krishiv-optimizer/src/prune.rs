@@ -9,11 +9,12 @@
 //! extra columns get a projection. The root's output never changes; CTE
 //! definitions and scalar and `IN` subquery plans keep their whole output.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, Scan, SubqueryKind,
+    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ResolvedExpr,
+    Scan, SubqueryKind,
 };
 
 use crate::expr::{Attrs, column, output_of, references_into};
@@ -205,7 +206,11 @@ impl Rewrite<'_> {
                 )
             }
             PlanNode::Project { input, exprs } => {
-                let kept = keep(exprs, req);
+                let kept = if has_required_cse(exprs, req) {
+                    exprs.clone()
+                } else {
+                    keep(exprs, req)
+                };
                 if kept.len() == exprs.len() {
                     rebuilt
                 } else {
@@ -241,7 +246,15 @@ impl Rewrite<'_> {
                 grouping,
                 aggregates,
             } => {
-                let kept = keep(aggregates, req);
+                // As for projections below: when a common-subexpression
+                // projection sits below, CSE may have orphaned an output
+                // (a grouping key no output above reads anymore); dropping
+                // it now would return a different plan on the next run.
+                let kept = if contains_cse(input) {
+                    aggregates.clone()
+                } else {
+                    keep(aggregates, req)
+                };
                 let mut need = refs(&kept);
                 grouping_refs(&rebuilt, &mut need);
                 let aggregates = kept;
@@ -340,11 +353,18 @@ fn replace(like: &LogicalPlan, node: PlanNode) -> Arc<LogicalPlan> {
 }
 
 /// `input`, under a projection onto `need` when it outputs more.
+/// Common-subexpression columns do not count toward the width: they were
+/// added after column pruning ran, and narrowing for them alone would come
+/// apart again on the next run.
 fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
     let Some(out) = input.resolved_output() else {
         return Arc::clone(input);
     };
-    if out.iter().all(|c| need.contains(&c.id)) {
+    if out
+        .iter()
+        .filter(|c| !crate::cse::is_cse_column(c))
+        .all(|c| need.contains(&c.id))
+    {
         return Arc::clone(input);
     }
     let mut exprs: Vec<Arc<Expr>> = out
@@ -359,6 +379,47 @@ fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
         input: Arc::clone(input),
         exprs,
     }))
+}
+
+/// Whether `p` holds a common-subexpression projection (an alias named
+/// `cse_*`, see `crate::cse`) on its main plan, subquery plans excluded.
+fn contains_cse(p: &LogicalPlan) -> bool {
+    let mut seen_plans: HashSet<*const LogicalPlan> = HashSet::new();
+    let mut plans = vec![p];
+    while let Some(q) = plans.pop() {
+        if !seen_plans.insert(std::ptr::from_ref(q)) {
+            continue;
+        }
+        let mut stack: Vec<&Expr> = Vec::new();
+        q.for_each_expr(&mut |e| stack.push(e));
+        let mut seen: HashSet<*const Expr> = HashSet::new();
+        while let Some(e) = stack.pop() {
+            if !seen.insert(std::ptr::from_ref(e)) {
+                continue;
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &e.node
+                && crate::cse::is_cse_column(output)
+            {
+                return true;
+            }
+            e.for_each_child(&mut |c| stack.push(c));
+        }
+        q.for_each_child(&mut |c| plans.push(c));
+    }
+    false
+}
+
+/// Whether a common-subexpression column is required: the projection
+/// computing it keeps every output, so re-optimising returns the same plan
+/// (pruning would otherwise narrow it below an operator whose output must
+/// stay whole, and the next run would see a different plan).
+fn has_required_cse(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
+    exprs.iter().any(|e| match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+            crate::cse::is_cse_column(output) && req.contains(&output.id)
+        }
+        _ => false,
+    })
 }
 
 /// The output entries of a projection or aggregate that are read, keeping

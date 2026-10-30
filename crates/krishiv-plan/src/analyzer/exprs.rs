@@ -16,9 +16,10 @@ use krishiv_common::error::{
     DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidOrderingType,
     DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
-    DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    FailedToParseTooComplex, FieldNotFound, InternalError, InvalidAggregateFilterNotBoolean,
-    InvalidExtractBaseFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
+    ExceptOverlappingColumns, FailedToParseTooComplex, FieldNotFound, InternalError,
+    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount, KrishivError,
     KrishivUnsupportedFeature, NamedParametersNotSupported, NestedAggregateFunction,
@@ -228,6 +229,34 @@ fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
 /// Spark's constructors write into the call (so the schema names them):
 /// `mask(s)` is `mask(s, 'X', 'x', 'n', NULL)`.
 const MASK_DEFAULTS: [Option<&str>; 4] = [Some("X"), Some("x"), Some("n"), None];
+
+/// The position of the options argument of the CSV and JSON functions.
+fn options_index(name: &str) -> Option<usize> {
+    match name {
+        "from_csv" | "from_json" => Some(2),
+        "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" => Some(1),
+        _ => None,
+    }
+}
+
+/// The pairs of a `map('k', 'v', ...)` call whose arguments are all `STRING`
+/// literals, if `e` is one (a call with any other argument keeps its call).
+fn literal_map_pairs(e: &Expr) -> Option<Vec<(String, String)>> {
+    let ExprNode::Resolved(ResolvedExpr::Function(call)) = &e.node else {
+        return None;
+    };
+    if call.id.name() != "map" || call.args.len() % 2 != 0 || call.filter.is_some() {
+        return None;
+    }
+    let text = |x: &Arc<Expr>| match &x.node {
+        ExprNode::Literal(Literal::String(s)) => Some(s.clone()),
+        _ => None,
+    };
+    call.args
+        .chunks(2)
+        .map(|kv| Some((text(&kv[0])?, text(&kv[1])?)))
+        .collect()
+}
 
 /// A literal argument written by a constructor, at `origin`.
 fn default_argument(
@@ -1577,6 +1606,17 @@ impl Resolver<'_> {
                     ));
                 }
                 let n = kids.len() - usize::from(f.filter.is_some());
+                // Spark's `SimpleDateFormat` time parser is not implemented: a
+                // pattern function under it would answer with the new parser.
+                if self.ctx.conf.legacy_time_parser
+                    && !session_qualified
+                    && is_pattern_function(lookup_name, &kids[..n])
+                {
+                    return Err(unsupported(
+                        "spark.sql.legacy.timeParserPolicy=LEGACY (the SimpleDateFormat time parser)",
+                        e.origin,
+                    ));
+                }
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
@@ -1757,6 +1797,47 @@ impl Resolver<'_> {
                             owned.push(filter.clone());
                         }
                         (&owned[..], 3)
+                    } else if is_builtin_entry(&entry)
+                        && let Some(at) = options_index(entry.id.name())
+                        && n > at
+                        && let Some(pairs) = literal_map_pairs(&kids[at].expr)
+                    {
+                        // A `map('k', 'v', ...)` of string literals is the
+                        // options literal Spark's `convertToMapData` reads at
+                        // analysis; the executor binds it as a literal.
+                        // Spark evaluates the options `map(...)`: a repeated key
+                        // is `DUPLICATED_MAP_KEY` unless the session keeps the
+                        // last one.
+                        let mut distinct_pairs: Vec<(String, String)> = Vec::new();
+                        for (key, value) in pairs {
+                            if let Some(seen) = distinct_pairs.iter_mut().find(|(k, _)| *k == key) {
+                                if !self.ctx.conf.map_key_dedup_last_win {
+                                    return Err(AnalysisError::new(
+                                        DuplicatedMapKey {
+                                            key,
+                                            map_key_dedup_policy: "\"spark.sql.mapKeyDedupPolicy\""
+                                                .to_owned(),
+                                        },
+                                        e.origin,
+                                    ));
+                                }
+                                seen.1 = value;
+                            } else {
+                                distinct_pairs.push((key, value));
+                            }
+                        }
+                        let pairs = distinct_pairs;
+                        owned = kids[..n].to_vec();
+                        let original = Arc::clone(&owned[at].expr);
+                        owned[at].shown = Some(Arc::clone(&original));
+                        owned[at].expr = Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Map(pairs)))
+                                .with_origin(original.origin),
+                        );
+                        if let Some(filter) = kids.get(n) {
+                            owned.push(filter.clone());
+                        }
+                        (&owned[..], n)
                     } else if is_builtin_entry(&entry) && entry.id.name() == "named_struct" && n > 0
                     {
                         owned = kids.clone();
@@ -2216,17 +2297,15 @@ impl Resolver<'_> {
         kids
     }
 
-    /// `schema_of_csv(csv)` as the DDL literal it resolves to (Spark's
+    /// `schema_of_csv(csv[, options])` as the DDL literal it resolves to (Spark's
     /// `SchemaOfCsv` evaluates its foldable child during analysis, keeping
     /// the call as the output name). The signature's result rule already
     /// rejected a non-foldable, null or non-string child, so anything but
     /// a folded string here (a custom registry's rule) keeps the call;
     /// that call has no scalar binding and fails at execution binding, so
-    /// it never resolves silently. Only the one-argument form resolves
-    /// here: the two-argument options form is rejected by the signature
-    /// (options are a map, which Krishiv cannot type yet), so the default
-    /// options below always match the accepted call. Out of line: it is on
-    /// the path of every call.
+    /// it never resolves silently. The options argument resolves when it is
+    /// a map literal (the `map('k', 'v')` rewrite above); any other map
+    /// keeps the call. Out of line: it is on the path of every call.
     #[inline(never)]
     fn resolve_schema_of_csv(
         &self,
@@ -2234,7 +2313,7 @@ impl Resolver<'_> {
         kids: &[Bound],
         bound: &mut Bound,
     ) -> Result<(), AnalysisError> {
-        if kids.len() != 1 {
+        if kids.is_empty() || kids.len() > 2 {
             return Ok(());
         }
         let csv = kids
@@ -2243,7 +2322,33 @@ impl Resolver<'_> {
         let Some(Constant::String(csv)) = csv else {
             return Ok(());
         };
-        let options = krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema());
+        let options = match kids.get(1) {
+            None => krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema()),
+            Some(opts) => {
+                // Options other than a literal map keep the call (the
+                // signature accepts them; the executor has no binding).
+                let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
+                    return Ok(());
+                };
+                // Option names are case-insensitive: of two spellings of one
+                // name, the one written last wins (Spark's `CaseInsensitiveMap`).
+                let mut user: std::collections::BTreeMap<
+                    String,
+                    krishiv_common::secret::OptionValue,
+                > = std::collections::BTreeMap::new();
+                for (k, v) in pairs {
+                    user.retain(|seen, _| !seen.eq_ignore_ascii_case(k));
+                    user.insert(
+                        k.clone(),
+                        krishiv_common::secret::OptionValue::from_user(k, v.clone()),
+                    );
+                }
+                krishiv_io::csv::option_schema()
+                    .parse(&user, &krishiv_common::config::Config::new())
+                    .map_err(|err| AnalysisError::new(err, e.origin))?
+                    .0
+            }
+        };
         let ddl = krishiv_io::csv::ddl_of_string(&csv, &options).map_err(|err| {
             AnalysisError::new(
                 match err {
@@ -2260,6 +2365,18 @@ impl Resolver<'_> {
         // not its value); otherwise show the call itself.
         if bound.shown.is_none() {
             bound.shown = Some(Arc::clone(&bound.expr));
+        }
+        // Spark's output name drops the options (`schema_of_csv(1|abc)`).
+        if kids.len() == 2
+            && let Some(shown) = &bound.shown
+            && let ExprNode::Resolved(ResolvedExpr::Function(call)) = &shown.node
+        {
+            let mut one = call.clone();
+            one.args.truncate(1);
+            bound.shown = Some(Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Function(one)))
+                    .with_origin(shown.origin),
+            ));
         }
         bound.expr =
             Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
@@ -4865,6 +4982,15 @@ fn call(
             let d = if distinct { "DISTINCT " } else { "" };
             format!("from_json({d}{})", k[0])
         }
+        // `StructsToJson` and `SchemaOfJson` likewise show only their first
+        // child, not the options.
+        _ if (name.eq_ignore_ascii_case("to_json")
+            || name.eq_ignore_ascii_case("schema_of_json"))
+            && !k.is_empty() =>
+        {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{})", name.to_lowercase(), k[0])
+        }
         // The bitwise operators show infix (`(20181117 >> 2)`), `~`
         // prefix; `to_varchar` shows as `to_char`.
         _ if k.len() == 2 && matches!(name, "&" | "|" | "^" | "<<" | ">>" | ">>>") => infix(name),
@@ -5179,6 +5305,26 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
         crate::FrameBound::CurrentRow => 1,
         crate::FrameBound::UnboundedFollowing => 2,
         crate::FrameBound::Offset(_) => 3,
+    }
+}
+
+/// The datetime functions whose pattern the legacy time parser reads: the
+/// formatters, the parsers with a format argument and `from_unixtime`.
+/// `unix_timestamp(str)` and `to_unix_timestamp(str)` parse their string with
+/// the default pattern, so a string argument alone counts too (a timestamp or
+/// date argument has no text to parse).
+fn is_pattern_function(name: &str, args: &[Bound]) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        "date_format" | "from_unixtime" => true,
+        "unix_timestamp" | "to_unix_timestamp" => {
+            args.len() >= 2
+                || args
+                    .first()
+                    .is_some_and(|a| a.ty.data_type == Some(DataType::String))
+        }
+        "to_date" | "try_to_date" | "to_timestamp" | "try_to_timestamp" | "to_timestamp_ntz"
+        | "to_timestamp_ltz" => args.len() >= 2,
+        _ => false,
     }
 }
 

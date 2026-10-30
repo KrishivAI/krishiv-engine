@@ -505,10 +505,6 @@ fn skip_reason(file: &str, sql: &str) -> Option<&'static str> {
     if sql.contains("d1.country = d2.country), count(id) from data d2") {
         return Some("correlated grouping key");
     }
-    // `FULL OUTER JOIN` is unsupported, with or without `NATURAL`.
-    if sql.contains("full outer join") {
-        return Some("FULL OUTER JOIN");
-    }
     if file == "natural-join.sql.out" {
         // A `NATURAL` right key is hidden from `*` but stays visible by
         // qualified name in Spark; the shared `USING` path drops it, a

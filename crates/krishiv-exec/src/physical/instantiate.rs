@@ -722,6 +722,22 @@ impl Instantiation<'_> {
                 job_uuid: effective_job_uuid(&write.job_uuid, self.task.attempt),
                 max_records_per_file: write.max_records_per_file,
                 target_file_bytes: write.target_file_bytes,
+                partition_by: write.partition_by.clone(),
+                zone: self.env.zone,
+                partition_names: write
+                    .partition_by
+                    .iter()
+                    .map(|&c| {
+                        input
+                            .schema
+                            .fields()
+                            .get(c)
+                            .map(|f| f.name().clone())
+                            .ok_or_else(|| {
+                                internal(format!("partition column {c} is out of range"))
+                            })
+                    })
+                    .collect::<Result<_>>()?,
             },
         )?);
         Ok(Built {
@@ -1210,6 +1226,7 @@ mod tests {
                 ansi: true,
                 legacy_statistical_aggregate: false,
                 zone: Some(0),
+                zone_name: None,
                 query_start_micros: 0,
                 user: Arc::from("u"),
                 map_key_dedup_last_win: false,

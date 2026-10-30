@@ -469,7 +469,10 @@ impl Interp<'_> {
                 if ok {
                     hit = true;
                     right_hit[j] = true;
-                    if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                    if !matches!(
+                        kind,
+                        JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+                    ) {
                         rows.push(row);
                     }
                 }
@@ -477,6 +480,9 @@ impl Interp<'_> {
             match kind {
                 JoinKind::LeftSemi if hit => rows.push(lr.clone()),
                 JoinKind::LeftAnti if !hit => rows.push(lr.clone()),
+                JoinKind::Existence(_) => {
+                    rows.push(lr.iter().cloned().chain([V::Bool(hit)]).collect());
+                }
                 JoinKind::LeftOuter | JoinKind::FullOuter if !hit => {
                     rows.push(lr.iter().cloned().chain(nulls(r.cols.len())).collect());
                 }
@@ -495,7 +501,9 @@ impl Interp<'_> {
                 }
             }
         }
-        let cols = if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+        let cols = if let JoinKind::Existence(id) = kind {
+            l.cols.iter().copied().chain([*id]).collect()
+        } else if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
             l.cols
         } else {
             cols
@@ -723,6 +731,19 @@ fn cast(v: V, to: &DataType, _mode: CastMode) -> V {
         (V::Str(s), DataType::Date) => {
             let p: Vec<i64> = s.split('-').map(|x| x.trim().parse().unwrap()).collect();
             V::Date(days(p[0], p[1], p[2]))
+        }
+        (V::Str(s), DataType::Double | DataType::Float) => {
+            // Invalid input is NULL here; ANSI's error is not modelled.
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_precision_loss,
+                reason = "test interpreter rounds to fixed point"
+            )]
+            let num = s
+                .trim()
+                .parse::<f64>()
+                .map_or(V::Null, |f| V::Num((f * SCALE as f64).round() as i128));
+            num
         }
         (V::Str(s), DataType::Integer | DataType::Long | DataType::Decimal(_)) => {
             // Invalid input is NULL here; ANSI's error is not modelled.

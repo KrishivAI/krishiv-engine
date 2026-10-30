@@ -11,7 +11,9 @@
 )]
 
 mod conditionals;
+mod cse;
 mod exchanges;
+mod existence;
 mod folding;
 mod group_limit;
 mod hints;
@@ -85,11 +87,14 @@ impl Runnable {
     }
 
     /// The plan writing its rows as `write` describes.
-    pub(crate) fn into_write(self, write: krishiv_exec::physical::WritePlan) -> Self {
-        Self {
-            plan: self.plan.into_write(write),
+    pub(crate) fn into_write(
+        self,
+        write: krishiv_exec::physical::WritePlan,
+    ) -> Result<Self, KrishivError> {
+        Ok(Self {
+            plan: self.plan.into_write(write)?,
             worker: self.worker,
-        }
+        })
     }
 
     /// The same plan instantiated with `io`.
@@ -444,10 +449,8 @@ fn a_self_join_instance_reads_shifted_ids() {
 #[test]
 fn unsupported_and_inconsistent_plans_fail_clearly() {
     let env = env();
-    // `FULL OUTER JOIN` planning is still unsupported; `coalesce` (which a
-    // full join's analyzer lowering uses) binds since the conditional
-    // functions do (see `conditionals`).
-    let sql = "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a = y.a";
+    // A `FULL OUTER JOIN` without an equality key has no nested loop yet.
+    let sql = "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a < y.a";
     let e = env.plan(sql).unwrap_err();
     assert_eq!(
         e.error_class(),

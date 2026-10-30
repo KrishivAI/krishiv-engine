@@ -2,16 +2,6 @@
   "cases": {
     "nested-interval-types": [
       24
-    ],
-    "sql-commands": [
-      1,
-      2,
-      3,
-      10,
-      11,
-      12,
-      25,
-      29
     ]
   },
   "file": "double-quoted-identifiers-enabled",

@@ -299,7 +299,10 @@ impl Cursor {
                 return Ok(None);
             }
             JoinType::LeftSemi => MATCHED,
-            JoinType::LeftOuter | JoinType::LeftAnti | JoinType::NullAwareAnti => UNMATCHED,
+            JoinType::LeftOuter
+            | JoinType::FullOuter
+            | JoinType::LeftAnti
+            | JoinType::NullAwareAnti => UNMATCHED,
             // Every probe row once, with whether it matched.
             JoinType::Existence => return self.tail_exists(shared),
         };
@@ -315,7 +318,7 @@ impl Cursor {
         } else {
             take_batch(&self.batch, &UInt32Array::from(rows))?
         };
-        if shared.join_type != JoinType::LeftOuter {
+        if !shared.join_type.pads_probe() {
             return Ok(Some(taken));
         }
         let m = taken.num_rows();
@@ -368,8 +371,8 @@ const EMIT_SCAN: usize = 64;
 
 /// The next rows a right join returns from `table` once every probe row
 /// is joined, from row `*from` on: a right semi join's marked rows, a right
-/// anti or right outer join's unmatched ones (a right outer join pads them
-/// with NULL probe columns). At most `limit` rows per batch; `true` once
+/// anti, right outer or full outer join's unmatched ones (the outer joins pad
+/// them with NULL probe columns). At most `limit` rows per batch; `true` once
 /// the table is done.
 pub(crate) fn emit_build(
     shared: &Shared,
@@ -387,14 +390,14 @@ pub(crate) fn emit_build(
 }
 
 /// Rows `ids` of `arena` as the right join's output: the build columns,
-/// after NULL probe columns for a right outer join.
+/// after NULL probe columns for a right or full outer join.
 fn build_rows(shared: &Shared, rows: bool, arena: &RowArena, ids: &[u32]) -> Result<Option<Batch>> {
     if ids.is_empty() {
         return Ok(None);
     }
     let picked: Vec<(usize, u32)> = ids.iter().map(|&r| (0, r)).collect();
     let mut columns = Vec::new();
-    if shared.join_type == JoinType::RightOuter {
+    if matches!(shared.join_type, JoinType::RightOuter | JoinType::FullOuter) {
         columns.extend(
             shared
                 .probe_schema

@@ -1,0 +1,83 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Sort [ca_county#141 ASC NULLS FIRST], true
++- Project [ca_county#141, d_year#143, ((web_sales#160 * 1.0000) / web_sales#156) AS web_q1_q2_increase#165, ((store_sales#148 * 1.0000) / store_sales#144) AS store_q1_q2_increase#166, ((web_sales#164 * 1.0000) / web_sales#160) AS web_q2_q3_increase#167, ((store_sales#152 * 1.0000) / store_sales#148) AS store_q2_q3_increase#168]
+   +- Join Inner, ((CASE WHEN (web_sales#160 > 0.00) THEN ((web_sales#164 * 1.0000) / web_sales#160) ELSE CAST(NULL AS DECIMAL(38,19)) END > CASE WHEN (store_sales#148 > 0.00) THEN ((store_sales#152 * 1.0000) / store_sales#148) ELSE CAST(NULL AS DECIMAL(38,19)) END) and (ca_county#145 == ca_county#149))
+      :- Shift +8
+      :  +- Project [ca_county#227 AS ca_county#141, store_sales#233 AS store_sales#144]
+      :     +- Shift +169
+      :        +- Aggregate [ca_county#58, d_qoy#33, d_year#29], [ca_county#58, sum(ss_ext_sales_price#15) AS store_sales#64]
+      :           +- Project [ca_county#58, ss_ext_sales_price#15, d_year#29, d_qoy#33]
+      :              +- Join Inner, (ss_addr_sk#6 == ca_address_sk#51)
+      :                 :- Scan spark_catalog.default.customer_address [ca_address_sk#51, ca_county#58] (shared #1)
+      :                 +- Project [ss_addr_sk#6, ss_ext_sales_price#15, d_year#29, d_qoy#33]
+      :                    +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+      :                       :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_addr_sk#6, ss_ext_sales_price#15] (shared #2)
+      :                       +- Filter ((d_qoy#33 == 3) and (d_year#29 == 2000))
+      :                          +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29, d_qoy#33] (shared #3)
+      +- Project [web_sales#164, ca_county#141, d_year#143, store_sales#144, web_sales#156, web_sales#160, ca_county#145, store_sales#148]
+         +- Join Inner, (ca_county#153 == ca_county#161)
+            :- Shift +8
+            :  +- Project [ca_county#368 AS ca_county#153, web_sales#374 AS web_sales#156]
+            :     +- Shift +234
+            :        +- Aggregate [ca_county#134, d_qoy#109, d_year#105], [ca_county#134, sum(ws_ext_sales_price#88) AS web_sales#140]
+            :           +- Project [ca_county#134, ws_ext_sales_price#88, d_year#105, d_qoy#109]
+            :              +- Join Inner, (ws_bill_addr_sk#72 == ca_address_sk#127)
+            :                 :- Scan spark_catalog.default.customer_address [ca_address_sk#127, ca_county#134] (shared #4)
+            :                 +- Project [ws_bill_addr_sk#72, ws_ext_sales_price#88, d_year#105, d_qoy#109]
+            :                    +- Join Inner, (ws_sold_date_sk#65 == d_date_sk#99)
+            :                       :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#65, ws_bill_addr_sk#72, ws_ext_sales_price#88] (shared #5)
+            :                       +- Filter ((d_qoy#109 == 3) and (d_year#105 == 2000))
+            :                          +- Scan spark_catalog.default.date_dim [d_date_sk#99, d_year#105, d_qoy#109] (shared #6)
+            +- Join Inner, ((CASE WHEN (web_sales#156 > 0.00) THEN ((web_sales#160 * 1.0000) / web_sales#156) ELSE CAST(NULL AS DECIMAL(38,19)) END > CASE WHEN (store_sales#144 > 0.00) THEN ((store_sales#148 * 1.0000) / store_sales#144) ELSE CAST(NULL AS DECIMAL(38,19)) END) and (ca_county#141 == ca_county#145))
+               :- Project [ca_county#141, d_year#143, store_sales#144, ca_county#153, web_sales#156, web_sales#160]
+               :  +- Join Inner, (ca_county#153 == ca_county#157)
+               :     :- Join Inner, (ca_county#141 == ca_county#153)
+               :     :  :- Project [ca_county#227 AS ca_county#141, d_year#198 AS d_year#143, store_sales#233 AS store_sales#144]
+               :     :  :  +- Shift +169
+               :     :  :     +- Aggregate [ca_county#58, d_qoy#33, d_year#29], [ca_county#58, d_year#29, sum(ss_ext_sales_price#15) AS store_sales#64]
+               :     :  :        +- Project [ca_county#58, ss_ext_sales_price#15, d_year#29, d_qoy#33]
+               :     :  :           +- Join Inner, (ss_addr_sk#6 == ca_address_sk#51)
+               :     :  :              :- Shared #1, printed above
+               :     :  :              +- Project [ss_addr_sk#6, ss_ext_sales_price#15, d_year#29, d_qoy#33]
+               :     :  :                 +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+               :     :  :                    :- Shared #2, printed above
+               :     :  :                    +- Filter ((d_qoy#33 == 1) and (d_year#29 == 2000))
+               :     :  :                       +- Shared #3, printed above
+               :     :  +- Project [ca_county#368 AS ca_county#153, web_sales#374 AS web_sales#156]
+               :     :     +- Shift +234
+               :     :        +- Aggregate [ca_county#134, d_qoy#109, d_year#105], [ca_county#134, sum(ws_ext_sales_price#88) AS web_sales#140]
+               :     :           +- Project [ca_county#134, ws_ext_sales_price#88, d_year#105, d_qoy#109]
+               :     :              +- Join Inner, (ws_bill_addr_sk#72 == ca_address_sk#127)
+               :     :                 :- Shared #4, printed above
+               :     :                 +- Project [ws_bill_addr_sk#72, ws_ext_sales_price#88, d_year#105, d_qoy#109]
+               :     :                    +- Join Inner, (ws_sold_date_sk#65 == d_date_sk#99)
+               :     :                       :- Shared #5, printed above
+               :     :                       +- Filter ((d_qoy#109 == 1) and (d_year#105 == 2000))
+               :     :                          +- Shared #6, printed above
+               :     +- Shift +4
+               :        +- Project [ca_county#368 AS ca_county#153, web_sales#374 AS web_sales#156]
+               :           +- Shift +234
+               :              +- Aggregate [ca_county#134, d_qoy#109, d_year#105], [ca_county#134, sum(ws_ext_sales_price#88) AS web_sales#140]
+               :                 +- Project [ca_county#134, ws_ext_sales_price#88, d_year#105, d_qoy#109]
+               :                    +- Join Inner, (ws_bill_addr_sk#72 == ca_address_sk#127)
+               :                       :- Shared #4, printed above
+               :                       +- Project [ws_bill_addr_sk#72, ws_ext_sales_price#88, d_year#105, d_qoy#109]
+               :                          +- Join Inner, (ws_sold_date_sk#65 == d_date_sk#99)
+               :                             :- Shared #5, printed above
+               :                             +- Filter ((d_qoy#109 == 2) and (d_year#105 == 2000))
+               :                                +- Shared #6, printed above
+               +- Shift +4
+                  +- Project [ca_county#227 AS ca_county#141, store_sales#233 AS store_sales#144]
+                     +- Shift +169
+                        +- Aggregate [ca_county#58, d_qoy#33, d_year#29], [ca_county#58, sum(ss_ext_sales_price#15) AS store_sales#64]
+                           +- Project [ca_county#58, ss_ext_sales_price#15, d_year#29, d_qoy#33]
+                              +- Join Inner, (ss_addr_sk#6 == ca_address_sk#51)
+                                 :- Shared #1, printed above
+                                 +- Project [ss_addr_sk#6, ss_ext_sales_price#15, d_year#29, d_qoy#33]
+                                    +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+                                       :- Shared #2, printed above
+                                       +- Filter ((d_qoy#33 == 2) and (d_year#29 == 2000))
+                                          +- Shared #3, printed above

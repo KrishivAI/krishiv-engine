@@ -1,0 +1,55 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [SEGMENT#271 ASC NULLS FIRST, num_customers#272 ASC NULLS FIRST, segment_base#273 ASC NULLS FIRST], true
+   +- Aggregate [SEGMENT#271], [SEGMENT#271, count(1) AS num_customers#272, (SEGMENT#271 * 50) AS segment_base#273]
+      +- Project [SEGMENT#1944 AS SEGMENT#271]
+         +- Shift +1674
+            +- Project [CAST(round((revenue#1383 / 50)) AS INT) AS SEGMENT#270]
+               +- Shift +1116
+                  +- Aggregate [c_customer_sk#142], [sum(ss_ext_sales_price#159) AS revenue#267]
+                     +- Project [ss_ext_sales_price#159, c_customer_sk#142]
+                        +- Join Inner, ((ca_county#174 == s_county#203) and (ca_state#175 == s_state#204))
+                           :- Scan spark_catalog.default.store [s_county#203, s_state#204]
+                           +- Project [ca_county#174, ca_state#175, ss_ext_sales_price#159, c_customer_sk#142]
+                              +- Join Inner, (c_current_addr_sk#143 == ca_address_sk#167)
+                                 :- Scan spark_catalog.default.customer_address [ca_address_sk#167, ca_county#174, ca_state#175]
+                                 +- Project [ss_ext_sales_price#159, c_customer_sk#142, c_current_addr_sk#143]
+                                    +- Join Inner, (ss_sold_date_sk#144 == d_date_sk#209)
+                                       :- Project [d_date_sk#209]
+                                       :  +- Filter ((d_month_seq#212 >= scalar-subquery) and (d_month_seq#212 <= scalar-subquery))
+                                       :     :  :- Aggregate [(d_month_seq + 1)#265], [(d_month_seq + 1)#265]
+                                       :     :  :  +- Project [(d_month_seq#240 + 1) AS (d_month_seq + 1)#265]
+                                       :     :  :     +- Shift +28 (shared #1)
+                                       :     :  :        +- Filter ((d_year#215 == 1998) and (d_moy#217 == 12))
+                                       :     :  :           +- Scan spark_catalog.default.date_dim [d_date_sk#209, d_month_seq#212, d_year#215, d_moy#217] (shared #2)
+                                       :     :  +- Aggregate [(d_month_seq + 3)#266], [(d_month_seq + 3)#266]
+                                       :     :     +- Project [(d_month_seq#240 + 3) AS (d_month_seq + 3)#266]
+                                       :     :        +- Shared #1, printed above
+                                       :     +- Shared #2, printed above
+                                       +- Project [ss_sold_date_sk#144, ss_ext_sales_price#159, c_customer_sk#142, c_current_addr_sk#143]
+                                          +- Join Inner, (c_customer_sk#142 == ss_customer_sk#147)
+                                             :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#144, ss_customer_sk#147, ss_ext_sales_price#159]
+                                             +- Project [c_customer_sk#540 AS c_customer_sk#142, c_current_addr_sk#544 AS c_current_addr_sk#143]
+                                                +- Shift +416
+                                                   +- Aggregate [c_customer_sk#124, c_current_addr_sk#128], [c_customer_sk#124, c_current_addr_sk#128]
+                                                      +- Project [c_customer_sk#124, c_current_addr_sk#128]
+                                                         +- Join Inner, (c_customer_sk#124 == customer_sk#35)
+                                                            :- Scan spark_catalog.default.customer [c_customer_sk#124, c_current_addr_sk#128]
+                                                            +- Project [customer_sk#35]
+                                                               +- Join Inner, (item_sk#36 == i_item_sk#74)
+                                                                  :- Project [customer_sk#35, item_sk#36]
+                                                                  :  +- Join Inner, (sold_date_sk#34 == d_date_sk#96)
+                                                                  :     :- Union
+                                                                  :     :  :- Project [cs_sold_date_sk#0 AS sold_date_sk#34, cs_bill_customer_sk#3 AS customer_sk#35, cs_item_sk#15 AS item_sk#36]
+                                                                  :     :  :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_bill_customer_sk#3, cs_item_sk#15]
+                                                                  :     :  +- Project [ws_sold_date_sk#37 AS sold_date_sk#71, ws_bill_customer_sk#41 AS customer_sk#72, ws_item_sk#40 AS item_sk#73]
+                                                                  :     :     +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#37, ws_item_sk#40, ws_bill_customer_sk#41]
+                                                                  :     +- Project [d_date_sk#96]
+                                                                  :        +- Filter ((d_moy#104 == 12) and (d_year#102 == 1998))
+                                                                  :           +- Scan spark_catalog.default.date_dim [d_date_sk#96, d_year#102, d_moy#104]
+                                                                  +- Project [i_item_sk#74]
+                                                                     +- Filter ((i_category#86 == 'Women') and (i_class#84 == 'maternity'))
+                                                                        +- Scan spark_catalog.default.item [i_item_sk#74, i_class#84, i_category#86]

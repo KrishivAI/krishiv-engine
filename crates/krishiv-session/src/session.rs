@@ -16,9 +16,10 @@ use arrow_schema::SchemaRef;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED};
+use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
 use krishiv_common::error::{
-    ColumnAlreadyExists, ErrorQueryContext, InternalError, KrishivError, KrishivUnsupportedFeature,
+    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
+    KrishivError, KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
@@ -501,7 +502,7 @@ impl Session {
     }
 
     /// Runs the parsed, authorized `statement`.
-    async fn run_statement(
+    pub(crate) async fn run_statement(
         &self,
         statement: Statement,
         env: QueryEnv,
@@ -526,13 +527,31 @@ impl Session {
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
+            Statement::ExecuteImmediate(e) => {
+                Box::pin(self.exec_execute_immediate(&e, query, redacted, 0)).await
+            }
             Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => self.exec_create_table(&t, query).await,
             Statement::CreateTableLike(t) => self.exec_create_table_like(&t, query).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
+            Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
+            Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
+            Statement::Use(u) => self.exec_use(&u).await,
+            Statement::Show(s) => self.exec_show(&s).await,
+            Statement::Describe(d) => self.exec_describe(&d).await,
+            Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
+            Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
+            Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
+            Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
+            Statement::Analyze(a) => self.exec_analyze(&a).await,
+            Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
+            Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
+            Statement::Delete(d) => self.exec_row_level_change(&d.table, "DELETE"),
+            Statement::Update(u) => self.exec_row_level_change(&u.table, "UPDATE TABLE"),
+            Statement::Merge(m) => self.exec_row_level_change(&m.target, "MERGE INTO TABLE"),
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -1015,6 +1034,7 @@ impl Session {
             conf_version,
             catalog_epoch,
             variables_version: variables.version,
+            policy_version: self.state.policy.version().0,
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1033,11 +1053,30 @@ impl Session {
     ) -> Result<AnalyzedPlan, KrishivError> {
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
-        let plan = crate::catalog::expand_temp_views(
+        let next_source = || self.next_source_id();
+        let expansion = crate::catalog::expand_views(
             &self.state.catalog,
             plan,
             env.analysis.conf.case_sensitive,
+            Some(&crate::catalog::StoredViews {
+                parser: env.parser,
+                next_source: &next_source,
+                namespace: env
+                    .catalog
+                    .namespace()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| self.state.catalog.current_namespace()),
+            }),
         )?;
+        // A permanent view is inlined before binding, so the analyzer never asks the
+        // policy about it: ask here, before any read and before the text of a stored view
+        // can fail, so a principal who may not read it learns nothing from it.
+        let views = self.authorize_reads(&expansion.reads, env).await?;
+        if let Some(e) = expansion.deferred {
+            return Err(e);
+        }
+        let plan = expansion.plan;
         let plan = Plan::try_new(plan)?;
         let analyzed = DefaultAnalyzer
             .analyze(&plan, &env.analysis)
@@ -1052,7 +1091,20 @@ impl Session {
                 attach_analysis(e, own.as_ref().or(text))
             });
         // Analysis checks every read: its denials are the reads' denials.
-        crate::access::audit(self, StatementClass::Read, analyzed)
+        let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
+        for view in views {
+            let securable = krishiv_plan::analyzer::Securable::View(view);
+            if !analyzed.securables.iter().any(|s| s.securable == securable) {
+                analyzed
+                    .securables
+                    .push(krishiv_plan::analyzer::SecurableUse {
+                        securable,
+                        privilege: krishiv_plan::analyzer::Privilege::Select,
+                        columns: std::collections::BTreeSet::new(),
+                    });
+            }
+        }
+        Ok(analyzed)
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -1413,12 +1465,6 @@ impl Session {
             partition_by,
         } = target;
         let mode = SaveMode::parse(&mode)?;
-        if !partition_by.is_empty() {
-            return Err(KrishivUnsupportedFeature {
-                feature: "writing partitioned output".to_owned(),
-            }
-            .into());
-        }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
         let format = match self.state.formats.get(&format) {
             Ok(format) => format,
@@ -1439,6 +1485,15 @@ impl Session {
             }
             .into());
         };
+        let schema = Arc::clone(physical.schema());
+        let partitions =
+            resolve_partitions(&schema, &partition_by, env.analysis.conf.case_sensitive)?;
+        if !partitions.is_empty() && partitions.len() == schema.fields().len() {
+            return Err(AllPartitionColumnsNotAllowed {}.into());
+        }
+        let dynamic =
+            !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
+        let max_records = max_records_per_file(&options, format.name())?;
         // Cloud stores are built from the query snapshot with the write's
         // per-relation `fs.*` options overriding it (Spark's per-relation
         // Hadoop configuration).
@@ -1474,23 +1529,29 @@ impl Session {
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
         let job = job_uuid();
-        let Some(write) =
-            DirectoryWrite::begin(&io, at.store.clone(), at.path.clone(), mode, job.clone())
-                .await?
-        else {
+        let Some(write) = DirectoryWrite::begin(
+            &io,
+            at.store.clone(),
+            at.path.clone(),
+            mode,
+            job.clone(),
+            dynamic,
+        )
+        .await?
+        .map(|w| w.partitioned(!partitions.is_empty())) else {
             // `ignore` found the path: nothing is written.
             return Ok(());
         };
-        let schema = Arc::clone(physical.schema());
         let plan = physical.into_write(WritePlan {
             format: format.name().to_owned(),
             options: options.clone(),
             store: at.store.to_string(),
             dir: at.path.as_ref().to_owned(),
             job_uuid: job,
-            max_records_per_file: max_records_per_file(&options, format.name())?,
+            max_records_per_file: max_records,
             target_file_bytes: 0,
-        });
+            partition_by: partitions.iter().map(|(i, _)| *i).collect(),
+        })?;
         let worker = self.worker(env);
         let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
         let mut batches = Vec::new();
@@ -1509,6 +1570,40 @@ impl Session {
         self.refresh_files();
         Ok(())
     }
+}
+
+/// Whether the write overwrites dynamically: the `partitionOverwriteMode`
+/// write option (any case), else `spark.sql.sources.partitionOverwriteMode`,
+/// is `DYNAMIC`.
+///
+/// # Errors
+/// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for an option value other than
+/// `STATIC` or `DYNAMIC`.
+fn partition_overwrite_is_dynamic(
+    config: &Config,
+    options: &BTreeMap<String, OptionValue>,
+) -> Result<bool, KrishivError> {
+    let from_option = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("partitionOverwriteMode"));
+    if let Some((key, value)) = from_option {
+        let text = value.as_plain().unwrap_or("<secret>");
+        return match text.to_ascii_uppercase().as_str() {
+            "DYNAMIC" => Ok(true),
+            "STATIC" => Ok(false),
+            _ => Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
+                value: format!("'{text}'"),
+                option: format!("\"{key}\""),
+                format: "\"partitioned write\"".to_owned(),
+                reason: "expected STATIC or DYNAMIC".to_owned(),
+            }
+            .into()),
+        };
+    }
+    Ok(config
+        .get(&PARTITION_OVERWRITE_MODE)
+        .and_then(ConfigValue::as_str)
+        == Some("DYNAMIC"))
 }
 
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
@@ -1587,6 +1682,69 @@ fn committed_files(
         }
     }
     Ok(out)
+}
+
+/// The `partitionBy` columns as `(index, name)` pairs in `partitionBy`
+/// order, deduplicated.
+///
+/// # Errors
+/// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA` for a name the schema has no
+/// column for.
+fn resolve_partitions(
+    schema: &SchemaRef,
+    partition_by: &[String],
+    case_sensitive: bool,
+) -> Result<Vec<(usize, String)>, KrishivError> {
+    let mut out = Vec::new();
+    for name in partition_by {
+        let mut matches = schema.fields().iter().enumerate().filter(|(_, f)| {
+            if case_sensitive {
+                f.name() == name
+            } else {
+                f.name().eq_ignore_ascii_case(name)
+            }
+        });
+        let Some((index, field)) = matches.next() else {
+            return Err(PartitionColumnNotFoundInSchema {
+                column: format!("`{}`", name.replace('`', "``")),
+                schema: schema_simple_string(schema),
+            }
+            .into());
+        };
+        if matches.next().is_some() {
+            return Err(internal(format!(
+                "partition column `{name}` matches several columns"
+            )));
+        }
+        // Spark rejects a repeated partition column
+        // (`checkColumnNameDuplication`).
+        if out.iter().any(|(i, _)| *i == index) {
+            return Err(ColumnAlreadyExists {
+                column_name: format!("`{}`", field.name().replace('`', "``")),
+            }
+            .into());
+        }
+        // Checked here so that nothing is started for a column type that
+        // has no partition path text.
+        krishiv_io::check_partition_column(field.name(), field.data_type())?;
+        out.push((index, field.name().clone()));
+    }
+    Ok(out)
+}
+
+/// `schema` as Spark prints one (`struct<id:int,...>`).
+fn schema_simple_string(schema: &SchemaRef) -> String {
+    let fields: Vec<String> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let ty = DataType::from_arrow(f.data_type())
+                .map(|t| t.simple_string())
+                .unwrap_or_else(|_| f.data_type().to_string());
+            format!("{}:{ty}", f.name())
+        })
+        .collect();
+    format!("struct<{}>", fields.join(","))
 }
 
 impl Session {
@@ -1742,7 +1900,7 @@ const PARSER_KEYS: [&str; 10] = [
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
-fn unsupported_statement(what: &str) -> KrishivError {
+pub(crate) fn unsupported_statement(what: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: format!("{what} in sessions"),
     }
@@ -1833,6 +1991,9 @@ pub(crate) struct QueryEnv {
     pub(crate) sql_functions: Arc<QueryFunctions>,
     /// [`FunctionRegistry::version`] of `analysis.functions`.
     pub(crate) functions_version: u64,
+    /// The access policy's version when the query started: an analysis made under another one
+    /// is not reused, since its reads were authorized under the old rules.
+    pub(crate) policy_version: u64,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

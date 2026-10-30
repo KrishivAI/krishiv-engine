@@ -19,7 +19,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use crate::store::{CatalogStore, InMemoryCatalogStore, Warehouse};
+use crate::store::{CatalogStore, CatalogTable, InMemoryCatalogStore, ViewDef, Warehouse};
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::{
@@ -107,6 +107,8 @@ pub(crate) struct SessionCatalog {
     pub(crate) store: InMemoryCatalogStore,
     /// Where managed tables live.
     pub(crate) warehouse: Warehouse,
+    /// The namespace bare table names resolve in (`USE`).
+    current_namespace: RwLock<String>,
 }
 
 impl SessionCatalog {
@@ -202,6 +204,30 @@ impl SessionCatalog {
             .collect()
     }
 
+    /// The namespace bare table names resolve in.
+    pub(crate) fn current_namespace(&self) -> String {
+        let ns = self
+            .current_namespace
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        if ns.is_empty() {
+            NAMESPACE.to_owned()
+        } else {
+            ns.clone()
+        }
+    }
+
+    /// `USE namespace`.
+    pub(crate) fn use_namespace(&self, namespace: &str) {
+        namespace.clone_into(
+            &mut self
+                .current_namespace
+                .write()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
     /// What a cached analysis depends on: temporary views and permanent
     /// tables both bump it.
     pub(crate) fn epoch(&self) -> u64 {
@@ -284,6 +310,15 @@ pub(crate) struct QueryCatalog {
     /// The file tables of the query's scans, opened before planning.
     opened: Mutex<Vec<(FilesKey, Arc<FileTable>)>>,
     epoch: u64,
+    /// The current namespace (`USE`) as this query sees it.
+    namespace: Vec<String>,
+}
+
+impl QueryCatalog {
+    /// The query's namespace snapshot.
+    pub(crate) fn namespace(&self) -> &[String] {
+        &self.namespace
+    }
 }
 
 impl fmt::Debug for QueryCatalog {
@@ -302,6 +337,7 @@ impl QueryCatalog {
         scans: FileScans,
     ) -> Self {
         let epoch = session.epoch();
+        let namespace = vec![session.current_namespace()];
         Self {
             session,
             cache,
@@ -311,6 +347,7 @@ impl QueryCatalog {
             loaded: Mutex::new(HashMap::new()),
             opened: Mutex::new(Vec::new()),
             epoch,
+            namespace,
         }
     }
 
@@ -836,6 +873,9 @@ impl QueryCatalog {
             (namespace.to_lowercase(), id.name.to_lowercase())
         };
         let table = self.session.store.table(&namespace, &name)?;
+        if table.view.is_some() {
+            return None; // views are expanded before analysis
+        }
         let columns: Vec<TableColumn> = table
             .columns
             .iter()
@@ -964,8 +1004,7 @@ impl CatalogResolver for QueryCatalogs {
     }
 
     fn current_namespace(&self) -> &[String] {
-        static DEFAULT: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-        DEFAULT.get_or_init(|| vec![NAMESPACE.to_owned()])
+        &self.0.namespace
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
@@ -1048,12 +1087,69 @@ pub(crate) fn expand_temp_views(
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    Expander {
+    let expansion = expand_views(catalog, plan, case_sensitive, None)?;
+    match expansion.deferred {
+        Some(e) => Err(e),
+        None => Ok(expansion.plan),
+    }
+}
+
+/// What expanding a permanent view needs: its SQL is parsed again with the session's parser options.
+pub(crate) struct StoredViews<'a> {
+    pub(crate) parser: krishiv_sql::ParserOptions,
+    pub(crate) next_source: &'a dyn Fn() -> krishiv_plan::SourceId,
+    /// The current namespace as the query snapshot saw it: bare names resolve here, whatever `USE` does later.
+    pub(crate) namespace: String,
+}
+
+/// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
+/// its query as a subquery, with its bare table names resolved in the namespace the view was created in.
+///
+/// # Errors
+/// As [`expand_temp_views`]; `INTERNAL_ERROR` for a stored view whose text no longer parses as a query.
+pub(crate) fn expand_views(
+    catalog: &SessionCatalog,
+    plan: &Arc<LogicalPlan>,
+    case_sensitive: bool,
+    stored: Option<&StoredViews<'_>>,
+) -> Result<Expansion, KrishivError> {
+    let mut expander = Expander {
         catalog,
         case_sensitive,
         path: Vec::new(),
-    }
-    .go(Arc::clone(plan), &mut Vec::new())
+        stored,
+        view_namespace: None,
+        reads: Vec::new(),
+        deferred: None,
+    };
+    let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
+    Ok(Expansion {
+        plan,
+        reads: expander.reads,
+        deferred: expander.deferred,
+    })
+}
+
+/// A table-like name the expansion looked up in the catalog store, in plan order. The analyzer never
+/// sees an inlined permanent view, so the session asks the policy about every candidate itself, as the
+/// analyzer asks about a table: the name as written and folded first (whether or not it exists), then,
+/// for a permanent view, the view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadCandidate {
+    /// The name parts as the plan spells them.
+    pub(crate) written: Vec<String>,
+    /// The namespace and name the catalog stores, when the name is a permanent view.
+    pub(crate) view: Option<(String, String)>,
+}
+
+/// What [`expand_views`] found besides the expanded plan.
+pub(crate) struct Expansion {
+    pub(crate) plan: Arc<LogicalPlan>,
+    /// The catalog-store lookups, in plan order, without repeats.
+    pub(crate) reads: Vec<ReadCandidate>,
+    /// A failure inside a stored view's text (it no longer parses, reads itself, ...). It is raised only
+    /// after the reads are authorized, so a principal who may not read the view never sees its text's errors.
+    pub(crate) deferred: Option<KrishivError>,
 }
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
@@ -1062,6 +1158,13 @@ struct Expander<'a> {
     catalog: &'a SessionCatalog,
     case_sensitive: bool,
     path: Vec<String>,
+    stored: Option<&'a StoredViews<'a>>,
+    /// Inside a stored view: the namespace its bare table names belong to.
+    view_namespace: Option<String>,
+    /// The catalog-store lookups so far, in plan order, without repeats.
+    reads: Vec<ReadCandidate>,
+    /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
+    deferred: Option<KrishivError>,
 }
 
 impl Expander<'_> {
@@ -1089,6 +1192,22 @@ impl Expander<'_> {
                 search_path: search_path(),
             }
             .into());
+        }
+        // Inside a stored view a bare table name is the view's own namespace's, never a temporary view.
+        if let Some(namespace) = &self.view_namespace
+            && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
+            && let [bare] = name.as_slice()
+            && !scope
+                .iter()
+                .any(|c| same_name(c, bare, self.case_sensitive))
+        {
+            let qualified = ReadSource::Table {
+                name: vec![namespace.clone(), bare.clone()],
+                options: options.clone(),
+            };
+            let plan =
+                Arc::new(LogicalPlan::new(PlanNode::Read(qualified)).with_origin(plan.origin));
+            return self.expand_stored(plan, scope);
         }
         if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
             && let [view] = name.as_slice()
@@ -1132,7 +1251,158 @@ impl Expander<'_> {
             let (input, ctes) = (Arc::clone(input), ctes.clone());
             return self.go_with_cte(plan.origin, input, ctes, scope);
         }
-        self.children_and_exprs(plan, scope)
+        let plan = self.children_and_exprs(plan, scope)?;
+        self.expand_stored(plan, scope)
+    }
+
+    /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.
+    fn expand_stored(
+        &mut self,
+        plan: Arc<LogicalPlan>,
+        scope: &mut [String],
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let Some(stored) = self.stored else {
+            return Ok(plan);
+        };
+        let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node else {
+            return Ok(plan);
+        };
+        if !options.is_empty()
+            || scope
+                .iter()
+                .any(|c| name.len() == 1 && same_name(c, &name[0], self.case_sensitive))
+        {
+            return Ok(plan);
+        }
+        // A bare name that is a temporary table or view never reaches a permanent view (Spark's resolution order).
+        if self.view_namespace.is_none()
+            && name.len() == 1
+            && self.catalog.exists(&name[0], self.case_sensitive)
+        {
+            return Ok(plan);
+        }
+        let (namespace, table) = match name.as_slice() {
+            [table] => (stored.namespace.clone(), table),
+            [namespace, table] => (namespace.clone(), table),
+            [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
+                (namespace.clone(), table)
+            }
+            _ => return Ok(plan),
+        };
+        let (namespace, table_key) = if self.case_sensitive {
+            (namespace, table.clone())
+        } else {
+            (namespace.to_lowercase(), table.to_lowercase())
+        };
+        let entry = self.catalog.store.table(&namespace, &table_key);
+        let candidate = ReadCandidate {
+            written: name.clone(),
+            view: entry
+                .as_ref()
+                .filter(|e| e.view.is_some())
+                .map(|e| (e.namespace.clone(), e.name.clone())),
+        };
+        if !self.reads.contains(&candidate) {
+            self.reads.push(candidate);
+        }
+        let Some(entry) = entry else {
+            return Ok(plan);
+        };
+        let Some(view) = &entry.view else {
+            return Ok(plan);
+        };
+        match self.inline_stored(&plan, &entry, view, &namespace, &table_key, scope) {
+            Ok(done) => Ok(done),
+            Err(e) => {
+                // Keep the read as it is; the failure is raised once the reads are authorized.
+                self.deferred.get_or_insert(e);
+                Ok(plan)
+            }
+        }
+    }
+
+    /// The query of the stored view `entry`, inlined for the read `plan`.
+    fn inline_stored(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        entry: &Arc<CatalogTable>,
+        view: &ViewDef,
+        namespace: &str,
+        table_key: &str,
+        _scope: &mut [String],
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let Some(stored) = self.stored else {
+            return Ok(Arc::clone(plan));
+        };
+        let table = match &plan.node {
+            PlanNode::Read(ReadSource::Table { name, .. }) => {
+                name.last().cloned().unwrap_or_default()
+            }
+            _ => return Ok(Arc::clone(plan)),
+        };
+        let key = format!("{namespace}.{table_key}");
+        if self.path.contains(&key) {
+            return Err(InternalError {
+                message: format!("view `{key}` reads itself"),
+            }
+            .into());
+        }
+        let statement =
+            krishiv_sql::parse_statement(&view.sql, &stored.parser).map_err(|e| e.error)?;
+        let krishiv_sql::ast::Statement::Query(query) = statement else {
+            return Err(InternalError {
+                message: format!("the text of view `{key}` is not a query"),
+            }
+            .into());
+        };
+        let lowered = krishiv_sql::lower(&query, (stored.next_source)()).map_err(|e| e.error)?;
+        self.path.push(key);
+        let previous = self.view_namespace.replace(view.namespace.clone());
+        let input = self.go(Arc::clone(lowered.root()), &mut Vec::new());
+        self.view_namespace = previous;
+        self.path.pop();
+        let columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
+        let mut input = input?;
+        let unique = view
+            .query_columns
+            .iter()
+            .map(|c| c.to_lowercase())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == view.query_columns.len();
+        if unique && view.query_columns.len() == columns.len() {
+            // The stored columns, by their query names and in their stored types: a base table that gained
+            // columns since does not change what the view returns.
+            let exprs = view
+                .query_columns
+                .iter()
+                .zip(&entry.columns)
+                .map(|(q, c)| {
+                    // The name is one part: `col(q)` would split a dot or read a trailing `*`.
+                    let stored = Expr::new(ExprNode::Column(krishiv_plan::ColumnRef {
+                        name: vec![q.clone()],
+                        plan_id: None,
+                    }));
+                    Arc::new(
+                        crate::column::Column::new(stored)
+                            .cast_ansi(c.data_type.clone())
+                            .alias(&c.name)
+                            .expr,
+                    )
+                })
+                .collect();
+            input = Arc::new(
+                LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
+            );
+        }
+        Ok(Arc::new(
+            LogicalPlan::new(PlanNode::SubqueryAlias {
+                input,
+                alias: table,
+                columns,
+            })
+            .with_origin(plan.origin),
+        ))
     }
 
     /// `WITH` query parts (of `origin`) with their views inlined: each
@@ -1226,6 +1496,65 @@ pub(crate) fn check_view_cycle(
         scope: Vec::new(),
     }
     .check(plan)
+}
+
+/// The first temporary view or table that `plan` reads by its bare name (outside `WITH` definitions that shadow it),
+/// for the check that a permanent view reads none (Spark's `INVALID_TEMP_OBJ_REFERENCE`).
+pub(crate) fn reads_temporary(
+    catalog: &SessionCatalog,
+    plan: &Arc<LogicalPlan>,
+    case_sensitive: bool,
+) -> Option<String> {
+    fn go(
+        catalog: &SessionCatalog,
+        plan: &Arc<LogicalPlan>,
+        cs: bool,
+        scope: &mut Vec<String>,
+    ) -> Option<String> {
+        if let PlanNode::Read(ReadSource::Table { name, .. }) = &plan.node
+            && let [bare] = name.as_slice()
+            && !scope.iter().any(|c| same_name(c, bare, cs))
+        {
+            return catalog.exists(bare, cs).then(|| bare.clone());
+        }
+        if let PlanNode::WithCte { input, ctes } = &plan.node {
+            let outer = scope.len();
+            for cte in ctes.iter() {
+                if let Some(found) = go(catalog, &cte.plan, cs, scope) {
+                    return Some(found);
+                }
+                scope.push(cte.name.clone());
+            }
+            let found = go(catalog, input, cs, scope);
+            scope.truncate(outer);
+            return found;
+        }
+        let mut children = Vec::new();
+        plan.for_each_child(&mut |child| children.push(Arc::clone(child)));
+        if let Some(found) = children.iter().find_map(|c| go(catalog, c, cs, scope)) {
+            return Some(found);
+        }
+        let mut exprs = Vec::new();
+        plan.for_each_expr(&mut |expr| exprs.push(Arc::clone(expr)));
+        exprs.iter().find_map(|e| in_expr(catalog, e, cs, scope))
+    }
+    fn in_expr(
+        catalog: &SessionCatalog,
+        expr: &Arc<Expr>,
+        cs: bool,
+        scope: &mut Vec<String>,
+    ) -> Option<String> {
+        let mut children = Vec::new();
+        expr.for_each_child(&mut |child| children.push(Arc::clone(child)));
+        if let Some(found) = children.iter().find_map(|c| in_expr(catalog, c, cs, scope)) {
+            return Some(found);
+        }
+        if let ExprNode::Subquery { plan, .. } = &expr.node {
+            return go(catalog, plan, cs, scope);
+        }
+        None
+    }
+    go(catalog, plan, case_sensitive, &mut Vec::new())
 }
 
 /// [`check_view_cycle`]: the views on the current expansion path from the
@@ -2254,6 +2583,7 @@ mod tests {
                 ansi: true,
                 legacy_statistical_aggregate: false,
                 zone: None,
+                zone_name: None,
                 query_start_micros: 0,
                 user: Arc::from("u"),
                 map_key_dedup_last_win: false,

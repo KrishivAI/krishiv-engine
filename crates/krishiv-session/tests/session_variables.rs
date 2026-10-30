@@ -1517,3 +1517,23 @@ fn decimal_variable_comparisons_keep_the_variable() {
         .collect();
     assert_eq!(got, [false, false, true]);
 }
+
+/// A keyword names a variable (`all` is not reserved unless keywords are enforced), and `TEMP` is `TEMPORARY`.
+#[test]
+fn keywords_name_variables_and_temp_drops_them() {
+    let s = Session::new().unwrap();
+    let run = |sql: &str| {
+        block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    };
+    run("DECLARE all = 1");
+    run("DECLARE VARIABLE select INT DEFAULT 2");
+    run("SET VARIABLE all = 3, select = 4");
+    run("DROP TEMP VARIABLE all");
+    run("DROP TEMP VAR IF EXISTS select");
+    run("DROP TEMP VARIABLE IF EXISTS select");
+    assert_eq!(
+        error(&s, "DROP TEMP VARIABLE all").error_class(),
+        ErrorClass::VariableNotFound
+    );
+}

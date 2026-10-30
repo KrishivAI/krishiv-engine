@@ -387,7 +387,7 @@ fn timestamp_intervals() {
 }
 
 #[test]
-fn timestamp_strings_that_need_more_than_the_kernels_know() {
+fn timestamp_strings_that_need_the_query_clock() {
     let ltz = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
     let ntz = DataType::Timestamp(TimeUnit::Microsecond, None);
     let run = |s: &str, to: &DataType, mode| {
@@ -397,12 +397,20 @@ fn timestamp_strings_that_need_more_than_the_kernels_know() {
         };
         cast(&StringArray::from(vec![s]), to, &opts)
     };
-    // A region id needs the tz database, a time of day the query clock.
-    for s in [
+    // A region id resolves against the bundled database: midnight in Los
+    // Angeles (UTC-08:00 in January) is 08:00 UTC. A time of day needs the
+    // query clock.
+    let out = run(
         "2020-01-01 00:00:00 America/Los_Angeles",
-        "10:00",
-        "T10:00:00",
-    ] {
+        &ltz,
+        CastMode::Ansi,
+    )
+    .unwrap();
+    assert_eq!(
+        out.as_primitive::<TimestampMicrosecondType>().value(0),
+        18_262 * 86_400_000_000 + 8 * 3_600_000_000
+    );
+    for s in ["10:00", "T10:00:00"] {
         let e = run(s, &ltz, CastMode::Ansi).unwrap_err();
         assert_eq!(
             e.error_class(),

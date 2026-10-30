@@ -1,0 +1,24 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [avg_quarterly_sales#103 ASC NULLS FIRST, sum_sales#102 ASC NULLS FIRST, i_manufact_id#13 ASC NULLS FIRST], true
+   +- Project [i_manufact_id#13, sum_sales#102, _we0#104 AS avg_quarterly_sales#103]
+      +- Filter (CASE WHEN (_we0#104 > 0.000000) THEN (abs((sum_sales#102 - _we0#104)) / _we0#104) ELSE CAST(NULL AS DECIMAL(38,16)) END > 0.1000000000000000)
+         +- Window [avg(sum_sales#102) OVER (PARTITION BY i_manufact_id#13 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS _we0#104], [i_manufact_id#13], []
+            +- Aggregate [i_manufact_id#13, d_qoy#55], [i_manufact_id#13, sum(ss_sales_price#35) AS sum_sales#102]
+               +- Project [d_qoy#55, ss_sales_price#35, i_manufact_id#13]
+                  +- Join Inner, (ss_store_sk#29 == s_store_sk#73)
+                     :- Scan spark_catalog.default.store [s_store_sk#73]
+                     +- Project [d_qoy#55, ss_store_sk#29, ss_sales_price#35, i_manufact_id#13]
+                        +- Join Inner, (ss_sold_date_sk#22 == d_date_sk#45)
+                           :- Project [d_date_sk#45, d_qoy#55]
+                           :  +- Filter (d_month_seq#48 IN (1200, 1201, 1202, 1203, 1204, 1205, 1206, 1207, 1208, 1209, 1210, 1211))
+                           :     +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_month_seq#48, d_qoy#55]
+                           +- Project [ss_sold_date_sk#22, ss_store_sk#29, ss_sales_price#35, i_manufact_id#13]
+                              +- Join Inner, (ss_item_sk#24 == i_item_sk#0)
+                                 :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#22, ss_item_sk#24, ss_store_sk#29, ss_sales_price#35]
+                                 +- Project [i_item_sk#0, i_manufact_id#13]
+                                    +- Filter ((((i_category#12 IN ('Books', 'Children', 'Electronics')) and (i_class#10 IN ('personal', 'portable', 'reference', 'self-help'))) and (i_brand#8 IN ('scholaramalgamalg #14', 'scholaramalgamalg #7', 'exportiunivamalg #9', 'scholaramalgamalg #9'))) or (((i_category#12 IN ('Women', 'Music', 'Men')) and (i_class#10 IN ('accessories', 'classical', 'fragrances', 'pants'))) and (i_brand#8 IN ('amalgimporto #1', 'edu packscholar #1', 'exportiimporto #1', 'importoamalg #1'))))
+                                       +- Scan spark_catalog.default.item [i_item_sk#0, i_brand#8, i_class#10, i_category#12, i_manufact_id#13]

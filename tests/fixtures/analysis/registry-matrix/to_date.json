@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "to_date#03ac210a3719/ansi_on",
+      "reason": "SELECT to_date('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#03ac210a3719/ansi_off",
+      "reason": "SELECT to_date('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#09c2babec746/ansi_on",
+      "reason": "SELECT to_date(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#09c2babec746/ansi_off",
+      "reason": "SELECT to_date(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#18087137cdef/ansi_on",
+      "reason": "SELECT to_date('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#18087137cdef/ansi_off",
+      "reason": "SELECT to_date('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#8ce10d599073/ansi_on",
+      "reason": "SELECT to_date(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#8ce10d599073/ansi_off",
+      "reason": "SELECT to_date(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#c4ca9f6bc092/ansi_on",
+      "reason": "SELECT to_date(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#c4ca9f6bc092/ansi_off",
+      "reason": "SELECT to_date(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#d4c6b9b89de1/ansi_on",
+      "reason": "SELECT to_date(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_date#d4c6b9b89de1/ansi_off",
+      "reason": "SELECT to_date(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_date"
+}

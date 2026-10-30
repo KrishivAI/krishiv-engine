@@ -1,0 +1,33 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [rnk#49 ASC NULLS FIRST], true
+   +- Project [rnk#49, i_product_name#127 AS best_performing#150, i_product_name#149 AS worst_performing#151]
+      +- Join Inner, (rnk#49 == rnk#104)
+         :- Project [i_product_name#127, rnk#49]
+         :  +- Join Inner, (i_item_sk#106 == item_sk#23)
+         :     :- Scan spark_catalog.default.item [i_item_sk#106, i_product_name#127] (shared #1)
+         :     +- Project [item_sk#23, _we0#50 AS rnk#49]
+         :        +- Filter (_we0#50 < 11)
+         :           +- Window [rank() OVER (ORDER BY rank_col#24 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#50], [], [rank_col#24 ASC NULLS FIRST]
+         :              +- Filter (CAST(rank_col#24 AS DECIMAL(13,7)) > (0.9 * scalar-subquery)) (shared #2)
+         :                 :  +- Aggregate [ss_store_sk#32], [avg(ss_net_profit#47) AS rank_col#48]
+         :                 :     +- Project [ss_store_sk#32, ss_net_profit#47]
+         :                 :        +- Shift +25
+         :                 :           +- Filter ((ss_store_sk#7 == 4) and isnull(ss_addr_sk#6))
+         :                 :              +- Scan spark_catalog.default.store_sales [ss_item_sk#2, ss_addr_sk#6, ss_store_sk#7, ss_net_profit#22] (shared #3)
+         :                 +- Aggregate [ss_item_sk#2], [ss_item_sk#2 AS item_sk#23, avg(ss_net_profit#22) AS rank_col#24]
+         :                    +- Project [ss_item_sk#2, ss_net_profit#22]
+         :                       +- Filter (ss_store_sk#7 == 4)
+         :                          +- Shared #3, printed above
+         +- Project [i_product_name#149, rnk#104]
+            +- Join Inner, (i_item_sk#128 == item_sk#76)
+               :- Shift +22
+               :  +- Shared #1, printed above
+               +- Shift +53
+                  +- Project [item_sk#23, _we0#52 AS rnk#51]
+                     +- Filter (_we0#52 < 11)
+                        +- Window [rank() OVER (ORDER BY rank_col#24 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#52], [], [rank_col#24 DESC NULLS LAST]
+                           +- Shared #2, printed above

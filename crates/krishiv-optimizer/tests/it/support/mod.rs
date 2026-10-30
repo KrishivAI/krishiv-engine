@@ -99,6 +99,17 @@ pub(crate) fn ctx_over(catalog: MemoryCatalog) -> AnalysisContext {
     ctx
 }
 
+/// Parses, lowers and resolves `sql`, or `None` when it does not resolve
+/// (used to list queries a harness cannot cover yet).
+pub(crate) fn try_resolve(sql: &str, ctx: &AnalysisContext) -> Option<Plan> {
+    let plan =
+        krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+            .ok()?;
+    block_on(DefaultAnalyzer.analyze(&plan, ctx))
+        .ok()
+        .map(|r| r.plan)
+}
+
 /// Parses, lowers and resolves `sql`.
 pub(crate) fn resolve(sql: &str, ctx: &AnalysisContext) -> Plan {
     let plan =

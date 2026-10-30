@@ -966,19 +966,40 @@ impl Resolver<'_> {
                     .name()
                     .starts_with("AMBIGUOUS_REFERENCE")
         };
-        match self.bind_all(exprs, &cx) {
-            Ok(bounds) => return Ok((bounds, c.clone())),
+        // `ORDER BY grouping(a)` over an aggregate's windows reads the
+        // grouping id, which goes up through them like a dropped key (Spark
+        // resolves these calls before it extracts the windows).
+        let analytics = c
+            .agg
+            .as_ref()
+            .filter(|i| op == "Sort" && i.has_windows())
+            .and_then(|i| i.analytics.clone());
+        cx.grouping = analytics.is_some();
+        let first = match self.bind_all(exprs, &cx) {
+            Ok(bounds) if analytics.is_none() => return Ok((bounds, c.clone())),
+            Ok(bounds) => Some(bounds),
             Err(e) if (!unresolved(&e) && !ambiguous(&e)) || lookup.is_empty() => return Err(e),
-            Err(_) => {}
-        }
-        cx.extra = Some(&lookup);
-        let bounds = match self.bind_all(exprs, &cx) {
-            Err(e) if unresolved(&e) => {
-                cx.outer = true;
-                self.bind_all(exprs, &cx)?
-            }
-            other => other?,
+            Err(_) => None,
         };
+        let mut bounds = match first {
+            Some(bounds) => bounds,
+            None => {
+                cx.extra = Some(&lookup);
+                match self.bind_all(exprs, &cx) {
+                    Err(e) if unresolved(&e) => {
+                        cx.outer = true;
+                        self.bind_all(exprs, &cx)?
+                    }
+                    other => other?,
+                }
+            }
+        };
+        if let Some(an) = &analytics {
+            for b in &mut bounds {
+                an.check_late_call(&b.expr)?;
+                b.expr = self.resolve_grouping(&b.expr, an, env)?;
+            }
+        }
         let have: HashSet<AttrId> = c.out.iter().map(|a| a.col.id).collect();
         let mut missing: Vec<Attr> = Vec::new();
         let mut seen = HashSet::new();
@@ -998,9 +1019,14 @@ impl Resolver<'_> {
                 x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
             }
         }
-        // The retry resolved a name only `below` holds: `missing` is not
-        // empty.
-        Ok((bounds, self.widened(c, &missing)?))
+        // The retry resolved a name only `below` holds, or a grouping call
+        // reads the id; with neither there is nothing to widen.
+        let wide = if missing.is_empty() {
+            c.clone()
+        } else {
+            self.widened(c, &missing)?
+        };
+        Ok((bounds, wide))
     }
 
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
@@ -2474,7 +2500,13 @@ impl Resolver<'_> {
             _ => (false, false),
         };
         let mut out: Vec<Attr> = l.out.iter().map(|a| nullable(a, ln)).collect();
-        if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+        if let JoinKind::Existence(id) = kind {
+            out.push(Attr {
+                col: JoinKind::existence_column(id),
+                qual: Arc::from(Vec::new()),
+                source: None,
+            });
+        } else if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
             out.extend(r.out.iter().map(|a| nullable(a, rn)));
         }
         let rels = [&l, &r];
@@ -2488,7 +2520,10 @@ impl Resolver<'_> {
                 // outer-join coalescing are exactly the `USING` ones. With
                 // no common columns the join is a cross join, as Spark's
                 // is.
-                if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                if matches!(
+                    kind,
+                    JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+                ) {
                     // Spark fails here with a bare `requirement failed:
                     // Unsupported natural join type LeftSemi` (no error class).
                     return Err(unsupported(
