@@ -99,9 +99,10 @@ const IN_SET_THRESHOLD: usize = 10;
 /// per row instead of one comparison per element. The same answers as
 /// [`InList`]: true on a match, NULL when `v` is NULL or nothing matched
 /// and the list holds a NULL, else false. Built only for types whose `=`
-/// is byte equality of a canonical encoding (strings and binaries by their
-/// bytes, integers, dates, timestamps, decimals and booleans by their
-/// row encoding); floats (`-0.0 = 0.0`, NaN) keep [`InList`].
+/// is equality of one canonical value: strings and binaries by their
+/// bytes; integers, dates, timestamps and booleans as `i64`; decimals as
+/// `i128` (one precision and scale, the analyzer's common type). Floats
+/// (`-0.0 = 0.0`, NaN) keep [`InList`].
 #[derive(Debug)]
 struct InSet {
     v: Arc<dyn PhysExpr>,
@@ -110,19 +111,30 @@ struct InSet {
     has_null: bool,
 }
 
+/// A hash set with a fixed-seed fast hasher (plan data must not depend on
+/// a per-process seed; the set is only probed, never iterated).
+type FastSet<T> = std::collections::HashSet<T, foldhash::fast::FixedState>;
+
+fn fast_set<T>(n: usize) -> FastSet<T> {
+    FastSet::with_capacity_and_hasher(n, foldhash::fast::FixedState::with_seed(0))
+}
+
 /// How [`InSet`] keys its values.
 enum Keys {
     /// String or binary bytes.
-    Bytes(std::collections::HashSet<Vec<u8>>),
-    /// Row-encoded values of one fixed-width type.
-    Rows(arrow_row::RowConverter, std::collections::HashSet<Vec<u8>>),
+    Bytes(FastSet<Vec<u8>>),
+    /// Integers, dates, timestamps and booleans.
+    Ints(FastSet<i64>),
+    /// Decimals (unscaled).
+    Decimals(FastSet<i128>),
 }
 
 impl std::fmt::Debug for Keys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bytes(s) => write!(f, "Bytes({} keys)", s.len()),
-            Self::Rows(_, s) => write!(f, "Rows({} keys)", s.len()),
+            Self::Ints(s) => write!(f, "Ints({} keys)", s.len()),
+            Self::Decimals(s) => write!(f, "Decimals({} keys)", s.len()),
         }
     }
 }
@@ -137,6 +149,42 @@ fn byte_value(a: &dyn Array, i: usize) -> &[u8] {
     }
 }
 
+/// Calls `f(row, value)` for every row of an integer-like array (`None`
+/// for a NULL row), one loop per Arrow type; `false` if `a` is not one.
+fn for_each_int(a: &dyn Array, mut f: impl FnMut(Option<i64>)) -> bool {
+    use arrow_array::types::{
+        Date32Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    };
+    macro_rules! each {
+        ($t:ty) => {
+            a.as_primitive::<$t>()
+                .iter()
+                .for_each(|v| f(v.map(i64::from)))
+        };
+    }
+    match a.data_type() {
+        ArrowType::Int8 => each!(Int8Type),
+        ArrowType::Int16 => each!(Int16Type),
+        ArrowType::Int32 => each!(Int32Type),
+        ArrowType::Int64 => each!(Int64Type),
+        ArrowType::Date32 => each!(Date32Type),
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Second, _) => each!(TimestampSecondType),
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => {
+            each!(TimestampMillisecondType);
+        }
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
+            each!(TimestampMicrosecondType);
+        }
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+            each!(TimestampNanosecondType);
+        }
+        ArrowType::Boolean => a.as_boolean().iter().for_each(|v| f(v.map(i64::from))),
+        _ => return false,
+    }
+    true
+}
+
 impl InSet {
     /// The set of `items` (constants) for `v`, or `None` when `v`'s type
     /// has no exact key or an element does not evaluate here (it then
@@ -144,29 +192,6 @@ impl InSet {
     /// row reaches it, as Spark does).
     fn try_new(v: &Arc<dyn PhysExpr>, items: &[Arc<dyn PhysExpr>]) -> Option<Self> {
         let t = v.data_type().clone();
-        let bytes = matches!(
-            t,
-            ArrowType::Utf8
-                | ArrowType::LargeUtf8
-                | ArrowType::Utf8View
-                | ArrowType::Binary
-                | ArrowType::LargeBinary
-                | ArrowType::BinaryView
-        );
-        let fixed = matches!(
-            t,
-            ArrowType::Int8
-                | ArrowType::Int16
-                | ArrowType::Int32
-                | ArrowType::Int64
-                | ArrowType::Date32
-                | ArrowType::Timestamp(..)
-                | ArrowType::Decimal128(..)
-                | ArrowType::Boolean
-        );
-        if !bytes && !fixed {
-            return None;
-        }
         let empty = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
         let mut has_null = false;
         let mut values: Vec<ArrayRef> = Vec::with_capacity(items.len());
@@ -184,21 +209,39 @@ impl InSet {
             }
             values.push(a);
         }
-        let keys = if bytes {
-            Keys::Bytes(
-                values
-                    .iter()
-                    .map(|a| byte_value(a.as_ref(), 0).to_vec())
-                    .collect(),
-            )
-        } else {
-            let conv = arrow_row::RowConverter::new(vec![arrow_row::SortField::new(t)]).ok()?;
-            let mut set = std::collections::HashSet::with_capacity(values.len());
-            for a in &values {
-                let rows = conv.convert_columns(&[Arc::clone(a)]).ok()?;
-                set.insert(rows.row(0).as_ref().to_vec());
+        let keys = match t {
+            ArrowType::Utf8
+            | ArrowType::LargeUtf8
+            | ArrowType::Utf8View
+            | ArrowType::Binary
+            | ArrowType::LargeBinary
+            | ArrowType::BinaryView => {
+                let mut set = fast_set(values.len());
+                set.extend(values.iter().map(|a| byte_value(a.as_ref(), 0).to_vec()));
+                Keys::Bytes(set)
             }
-            Keys::Rows(conv, set)
+            ArrowType::Decimal128(..) => {
+                let mut set = fast_set(values.len());
+                set.extend(values.iter().map(|a| {
+                    a.as_primitive::<arrow_array::types::Decimal128Type>()
+                        .value(0)
+                }));
+                Keys::Decimals(set)
+            }
+            _ => {
+                let mut set = fast_set(values.len());
+                for a in &values {
+                    let ok = for_each_int(a.as_ref(), |v| {
+                        if let Some(v) = v {
+                            set.insert(v);
+                        }
+                    });
+                    if !ok {
+                        return None;
+                    }
+                }
+                Keys::Ints(set)
+            }
         };
         Some(Self {
             v: Arc::clone(v),
@@ -247,12 +290,13 @@ impl PhysExpr for InSet {
                     );
                 }
             }
-            Keys::Rows(conv, set) => {
-                let rows = conv
-                    .convert_columns(&[Arc::clone(a)])
-                    .map_err(|e| internal(&e.to_string()))?;
-                for i in 0..n {
-                    decide(a.is_valid(i).then(|| set.contains(rows.row(i).as_ref())));
+            Keys::Decimals(set) => {
+                let d = a.as_primitive::<arrow_array::types::Decimal128Type>();
+                d.iter().for_each(|x| decide(x.map(|x| set.contains(&x))));
+            }
+            Keys::Ints(set) => {
+                if !for_each_int(a.as_ref(), |x| decide(x.map(|x| set.contains(&x)))) {
+                    return Err(internal("IN set over a value of another type"));
                 }
             }
         }
@@ -1047,6 +1091,69 @@ mod tests {
                 .collect();
             check(column(3, ArrowType::Date32, true), dates, &batch);
         }
+        // Decimal and zoned timestamp columns.
+        let dec = DecimalType::try_new(10, 2).unwrap();
+        let darr = Arc::new(
+            arrow_array::Decimal128Array::from(vec![Some(150), None, Some(1_234), Some(7)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        ) as ArrayRef;
+        // A zoned timestamp column, of the literals' own Arrow type.
+        let t_type = lit(&Literal::Timestamp(0)).data_type().clone();
+        assert!(
+            matches!(t_type, ArrowType::Timestamp(_, Some(_))),
+            "{t_type}"
+        );
+        let tarr = arrow_array::make_array(
+            arrow_array::TimestampMicrosecondArray::from(vec![Some(3), Some(4), None, Some(99)])
+                .into_data()
+                .into_builder()
+                .data_type(t_type.clone())
+                .build()
+                .unwrap(),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", darr.data_type().clone(), true),
+            Field::new("t", t_type.clone(), true),
+        ]));
+        let dt = RecordBatch::try_new(schema, vec![darr, tarr]).unwrap();
+        let decs: Vec<_> = (0..12)
+            .map(|i| {
+                lit(&Literal::Decimal {
+                    unscaled: i * 150,
+                    data_type: dec,
+                })
+            })
+            .collect();
+        check(column(0, dt.column(0).data_type().clone(), true), decs, &dt);
+        let ts: Vec<_> = (0..12).map(|i| lit(&Literal::Timestamp(i))).collect();
+        check(column(1, t_type, true), ts, &dt);
+        // As the analyzer coerces them: a BIGINT value against INT
+        // literals cast to BIGINT, and a DECIMAL(10,2) value against
+        // DECIMAL(3,1) literals cast up, still make a set.
+        let schema = Arc::new(Schema::new(vec![Field::new("d", ArrowType::Null, true)]));
+        let inp = input(&env, &[], &schema);
+        let cast = |e: Arc<dyn PhysExpr>, to: &DataType| {
+            super::super::cast::compile(e, to, krishiv_plan::CastMode::Legacy, inp).unwrap()
+        };
+        let small = DecimalType::try_new(3, 1).unwrap();
+        let ints: Vec<_> = (0..12)
+            .map(|i| cast(lit(&Literal::Integer(i)), &DataType::Long))
+            .collect();
+        assert!(ints.iter().all(|e| e.is_constant()));
+        check(column(0, ArrowType::Int64, true), ints, &batch);
+        let decs: Vec<_> = (0..12)
+            .map(|i| {
+                cast(
+                    lit(&Literal::Decimal {
+                        unscaled: i128::from(i) * 15,
+                        data_type: small,
+                    }),
+                    &DataType::Decimal(dec),
+                )
+            })
+            .collect();
+        check(column(0, dt.column(0).data_type().clone(), true), decs, &dt);
         let floats: Vec<_> = std::iter::once(column(0, ArrowType::Float64, true))
             .chain((0..12).map(|i| lit(&Literal::Double(f64::from(i)))))
             .collect();

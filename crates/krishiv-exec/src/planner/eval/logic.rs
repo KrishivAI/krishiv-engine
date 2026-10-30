@@ -581,7 +581,8 @@ fn views_equal(a: u128, ab: &[arrow_buffer::Buffer], b: u128, bb: &[arrow_buffer
     if a as u64 != b as u64 {
         return false;
     }
-    long_bytes(a, ab) == long_bytes(b, bb)
+    // A view that points outside its buffers equals nothing.
+    matches!((long_bytes(a, ab), long_bytes(b, bb)), (Some(x), Some(y)) if x == y)
 }
 
 /// The bytes of a view of a value longer than 12 bytes, in its data buffer.
@@ -1012,6 +1013,35 @@ mod tests {
                         proptest::prop_assert_eq!(got.value(i), want.value(i), "row {}", i);
                     }
                 }
+            }
+        }
+    }
+
+    /// Sliced view arrays (an offset into shared views and buffers) compare
+    /// as their rows, against a column and against a scalar.
+    #[test]
+    fn sliced_views_compare_their_rows() {
+        let long = "a value longer than twelve bytes";
+        let all = StringViewArray::from(vec![
+            Some("x"),
+            Some(long),
+            None,
+            Some("short"),
+            Some(long),
+            Some("a value longer than twelve bytes, but not equal"),
+        ]);
+        let left: ArrayRef = Arc::new(all.slice(1, 5));
+        let right: ArrayRef = Arc::new(all.slice(0, 5));
+        let lit: ArrayRef = Arc::new(StringViewArray::from(vec![long]));
+        let at: for<'a> fn(&'a dyn Array, usize) -> &'a [u8] = |a, i| str_value(a, i).as_bytes();
+        for (l, r) in [
+            (Value::Array(Arc::clone(&left)), Value::Array(right)),
+            (Value::Array(left), Value::Scalar(lit)),
+        ] {
+            for (equal, kind) in [(true, CompareKind::Equal), (false, CompareKind::NotEqual)] {
+                let got = view_eq(equal, &l, &r, 5);
+                let want = bytes(kind, &l, &r, 5, at).unwrap();
+                assert_eq!(got, want, "{kind:?}");
             }
         }
     }
