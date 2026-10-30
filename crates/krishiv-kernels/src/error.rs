@@ -33,12 +33,13 @@
 //! [`crate::version::SparkVersion`].
 
 use krishiv_common::error::{
-    ArithmeticOverflow, BinaryArithmeticOverflow, CastInvalidInput, CastOverflow,
-    DatetimeFieldOutOfBoundsWithSuggestion, DatetimeOverflow, DivideByZero, ErrorClass,
-    IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
-    InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
-    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
-    NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
+    ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTimestamp, CastInvalidInput,
+    CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion, DatetimeOverflow, DivideByZero,
+    ErrorClass, IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd,
+    InvalidFormatEscInTheMiddle, InvalidUtf8String, KrishivDecimalRemainderImpossible,
+    KrishivError, KrishivUnsupportedFeature, NumericOutOfSupportedRange,
+    NumericValueOutOfRangeWithSuggestion, NumericValueOutOfRangeWithoutSuggestion, RemainderByZero,
+    UnableToAcquireMemory,
 };
 
 use crate::policy::Fault;
@@ -270,6 +271,21 @@ impl KernelError {
             row: Some(row),
             error: IllegalDayOfWeek {
                 string: name.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// `CANNOT_PARSE_TIMESTAMP`: the string of a `to_*`/`unix_timestamp`
+    /// call does not match its pattern; `func` is the `try_*` function
+    /// that tolerates it (`` `try_to_timestamp` ``), `message` Java's
+    /// failure text.
+    pub(crate) fn cannot_parse_timestamp(row: usize, message: String, func: &str) -> Self {
+        Self {
+            row: Some(row),
+            error: CannotParseTimestamp {
+                message,
+                func: format!("`{func}`"),
             }
             .into(),
         }

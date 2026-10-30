@@ -22,10 +22,11 @@
 //!   day 1, midnight). A string that does not match is `None`, never an
 //!   error.
 //!
-//! Only English (`en-US`) texts are known. Zone ids other than UTC and
-//! fixed offsets (`America/Los_Angeles`, `PST`) need the time-zone database
-//! and fail with `KRISHIV_UNSUPPORTED_FEATURE`. Checked against Spark 4.2 by
-//! the `datetime_pattern_differential` test.
+//! Only English (`en-US`) texts are known. Zone ids in strings resolve
+//! against the bundled time-zone database; short `z`/`zzzz` display names
+//! of region zones need CLDR data and fail with
+//! `KRISHIV_UNSUPPORTED_FEATURE`. Checked against Spark 4.2 by the
+//! `datetime_pattern_differential` test.
 #![expect(
     clippy::arithmetic_side_effects,
     reason = "field values are bounded by the pattern's digit limits and checked ranges; \
@@ -33,7 +34,7 @@
 )]
 
 mod format;
-mod parse;
+pub(crate) mod parse;
 
 use krishiv_common::error::{
     InconsistentBehaviorCrossVersionDatetimePatternRecognition,
@@ -286,10 +287,12 @@ impl DateTimePattern {
     }
 
     /// `s` as an instant: its zone or offset, else `session`. `Ok(None)`
-    /// when `s` does not match.
+    /// when `s` does not match, or names a zone id the database cannot
+    /// resolve (Spark's lenient readers read it as no timestamp at all).
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for a region zone id in `s`.
+    /// Never for the zone itself; `INVALID_TIMEZONE` is the scalar zone
+    /// arguments' error, not the readers'.
     pub fn parse_timestamp(
         &self,
         s: &str,
@@ -304,16 +307,18 @@ impl DateTimePattern {
         match p.zone {
             parse::ParsedZone::None => Ok(crate::cast::datetime::local_to_utc(local, session)),
             parse::ParsedZone::Offset(o) => Ok(local.checked_sub(i64::from(o) * 1_000_000)),
-            parse::ParsedZone::Region(id) => Err(region(&id)),
+            parse::ParsedZone::Region(id) => {
+                let Ok(zone) = crate::datetime::resolve_zone(&id) else {
+                    return Ok(None);
+                };
+                Ok(crate::cast::datetime::local_to_utc(local, &zone))
+            }
         }
     }
 
     /// `s` as a local date-time (`TIMESTAMP_NTZ`). A zone or offset in `s`
-    /// is ignored when `allow_zone`, else the string does not match.
-    ///
-    /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for a region zone id in `s` (whether
-    /// it exists needs the time-zone database).
+    /// is ignored when `allow_zone`, else the string does not match. An
+    /// unresolvable zone id does not match either.
     pub fn parse_local(&self, s: &str, allow_zone: bool) -> Result<Option<i64>, KrishivError> {
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
@@ -322,31 +327,36 @@ impl DateTimePattern {
             parse::ParsedZone::None => {}
             _ if !allow_zone => return Ok(None),
             parse::ParsedZone::Offset(_) => {}
-            parse::ParsedZone::Region(id) => return Err(region(id)),
+            parse::ParsedZone::Region(id) => {
+                if crate::datetime::resolve_zone(id).is_err() {
+                    return Ok(None);
+                }
+            }
         }
         Ok(p.local_micros())
     }
 
     /// `s` as a date (days since the epoch), as Spark's CSV and JSON
-    /// readers parse dates: time and zone fields are read but ignored.
-    ///
-    /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for a region zone id in `s`.
+    /// readers parse dates: time and zone fields are read but ignored. An
+    /// unresolvable zone id does not match either.
     pub fn parse_date(&self, s: &str) -> Result<Option<i32>, KrishivError> {
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
         };
-        if let parse::ParsedZone::Region(id) = &p.zone {
-            return Err(region(id));
+        if let parse::ParsedZone::Region(id) = &p.zone
+            && crate::datetime::resolve_zone(id).is_err()
+        {
+            return Ok(None);
         }
         Ok(p.days().and_then(|d| i32::try_from(d).ok()))
     }
-}
 
-fn region(id: &str) -> KrishivError {
-    unsupported(&format!(
-        "the time zone {id} in a datetime string (only UTC and fixed offsets are known)"
-    ))
+    /// `s` with Java's failure detail: the resolved local date-time and
+    /// zone, or how the match or resolution failed. The batch parsers of
+    /// [`crate::datetime::format`] report it as Spark does.
+    pub(crate) fn parse_detailed(&self, s: &str) -> Result<parse::Resolved, parse::Fail> {
+        parse::parse_detailed(&self.items, s)
+    }
 }
 
 fn unsupported(what: &str) -> KrishivError {

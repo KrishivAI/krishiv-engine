@@ -325,7 +325,16 @@ fn zone_name(id: &str, offset: i32, full: bool) -> Result<String, KrishivError> 
         }
         .to_owned(),
         "GMT" | "Etc/GMT" => if full { "Greenwich Mean Time" } else { "GMT" }.to_owned(),
-        "Z" => "Z".to_owned(),
+        "Z" | "UT" => id.to_owned(),
+        // `UTC+05:30`, `GMT+05:30` and `UT+05:30` have no display name:
+        // `java.time` falls back to the id.
+        _ if ["UTC", "GMT", "UT"]
+            .iter()
+            .filter_map(|p| id.strip_prefix(p))
+            .any(|rest| rest.starts_with(['+', '-'])) =>
+        {
+            id.to_owned()
+        }
         _ if id.starts_with('+') || id.starts_with('-') => {
             let mut s = String::new();
             write_offset(

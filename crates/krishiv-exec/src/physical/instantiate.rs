@@ -1210,6 +1210,7 @@ mod tests {
                 ansi: true,
                 legacy_statistical_aggregate: false,
                 zone: Some(0),
+                zone_name: None,
                 query_start_micros: 0,
                 user: Arc::from("u"),
                 map_key_dedup_last_win: false,
