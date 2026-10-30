@@ -41,6 +41,8 @@ pub(crate) fn should_persist(line: &str) -> bool {
 /// (`OPTIONS (password 'x')`, `password = 'x'`) or credentials in a URL (`jdbc:...://user:pw@host`).
 /// A column merely named `password` is not one, so ordinary queries still persist.
 fn assigns_secret(stmt: &str) -> bool {
+    let stmt = &blank_comments(stmt);
+    let stmt = stmt.as_str();
     let mut i = 0;
     while let Some(off) = stmt.get(i..).and_then(|r| r.find("://")) {
         let rest = &stmt[i + off + 3..];
@@ -116,6 +118,51 @@ fn set_key(stmt: &str) -> Option<String> {
         }
     }
     if key.is_empty() { None } else { Some(key) }
+}
+
+/// `s` with comments (outside quotes) replaced by a space, so words inside a comment are never read as code.
+fn blank_comments(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                out.push(c);
+                if c == '\\' && q != '`' {
+                    out.extend(chars.next());
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c == '-' && chars.peek() == Some(&'-') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            None if c == '/' && chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    prev = n;
+                }
+                out.push(' ');
+            }
+            None => {
+                if matches!(c, '\'' | '"' | '`') {
+                    quote = Some(c);
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// `line` split at top-level `;` (outside quotes and comments), like the
