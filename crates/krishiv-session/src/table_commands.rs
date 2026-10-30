@@ -275,6 +275,7 @@ impl Session {
             properties,
             comment: t.comment.clone(),
             created_ms: now_ms(),
+            root: self.warehouse_dir()?,
         };
         match &t.as_query {
             Some(query) => self.create_table_as(table, query, mode).await?,
@@ -429,13 +430,28 @@ impl Session {
         table: &CatalogTable,
         keep_dir: bool,
     ) -> Result<(), KrishivError> {
+        if let Some(dir) = self.deletable_dir(table).await? {
+            if keep_dir {
+                clear_dir(&dir)
+            } else {
+                remove_dir(&dir)
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The directory whose files a delete of `table` would remove, after every check (containment in the root
+    /// the table was created under, no links, the policy): `None` when there is nothing to delete. Run before
+    /// the metadata changes, so a refused delete leaves the table in place.
+    async fn deletable_dir(&self, table: &CatalogTable) -> Result<Option<PathBuf>, KrishivError> {
         if !table.managed {
-            return Ok(());
+            return Ok(None);
         }
         let location = &table.location;
         let meta = match location.symlink_metadata() {
             Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => {
                 return Err(internal(format!(
                     "cannot inspect {}: {e}",
@@ -443,8 +459,8 @@ impl Session {
                 )));
             }
         };
-        let root = self
-            .warehouse_dir()?
+        let root = table
+            .root
             .canonicalize()
             .map_err(|e| internal(format!("cannot resolve the warehouse: {e}")))?;
         let canonical = location
@@ -458,11 +474,7 @@ impl Session {
         }
         self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
             .await?;
-        if keep_dir {
-            clear_dir(&canonical)
-        } else {
-            remove_dir(&canonical)
-        }
+        Ok(Some(canonical))
     }
 
     /// `CREATE TABLE ... AS SELECT`: writes the query to the table's
@@ -582,6 +594,7 @@ impl Session {
             properties: options_of(&t.tblproperties, text),
             comment: None,
             created_ms: now_ms(),
+            root: self.warehouse_dir()?,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -599,13 +612,16 @@ impl Session {
         if self.temp_entry_of(&name, &env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
-        } else if let Some(table) = self
-            .state
-            .catalog
-            .store
-            .drop_table(&name.namespace, &name.name)
-        {
-            self.delete_table_files(&table, false).await?;
+        } else if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) {
+            // Checked before the metadata goes: a refused delete must not orphan the files.
+            let dir = self.deletable_dir(&table).await?;
+            self.state
+                .catalog
+                .store
+                .drop_table(&name.namespace, &name.name);
+            if let Some(dir) = dir {
+                remove_dir(&dir)?;
+            }
         } else if !d.if_exists {
             return Err(name.not_found());
         }

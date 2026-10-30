@@ -61,6 +61,9 @@ pub(crate) struct CatalogTable {
     pub(crate) properties: BTreeMap<String, String>,
     pub(crate) comment: Option<String>,
     pub(crate) created_ms: i64,
+    /// The warehouse root the table was created under: `spark.sql.warehouse.dir` can change later, and the
+    /// files must be deleted against the root they were created in.
+    pub(crate) root: PathBuf,
 }
 
 /// What `CREATE TABLE` does when the table exists.
@@ -251,6 +254,7 @@ mod tests {
             properties: BTreeMap::new(),
             comment: None,
             created_ms: 0,
+            root: PathBuf::new(),
         }
     }
 

@@ -330,17 +330,46 @@ fn a_failed_create_leaves_no_metadata() {
 }
 
 #[test]
+fn store_overflow_is_an_error_even_with_ansi_off() {
+    // Spark 4.2 verified: the store assignment is strict whatever `spark.sql.ansi.enabled` says.
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    run(&s, "CREATE TABLE t (s SMALLINT)");
+    let e = err(&s, "INSERT INTO t SELECT CAST(100000 AS BIGINT)");
+    assert_eq!(
+        e.error_class().name(),
+        "CAST_OVERFLOW_IN_TABLE_INSERT",
+        "{e}"
+    );
+    assert!(col0(&s, "SELECT CAST(s AS STRING) FROM t").is_empty());
+}
+
+#[test]
+fn dropping_a_table_after_the_warehouse_moved_removes_its_files() {
+    let old = tempfile::tempdir().unwrap();
+    let new = tempfile::tempdir().unwrap();
+    let s = session(old.path());
+    run(&s, "CREATE TABLE t (a INT)");
+    run(&s, "INSERT INTO t VALUES (1)");
+    s.conf()
+        .set("spark.sql.warehouse.dir", new.path().to_str().unwrap())
+        .unwrap();
+    run(&s, "DROP TABLE t");
+    assert!(!old.path().join("t").exists());
+    assert_eq!(class(&s, "DROP TABLE t"), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+#[test]
 fn a_failed_insert_writes_no_files() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE TABLE t (a INT)");
     // The cast overflows while the rows are written.
     let e = err(&s, "INSERT INTO t SELECT CAST(2147483648 AS BIGINT)");
-    assert!(
-        matches!(
-            e.error_class().name(),
-            "CAST_OVERFLOW" | "CAST_OVERFLOW_IN_TABLE_INSERT"
-        ),
+    assert_eq!(
+        e.error_class().name(),
+        "CAST_OVERFLOW_IN_TABLE_INSERT",
         "{e}"
     );
     let files: Vec<_> = std::fs::read_dir(dir.path().join("t"))
@@ -414,6 +443,8 @@ fn insert_overwrite_never_loses_the_old_rows_before_the_new_ones_are_complete() 
         run(&s, "INSERT OVERWRITE t VALUES (1), (2), (3)");
     }
     let (seen, errors) = reader.join().unwrap();
+    // See open-issues: until P2-T082b a concurrent reader can see a MIXED old+new result (count 8), a wrong
+    // row count, as well as a FILE_NOT_EXIST error. Both are allowed here until the manifest commit lands.
     // A reader sees the old rows, the new rows, or (between the two steps of the writer's commit, until the
     // manifest commit of P2-T082b) both: never fewer rows than either side. Until that commit a reader that
     // listed the old files can also lose one to the overwrite's cleanup: that is the only error allowed.
