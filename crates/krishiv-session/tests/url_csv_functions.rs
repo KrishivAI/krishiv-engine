@@ -494,3 +494,90 @@ fn schema_of_csv_reads_map_options() {
         ["1|2"]
     );
 }
+
+/// The options `map(...)` is evaluated as a map: a repeated key is
+/// `DUPLICATED_MAP_KEY` unless the session keeps the last one; option names
+/// are case-insensitive and the one written last wins (Spark 4.2.0).
+#[test]
+fn option_maps_follow_the_map_key_dedup_policy() {
+    let s = session();
+    assert_eq!(
+        class_of(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|', 'sep', ';'))"
+        ),
+        ErrorClass::DuplicatedMapKey
+    );
+    assert_eq!(
+        class_of(
+            &s,
+            "select from_json('{\"a\":1}', 'a INT', map('mode', 'FAILFAST', 'mode', 'PERMISSIVE'))"
+        ),
+        ErrorClass::DuplicatedMapKey
+    );
+    // Two spellings of one option are distinct map keys; the last written wins.
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_csv('1|2', map('sep', '|', 'SEP', ';'))"
+        ),
+        ["STRUCT<_c0: STRING>"]
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|', 'SEP', ';'))"
+        ),
+        ["1;2"]
+    );
+    block_on(s.sql("set spark.sql.mapKeyDedupPolicy=LAST_WIN")).expect("set policy");
+    assert_eq!(
+        run(
+            &s,
+            "select to_csv(named_struct('a', 1, 'b', 2), map('sep', '|', 'sep', ';'))"
+        ),
+        ["1;2"]
+    );
+}
+
+/// `to_json`, `from_json` and `schema_of_json` take their options from a
+/// `map(...)` and are named after their first argument (Spark 4.2.0).
+#[test]
+fn json_functions_read_map_options() {
+    let s = session();
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_json('{\"c1\":1}', map('primitivesAsString', 'true'))"
+        ),
+        ["STRUCT<c1: STRING>"]
+    );
+    assert_eq!(
+        names(
+            &s,
+            "select schema_of_json('{\"c1\":1}', map('primitivesAsString', 'true'))"
+        ),
+        ["schema_of_json({\"c1\":1})"]
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_json(named_struct('a', 1, 'b', 'x'), map('ignoreNullFields', 'false'))"
+        ),
+        ["{\"a\":1,\"b\":\"x\"}"]
+    );
+    assert_eq!(
+        names(
+            &s,
+            "select to_json(named_struct('a', 1), map('ignoreNullFields', 'false'))"
+        ),
+        ["to_json(named_struct(a, 1))"]
+    );
+    assert_eq!(
+        run(
+            &s,
+            "select to_json(from_json('{\"a\":1}', 'a INT', map('mode', 'FAILFAST')))"
+        ),
+        ["{\"a\":1}"]
+    );
+}

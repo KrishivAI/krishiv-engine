@@ -16,9 +16,10 @@ use krishiv_common::error::{
     DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidOrderingType,
     DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
-    DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    FailedToParseTooComplex, FieldNotFound, InternalError, InvalidAggregateFilterNotBoolean,
-    InvalidExtractBaseFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
+    ExceptOverlappingColumns, FailedToParseTooComplex, FieldNotFound, InternalError,
+    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount, KrishivError,
     KrishivUnsupportedFeature, NamedParametersNotSupported, NestedAggregateFunction,
@@ -239,7 +240,7 @@ fn options_index(name: &str) -> Option<usize> {
 }
 
 /// The pairs of a `map('k', 'v', ...)` call whose arguments are all `STRING`
-/// literals (Spark's `CreateMap` of foldable string options), if `e` is one.
+/// literals, if `e` is one (a call with any other argument keeps its call).
 fn literal_map_pairs(e: &Expr) -> Option<Vec<(String, String)>> {
     let ExprNode::Resolved(ResolvedExpr::Function(call)) = &e.node else {
         return None;
@@ -1804,6 +1805,28 @@ impl Resolver<'_> {
                         // A `map('k', 'v', ...)` of string literals is the
                         // options literal Spark's `convertToMapData` reads at
                         // analysis; the executor binds it as a literal.
+                        // Spark evaluates the options `map(...)`: a repeated key
+                        // is `DUPLICATED_MAP_KEY` unless the session keeps the
+                        // last one.
+                        let mut distinct_pairs: Vec<(String, String)> = Vec::new();
+                        for (key, value) in pairs {
+                            if let Some(seen) = distinct_pairs.iter_mut().find(|(k, _)| *k == key) {
+                                if !self.ctx.conf.map_key_dedup_last_win {
+                                    return Err(AnalysisError::new(
+                                        DuplicatedMapKey {
+                                            key,
+                                            map_key_dedup_policy: "\"spark.sql.mapKeyDedupPolicy\""
+                                                .to_owned(),
+                                        },
+                                        e.origin,
+                                    ));
+                                }
+                                seen.1 = value;
+                            } else {
+                                distinct_pairs.push((key, value));
+                            }
+                        }
+                        let pairs = distinct_pairs;
                         owned = kids[..n].to_vec();
                         let original = Arc::clone(&owned[at].expr);
                         owned[at].shown = Some(Arc::clone(&original));
@@ -2307,16 +2330,19 @@ impl Resolver<'_> {
                 let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
                     return Ok(());
                 };
-                let user: std::collections::BTreeMap<String, krishiv_common::secret::OptionValue> =
-                    pairs
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                krishiv_common::secret::OptionValue::from_user(k, v.clone()),
-                            )
-                        })
-                        .collect();
+                // Option names are case-insensitive: of two spellings of one
+                // name, the one written last wins (Spark's `CaseInsensitiveMap`).
+                let mut user: std::collections::BTreeMap<
+                    String,
+                    krishiv_common::secret::OptionValue,
+                > = std::collections::BTreeMap::new();
+                for (k, v) in pairs {
+                    user.retain(|seen, _| !seen.eq_ignore_ascii_case(k));
+                    user.insert(
+                        k.clone(),
+                        krishiv_common::secret::OptionValue::from_user(k, v.clone()),
+                    );
+                }
                 krishiv_io::csv::option_schema()
                     .parse(&user, &krishiv_common::config::Config::new())
                     .map_err(|err| AnalysisError::new(err, e.origin))?
@@ -4955,6 +4981,15 @@ fn call(
         _ if name.eq_ignore_ascii_case("from_json") && !k.is_empty() => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("from_json({d}{})", k[0])
+        }
+        // `StructsToJson` and `SchemaOfJson` likewise show only their first
+        // child, not the options.
+        _ if (name.eq_ignore_ascii_case("to_json")
+            || name.eq_ignore_ascii_case("schema_of_json"))
+            && !k.is_empty() =>
+        {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{})", name.to_lowercase(), k[0])
         }
         // The bitwise operators show infix (`(20181117 >> 2)`), `~`
         // prefix; `to_varchar` shows as `to_char`.
