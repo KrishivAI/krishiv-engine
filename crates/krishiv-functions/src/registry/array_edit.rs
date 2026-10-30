@@ -22,6 +22,18 @@ use crate::signature::{ArgType, CallTypes, InputType, Inputs};
 /// array (or, for an insert, the position) is NULL.
 fn grow(name: &'static str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let item = c.args().len() - 1;
+    // Spark types an append or prepend by `ImplicitCastInputTypes`: a first
+    // argument that is not an array is an input-type error; `array_insert`
+    // reports the shape mismatch instead, and checks its position's type.
+    if name != "array_insert" && !matches!(c.data_type(0), Some(DataType::Array(_))) {
+        return Err(unexpected(name, c, 0, "\"ARRAY\""));
+    }
+    if name == "array_insert"
+        && c.data_type(1) != Some(&DataType::Integer)
+        && matches!(c.data_type(0), Some(DataType::Array(_)))
+    {
+        return Err(unexpected(name, c, 1, "\"INT\""));
+    }
     let element = match (c.data_type(0), c.data_type(item)) {
         (Some(DataType::Array(a)), Some(t)) if a.element_type().equals_ignore_nullability(t) => {
             Some(a.element_type().clone())
@@ -60,17 +72,22 @@ fn insert(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     grow("array_insert", c)
 }
 
+/// The `UNEXPECTED_INPUT_TYPE` error of argument `index`.
+fn unexpected(name: &str, c: &CallTypes<'_>, index: usize, required: &str) -> KrishivError {
+    DatatypeMismatchUnexpectedInputType {
+        sql_expr: call_sql(name, c),
+        param_index: ordinal(index).to_owned(),
+        required_type: required.to_owned(),
+        input_sql: format!("\"{}\"", c.sql(index).unwrap_or_default()),
+        input_type: quoted(c.data_type(index)),
+    }
+    .into()
+}
+
 /// `array_compact(array)`: the array without its NULLs.
 fn compact(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let Some(DataType::Array(a)) = c.data_type(0) else {
-        return Err(DatatypeMismatchUnexpectedInputType {
-            sql_expr: call_sql("array_compact", c),
-            param_index: ordinal(0).to_owned(),
-            required_type: "\"ARRAY\"".to_owned(),
-            input_sql: format!("\"{}\"", c.sql(0).unwrap_or_default()),
-            input_type: quoted(c.data_type(0)),
-        }
-        .into());
+        return Err(unexpected("array_compact", c, 0, "\"ARRAY\""));
     };
     Ok(ArgType::new(
         DataType::Array(ArrayType::new(a.element_type().clone(), false).into()),

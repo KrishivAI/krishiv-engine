@@ -1108,7 +1108,10 @@ fn array_item_casts(args: &[Arg<'_>], rules: Rules) -> Vec<Option<DataType>> {
     let array: DataType = ArrayType::new(meet.clone(), a.contains_null()).into();
     let mut casts = vec![cast_to(arr.ty, Some(&array))];
     if let Some(p) = pos {
-        casts.push(cast_to(p.ty, Some(&DataType::Integer)));
+        // Only the narrower integers widen to the `INT` position; any other
+        // type is left for the result rule to refuse.
+        let widens = matches!(p.ty, Some(DataType::Byte | DataType::Short));
+        casts.push(widens.then_some(DataType::Integer));
     }
     casts.push(cast_to(item.ty, Some(&meet)));
     casts

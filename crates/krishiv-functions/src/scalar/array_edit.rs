@@ -132,6 +132,7 @@ fn rebuild(
     values: &ArrayRef,
     rows: &[Option<Vec<Option<u32>>>],
     name: &str,
+    limit: usize,
 ) -> Result<ArrayRef, KrishivError> {
     let mut offsets: Vec<i32> = Vec::with_capacity(rows.len() + 1);
     offsets.push(0);
@@ -139,7 +140,7 @@ fn rebuild(
     let mut valid = Vec::with_capacity(rows.len());
     for row in rows {
         if let Some(pieces) = row {
-            if pieces.len() > MAX_ARRAY_LENGTH {
+            if pieces.len() > limit {
                 return Err(CollectionSizeLimitExceededFunction {
                     function_name: format!("`{name}`"),
                     number_of_elements: pieces.len().to_string(),
@@ -226,7 +227,7 @@ fn edit_rows(
         };
         rows.push(Some(pieces));
     }
-    rebuild(field, &values, &rows, name)
+    rebuild(field, &values, &rows, name, MAX_ARRAY_LENGTH)
 }
 
 /// `array_compact(arr)`: each array without its NULL elements.
@@ -251,6 +252,33 @@ fn compact(x: &Inputs<'_>, field: &arrow_schema::FieldRef) -> Result<ArrayRef, K
         }
         rows.push(Some(kept));
     }
-    let out = rebuild(field, values, &rows, "array_compact")?;
+    let out = rebuild(field, values, &rows, "array_compact", MAX_ARRAY_LENGTH)?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::Int32Array;
+
+    use super::*;
+
+    /// A result longer than the limit is `COLLECTION_SIZE_LIMIT_EXCEEDED.FUNCTION`
+    /// naming the function, the length and the limit.
+    #[test]
+    fn an_array_past_the_limit_is_refused() {
+        let field = Arc::new(arrow_schema::Field::new("element", DataType::Int32, true));
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let rows = vec![Some(vec![Some(0), Some(1), Some(2)])];
+        let err = rebuild(&field, &values, &rows, "array_insert", 2).unwrap_err();
+        assert_eq!(
+            err.error_class().name(),
+            "COLLECTION_SIZE_LIMIT_EXCEEDED.FUNCTION"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("array_insert") && message.contains('3') && message.contains('2'),
+            "{message}"
+        );
+        assert!(rebuild(&field, &values, &rows, "array_insert", 3).is_ok());
+    }
 }

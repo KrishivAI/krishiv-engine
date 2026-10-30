@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 
 use krishiv_common::secret::SecretUrl;
-use krishiv_types::DataType;
 
 use crate::walk::{self, Node};
 use crate::{
@@ -747,14 +746,6 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 out,
             );
         }
-        // Spark's pretty SQL (auto aliases and quoted expressions) shows a
-        // cast to an array, map or struct type as its operand:
-        // `CAST(array() AS ARRAY<FLOAT>)` is `array()`.
-        ExprNode::Cast {
-            expr,
-            to: DataType::Array(_) | DataType::Map(_) | DataType::Struct(_),
-            mode: CastMode::Default | CastMode::Legacy | CastMode::Ansi,
-        } => out.push(Piece::Expr(expr)),
         ExprNode::Cast { expr, to, mode } => {
             out.push(Piece::Str(match mode {
                 CastMode::Try => "TRY_CAST(",
@@ -1099,8 +1090,6 @@ impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Null(None) => f.write_str("NULL"),
-            // Spark prints a NULL of a nested type as plain `NULL`.
-            Self::Null(Some(t)) if t.is_nested() => f.write_str("NULL"),
             Self::Null(Some(t)) => write!(f, "CAST(NULL AS {})", t.sql()),
             Self::Boolean(v) => write!(f, "{v}"),
             Self::Byte(v) => write!(f, "{v}Y"),
