@@ -2532,7 +2532,13 @@ impl Resolver<'_> {
             _ => (false, false),
         };
         let mut out: Vec<Attr> = l.out.iter().map(|a| nullable(a, ln)).collect();
-        if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+        if let JoinKind::Existence(id) = kind {
+            out.push(Attr {
+                col: JoinKind::existence_column(id),
+                qual: Arc::from(Vec::new()),
+                source: None,
+            });
+        } else if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
             out.extend(r.out.iter().map(|a| nullable(a, rn)));
         }
         let rels = [&l, &r];
@@ -2546,7 +2552,10 @@ impl Resolver<'_> {
                 // outer-join coalescing are exactly the `USING` ones. With
                 // no common columns the join is a cross join, as Spark's
                 // is.
-                if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                if matches!(
+                    kind,
+                    JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+                ) {
                     // Spark fails here with a bare `requirement failed:
                     // Unsupported natural join type LeftSemi` (no error class).
                     return Err(unsupported(

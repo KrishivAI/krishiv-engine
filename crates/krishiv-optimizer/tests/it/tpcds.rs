@@ -53,11 +53,9 @@ pub(crate) fn sql(q: usize) -> String {
 /// TPC-DS queries that do not resolve yet (with the reason): snapshots
 /// cannot cover them until their features land.
 pub(crate) const UNSUPPORTED: &[(usize, &str)] = &[
-    (10, "correlated EXISTS/IN subqueries in OR"),
     (16, "double-quoted aliases do not parse"),
     (30, "column c_last_review_date_sk missing from schemas"),
     (32, "double-quoted aliases do not parse"),
-    (35, "correlated EXISTS/IN subqueries in OR"),
     (41, "correlated scalar subquery (non-equality correlation)"),
     (50, "double-quoted aliases do not parse"),
     (62, "double-quoted aliases do not parse"),

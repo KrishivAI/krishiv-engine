@@ -329,9 +329,13 @@ impl<'a> Estimator<'a> {
                     JoinKind::FullOuter => inner.max(l.rows).max(r.rows),
                     JoinKind::LeftSemi => inner.min(l.rows),
                     JoinKind::LeftAnti => (l.rows - inner.min(l.rows)).max(1.0),
+                    JoinKind::Existence(_) => l.rows,
                     _ => inner,
                 };
-                if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                if matches!(
+                    kind,
+                    JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
+                ) {
                     both.cols = l.cols.clone();
                 }
                 both.with_rows(rows)

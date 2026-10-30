@@ -81,7 +81,7 @@ pub(crate) fn max_rows(plan: &LogicalPlan) -> Option<u64> {
         } if keys.is_empty() => Some(1),
         PlanNode::Join {
             left,
-            kind: JoinKind::LeftSemi | JoinKind::LeftAnti,
+            kind: JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_),
             ..
         } => max_rows(left),
         _ => None,
@@ -132,10 +132,10 @@ pub(crate) fn push_limit(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         PlanNode::Join {
             left,
             right,
-            kind: kind @ (JoinKind::LeftOuter | JoinKind::RightOuter),
+            kind: kind @ (JoinKind::LeftOuter | JoinKind::RightOuter | JoinKind::Existence(_)),
             condition,
         } => {
-            let side = if *kind == JoinKind::LeftOuter {
+            let side = if *kind != JoinKind::RightOuter {
                 left
             } else {
                 right
@@ -144,7 +144,7 @@ pub(crate) fn push_limit(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
                 return node;
             }
             let side = limited(&node, side, Arc::clone(limit));
-            let (left, right) = if *kind == JoinKind::LeftOuter {
+            let (left, right) = if *kind != JoinKind::RightOuter {
                 (side, Arc::clone(right))
             } else {
                 (Arc::clone(left), side)
