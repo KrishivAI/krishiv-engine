@@ -1645,6 +1645,28 @@ impl Resolver<'_> {
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
+                // `date + int`, `int + date` and `date - int` are `date_add`
+                // and `date_sub` to Spark, which names them so.
+                if !session_qualified
+                    && n == 2
+                    && let Some((name, swap)) =
+                        date_with_days(lookup_name, &kids[0].ty, &kids[1].ty)
+                {
+                    let (first, second) = if swap { (1, 0) } else { (0, 1) };
+                    let call = Expr::function(
+                        name,
+                        vec![
+                            Expr::clone(&kids[first].expr),
+                            Expr::clone(&kids[second].expr),
+                        ],
+                    )
+                    .with_origin(e.origin);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    return Ok(b);
+                }
                 if !session_qualified && let Some(op) = builtin_op(lookup_name, n) {
                     // `ILIKE` and `LIKE|ILIKE ANY|SOME|ALL` are rewritten to
                     // the calls they denote, keeping Spark's display name.
@@ -6253,5 +6275,25 @@ mod tests {
             assert_eq!(ty.data_type, None);
             assert!(ty.nullable);
         }
+    }
+}
+
+/// The function Spark rewrites `+`/`-` to when one operand is a date and
+/// the other a byte, short or int (`date_add`, `date_sub`), and whether the
+/// operands swap (`int + date`). Other mixes of dates and numbers stay
+/// refused by the coercion.
+fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static str, bool)> {
+    let days = |t: &ArgType| {
+        matches!(
+            t.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer)
+        )
+    };
+    let date = |t: &ArgType| matches!(t.data_type, Some(DataType::Date));
+    match op {
+        "+" if date(left) && days(right) => Some(("date_add", false)),
+        "+" if days(left) && date(right) => Some(("date_add", true)),
+        "-" if date(left) && days(right) => Some(("date_sub", false)),
+        _ => None,
     }
 }
