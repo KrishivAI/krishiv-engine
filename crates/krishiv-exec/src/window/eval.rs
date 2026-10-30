@@ -596,6 +596,25 @@ pub(super) fn picks_bytes(a: &AggregateExpr) -> bool {
         )
 }
 
+/// The heap a running frame's snapshots of a growing state hold: each row
+/// of a partition copies the whole state so far, which is quadratic in the
+/// partition's rows (`collect_list`, `collect_set`, `mode`, `listagg`).
+/// Estimated from the average partition size, at 16 bytes an element (a
+/// lower bound for views and keys): a skewed input can hold more.
+fn snapshot_heap(a: &AggregateExpr, shape: Shape, rows: usize, parts: usize) -> usize {
+    use AggregateFunction as F;
+    let grows = matches!(
+        a.function,
+        F::CollectList | F::CollectSet | F::Mode | F::ModeMin | F::ModeMax | F::ListAgg { .. }
+    );
+    if !grows || shape == Shape::Whole {
+        return 0;
+    }
+    let per_part = rows.div_ceil(parts.max(1));
+    rows.saturating_mul(per_part.saturating_add(1) / 2 + 1)
+        .saturating_mul(16)
+}
+
 /// The view type a string or binary argument is read as.
 pub(super) fn view_type(t: &DataType) -> DataType {
     match t {
@@ -800,6 +819,7 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
                     };
                     let slots = if shape == Shape::Whole { 0 } else { rows * 4 };
                     ids + slots
+                        + snapshot_heap(a, shape, rows, parts)
                         + groups * state
                         + width(&out, segments)
                         + if shape == Shape::RunningRows {

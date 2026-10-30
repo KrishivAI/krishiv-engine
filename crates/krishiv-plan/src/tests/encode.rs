@@ -244,6 +244,50 @@ fn resolved_call(name: &str, id: u32, kind: FunctionKind, arg: &str) -> LogicalP
     LogicalPlan::table(["t"]).project(vec![call])
 }
 
+/// A call's `WITHIN GROUP` keys, directions and null orderings enter both
+/// the canonical encoding and the structural hash.
+#[test]
+fn within_group_orderings_enter_the_key() {
+    use crate::{NullOrdering, SortDirection, SortOrder};
+    let call = |arg: &str, direction: SortDirection, nulls: NullOrdering| {
+        let func = ResolvedFunction {
+            id: FunctionId::Registry {
+                name: "listagg".to_owned(),
+                id: 1,
+            },
+            kind: FunctionKind::Aggregate,
+            args: vec![Arc::new(Expr::column(["v"]))],
+            distinct: false,
+            filter: None,
+            within_group: vec![SortOrder {
+                expr: Arc::new(Expr::column([arg])),
+                direction,
+                nulls,
+            }],
+            data_type: DataType::String,
+            nullable: true,
+            deterministic: true,
+        };
+        let call = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(func)));
+        key(LogicalPlan::table(["t"]).project(vec![call]))
+    };
+    use NullOrdering::{NullsFirst, NullsLast};
+    use SortDirection::{Ascending, Descending};
+    let keys = [
+        call("k", Ascending, NullsFirst),
+        call("k", Descending, NullsFirst),
+        call("k", Ascending, NullsLast),
+        call("j", Ascending, NullsFirst),
+    ];
+    for (i, a) in keys.iter().enumerate() {
+        for b in &keys[i + 1..] {
+            assert_ne!(a.0, b.0);
+            assert_ne!(a.1, b.1);
+        }
+    }
+    assert_eq!(keys[0], call("k", Ascending, NullsFirst));
+}
+
 /// A lambda and its variables enter the key: parameter names, the
 /// variable's name and identity, and the lambda/variable tags all count.
 #[test]

@@ -2068,7 +2068,7 @@ impl Accumulator {
                         m.fold(&[g], &col, &|_| valid(i))?;
                         let to = r.snapshots[i];
                         if to != Running::NONE {
-                            m.snapshot(g as usize, to as usize);
+                            m.snapshot(r.parts[i] as usize, to as usize);
                         }
                     }
                 } else {
@@ -2093,7 +2093,7 @@ impl Accumulator {
                         l.fold(&[g], &refs, &|_| valid(i))?;
                         let to = r.snapshots[i];
                         if to != Running::NONE {
-                            l.snapshot(g as usize, to as usize);
+                            l.snapshot(r.parts[i] as usize, to as usize);
                         }
                     }
                 } else {
@@ -3285,6 +3285,9 @@ mod tests {
                     ignore_nulls: false,
                 },
                 &F::Last { ignore_nulls: true },
+                &F::Mode,
+                &F::ModeMin,
+                &F::ModeMax,
             ] {
                 let expr = AggregateExpr::new(f.clone(), 0, t.clone(), "x");
                 let mut fast = Accumulator::new(&expr, true).unwrap();

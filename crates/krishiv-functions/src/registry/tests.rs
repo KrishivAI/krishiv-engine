@@ -1340,8 +1340,13 @@ fn simple_aggregates() {
     // one argument of any type; the result is an array of the argument's
     // type, never NULL. `vector_sum`/`vector_avg` take `ARRAY<FLOAT>` and
     // give an array of `float`, NULL when no non-NULL vector was seen.
-    for name in ["collect_list", "collect_set", "array_agg"] {
+    for (name, agg) in [
+        ("collect_list", Aggregate::CollectList),
+        ("collect_set", Aggregate::CollectSet),
+        ("array_agg", Aggregate::CollectList),
+    ] {
         let d = def(name);
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
         assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
         assert!(d.deterministic, "{name}");
         assert!(d.arity.accepts(1) && !d.arity.accepts(2), "{name}");
@@ -1352,8 +1357,29 @@ fn simple_aggregates() {
             "{name}"
         );
     }
-    for name in ["vector_sum", "vector_avg"] {
+    // Spark refuses a map anywhere inside the input of `collect_set` only.
+    let map = DataType::Map(
+        krishiv_types::MapType::new(DataType::Integer, DataType::Integer, true).into(),
+    );
+    for nested in [
+        map.clone(),
+        DataType::Array(ArrayType::new(map.clone(), true).into()),
+    ] {
+        let err = result("collect_set", &[ty(nested.clone())], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnsupportedInputType,
+            "{nested:?}"
+        );
+        assert!(result("collect_list", &[ty(nested.clone())], &[]).is_ok());
+        assert!(result("array_agg", &[ty(nested)], &[]).is_ok());
+    }
+    for (name, agg) in [
+        ("vector_sum", Aggregate::VectorSum),
+        ("vector_avg", Aggregate::VectorAvg),
+    ] {
         let d = def(name);
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
         assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
         assert!(d.arity.accepts(1) && !d.arity.accepts(2), "{name}");
         let floats = || DataType::Array(ArrayType::new(DataType::Float, false).into());

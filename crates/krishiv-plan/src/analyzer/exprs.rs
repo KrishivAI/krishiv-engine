@@ -2292,8 +2292,12 @@ impl Resolver<'_> {
         }
         // The shown ordering: Spark's swapped direction (ascending shows
         // as descending, descending shows bare).
-        let shown_order = |o: &Bound, descending: bool| SortOrder {
-            expr: o.shown(),
+        let shown_order = |o: &Bound, descending: bool, shown: bool| SortOrder {
+            expr: if shown {
+                o.shown()
+            } else {
+                Arc::clone(&o.expr)
+            },
             direction: if descending {
                 SortDirection::Ascending
             } else {
@@ -2303,8 +2307,8 @@ impl Resolver<'_> {
         };
         let within_group = match form {
             Form::Plain => Vec::new(),
-            Form::Smallest => vec![shown_order(value, false)],
-            Form::Largest => vec![shown_order(value, true)],
+            Form::Smallest => vec![shown_order(value, false, false)],
+            Form::Largest => vec![shown_order(value, true, false)],
         };
         let call = ResolvedFunction {
             id: entry.id.clone(),
@@ -2333,8 +2337,8 @@ impl Resolver<'_> {
                 filter: at(n_args).filter(|_| f.filter.is_some()).map(Bound::shown),
                 within_group: match form {
                     Form::Plain => Vec::new(),
-                    Form::Smallest => vec![shown_order(value, false)],
-                    Form::Largest => vec![shown_order(value, true)],
+                    Form::Smallest => vec![shown_order(value, false, true)],
+                    Form::Largest => vec![shown_order(value, true, true)],
                 },
                 data_type,
                 nullable: true,
@@ -2405,7 +2409,18 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        let (mut call_kids, ty) = self.typed_call(entry, e, &kids[..n_args])?;
+        // A call built outside SQL (`call_function("listagg", [x])`) has no
+        // delimiter: it is NULL, as the SQL layer writes it.
+        let mut head: Vec<Bound> = kids[..n_args].to_vec();
+        if n_args == 1 {
+            head.push(default_argument(
+                Literal::Null(None),
+                DataType::Null,
+                true,
+                e.origin,
+            ));
+        }
+        let (mut call_kids, ty) = self.typed_call(entry, e, &head)?;
         // `DISTINCT` with an ordering: the ordering must be the value
         // itself. When the value is a cast of the ordering key, the cast
         // must preserve equality (Spark's `hasDistinctOrderAmbiguity`,
@@ -2476,9 +2491,9 @@ impl Resolver<'_> {
         // A NULL delimiter stays NULL (it reads as empty): the implicit
         // cast must not give it a type, or the same-type check below
         // would compare the value against the cast.
-        if n_args > 1
+        if head.len() > 1
             && matches!(
-                kids.get(1).map(|k| &k.expr.node),
+                head.get(1).map(|k| &k.expr.node),
                 Some(ExprNode::Literal(Literal::Null(_)))
             )
         {
@@ -5729,7 +5744,13 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
                     _ => f.id.name(),
                 };
                 name = Some(f);
-                format!("f{id}:{:?}:{}", f.kind, f.distinct)
+                // The ordering keys are children; their directions are not.
+                let directions: Vec<_> = f
+                    .within_group
+                    .iter()
+                    .map(|o| (o.direction, o.nulls))
+                    .collect();
+                format!("f{id}:{:?}:{}:{directions:?}", f.kind, f.distinct)
             }
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => format!("a{}", output.id.0),
             ExprNode::Literal(v) => format!("l{v:?}"),

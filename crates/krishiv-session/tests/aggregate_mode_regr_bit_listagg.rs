@@ -598,6 +598,79 @@ fn filter_restricts_the_new_aggregates() -> R {
     Ok(())
 }
 
+/// A table of four rows for the ordered-set rewrites below.
+fn ordered_t(s: &Session) -> R {
+    let strs = |v: Vec<&str>| Arc::new(StringArray::from(v)) as ArrayRef;
+    let ints = |v: Vec<i32>| Arc::new(Int32Array::from(v)) as ArrayRef;
+    register(
+        s,
+        "t",
+        vec![
+            Field::new("v", DataType::Utf8, true),
+            Field::new("o", DataType::Int32, true),
+            Field::new("y", DataType::Int32, true),
+            Field::new("z", DataType::Int32, true),
+            Field::new("p", DataType::Utf8, true),
+        ],
+        vec![
+            strs(vec!["a", "b", "c", "d"]),
+            ints(vec![3, 1, 2, 4]),
+            ints(vec![1, 1, 2, 2]),
+            ints(vec![1, 2, 2, 1]),
+            strs(vec!["x", "x", "y", "y"]),
+        ],
+    )
+}
+
+/// A `WITHIN GROUP` ordering survives the rewrites that rebuild a call: the
+/// distinct-aggregate expansion, `PIVOT` and the `ROLLUP` re-typing. The
+/// expected values follow from the ordering (not a Spark run).
+#[test]
+fn within_group_survives_rewrites() -> R {
+    let s = Session::builder().build()?;
+    ordered_t(&s)?;
+    // Mixed with several distinct sets: `v` ordered by `o` is b, c, a, d.
+    let (_, rows) = run(
+        &s,
+        "SELECT listagg(v, ',') WITHIN GROUP (ORDER BY o), count(DISTINCT y), \
+         count(DISTINCT z) FROM t",
+    )?;
+    assert_eq!(rows, ["b,c,a,d\t2\t2"]);
+    let (_, rows) = run(
+        &s,
+        "SELECT mode() WITHIN GROUP (ORDER BY y), count(DISTINCT y), count(DISTINCT z) FROM t",
+    )?;
+    assert_eq!(rows, ["1\t2\t2"]);
+    // `PIVOT`: each pivot value orders its own rows, descending by `o`.
+    let (_, rows) = run(
+        &s,
+        "SELECT * FROM (SELECT v, o, p FROM t) \
+         PIVOT (listagg(v, ',') WITHIN GROUP (ORDER BY o DESC) FOR p IN ('x', 'y'))",
+    )?;
+    assert_eq!(rows, ["a,b\td,c"]);
+    // A grouping call inside the ordering, over `ROLLUP`.
+    let (_, rows) = run(
+        &s,
+        "SELECT p, mode() WITHIN GROUP (ORDER BY grouping(p)) FROM t \
+         GROUP BY ROLLUP(p) ORDER BY p NULLS FIRST",
+    )?;
+    assert_eq!(rows, ["NULL\t1", "x\t0", "y\t0"]);
+    Ok(())
+}
+
+/// `listagg(x)` built outside SQL has no delimiter: it is NULL, as the SQL
+/// layer writes it (the values join with nothing between them).
+#[test]
+fn listagg_without_a_delimiter_from_the_column_api() -> R {
+    use krishiv_session::functions::{call_function, col};
+    let s = Session::builder().build()?;
+    ordered_t(&s)?;
+    let df = s.table("t").select([call_function("listagg", [col("v")])]);
+    let batches = block_on(df.collect())?;
+    assert_eq!(cell(batches[0].column(0).as_ref(), 0), "abcd");
+    Ok(())
+}
+
 /// `mode.sql`: the `VALUES`-based statements (no view needed), except
 /// the `map` inputs (the `map` constructor is unsupported).
 #[test]

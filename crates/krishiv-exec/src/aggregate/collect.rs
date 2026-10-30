@@ -89,7 +89,10 @@ pub(crate) fn kept_bytes(a: &ArrayRef) -> usize {
             | T::Decimal64(..) => mul(n, 8),
             T::Decimal128(..) | T::Interval(_) | T::Decimal32(..) | T::Decimal256(..) => mul(n, 16),
             T::Utf8 | T::Binary => {
-                let o = a.as_string::<i32>().value_offsets();
+                let o = match a.data_type() {
+                    T::Utf8 => a.as_string::<i32>().value_offsets(),
+                    _ => a.as_binary::<i32>().value_offsets(),
+                };
                 span32(o) + data_span(a, 0)
             }
             T::LargeUtf8 | T::LargeBinary => {
@@ -714,9 +717,9 @@ impl VectorAcc {
                 }
             }
             Some(n) => {
-                for (k, s) in s.iter_mut().enumerate() {
+                for (k, (s, &v)) in s.iter_mut().zip(&values[start..end]).enumerate() {
                     if n.is_valid(start + k) {
-                        *s += f64::from(values[start + k]);
+                        *s += f64::from(v);
                     }
                 }
             }
@@ -881,4 +884,46 @@ fn counts_of(a: &ArrayRef) -> Result<&[i64]> {
     a.as_primitive_opt::<Int64Type>()
         .map(|c| c.values().as_ref())
         .ok_or_else(|| internal(format!("count state of type {}", a.data_type())))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::{BinaryArray, LargeBinaryArray, StringArray};
+    use arrow_buffer::NullBuffer;
+
+    use super::*;
+
+    #[test]
+    fn kept_bytes_counts_every_variable_width_carrier() {
+        let binary: ArrayRef = Arc::new(BinaryArray::from_iter_values([b"ab".as_ref(), b"c"]));
+        let large: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values([b"ab".as_ref(), b"c"]));
+        let utf8: ArrayRef = Arc::new(StringArray::from(vec!["ab", "c"]));
+        // `Binary` used to panic (read as `Utf8`); each counts the data.
+        for (name, a) in [("binary", &binary), ("large", &large), ("utf8", &utf8)] {
+            assert!(kept_bytes(a) >= 3, "{name}");
+        }
+    }
+
+    /// An empty vector is neutral even when the child array has NULLs: it
+    /// reads none of the next vectors' slots (and none past the array).
+    #[test]
+    fn an_empty_vector_adds_nothing_with_a_null_buffer() {
+        // Child array: [1, NULL, | (empty) | NULL, 5].
+        let values = [1.0_f32, 0.0, 0.0, 5.0];
+        let nulls = NullBuffer::from(vec![true, false, false, true]);
+        let mut v = VectorAcc::new(false);
+        v.resize(1);
+        v.add(0, 0, 2, &values, Some(&nulls)).unwrap();
+        v.add(0, 2, 0, &values, Some(&nulls)).unwrap();
+        v.add(0, 2, 2, &values, Some(&nulls)).unwrap();
+        assert_eq!(v.sums[0], Some(vec![1.0, 5.0]));
+        assert_eq!(v.count[0], 3);
+        // An empty vector at the very end of the child array.
+        let nulls = NullBuffer::from(vec![true, false]);
+        let mut v = VectorAcc::new(false);
+        v.resize(1);
+        v.add(0, 0, 2, &values[..2], Some(&nulls)).unwrap();
+        v.add(0, 2, 0, &values[..2], Some(&nulls)).unwrap();
+        assert_eq!(v.sums[0], Some(vec![1.0, 0.0]));
+    }
 }

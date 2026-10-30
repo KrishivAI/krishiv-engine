@@ -6,9 +6,9 @@
 use krishiv_common::error::{
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInvalidOrderingType,
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, InvalidExtractField, InvalidParameterValueBoolean,
-    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210, NonFoldableArgument,
-    SecondFunctionArgumentNotInteger,
+    DatatypeMismatchUnsupportedInputType, DatatypeMismatchValueOutOfRange, InvalidExtractField,
+    InvalidParameterValueBoolean, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210,
+    NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{ArrayType, DataType, DecimalType};
@@ -979,7 +979,31 @@ fn collect(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     ))
 }
 
-/// `vector_sum(x)` / `vector_avg(x)`: element-wise aggregates over
+/// Whether `t` is or contains a map at any depth.
+fn has_map(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => true,
+        DataType::Array(a) => has_map(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| has_map(f.data_type())),
+        _ => false,
+    }
+}
+
+/// `collect_set(x)`: as [`collect`], but Spark refuses an input that
+/// contains a map at any depth (`DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE`),
+/// as a map has no equality to deduplicate by.
+fn collect_set(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if let Some(t) = c.data_type(0).filter(|t| has_map(t)) {
+        return Err(DatatypeMismatchUnsupportedInputType {
+            sql_expr: format!("\"collect_set({})\"", c.sql(0).unwrap_or_default()),
+            function_name: "`collect_set`".to_owned(),
+            data_type: format!("\"{}\"", t.sql()),
+        }
+        .into());
+    }
+    collect(c)
+}
+
 /// `vector_sum(x)` / `vector_avg(x)`: element-wise aggregates over
 /// `ARRAY<FLOAT>` only. Any other type is Spark's
 /// `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (no implicit cast is
@@ -1211,7 +1235,12 @@ fn aggregates() -> Vec<Spec> {
         // no implicit casts (the vector ones check the type themselves);
         // `array_agg` is `collect_list` under Spark's display name.
         aggregate("collect_list", Inputs::Any, collect, Aggregate::CollectList),
-        aggregate("collect_set", Inputs::Any, collect, Aggregate::CollectSet),
+        aggregate(
+            "collect_set",
+            Inputs::Any,
+            collect_set,
+            Aggregate::CollectSet,
+        ),
         aggregate("array_agg", Inputs::Any, collect, Aggregate::CollectList),
         aggregate("vector_sum", Inputs::Any, vector_sum, Aggregate::VectorSum),
         aggregate("vector_avg", Inputs::Any, vector_avg, Aggregate::VectorAvg),

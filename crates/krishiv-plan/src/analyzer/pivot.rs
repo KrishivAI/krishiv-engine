@@ -36,7 +36,7 @@ use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, Constant};
 use crate::{
     AttrId, Builtin, CastMode, Expr, ExprNode, FunctionCall, FunctionKind, Literal, LogicalPlan,
-    Origin, PivotValue, ResolvedExpr,
+    Origin, PivotValue, ResolvedExpr, SortOrder,
 };
 
 impl Resolver<'_> {
@@ -317,10 +317,23 @@ impl Resolver<'_> {
                     };
                     (args, arg_names)
                 } else {
+                    // A `listagg` delimiter and a `mode` flag are foldable
+                    // literals, which a condition would make a column.
+                    let literal_from = match f.name.to_ascii_lowercase().as_str() {
+                        "listagg" | "string_agg" | "mode" => 1,
+                        _ => usize::MAX,
+                    };
                     let args: Vec<Arc<Expr>> = f
                         .args
                         .iter()
-                        .map(|a| if_expr(cond, Arc::clone(a), x.origin))
+                        .enumerate()
+                        .map(|(n, a)| {
+                            if n >= literal_from {
+                                Arc::clone(a)
+                            } else {
+                                if_expr(cond, Arc::clone(a), x.origin)
+                            }
+                        })
                         .collect();
                     let arg_names = if f.arg_names.is_empty() {
                         Vec::new()
@@ -337,7 +350,17 @@ impl Resolver<'_> {
                         arg_names,
                         distinct: f.distinct,
                         filter: f.filter.clone(),
-                        within_group: Vec::new(),
+                        // The ordering keys are children of the call, so
+                        // they take the same condition as its arguments.
+                        within_group: f
+                            .within_group
+                            .iter()
+                            .map(|o| SortOrder {
+                                expr: if_expr(cond, Arc::clone(&o.expr), x.origin),
+                                direction: o.direction,
+                                nulls: o.nulls,
+                            })
+                            .collect(),
                     }))
                     .with_origin(x.origin),
                 ))
