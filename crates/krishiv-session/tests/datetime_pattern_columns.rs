@@ -357,3 +357,46 @@ fn the_legacy_time_parser_is_refused() {
         text(&[Some("2024-01-05")])
     );
 }
+
+/// Under a region session zone the UTC fallback is only right while no zone
+/// is parsed or printed: string inputs, zone-bearing and dynamic patterns
+/// are refused, zone-free DATE / zone-less paths still run.
+#[test]
+fn a_region_session_zone_refuses_the_calls_that_would_read_it() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.session.timeZone = America/Los_Angeles")).unwrap();
+    for sql in [
+        "SELECT date_format('2024-01-05 10:00:00+08:00', 'yyyy-MM-dd')",
+        "SELECT date_format(DATE '2024-01-05', 'VV')",
+        "SELECT date_format(TIMESTAMP_NTZ '2024-01-05 10:00:00', 'yyyy-MM-dd XXX')",
+        "SELECT date_format(DATE '2024-01-05', f) FROM VALUES ('yyyy'), ('MM') AS t(f)",
+        "SELECT to_date('2024-01-05 +08:00', 'yyyy-MM-dd XXX')",
+        "SELECT try_to_date('2024-01-05', f) FROM VALUES ('yyyy-MM-dd'), ('dd') AS t(f)",
+    ] {
+        let err = block_on(async { s.sql(sql).await?.collect().await })
+            .err()
+            .unwrap_or_else(|| panic!("{sql} ran"));
+        assert_eq!(
+            err.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+            "{sql}: {err}"
+        );
+    }
+    for (expr, want) in [
+        ("date_format(DATE '2024-01-05', 'yyyy-MM-dd')", "2024-01-05"),
+        (
+            "date_format(TIMESTAMP_NTZ '2024-01-05 10:00:00', 'yyyy-MM-dd HH')",
+            "2024-01-05 10",
+        ),
+        ("to_date('2024-01-05', 'yyyy-MM-dd')", "2024-01-05"),
+        ("to_date('2024-01-05')", "2024-01-05"),
+    ] {
+        assert_eq!(column(&s, expr, ""), text(&[Some(want)]), "{expr}");
+    }
+    // A fixed-offset zone has no such limit.
+    block_on(s.sql("SET spark.sql.session.timeZone = +08:00")).unwrap();
+    assert_eq!(
+        column(&s, "to_date('2024-01-05 +08:00', 'yyyy-MM-dd XXX')", ""),
+        text(&[Some("2024-01-05")])
+    );
+}

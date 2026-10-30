@@ -68,6 +68,61 @@ pub(super) fn compile_udf(
     }))
 }
 
+/// The zone letters of a datetime pattern: region ids (`V`), names (`z`),
+/// offsets (`X`, `x`, `Z`) and localized offsets (`O`).
+const PATTERN_ZONE_LETTERS: &[char] = &['V', 'z', 'Z', 'X', 'x', 'O'];
+
+/// The text of a one-row string literal; `None` for NULL or another type.
+fn literal_text(a: &arrow_array::ArrayRef) -> Option<String> {
+    use arrow_array::cast::AsArray as _;
+    if a.len() != 1 || a.is_null(0) {
+        return None;
+    }
+    match a.data_type() {
+        ArrowType::Utf8 => Some(a.as_string::<i32>().value(0).to_owned()),
+        ArrowType::LargeUtf8 => Some(a.as_string::<i64>().value(0).to_owned()),
+        ArrowType::Utf8View => Some(a.as_string_view().value(0).to_owned()),
+        _ => None,
+    }
+}
+
+fn is_string(t: &ArrowType) -> bool {
+    matches!(
+        t,
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+    )
+}
+
+/// Whether the pattern argument can name a zone: a column or any literal
+/// with a zone letter (a quoted letter is text, but refusing it is safe).
+/// A NULL literal parses nothing.
+fn pattern_may_use_zone(arg: Option<&BindArg>) -> bool {
+    match arg {
+        None => false,
+        Some(BindArg::Literal(a)) => literal_text(a)
+            .is_some_and(|text| text.chars().any(|c| PATTERN_ZONE_LETTERS.contains(&c))),
+        // A column, or any other kind of argument: its zone use is unknown.
+        Some(_) => true,
+    }
+}
+
+/// Calls that still read the region session zone although they are not in
+/// `reads_zone`: they run on the UTC fallback, which is only right while no
+/// zone is parsed or printed. Refused under a region zone: `date_format` of
+/// a string (it may carry an offset) or of a date / zone-less timestamp with
+/// a zone-bearing or dynamic pattern, and `to_date` / `try_to_date` of a
+/// string with such a pattern. Zone-free paths stay allowed.
+fn reads_region_zone(name: &str, args: &[BindArg]) -> bool {
+    let first = args.first().map(BindArg::data_type);
+    match name {
+        "date_format" => first.as_ref().is_some_and(is_string) || pattern_may_use_zone(args.get(1)),
+        "to_date" | "try_to_date" => {
+            first.as_ref().is_some_and(is_string) && pattern_may_use_zone(args.get(1))
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn compile(
     name: &str,
     f: &ResolvedFunction,
@@ -150,6 +205,13 @@ pub(super) fn compile(
             err
         }
     })?;
+    // After the binding, so an invalid pattern still fails as Spark's does
+    // whatever the zone.
+    if input.env.zone.is_none() && reads_region_zone(name, &bind_args) {
+        return Err(unsupported(
+            "functions of timestamps in a session time zone other than a fixed offset",
+        ));
+    }
     // The binding returns plain carriers; Spark's `STRING` is a view here.
     let view = match (function.return_type(), &out) {
         (a, b) if a == b => false,
