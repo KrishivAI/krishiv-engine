@@ -735,7 +735,7 @@ fn merge_sources_are_never_read_unchecked() {
 #[test]
 fn sql_function_bodies_are_read_through_the_policy() {
     let policy = Policy::new(no_reads_of_s);
-    let s = session(policy.clone());
+    let s = session(Arc::<Policy>::clone(&policy));
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
     s.register_batches("s", schema, vec![]).unwrap();
     // Creating a function whose body reads `s` is denied.
