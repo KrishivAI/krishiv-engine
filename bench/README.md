@@ -117,6 +117,40 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Selective scan (`remote-filter`)
+One selective scan over a FineWeb-Edu sample, written back as Parquet.
+```bash
+uv run krishiv-datasets remote-filter --yes                    # ~28 GB mirror -> $KRISHIV_DATA/remote-filter/sample-10BT/fw/
+uv run krishiv-bench remote-filter --engines duckdb,polars     # local mirror (the default input); scopes: uncapped and 4g
+uv run krishiv-bench remote-filter --memory-limit 4g --reps 7  # only a MemoryMax=4g scope, 7 timed repetitions
+uv run krishiv-bench remote-filter --sources '["https://..."]' # remote reads (Krishiv needs the local mirror)
+```
+* **Data**: FineWeb-Edu `sample/10BT` Parquet (Hugging Face dataset `HuggingFaceFW/fineweb-edu`), stored as the
+  `fw` table (`fw.parquet`, or an `fw/` directory of part files). The download is opt-in (`--yes`) with a size
+  warning, resolves the listing to a commit sha so the files are those of one revision, and resumes through a
+  `.part` file. A sha256 manifest covers the mirror files. `expected.json` may hold row and token counts the
+  operator recorded with `write_expected`; nothing writes counts automatically.
+* **Query**: the rows with `int_score >= 4 AND token_count >= 4000 AND language_score >= 0.95`, written back
+  (DuckDB: `COPY ... (FORMAT parquet, COMPRESSION zstd)` to one file; Polars:
+  `sink_parquet(..., compression="zstd")` to one file; Krishiv: the bench runner's native output directory with
+  the runner's default codec, since its DUMP protocol has no per-write codec option). The result JSON records the
+  codec each engine wrote, so write cost is not like for like. All engines run with 8 threads.
+* **Runs**: one fresh process per engine under the bench lock. Each scope (an uncapped one, then each
+  `--memory-limit`; the default is uncapped plus `4g`) runs one validation pass and `--reps` timed repetitions
+  (default 5) with the engine order rotated per repetition. A capped process runs in a
+  `systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0` scope, the way the `memcap` suite gates
+  memory. A run is `finished`, `killed`, `timeout` or `failed`; a kill is a recorded result, and an uncapped
+  timeout kills the whole process group.
+* **Correctness**: the row count, the exact sum of `token_count` and a digest of the sorted `id` values. The
+  reference is DuckDB's validation result (or the counts in `expected.json`); a run that differs is recorded as
+  `fail` and never timed. With neither a DuckDB run nor counts the verdict is `unverified`.
+* **Output**: `$KRISHIV_DATA/results/<ts>_remote-filter.json`, written even when a run raises, with per scope and
+  engine: the runs, the median wall time and peak RSS (the cgroup figure when capped, else the process's own
+  peak), a 95% bootstrap CI of the wall-time ratio to DuckDB, the verdict and timing buckets (`scan_s`/`filter_s`/
+  `write_s`, empty unless a per-operator profile is supplied, plus the `total_s` span).
+* **Not covered yet**: reads from a local S3-compatible server in a throw-away container (the spec's remote
+  input); runs read the local mirror or the Hugging Face URLs directly.
+
 ## Spill coverage of the memory gate (TPC-H SF10)
 The gate's 2 GiB run (each query in its own `MemoryMax=2816M`, `MemorySwapMax=0` scope, a fresh runner per query)
 spills only in hash joins (q04, q21). Hash aggregate and sort spill at 1 GiB on the same data: TPC-H `q18`
