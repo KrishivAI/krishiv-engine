@@ -734,11 +734,13 @@ fn row_level_changes_are_unsupported_on_file_tables() {
             "UNSUPPORTED_FEATURE.TABLE_OPERATION",
             "{sql}"
         );
-        let message = e.to_string();
-        assert!(message.contains(operation), "{message}");
-        assert!(
-            message.contains("`spark_catalog`.`default`.`t`"),
-            "{message}"
+        assert_eq!(
+            e.message_parameters(),
+            [
+                ("tableName", "`spark_catalog`.`default`.`t`".to_owned()),
+                ("operation", operation.to_owned()),
+            ],
+            "{sql}"
         );
     }
     assert_eq!(
@@ -758,13 +760,49 @@ fn analyze_validates_and_resource_commands_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE TABLE t (a INT, b INT) USING parquet");
-    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS");
-    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS NOSCAN");
-    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS FOR ALL COLUMNS");
+    // A successful ANALYZE returns no rows.
+    for sql in [
+        "ANALYZE TABLE t COMPUTE STATISTICS",
+        "ANALYZE TABLE t COMPUTE STATISTICS NOSCAN",
+        "ANALYZE TABLE t COMPUTE STATISTICS FOR ALL COLUMNS",
+        "ANALYZE TABLE default.t COMPUTE STATISTICS FOR COLUMNS A, b",
+    ] {
+        let batches = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        assert_eq!(
+            batches
+                .iter()
+                .map(arrow_array::RecordBatch::num_rows)
+                .sum::<usize>(),
+            0,
+            "{sql}"
+        );
+    }
+    // Spark gathers statistics for scalar types only, for FOR COLUMNS and FOR ALL COLUMNS alike.
     run(
         &s,
-        "ANALYZE TABLE default.t COMPUTE STATISTICS FOR COLUMNS A, b",
+        "CREATE TABLE nested (n INT, arr ARRAY<INT>) USING parquet",
     );
+    for sql in [
+        "ANALYZE TABLE nested COMPUTE STATISTICS FOR COLUMNS arr",
+        "ANALYZE TABLE nested COMPUTE STATISTICS FOR ALL COLUMNS",
+    ] {
+        let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "UNSUPPORTED_FEATURE.ANALYZE_UNSUPPORTED_COLUMN_TYPE",
+            "{sql}"
+        );
+        assert_eq!(
+            e.message_parameters(),
+            [
+                ("columnType", "\"ARRAY<INT>\"".to_owned()),
+                ("columnName", "`arr`".to_owned()),
+                ("tableName", "`default`.`nested`".to_owned()),
+            ],
+            "{sql}"
+        );
+    }
+    run(&s, "ANALYZE TABLE nested COMPUTE STATISTICS FOR COLUMNS n");
     assert_eq!(
         class(&s, "ANALYZE TABLE missing COMPUTE STATISTICS"),
         "TABLE_OR_VIEW_NOT_FOUND"

@@ -113,16 +113,19 @@ impl Session {
         let statement = krishiv_sql::parse_statement(&bound, &env.parser)
             .map_err(|err| sql_context(err.error, &inner_text, err.span.start, err.span.end))?;
         if !e.into.is_empty() && !matches!(statement, Statement::Query(_)) {
+            // Spark shows the statement as the user wrote it; text reaches errors redacted.
+            let shown = krishiv_sql::redact_sql(&statement_text);
             return Err(InvalidStatementForExecuteInto {
-                sql_string: statement_text.clone(),
+                sql_string: shown.fragment(0..statement_text.len()).to_owned(),
             }
             .into());
         }
         let frame = match statement {
             Statement::ExecuteImmediate(inner) => {
                 if depth >= MAX_NESTING {
+                    let shown = krishiv_sql::redact_sql(&statement_text);
                     return Err(NestedExecuteImmediate {
-                        sql_string: inner_text.fragment(0..bound.len()).to_owned(),
+                        sql_string: shown.fragment(0..statement_text.len()).to_owned(),
                     }
                     .into());
                 }
@@ -185,7 +188,8 @@ impl Session {
             }
             .into());
         }
-        let batches = frame.collect().await?;
+        // Two rows decide the outcome: never buffer more.
+        let batches = frame.limit(2).collect().await?;
         let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
         if rows > 1 {
             return Err(RowSubqueryTooManyRows {}.into());
