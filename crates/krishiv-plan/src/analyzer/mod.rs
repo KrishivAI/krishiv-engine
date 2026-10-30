@@ -42,6 +42,12 @@
 //! `+` / `-` on dates and timestamps, and operators' string coercions with
 //! ANSI off, fail with `KRISHIV_UNSUPPORTED_FEATURE`.
 //!
+//! A call of a SQL-bodied function (`FunctionLookup::Sql`, the session's
+//! `CREATE TEMPORARY FUNCTION`) is replaced while expressions are bound by
+//! the function's body, resolved in its own scope with the arguments
+//! standing for its parameters (`sqlfn`); Bind also binds what the bodies
+//! read. The resolved plan holds no call of such a function.
+//!
 //! Resolution reads only the [`AnalysisContext`], whose configuration is a
 //! [`ResolutionConf`]: an input it does not hold cannot change the result,
 //! so `(input key, context fingerprint, pins)` is a sound cache key.
@@ -78,6 +84,7 @@ mod ops;
 mod pivot;
 mod resolve;
 mod setops;
+mod sqlfn;
 mod subquery;
 mod suggest;
 pub mod table_functions;
@@ -107,6 +114,7 @@ pub use catalog::{
     Securable, SourceKind, SqlFrontend, TableColumn, TableFunctionKind, TableFunctionLookup,
     TableFunctionRegistry, TableIdent, TableKind, TableMeta,
 };
+pub use sqlfn::{SqlFunction, SqlParam};
 pub use variables::{SessionVariable, VariableSnapshot, variable_name};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
@@ -198,6 +206,10 @@ pub struct ResolutionConf {
     /// `count(tbl.*)` expands to the table's columns instead of failing
     /// with `INVALID_USAGE_OF_STAR_WITH_TABLE_IDENTIFIER_IN_COUNT`.
     pub allow_star_with_single_table_identifier_in_count: bool,
+    /// `spark.sql.legacy.allowUdfParameterToShadowParameterlessFunction`:
+    /// a SQL function's parameter named like a parameterless function
+    /// (`current_user`) is the parameter, not the function.
+    pub udf_parameter_shadows_function: bool,
     /// `spark.sql.legacy.timeParserPolicy = LEGACY`: Spark's
     /// `SimpleDateFormat` parser, which Krishiv does not implement (the
     /// datetime functions with a pattern are refused).
@@ -222,6 +234,7 @@ impl Default for ResolutionConf {
             cte_precedence: CtePrecedencePolicy::default(),
             allow_parameterless_count: false,
             allow_star_with_single_table_identifier_in_count: false,
+            udf_parameter_shadows_function: false,
             legacy_time_parser: false,
         }
     }
@@ -229,7 +242,7 @@ impl Default for ResolutionConf {
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 15] = [
+    pub const KEYS: [&'static str; 16] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -244,6 +257,7 @@ impl ResolutionConf {
         "spark.sql.legacy.ctePrecedencePolicy",
         "spark.sql.legacy.allowParameterlessCount",
         "spark.sql.legacy.allowStarWithSingleTableIdentifierInCount",
+        "spark.sql.legacy.allowUdfParameterToShadowParameterlessFunction",
         "spark.sql.legacy.timeParserPolicy",
     ];
 
@@ -288,7 +302,11 @@ impl ResolutionConf {
                 .unwrap_or_default(),
             allow_parameterless_count: on(Self::KEYS[12]),
             allow_star_with_single_table_identifier_in_count: on(Self::KEYS[13]),
-            legacy_time_parser: conf(Self::KEYS[14])
+            udf_parameter_shadows_function: conf(Self::KEYS[14])
+                .map_or(d.udf_parameter_shadows_function, |s| {
+                    s.trim().eq_ignore_ascii_case("true")
+                }),
+            legacy_time_parser: conf(Self::KEYS[15])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
         }
     }
@@ -382,6 +400,7 @@ impl ContextFingerprint {
             self.files,
             c.allow_parameterless_count,
             c.allow_star_with_single_table_identifier_in_count,
+            c.udf_parameter_shadows_function,
         ];
         num(
             &mut b,

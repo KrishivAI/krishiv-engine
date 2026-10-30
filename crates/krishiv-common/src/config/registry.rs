@@ -69,6 +69,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &METRICS_ENABLED,
     &AVRO_COMPRESSION_CODEC,
     &AVRO_DATETIME_REBASE_MODE_IN_READ,
 ];
@@ -87,6 +88,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.batchSize", &EXEC_BATCH_SIZE),
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
+    ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),
@@ -1021,6 +1023,20 @@ pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
+};
+
+/// `krishiv.metrics.enabled`.
+pub static METRICS_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.metrics.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, every query that reaches execution folds its metrics into the engine's \
+          metrics registry once, at query end (`Session::metrics`, `krishiv.metrics()`); \
+          when false the fold is skipped entirely. Engine gauges (memory, spill disk, \
+          metadata cache size, build info) are evaluated when the snapshot is read either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
 };
 
 /// `spark.sql.avro.compression.codec`.

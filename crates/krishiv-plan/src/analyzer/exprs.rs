@@ -374,6 +374,22 @@ fn bad_cast(
     AnalysisError::new(error, origin)
 }
 
+/// The error for a cast of `arg` to `to` that `bad` says is refused;
+/// `sql_expr` is the quoted expression Spark shows in it.
+pub(super) fn cast_error(
+    bad: BadCast,
+    sql_expr: String,
+    arg: &Bound,
+    to: &DataType,
+) -> KrishivError {
+    cast_mismatch(
+        bad,
+        sql_expr,
+        quoted_type(arg.ty.data_type.as_ref()),
+        quoted_type(Some(to)),
+    )
+}
+
 /// Why a cast fails: the error of [`BadCast`], quoting `sql_expr` (the
 /// expression Spark's message names) with the source and target types.
 /// A `CAST` quotes the cast; a cast-named function (`float(x)`, ...)
@@ -1485,6 +1501,28 @@ impl Resolver<'_> {
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
                 let session_qualified = super::bind::is_session_qualifier(&f.qualifier);
                 let lookup_name = builtin.as_deref().unwrap_or(&f.name);
+                // A SQL-bodied function of the session: the call is replaced by
+                // its body. Built-ins and the operators rank first.
+                if !session_qualified
+                    && builtin.is_none()
+                    && f.qualifier.is_empty()
+                    && GroupingFn::from_name(lookup_name).is_none()
+                    && builtin_op(lookup_name, n).is_none()
+                    && let FunctionLookup::Sql(def) = self
+                        .ctx
+                        .functions
+                        .lookup(std::slice::from_ref(&f.name), self.ctx.profile)
+                {
+                    return self.sql_call(&def, e, f, kids);
+                }
+                // `session.f` / `system.session.f` reach a temporary SQL
+                // function as well as a session UDF.
+                if session_qualified
+                    && let FunctionLookup::Sql(def) =
+                        self.ctx.functions.lookup(&parts, self.ctx.profile)
+                {
+                    return self.sql_call(&def, e, f, kids);
+                }
                 // A call of a function with a named-parameter signature is
                 // rearranged into positional order (Spark's
                 // `FunctionBuilderBase` rearrangement), filling defaults; any
@@ -1549,7 +1587,7 @@ impl Resolver<'_> {
                                 e.origin,
                             ));
                         }
-                        FunctionLookup::NotFound => {
+                        FunctionLookup::NotFound | FunctionLookup::Sql(_) => {
                             return Err(AnalysisError::new(
                                 UnresolvedRoutine {
                                     routine_name: quoted(&parts),
@@ -1585,7 +1623,7 @@ impl Resolver<'_> {
                                 e.origin,
                             ));
                         }
-                        FunctionLookup::NotFound => {
+                        FunctionLookup::NotFound | FunctionLookup::Sql(_) => {
                             return Err(AnalysisError::new(
                                 UnresolvedRoutine {
                                     routine_name: quoted(&parts),
@@ -2257,7 +2295,12 @@ impl Resolver<'_> {
     }
 
     /// [`Self::implicit_cast`], as a `TRY_CAST` when `try_cast`.
-    fn implicit_cast_as(&self, b: &Bound, to: Option<DataType>, try_cast: bool) -> Bound {
+    pub(super) fn implicit_cast_as(
+        &self,
+        b: &Bound,
+        to: Option<DataType>,
+        try_cast: bool,
+    ) -> Bound {
         let Some(to) = to else {
             return b.clone();
         };
@@ -3515,6 +3558,7 @@ impl Resolver<'_> {
         // keywords are on). Spark 4.2 tries it before lateral aliases,
         // GROUP BY aliases and outer references.
         if let [name] = &c.name[..]
+            && !(self.ctx.conf.udf_parameter_shadows_function && self.has_parameter(name))
             && let Some(function) = LITERAL_FUNCTIONS
                 .iter()
                 .find(|(n, _)| n.eq_ignore_ascii_case(name))
@@ -3588,6 +3632,11 @@ impl Resolver<'_> {
                 return self.resolve_attr(&a, used, &c.name, origin, Some(level));
             }
         }
+        // The parameters of the SQL function being resolved rank after
+        // everything else, but before a session variable.
+        if let Some(b) = self.parameter(&c.name, origin, cx.env.outer.len())? {
+            return Ok(b);
+        }
         // A name no column or outer reference has may be a session
         // variable (`v`, `session.v` or `system.session.v`): Spark
         // resolves columns and outer references first, then variables. A
@@ -3619,7 +3668,16 @@ impl Resolver<'_> {
                 )),
             });
         }
-        Err(unresolved(&c.name, cx.scope, origin))
+        if self.parameter_attrs().is_empty() {
+            return Err(unresolved(&c.name, cx.scope, origin));
+        }
+        let candidates: Vec<Attr> = cx
+            .scope
+            .iter()
+            .chain(self.parameter_attrs())
+            .cloned()
+            .collect();
+        Err(unresolved(&c.name, &candidates, origin))
     }
 
     /// `df["a"]`: the column `name` of the relations carrying `id` in the

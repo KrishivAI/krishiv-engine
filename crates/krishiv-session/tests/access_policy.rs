@@ -729,3 +729,48 @@ fn merge_sources_are_never_read_unchecked() {
     .unwrap_err();
     assert_eq!(e.error_class().name(), DENIED);
 }
+
+/// A SQL function's body reads `s`: creating the function probes the body,
+/// and calling it analyzes the body, both through the policy.
+#[test]
+fn sql_function_bodies_are_read_through_the_policy() {
+    let policy = Policy::new(no_reads_of_s);
+    let s = session(Arc::<Policy>::clone(&policy));
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    s.register_batches("s", schema, vec![]).unwrap();
+    // Creating a function whose body reads `s` is denied.
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE TEMPORARY FUNCTION leak() RETURNS INT RETURN (SELECT max(a) FROM s)"
+        ))),
+        DENIED
+    );
+    // A function over a table the principal may read works ...
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE TEMPORARY FUNCTION ok_fn() RETURNS INT RETURN (SELECT max(a) FROM t)"
+        ))),
+        "OK"
+    );
+    assert_eq!(class(rows(&s, "SELECT ok_fn()")), "OK");
+    // ... until the policy denies the reads: the call analyzes the body.
+    policy.deny_everything();
+    assert_eq!(class(rows(&s, "SELECT ok_fn()")), DENIED);
+}
+
+/// Persisted functions are unsupported: the statements fail without
+/// changing the session.
+#[test]
+fn persisted_function_statements_change_nothing() {
+    let s = session(Policy::new(allow));
+    for sql in [
+        "CREATE FUNCTION f() RETURNS INT RETURN 1",
+        "DROP FUNCTION f",
+    ] {
+        assert_eq!(
+            class(block_on(s.sql(sql))),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{sql}"
+        );
+    }
+}

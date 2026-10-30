@@ -35,6 +35,19 @@ pub enum WorkloadClass {
     Agent,
 }
 
+impl WorkloadClass {
+    /// `interactive`, `batch`, `background` or `agent` (the `class` label).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::Batch => "batch",
+            Self::Background => "background",
+            Self::Agent => "agent",
+        }
+    }
+}
+
 /// Where tasks run. Keeps a dedicated CPU pool possible later without
 /// changing operators or the driver.
 pub trait Executor: Send + Sync + fmt::Debug {

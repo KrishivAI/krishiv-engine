@@ -14,7 +14,7 @@ use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_types::DataType;
 
-use super::{AnalysisError, SparkProfile};
+use super::{AnalysisError, SparkProfile, SqlFunction};
 use crate::{Expr, FunctionId, FunctionKind, Plan, SourceId, TableVersion};
 
 /// How a relation name was written, for the catalog that loads it.
@@ -182,6 +182,9 @@ impl fmt::Debug for FunctionEntry {
 pub enum FunctionLookup {
     /// Found.
     Found(FunctionEntry),
+    /// A SQL-bodied function of the session: calls are replaced by its
+    /// body (see [`SqlFunction`]).
+    Sql(Arc<SqlFunction>),
     /// Spark has it in this profile but Krishiv does not implement it.
     KnownUnsupported,
     /// Spark does not have it in this profile.

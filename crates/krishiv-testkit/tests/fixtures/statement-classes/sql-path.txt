@@ -34,16 +34,16 @@ SESSION	SET PATH = SYSTEM_PATH, SYSTEM_PATH
 SESSION	SET PATH = current_database, current_schema
 SESSION	SET PATH = my_schema_no_catalog
 DDL	CREATE SCHEMA sql_path_routines
-PARSE_ERROR	CREATE FUNCTION sql_path_routines.pick() RETURNS INT RETURN 7
+DDL	CREATE FUNCTION sql_path_routines.pick() RETURNS INT RETURN 7
 SESSION	SET PATH = spark_catalog.sql_path_routines, spark_catalog.default, system.builtin
 READ	SELECT pick()
 SESSION	SET PATH = DEFAULT_PATH
-PARSE_ERROR	CREATE FUNCTION sql_path_routines.pick_tvf()
+DDL	CREATE FUNCTION sql_path_routines.pick_tvf()
 SESSION	SET PATH = spark_catalog.sql_path_routines, spark_catalog.default, system.builtin
 READ	SELECT * FROM pick_tvf()
 SESSION	SET PATH = DEFAULT_PATH
 DDL	CREATE SCHEMA sql_path_routines_b
-PARSE_ERROR	CREATE FUNCTION sql_path_routines_b.pick() RETURNS INT RETURN 11
+DDL	CREATE FUNCTION sql_path_routines_b.pick() RETURNS INT RETURN 11
 SESSION	SET PATH = spark_catalog.sql_path_routines, spark_catalog.sql_path_routines_b, system.builtin
 READ	SELECT pick() AS from_first_schema
 SESSION	SET PATH = spark_catalog.sql_path_routines_b, spark_catalog.sql_path_routines, system.builtin
@@ -52,9 +52,9 @@ SESSION	SET PATH = DEFAULT_PATH
 SESSION	SET PATH = spark_catalog.default, system.builtin
 READ	SELECT pick()
 SESSION	SET PATH = DEFAULT_PATH
-PARSE_ERROR	DROP FUNCTION sql_path_routines.pick
-PARSE_ERROR	DROP FUNCTION sql_path_routines.pick_tvf
-PARSE_ERROR	DROP FUNCTION sql_path_routines_b.pick
+DDL	DROP FUNCTION sql_path_routines.pick
+DDL	DROP FUNCTION sql_path_routines.pick_tvf
+DDL	DROP FUNCTION sql_path_routines_b.pick
 DDL	DROP SCHEMA sql_path_routines
 DDL	DROP SCHEMA sql_path_routines_b
 DDL	CREATE SCHEMA sql_path_relations_a
@@ -99,24 +99,24 @@ DDL	CREATE SCHEMA sql_path_fn_b
 DDL	CREATE TABLE sql_path_fn_a.frozen_t USING parquet AS SELECT 10 AS id
 DDL	CREATE TABLE sql_path_fn_b.frozen_t USING parquet AS SELECT 20 AS id
 SESSION	SET PATH = spark_catalog.sql_path_fn_a, system.builtin
-PARSE_ERROR	CREATE FUNCTION default.frozen_fn()
+DDL	CREATE FUNCTION default.frozen_fn()
 SESSION	SET PATH = spark_catalog.sql_path_fn_b, system.builtin
 READ	SELECT MAX(id) FROM frozen_t AS bare_lookup_uses_live_path
 READ	SELECT default.frozen_fn() AS scalar_body_uses_frozen_path
 SESSION	SET PATH = spark_catalog.sql_path_fn_a, system.builtin
-PARSE_ERROR	CREATE FUNCTION default.frozen_tvf()
+DDL	CREATE FUNCTION default.frozen_tvf()
 SESSION	SET PATH = spark_catalog.sql_path_fn_b, system.builtin
 READ	SELECT * FROM default.frozen_tvf() AS table_body_uses_frozen_path
 SESSION	USE spark_catalog.sql_path_fn_a
-PARSE_ERROR	CREATE FUNCTION sql_path_fn_a.f_ctx()
+DDL	CREATE FUNCTION sql_path_fn_a.f_ctx()
 SESSION	USE spark_catalog.sql_path_fn_b
 SESSION	SET PATH = DEFAULT_PATH
 READ	SELECT sql_path_fn_a.f_ctx() AS invoker_context
 SESSION	USE spark_catalog.default
 SESSION	SET PATH = DEFAULT_PATH
-PARSE_ERROR	DROP FUNCTION default.frozen_fn
-PARSE_ERROR	DROP FUNCTION default.frozen_tvf
-PARSE_ERROR	DROP FUNCTION sql_path_fn_a.f_ctx
+DDL	DROP FUNCTION default.frozen_fn
+DDL	DROP FUNCTION default.frozen_tvf
+DDL	DROP FUNCTION sql_path_fn_a.f_ctx
 DDL	DROP TABLE sql_path_fn_a.frozen_t
 DDL	DROP TABLE sql_path_fn_b.frozen_t
 DDL	DROP SCHEMA sql_path_fn_a
