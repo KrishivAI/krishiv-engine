@@ -1275,10 +1275,38 @@ impl Expander<'_> {
         let input = self.go(Arc::clone(lowered.root()), &mut Vec::new());
         self.view_namespace = previous;
         self.path.pop();
-        let columns = entry.columns.iter().map(|c| c.name.clone()).collect();
+        let columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
+        let mut input = input?;
+        let unique = view
+            .query_columns
+            .iter()
+            .map(|c| c.to_lowercase())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == view.query_columns.len();
+        if unique && view.query_columns.len() == columns.len() {
+            // The stored columns, by their query names and in their stored types: a base table that gained
+            // columns since does not change what the view returns.
+            let exprs = view
+                .query_columns
+                .iter()
+                .zip(&entry.columns)
+                .map(|(q, c)| {
+                    Arc::new(
+                        crate::functions::col(q)
+                            .cast_ansi(c.data_type.clone())
+                            .alias(&c.name)
+                            .expr,
+                    )
+                })
+                .collect();
+            input = Arc::new(
+                LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
+            );
+        }
         Ok(Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
-                input: input?,
+                input,
                 alias: table.clone(),
                 columns,
             })

@@ -237,10 +237,23 @@ impl Session {
         let env = self.query_env();
         let name = self.namespace_name(&n.name, &env)?;
         let cascade = matches!(n.behavior, Some(DropBehavior::Cascade));
+        // Every check on every table's files comes before the first change, so a refused delete leaves the
+        // namespace as it was.
+        let mut dirs = Vec::new();
+        if cascade {
+            for t in self.state.catalog.store.tables_in(&name) {
+                dirs.extend(self.deletable_dir(&t).await?);
+            }
+        }
         match self.state.catalog.store.drop_namespace(&name, cascade) {
             Ok(tables) => {
-                for t in tables.iter().filter(|t| t.managed) {
-                    remove_dir(&t.location)?;
+                for t in &tables {
+                    self.state
+                        .cache
+                        .invalidate_table(&format!("{}.{}", t.namespace, t.name));
+                }
+                for dir in dirs {
+                    remove_dir(&dir)?;
                 }
                 if self.state.catalog.current_namespace() == name {
                     self.state.catalog.use_namespace(DEFAULT_NAMESPACE);
@@ -322,12 +335,9 @@ impl Session {
                 return self.empty_frame().await;
             }
             if existing.view.is_none() && mode == CreateMode::Replace {
-                return Err(WrongCommandForObjectType {
+                return Err(krishiv_common::error::ExpectViewNotTableNoAlternative {
+                    table_name: name.quoted(),
                     operation: "CREATE OR REPLACE VIEW".to_owned(),
-                    required_type: "VIEW".to_owned(),
-                    object_name: name.quoted(),
-                    found_type: "TABLE".to_owned(),
-                    alternative: "DROP TABLE".to_owned(),
                 }
                 .into());
             }
@@ -352,6 +362,12 @@ impl Session {
         }
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let analysis = df.analyzed_in(env).await?;
+        let query_columns: Vec<String> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
         let mut columns: Vec<StoreColumn> = analysis
             .analyzed
             .output
@@ -393,6 +409,7 @@ impl Session {
             view: Some(ViewDef {
                 sql,
                 namespace: self.state.catalog.current_namespace(),
+                query_columns,
             }),
         };
         self.state.catalog.store.create_table(view, mode)?;
@@ -430,17 +447,18 @@ impl Session {
     fn drop_stored_view(&self, name: &TableName, if_exists: bool) -> Result<(), KrishivError> {
         match self.state.catalog.store.table(&name.namespace, &name.name) {
             Some(t) if t.view.is_some() => {
+                self.forget_cached(name);
                 self.state
                     .catalog
                     .store
                     .drop_table(&name.namespace, &name.name);
                 Ok(())
             }
-            Some(_) => Err(WrongCommandForObjectType {
+            Some(t) => Err(WrongCommandForObjectType {
                 operation: "DROP VIEW".to_owned(),
                 required_type: "VIEW".to_owned(),
                 object_name: name.quoted(),
-                found_type: "TABLE".to_owned(),
+                found_type: if t.managed { "MANAGED" } else { "EXTERNAL" }.to_owned(),
                 alternative: "DROP TABLE".to_owned(),
             }
             .into()),
@@ -462,12 +480,9 @@ impl Session {
             return Err(name.not_found());
         };
         if existing.view.is_none() {
-            return Err(WrongCommandForObjectType {
+            return Err(krishiv_common::error::ExpectViewNotTableUseAlterTable {
+                table_name: name.quoted(),
                 operation: "ALTER VIEW".to_owned(),
-                required_type: "VIEW".to_owned(),
-                object_name: name.quoted(),
-                found_type: "TABLE".to_owned(),
-                alternative: "ALTER TABLE".to_owned(),
             }
             .into());
         }
@@ -506,12 +521,19 @@ impl Session {
                         comment: None,
                     })
                     .collect();
+                let query_columns = analysis
+                    .analyzed
+                    .output
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
                 changed.view = Some(ViewDef {
                     sql: original
                         .get(query.span.start..query.span.end)
                         .unwrap_or_default()
                         .to_owned(),
                     namespace: self.state.catalog.current_namespace(),
+                    query_columns,
                 });
             }
             AlterViewAction::SetTblProperties(props) => {
@@ -535,6 +557,19 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&a.table, &env)?;
+        if self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some_and(|t| t.view.is_some())
+        {
+            return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
+                operation: "`ALTER TABLE`".to_owned(),
+                view_name: name.quoted(),
+            }
+            .into());
+        }
         let table = self.table_for_write(&name, "ALTER TABLE", &env)?;
         let mut changed = (*table).clone();
         match &a.action {
@@ -590,9 +625,22 @@ impl Session {
         table: &CatalogTable,
         to: &TableName,
     ) -> Result<DataFrame, KrishivError> {
+        // A bare target stays in the source's namespace, and a table never changes namespace (Spark 4.2).
+        let mut to = to.clone();
+        if to.bare {
+            to.namespace.clone_from(&table.namespace);
+        }
+        let to = &to;
         check_new_name(&to.namespace)?;
         check_new_name(&to.name)?;
         self.check_namespace(to)?;
+        if to.namespace != table.namespace {
+            return Err(krishiv_common::error::LegacyErrorTemp1073 {
+                db: table.namespace.clone(),
+                new_db: to.namespace.clone(),
+            }
+            .into());
+        }
         let store = &self.state.catalog.store;
         if store.table(&to.namespace, &to.name).is_some() {
             return Err(krishiv_common::error::TableOrViewAlreadyExists {
@@ -620,6 +668,9 @@ impl Session {
             })?;
         }
         let moved_to = renamed.location.clone();
+        self.state
+            .cache
+            .invalidate_table(&format!("{}.{}", table.namespace, table.name));
         store.drop_table(&table.namespace, &table.name);
         if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
             let _ = store.create_table(table.clone(), CreateMode::Replace);
@@ -1072,22 +1123,7 @@ impl Session {
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
-        if self
-            .state
-            .catalog
-            .store
-            .table(&name.namespace, &name.name)
-            .is_some_and(|t| t.view.is_some())
-        {
-            return Err(WrongCommandForObjectType {
-                operation: "DROP TABLE".to_owned(),
-                required_type: "EXTERNAL or MANAGED".to_owned(),
-                object_name: name.quoted(),
-                found_type: "VIEW".to_owned(),
-                alternative: "DROP VIEW".to_owned(),
-            }
-            .into());
-        }
+        // A permanent view drops here too, as in Spark 4.2.
         if self.temp_entry_of(&name, &env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);

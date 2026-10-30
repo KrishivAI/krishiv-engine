@@ -125,12 +125,18 @@ fn view_errors() {
         class(&s, "TRUNCATE TABLE v"),
         "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
     );
-    assert_eq!(class(&s, "DROP TABLE v"), "WRONG_COMMAND_FOR_OBJECT_TYPE");
     assert_eq!(class(&s, "DROP VIEW t"), "WRONG_COMMAND_FOR_OBJECT_TYPE");
     assert_eq!(
         class(&s, "CREATE OR REPLACE VIEW t AS SELECT 1"),
-        "WRONG_COMMAND_FOR_OBJECT_TYPE"
+        "EXPECT_VIEW_NOT_TABLE.NO_ALTERNATIVE"
     );
+    assert_eq!(
+        class(&s, "ALTER TABLE v SET TBLPROPERTIES ('a' = 'b')"),
+        "EXPECT_TABLE_NOT_VIEW.USE_ALTER_VIEW"
+    );
+    // DROP TABLE drops a permanent view, as Spark 4.2 does.
+    run(&s, "DROP TABLE v");
+    assert_eq!(class(&s, "SELECT * FROM v"), "TABLE_OR_VIEW_NOT_FOUND");
     assert_eq!(
         class(&s, "CREATE VIEW nodb.x AS SELECT 1"),
         "SCHEMA_NOT_FOUND"
@@ -169,7 +175,7 @@ fn alter_view() {
     run(&s, "ALTER VIEW v SET TBLPROPERTIES ('k' = 'v')");
     assert_eq!(
         class(&s, "ALTER VIEW t AS SELECT 1"),
-        "WRONG_COMMAND_FOR_OBJECT_TYPE"
+        "EXPECT_VIEW_NOT_TABLE.USE_ALTER_TABLE"
     );
     assert_eq!(
         class(&s, "ALTER VIEW nope AS SELECT 1"),
@@ -225,7 +231,7 @@ fn alter_table() {
     run(&s, "CREATE VIEW v AS SELECT 1 AS x");
     assert_eq!(
         class(&s, "ALTER TABLE v SET TBLPROPERTIES ('a' = 'b')"),
-        "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
+        "EXPECT_TABLE_NOT_VIEW.USE_ALTER_VIEW"
     );
 }
 
@@ -241,19 +247,26 @@ fn rename_moves_a_managed_table() {
     assert!(dir.path().join("u").is_dir());
     assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM u"), ["9"]);
     assert_eq!(class(&s, "SELECT * FROM t"), "TABLE_OR_VIEW_NOT_FOUND");
-    run(&s, "ALTER TABLE u RENAME TO d.w");
-    assert!(dir.path().join("d.db").join("w").is_dir());
-    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM d.w"), ["9"]);
+    // A table never changes namespace.
+    assert_eq!(
+        class(&s, "ALTER TABLE u RENAME TO d.w"),
+        "_LEGACY_ERROR_TEMP_1073"
+    );
+    assert!(dir.path().join("u").is_dir());
     run(&s, "CREATE TABLE x (a INT)");
     assert_eq!(
-        class(&s, "ALTER TABLE d.w RENAME TO x"),
+        class(&s, "ALTER TABLE u RENAME TO x"),
         "TABLE_OR_VIEW_ALREADY_EXISTS"
     );
     assert_eq!(
-        class(&s, "ALTER TABLE d.w RENAME TO nodb.y"),
+        class(&s, "ALTER TABLE u RENAME TO nodb.y"),
         "SCHEMA_NOT_FOUND"
     );
-    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM d.w"), ["9"]);
+    // A bare target stays in the source's namespace, whatever is current.
+    run(&s, "CREATE TABLE d.m (a INT)");
+    run(&s, "ALTER TABLE d.m RENAME TO m2");
+    assert!(dir.path().join("d.db").join("m2").is_dir());
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM u"), ["9"]);
 }
 
 #[test]
@@ -274,4 +287,24 @@ fn view_and_rename_target_names_are_validated() {
         "INVALID_SCHEMA_OR_RELATION_NAME"
     );
     assert!(dir.path().join("t").is_dir());
+}
+
+#[test]
+fn a_view_keeps_its_columns_when_its_base_table_gains_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT, b STRING)");
+    run(&s, "INSERT INTO t VALUES (1, 'x')");
+    run(&s, "CREATE VIEW v AS SELECT * FROM t");
+    run(&s, "CREATE VIEW w (p, q) AS SELECT a, b FROM t");
+    run(&s, "ALTER TABLE t ADD COLUMNS (c INT)");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM v"), ["1"]);
+    assert_eq!(
+        col0(&s, "SELECT concat(CAST(p AS STRING), q) FROM w"),
+        ["1x"]
+    );
+    // `SELECT *` over the view is still the stored two columns.
+    let n = block_on(async { s.sql("SELECT * FROM v").await?.collect().await }).unwrap()[0]
+        .num_columns();
+    assert_eq!(n, 2);
 }

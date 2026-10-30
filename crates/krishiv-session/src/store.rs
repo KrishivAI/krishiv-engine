@@ -49,6 +49,10 @@ pub(crate) struct StoreColumn {
 pub(crate) struct ViewDef {
     pub(crate) sql: String,
     pub(crate) namespace: String,
+    /// The names the query's output had when the view was created (before a column list renamed them): a
+    /// read projects the stored columns from the query's output by these names, so a base table that gained
+    /// columns does not change the view (Spark's schema compensation).
+    pub(crate) query_columns: Vec<String>,
 }
 
 /// A table in the catalog.
@@ -122,6 +126,8 @@ pub(crate) trait CatalogStore: Send + Sync {
         namespace: &str,
         cascade: bool,
     ) -> Result<Vec<Arc<CatalogTable>>, DropNamespaceError>;
+    /// The tables and views of `namespace`, by name.
+    fn tables_in(&self, namespace: &str) -> Vec<Arc<CatalogTable>>;
     /// The table `namespace.name`.
     fn table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
     /// Adds `table`; `false` when nothing was added (`IfNotExists` on an existing table).
@@ -180,6 +186,15 @@ impl CatalogStore for InMemoryCatalogStore {
 
     fn has_namespace(&self, namespace: &str) -> bool {
         self.lock().namespaces.contains_key(namespace)
+    }
+
+    fn tables_in(&self, namespace: &str) -> Vec<Arc<CatalogTable>> {
+        self.lock()
+            .tables
+            .iter()
+            .filter(|((ns, _), _)| ns == namespace)
+            .map(|(_, t)| Arc::clone(t))
+            .collect()
     }
 
     fn create_namespace(&self, namespace: &str, meta: NamespaceMeta) -> bool {
