@@ -81,24 +81,37 @@ fn append_and_prepend_add_the_item_even_when_null() {
 }
 
 #[test]
-fn the_result_element_may_hold_null_when_the_array_or_item_may() {
+fn the_result_element_always_allows_null_except_after_compact() {
     let non_null = DataType::List(Arc::new(Field::new("element", DataType::Int32, false)));
-    let ty = |item: BindArg| {
-        bind_scalar(
-            "array_append",
-            &[non_null.clone().into(), item],
+    let element_nullable = |t: DataType| matches!(t, DataType::List(f) if f.is_nullable());
+    let item = BindArg::Column {
+        ty: DataType::Int32,
+        nullable: false,
+    };
+    for name in ["array_append", "array_prepend"] {
+        let t = bind_scalar(
+            name,
+            &[non_null.clone().into(), item.clone()],
             &BindOptions::new(),
         )
         .unwrap()
         .return_type()
-        .clone()
-    };
-    let element_nullable = |t: DataType| matches!(t, DataType::List(f) if f.is_nullable());
-    assert!(!element_nullable(ty(BindArg::Column {
-        ty: DataType::Int32,
-        nullable: false
-    })));
-    assert!(element_nullable(ty(BindArg::from(DataType::Int32))));
+        .clone();
+        assert!(element_nullable(t), "{name}");
+    }
+    let insert = bind_scalar(
+        "array_insert",
+        &[
+            non_null.clone().into(),
+            BindArg::from(DataType::Int32),
+            item,
+        ],
+        &BindOptions::new(),
+    )
+    .unwrap();
+    assert!(element_nullable(insert.return_type().clone()));
+    let compact = bind_scalar("array_compact", &[non_null.into()], &BindOptions::new()).unwrap();
+    assert!(!element_nullable(compact.return_type().clone()));
 }
 
 #[test]

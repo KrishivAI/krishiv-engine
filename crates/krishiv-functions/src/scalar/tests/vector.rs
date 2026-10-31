@@ -119,9 +119,12 @@ fn a_degree_other_than_one_two_or_infinity_is_refused() {
                 "INVALID_VECTOR_NORM_DEGREE",
                 "{name} {degree}"
             );
-            assert!(
-                message.contains(shown) && message.contains(name),
-                "{message}"
+            assert_eq!(
+                message,
+                format!(
+                    "[INVALID_VECTOR_NORM_DEGREE] For the `{name}` function, degree must be \
+                     1.0, 2.0, or float('inf'), but got {shown}. SQLSTATE: 22023"
+                )
             );
         }
     }
@@ -195,41 +198,54 @@ fn pairs_combine_equal_dimensions() {
     );
     let (class, message) = error("vector_l2_distance", &[&a, &plain(&[1.0, 2.0])]);
     assert_eq!(class.name(), "VECTOR_DIMENSION_MISMATCH");
-    assert!(message.contains('3') && message.contains('2'), "{message}");
+    assert_eq!(
+        message,
+        "[VECTOR_DIMENSION_MISMATCH] Vectors passed to `vector_l2_distance` must have the same \
+         dimension, but got 3 and 2. SQLSTATE: 22000"
+    );
+}
+
+/// The error of binding `name` to `args`: the class and the message.
+fn refused(name: &str, args: &[DataType]) -> (ErrorClass, String) {
+    let args: Vec<BindArg> = args.iter().cloned().map(BindArg::from).collect();
+    let e = bind_scalar(name, &args, &BindOptions::new())
+        .err()
+        .unwrap_or_else(|| panic!("{name} bound"));
+    (e.error_class(), e.to_string())
 }
 
 #[test]
 fn only_float_vectors_bind() {
     let doubles = DataType::List(Arc::new(Field::new("element", DataType::Float64, true)));
     let floats = DataType::List(Arc::new(Field::new("element", DataType::Float32, true)));
+    let shown = |t: &DataType| t.to_string();
     for name in [
         "vector_inner_product",
         "vector_cosine_similarity",
         "vector_l2_distance",
     ] {
-        assert!(
-            bind_scalar(
-                name,
-                &[doubles.clone().into(), floats.clone().into()],
-                &BindOptions::new()
-            )
-            .is_err(),
-            "{name}"
-        );
-        assert!(
-            bind_scalar(name, &[floats.clone().into()], &BindOptions::new()).is_err(),
-            "{name}"
-        );
+        for args in [vec![doubles.clone(), floats.clone()], vec![floats.clone()]] {
+            let (class, message) = refused(name, &args);
+            let types: Vec<String> = args.iter().map(shown).collect();
+            assert_eq!(class.name(), "KRISHIV_UNSUPPORTED_FEATURE", "{name}");
+            assert!(
+                message.contains(&format!("{name}({})", types.join(", "))),
+                "{message}"
+            );
+        }
     }
     for name in ["vector_norm", "vector_normalize"] {
-        assert!(bind_scalar(name, &[doubles.clone().into()], &BindOptions::new()).is_err());
-        assert!(
-            bind_scalar(
-                name,
-                &[floats.clone().into(), DataType::Float64.into()],
-                &BindOptions::new()
-            )
-            .is_err()
-        );
+        for args in [
+            vec![doubles.clone()],
+            vec![floats.clone(), DataType::Float64],
+        ] {
+            let (class, message) = refused(name, &args);
+            let types: Vec<String> = args.iter().map(shown).collect();
+            assert_eq!(class.name(), "KRISHIV_UNSUPPORTED_FEATURE", "{name}");
+            assert!(
+                message.contains(&format!("{name}({})", types.join(", "))),
+                "{message}"
+            );
+        }
     }
 }

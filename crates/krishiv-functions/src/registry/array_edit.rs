@@ -10,7 +10,8 @@
 //! `array_prepend` and `DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES` for
 //! `array_insert`, which also gives the latter for an item that does not meet
 //! the element type. The result
-//! array may hold NULL when the array or the item may.
+//! array always allows NULL elements (`array_compact`'s never does), as Spark
+//! types it.
 
 use krishiv_common::error::{
     DatatypeMismatchArrayFunctionDiffTypes, DatatypeMismatchUnexpectedInputType, KrishivError,
@@ -45,7 +46,7 @@ fn grow(name: &'static str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> 
         (Some(DataType::Array(a)), None) => Some(a.element_type().clone()),
         _ => None,
     };
-    let (Some(element), Some(DataType::Array(a))) = (element, c.data_type(0)) else {
+    let (Some(element), Some(DataType::Array(_))) = (element, c.data_type(0)) else {
         return Err(DatatypeMismatchArrayFunctionDiffTypes {
             data_type: "\"ARRAY\"".to_owned(),
             function_name: format!("`{name}`"),
@@ -55,10 +56,11 @@ fn grow(name: &'static str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> 
         }
         .into());
     };
-    let contains_null = a.contains_null() || c.args()[item].nullable;
+    // Spark types the result `containsNull = true` whatever the inputs: a
+    // position past the end pads with NULLs (checked on a Spark 4.2.0 run).
     let nullable = c.args()[0].nullable || (item == 2 && c.args()[1].nullable);
     Ok(ArgType::new(
-        DataType::Array(ArrayType::new(element, contains_null).into()),
+        DataType::Array(ArrayType::new(element, true).into()),
         nullable,
     ))
 }

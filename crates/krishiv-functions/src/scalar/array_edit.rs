@@ -19,7 +19,7 @@ use arrow_schema::DataType;
 use arrow_select::concat::concat;
 use arrow_select::take::take;
 use krishiv_common::error::{
-    CollectionSizeLimitExceededFunction, InvalidIndexOfZero, KrishivError,
+    CollectionSizeLimitExceededFunction, InvalidIndexOfZero, KrishivError, UnableToAcquireMemory,
 };
 
 use super::args::{Inputs, internal};
@@ -54,14 +54,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         "array_insert" => Edit::Insert,
         _ => Edit::Compact,
     };
-    let item_nullable = |i: usize| args.get(i).is_some_and(BindArg::nullable);
     let typed = match (edit, types.as_slice()) {
         (Edit::Compact, [DataType::List(f)]) => Some(compact_type(&DataType::List(Arc::clone(f)))),
         (Edit::Append | Edit::Prepend, [DataType::List(f), item]) if f.data_type() == item => {
-            Some(grown_type(f, item_nullable(1)))
+            Some(grown_type(f))
         }
         (Edit::Insert, [DataType::List(f), DataType::Int32, item]) if f.data_type() == item => {
-            Some(grown_type(f, item_nullable(2)))
+            Some(grown_type(f))
         }
         _ => None,
     };
@@ -79,12 +78,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
 }
 
 /// The result type of an append, prepend or insert: the array's element
-/// type, which may hold NULL when the array or the item may.
-fn grown_type(f: &arrow_schema::FieldRef, item_nullable: bool) -> DataType {
+/// type, always allowed to hold NULL (Spark's `containsNull = true`; a
+/// position past the end pads with NULLs).
+fn grown_type(f: &arrow_schema::FieldRef) -> DataType {
     DataType::List(Arc::new(arrow_schema::Field::new(
         "element",
         f.data_type().clone(),
-        f.is_nullable() || item_nullable,
+        true,
     )))
 }
 
@@ -131,6 +131,17 @@ fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
     .into()
 }
 
+/// `UNABLE_TO_ACQUIRE_MEMORY` for a result of `elements` indices.
+fn no_memory(elements: usize) -> KrishivError {
+    UnableToAcquireMemory {
+        requested_bytes: elements
+            .saturating_mul(std::mem::size_of::<Option<u32>>())
+            .to_string(),
+        received_bytes: "0".to_owned(),
+    }
+    .into()
+}
+
 fn index(i: usize) -> Result<u32, KrishivError> {
     u32::try_from(i).map_err(|_| internal("an array past 2^32 elements".to_owned()))
 }
@@ -153,6 +164,9 @@ fn rebuild(
             if pieces.len() > limit {
                 return Err(too_long(name, pieces.len()));
             }
+            picked
+                .try_reserve(pieces.len())
+                .map_err(|_| no_memory(pieces.len()))?;
             picked.extend_from_slice(pieces);
         }
         valid.push(row.is_some());
@@ -203,13 +217,11 @@ fn edit_rows(
             continue;
         }
         let (start, len) = span(list, row);
-        let existing = (start..start + len)
-            .map(|i| index(i).map(Some))
-            .collect::<Result<Vec<_>, _>>()?;
         let new = Some(index(base + row)?);
-        let pieces = match edit {
-            Edit::Append => [existing, vec![new]].concat(),
-            Edit::Prepend => [vec![new], existing].concat(),
+        let existing = start..start + len;
+        let (before, padding, after) = match edit {
+            Edit::Append => (existing.len(), 0, 0),
+            Edit::Prepend => (0, 0, existing.len()),
             _ => {
                 let p = i64::from(pos.map_or(0, |p| p.value(row)));
                 if p == 0 {
@@ -228,17 +240,44 @@ fn edit_rows(
                 }
                 if at < 0 {
                     // Reaches past the front: the item, NULL padding, the array.
-                    let pad = usize::try_from(-at).unwrap_or(0);
-                    [vec![new], vec![None; pad], existing].concat()
+                    (0, usize::try_from(-at).unwrap_or(0), existing.len())
                 } else if at <= len {
-                    let at = usize::try_from(at).unwrap_or(0);
-                    [existing[..at].to_vec(), vec![new], existing[at..].to_vec()].concat()
+                    (
+                        usize::try_from(at).unwrap_or(0),
+                        0,
+                        existing.len() - usize::try_from(at).unwrap_or(0),
+                    )
                 } else {
-                    let pad = usize::try_from(at - len).unwrap_or(0);
-                    [existing, vec![None; pad], vec![new]].concat()
+                    (existing.len(), usize::try_from(at - len).unwrap_or(0), 0)
                 }
             }
         };
+        // The row is built once into a vector sized up front: a result too
+        // big to allocate is an error, not an abort.
+        let total = before
+            .saturating_add(padding)
+            .saturating_add(after)
+            .saturating_add(1);
+        let mut pieces: Vec<Option<u32>> = Vec::new();
+        pieces
+            .try_reserve_exact(total)
+            .map_err(|_| no_memory(total))?;
+        // `before` elements, then (for a position past the end) the padding and
+        // the item, or (otherwise) the item, the padding and the rest.
+        let split = start + before;
+        for i in start..split {
+            pieces.push(Some(index(i)?));
+        }
+        if after == 0 && padding > 0 {
+            pieces.extend(std::iter::repeat_n(None, padding));
+            pieces.push(new);
+        } else {
+            pieces.push(new);
+            pieces.extend(std::iter::repeat_n(None, padding));
+            for i in split..start + len {
+                pieces.push(Some(index(i)?));
+            }
+        }
         rows.push(Some(pieces));
     }
     rebuild(field, &values, &rows, name, MAX_ARRAY_LENGTH)

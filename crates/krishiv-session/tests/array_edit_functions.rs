@@ -129,3 +129,57 @@ fn output_names_follow_spark() {
         "array_append(array(), a)"
     );
 }
+
+/// Spark 4.2.0 shows a cast to an array, map or struct type as its operand,
+/// written or not: the output name and the quoted expression of a refused
+/// cast (`CAST(1 AS ARRAY<INT>)` quotes `"1"`).
+#[test]
+fn nested_casts_show_their_operand() {
+    let s = session();
+    assert_eq!(
+        first_name(&s, "SELECT CAST(array(1) AS ARRAY<BIGINT>)"),
+        "array(1)"
+    );
+    for (sql, quoted) in [
+        ("SELECT CAST(1 AS ARRAY<INT>)", "\"1\""),
+        ("SELECT CAST(array(1) AS MAP<INT, INT>)", "\"array(1)\""),
+        ("SELECT CAST(map(1, 2) AS ARRAY<INT>)", "\"map(1, 2)\""),
+    ] {
+        let e = error_of(&s, sql);
+        assert_eq!(
+            e.error_class().name(),
+            "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
+            "{sql}"
+        );
+        let shown = e
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "sqlExpr")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(shown, Some(quoted), "{sql}");
+    }
+}
+
+/// Spark 4.2.0 types the result of `array_append`, `array_prepend` and
+/// `array_insert` with `containsNull = true` whatever the inputs (padding adds
+/// NULLs), and `array_compact`'s with `false`.
+#[test]
+fn result_elements_are_nullable_as_spark_types_them() {
+    let s = session();
+    let element_nullable = |sql: &str| {
+        let df = block_on(s.sql(sql)).unwrap();
+        match block_on(df.schema()).unwrap().field(0).data_type() {
+            arrow_schema::DataType::List(f) => f.is_nullable(),
+            other => panic!("{sql}: {other}"),
+        }
+    };
+    for sql in [
+        "SELECT array_append(array(1), 2)",
+        "SELECT array_prepend(array(1), 2)",
+        "SELECT array_insert(array(1), 1, 2)",
+        "SELECT array_insert(array(1), 5, 2)",
+    ] {
+        assert!(element_nullable(sql), "{sql}");
+    }
+    assert!(!element_nullable("SELECT array_compact(array(1, NULL))"));
+}
