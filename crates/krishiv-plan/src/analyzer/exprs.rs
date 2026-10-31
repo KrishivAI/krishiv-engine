@@ -5069,7 +5069,11 @@ impl Resolver<'_> {
                 value.ty.data_type,
                 Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
             );
-        let child_target: Option<DataType> = if temporal {
+        // `approx_count_distinct` hashes a value of any type as it is: no
+        // numeric requirement and no cast (the executor refuses what it
+        // cannot hash).
+        let hashes_any_type = name == "approx_count_distinct";
+        let child_target: Option<DataType> = if temporal || hashes_any_type {
             None
         } else {
             let given = [value.ty.clone()];
