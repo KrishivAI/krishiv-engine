@@ -28,6 +28,8 @@ use krishiv_common::error::{KrishivError, TableOrViewAlreadyExists};
 use krishiv_types::DataType;
 use std::sync::Arc;
 
+use crate::sql_functions::Entry;
+
 /// The namespace that always exists and cannot be dropped.
 pub(crate) const DEFAULT_NAMESPACE: &str = "default";
 
@@ -88,6 +90,61 @@ pub(crate) struct NamespaceMeta {
     pub(crate) properties: BTreeMap<String, String>,
 }
 
+/// A SQL-bodied function of a namespace (`CREATE FUNCTION` without
+/// `TEMPORARY`), with the statement that defined it.
+#[derive(Clone)]
+pub(crate) struct StoredFunction {
+    pub(crate) namespace: String,
+    pub(crate) entry: Entry,
+}
+
+/// The stored functions at one version: replaced, never edited, so a query
+/// reads one map whatever other statements run meanwhile.
+#[derive(Clone, Default)]
+pub(crate) struct StoredFunctions {
+    version: u64,
+    /// By namespace and lower-case name.
+    entries: BTreeMap<(String, String), StoredFunction>,
+}
+
+impl std::fmt::Debug for StoredFunctions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredFunctions")
+            .field("version", &self.version)
+            .field("functions", &self.entries.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+impl StoredFunctions {
+    /// The function `name` of `namespace`.
+    pub(crate) fn get(&self, namespace: &str, name: &str) -> Option<&StoredFunction> {
+        self.entries
+            .get(&(namespace.to_owned(), name.to_lowercase()))
+    }
+
+    /// Every function, by namespace and name.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &StoredFunction> {
+        self.entries.values()
+    }
+
+    /// How many changes the store has made to its functions.
+    pub(crate) fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// This map with `function` defined (replacing any of its name).
+    pub(crate) fn with(&self, function: StoredFunction) -> Self {
+        let mut next = self.clone();
+        next.entries.insert(
+            (function.namespace.clone(), function.entry.def.name.clone()),
+            function,
+        );
+        next.version += 1;
+        next
+    }
+}
+
 /// Why a namespace could not be dropped.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum DropNamespaceError {
@@ -142,6 +199,15 @@ pub(crate) trait CatalogStore: Send + Sync {
     fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool;
     /// Removes the table, returning it.
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
+    /// The stored functions as of now.
+    fn functions(&self) -> Arc<StoredFunctions>;
+    /// Defines `function`, replacing one of its name. `expected` is the
+    /// version of [`functions`](Self::functions) the caller checked the
+    /// definition against: when another statement changed the functions
+    /// meanwhile nothing is defined and `false` is returned.
+    fn define_function(&self, function: StoredFunction, expected: u64) -> bool;
+    /// Removes the function `namespace.name`; whether it existed.
+    fn drop_function(&self, namespace: &str, name: &str) -> bool;
 }
 
 /// Spark's `in-memory` catalog: metadata in memory, per session.
@@ -155,6 +221,7 @@ pub(crate) struct InMemoryCatalogStore {
 struct StoreState {
     namespaces: BTreeMap<String, NamespaceMeta>,
     tables: BTreeMap<(String, String), Arc<CatalogTable>>,
+    functions: Arc<StoredFunctions>,
 }
 
 impl Default for InMemoryCatalogStore {
@@ -166,6 +233,7 @@ impl Default for InMemoryCatalogStore {
                     NamespaceMeta::default(),
                 )]),
                 tables: BTreeMap::new(),
+                functions: Arc::new(StoredFunctions::default()),
             }),
             epoch: AtomicU64::new(0),
         }
@@ -238,8 +306,15 @@ impl CatalogStore for InMemoryCatalogStore {
             .filter(|(ns, _)| ns == namespace)
             .cloned()
             .collect();
-        if !held.is_empty() && !cascade {
+        let has_functions = state.functions.iter().any(|f| f.namespace == namespace);
+        if (!held.is_empty() || has_functions) && !cascade {
             return Err(DropNamespaceError::NotEmpty);
+        }
+        if has_functions {
+            let mut next = StoredFunctions::clone(&state.functions);
+            next.entries.retain(|(ns, _), _| ns != namespace);
+            next.version += 1;
+            state.functions = Arc::new(next);
         }
         let dropped = held
             .into_iter()
@@ -299,6 +374,36 @@ impl CatalogStore for InMemoryCatalogStore {
             self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         removed
+    }
+
+    fn functions(&self) -> Arc<StoredFunctions> {
+        Arc::clone(&self.lock().functions)
+    }
+
+    fn define_function(&self, function: StoredFunction, expected: u64) -> bool {
+        let mut state = self.lock();
+        if state.functions.version() != expected
+            || !state.namespaces.contains_key(&function.namespace)
+        {
+            return false;
+        }
+        state.functions = Arc::new(state.functions.with(function));
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
+    fn drop_function(&self, namespace: &str, name: &str) -> bool {
+        let mut state = self.lock();
+        if state.functions.get(namespace, name).is_none() {
+            return false;
+        }
+        let mut next = StoredFunctions::clone(&state.functions);
+        next.entries
+            .remove(&(namespace.to_owned(), name.to_lowercase()));
+        next.version += 1;
+        state.functions = Arc::new(next);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
     }
 }
 

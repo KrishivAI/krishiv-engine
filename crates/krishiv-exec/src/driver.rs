@@ -157,10 +157,11 @@ async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
 ///
 /// In fail-on-stall mode (tests and CI) a slice is measured without the
 /// time its thread waited on a run queue (runnable, but another thread had
-/// the core): that time is the machine's load, not the driver's work, and
-/// counting it failed queries on loaded machines. Running and blocking
-/// (a sleep or blocking I/O inside a poll) both still count. Where the
-/// kernel does not report run-queue waits, and when stalls are only
+/// the core) and without the time its cgroup was throttled by a CPU quota
+/// (runnable, but not allowed to run): that time is the machine's load, not
+/// the driver's work, and counting it failed queries on loaded machines.
+/// Running and blocking (a sleep or blocking I/O inside a poll) both still
+/// count. Where the kernel does not report these, and when stalls are only
 /// counted, the slice is wall time.
 struct Timed {
     inner: BoxFuture<'static, ()>,
@@ -180,7 +181,7 @@ impl Future for Timed {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let queued = if self.query.config().fail_on_stall {
-            runqueue_wait()
+            unrunnable_time()
         } else {
             None
         };
@@ -199,9 +200,13 @@ impl Future for Timed {
         let config = this.query.config();
         // Only a slice longer than the threshold can be a stall, so the
         // second sample is taken for those alone.
+        let mut waited = Duration::ZERO;
         let held = if slice > config.stall_threshold {
-            match queued.zip(runqueue_wait()) {
-                Some((before, after)) => slice.saturating_sub(after.saturating_sub(before)),
+            match queued.zip(unrunnable_time()) {
+                Some((before, after)) => {
+                    waited = after.saturating_sub(before);
+                    slice.saturating_sub(waited)
+                }
                 None => slice,
             }
         } else {
@@ -211,7 +216,8 @@ impl Future for Timed {
             this.stats.stalls += 1;
             if config.fail_on_stall {
                 this.query.fail(internal(format!(
-                    "a driver ran {held:?} without yielding (stall threshold {:?}, batch size {})",
+                    "a driver ran {held:?} without yielding (stall threshold {:?}, batch size {}; \
+                     slice {slice:?}, of which {waited:?} runnable but not running)",
                     config.stall_threshold, config.batch_size
                 )));
             }
@@ -220,42 +226,89 @@ impl Future for Timed {
     }
 }
 
-/// The time this thread has waited on a run queue so far, from
-/// `/proc/thread-self/schedstat` (its second field, in nanoseconds); `None`
-/// where the kernel does not report it.
+/// The time this thread has been ready to run but kept off a CPU so far:
+/// its wait on a run queue, from `/proc/thread-self/schedstat` (second
+/// field, nanoseconds), plus the time the cgroups it belongs to were
+/// throttled by a CPU quota (`throttled_usec` of each cgroup's `cpu.stat`;
+/// a throttled thread is off the run queue, so schedstat does not count it).
+/// `None` where the kernel does not report the run-queue wait.
 ///
-/// The file is opened once per thread and read with `pread`: a poll costs
-/// one syscall instead of open, statx, two reads and close.
+/// The files are opened once per thread and read with `pread`: a sample
+/// costs a syscall per file instead of open, statx, two reads and close.
+/// Throttled time of nested cgroups is summed, which can only take away more
+/// than was lost, never fail a query that was not slow.
 #[cfg(unix)]
 #[expect(
     clippy::disallowed_methods,
-    reason = "reading a pseudo-file served from memory with one pread per poll never blocks: the only deliberate sync read on a worker"
+    reason = "reading pseudo-files served from memory with one pread each per poll never blocks: the only deliberate sync reads on a worker"
 )]
-fn runqueue_wait() -> Option<Duration> {
+fn unrunnable_time() -> Option<Duration> {
     use std::os::unix::fs::FileExt;
     thread_local! {
         /// Opened by the thread it describes (`thread-self` is resolved at
         /// open), `None` where the file is missing.
         static SCHEDSTAT: Option<std::fs::File> =
             std::fs::File::open("/proc/thread-self/schedstat").ok();
+        /// The `cpu.stat` of the thread's cgroup and each ancestor (cgroup v2).
+        static CGROUP_STATS: Vec<std::fs::File> = cgroup_stats();
     }
-    SCHEDSTAT.with(|file| {
+    fn cgroup_stats() -> Vec<std::fs::File> {
+        let Ok(text) = std::fs::read_to_string("/proc/thread-self/cgroup") else {
+            return Vec::new();
+        };
+        let Some(path) = text.lines().find_map(|l| l.strip_prefix("0::")) else {
+            return Vec::new();
+        };
+        let mut files = Vec::new();
+        let mut dir = path.trim_matches('/').to_owned();
+        loop {
+            if !dir.is_empty()
+                && let Ok(f) = std::fs::File::open(format!("/sys/fs/cgroup/{dir}/cpu.stat"))
+            {
+                files.push(f);
+            }
+            match dir.rfind('/') {
+                Some(i) => dir.truncate(i),
+                None if dir.is_empty() => break,
+                None => dir.clear(),
+            }
+        }
+        files
+    }
+    let waited = SCHEDSTAT.with(|file| {
         let mut buf = [0u8; 128];
         let n = file.as_ref()?.read_at(&mut buf, 0).ok()?;
-        let nanos = std::str::from_utf8(&buf[..n])
+        let nanos: u64 = std::str::from_utf8(&buf[..n])
             .ok()?
             .split_whitespace()
             .nth(1)?
             .parse()
             .ok()?;
         Some(Duration::from_nanos(nanos))
-    })
+    })?;
+    let throttled = CGROUP_STATS.with(|files| {
+        let mut total = Duration::ZERO;
+        for file in files {
+            let mut buf = [0u8; 1024];
+            let Ok(n) = file.read_at(&mut buf, 0) else {
+                continue;
+            };
+            let micros: u64 = std::str::from_utf8(&buf[..n])
+                .ok()
+                .and_then(|t| t.lines().find_map(|l| l.strip_prefix("throttled_usec ")))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            total += Duration::from_micros(micros);
+        }
+        total
+    });
+    Some(waited + throttled)
 }
 
 /// Non-Unix targets have no `/proc/thread-self/schedstat`: there is no
-/// run-queue wait to subtract, so slices are wall time.
+/// wait to subtract, so slices are wall time.
 #[cfg(not(unix))]
-fn runqueue_wait() -> Option<Duration> {
+fn unrunnable_time() -> Option<Duration> {
     None
 }
 

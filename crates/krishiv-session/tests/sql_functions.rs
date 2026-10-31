@@ -13,10 +13,10 @@
 //! - **`VALUES`** (`CREATE TEMPORARY VIEW t AS VALUES (0) t(a)` and the
 //!   functions reading `t`): not claimed yet; the statements that need only
 //!   temporary functions are the ones replayed.
-//! - **Persisted functions** (`CREATE FUNCTION` without `TEMPORARY`, and the
-//!   statements that call them): out of scope; they name
-//!   `spark_catalog.default.f` in Spark's output. This is nearly all of
-//!   `sql-udf.sql`.
+//! - **Stored functions** (`CREATE FUNCTION` without `TEMPORARY`) live in the
+//!   session's in-memory catalog and are run by the golden-report ratchet
+//!   (`known-failures-cases/sql-udf*.json` lists the statements that still
+//!   differ); the tests at the end of this file pin the behaviour.
 //! - **Table functions** (`RETURNS TABLE`, `FROM f(...)`): not implemented
 //!   yet.
 //! - **`foo3_3b` under ANSI** (`SELECT foo3_3b(0)` after the function was
@@ -690,12 +690,8 @@ fn what_is_not_supported_is_named() {
     let s = session();
     for (sql, feature) in [
         (
-            "CREATE FUNCTION p() RETURNS INT RETURN 1",
-            "persisted functions: CREATE FUNCTION without TEMPORARY",
-        ),
-        (
-            "DROP FUNCTION p",
-            "persisted functions: DROP FUNCTION without TEMPORARY",
+            "CREATE FUNCTION other_catalog.default.p() RETURNS INT RETURN 1",
+            "functions of catalogs other than spark_catalog",
         ),
         (
             "CREATE TEMPORARY FUNCTION p() RETURNS INT LANGUAGE python RETURN 1",
@@ -821,4 +817,164 @@ fn the_body_does_not_see_the_callers_lambda_variables() {
         ),
         ["90"]
     );
+}
+
+#[test]
+fn a_stored_function_lives_in_the_catalog_of_the_session() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE FUNCTION stored_add(a INT, b INT) RETURNS INT RETURN a + b",
+    );
+    // Bare, namespace-qualified and fully qualified calls reach it, in any
+    // letter case.
+    assert_eq!(ok(&s, "SELECT stored_add(1, 2)"), ["3"]);
+    assert_eq!(ok(&s, "SELECT default.STORED_ADD(1, 2)"), ["3"]);
+    assert_eq!(
+        ok(&s, "SELECT spark_catalog.default.stored_add(1, 2)"),
+        ["3"]
+    );
+    // Spark names the column after the catalog's identifier.
+    let (schema, _) = run(&s, "SELECT stored_add(1, 2)").unwrap();
+    assert_eq!(schema, "struct<spark_catalog.default.stored_add(1, 2):int>");
+    // Another session has not got it.
+    let other = Session::new().unwrap();
+    let (class, _) = class_and_params(&fails(&other, "SELECT stored_add(1, 2)"));
+    assert_eq!(class, "UNRESOLVED_ROUTINE");
+    // It follows `USE`: bare names resolve in the current namespace only.
+    ok(&s, "CREATE SCHEMA other_ns");
+    ok(&s, "USE other_ns");
+    let (class, _) = class_and_params(&fails(&s, "SELECT stored_add(1, 2)"));
+    assert_eq!(class, "UNRESOLVED_ROUTINE");
+    assert_eq!(ok(&s, "SELECT default.stored_add(1, 2)"), ["3"]);
+    ok(
+        &s,
+        "CREATE FUNCTION stored_add(a INT) RETURNS INT RETURN a * 10",
+    );
+    assert_eq!(ok(&s, "SELECT stored_add(4)"), ["40"]);
+    assert_eq!(ok(&s, "SELECT default.stored_add(4, 5)"), ["9"]);
+}
+
+#[test]
+fn a_stored_function_is_created_replaced_and_dropped_as_spark_does() {
+    let s = session();
+    ok(&s, "CREATE FUNCTION f1() RETURNS INT RETURN 1");
+    let (class, params) = class_and_params(&fails(&s, "CREATE FUNCTION f1() RETURNS INT RETURN 2"));
+    assert_eq!(class, "ROUTINE_ALREADY_EXISTS");
+    assert_eq!(params["routineName"], "`spark_catalog`.`default`.`f1`");
+    ok(&s, "CREATE OR REPLACE FUNCTION f1() RETURNS INT RETURN 2");
+    assert_eq!(ok(&s, "SELECT f1()"), ["2"]);
+    // A stored and a temporary function of one name coexist; the temporary
+    // one is found first, and the stored one by its qualified name.
+    ok(&s, "CREATE TEMPORARY FUNCTION f1() RETURNS INT RETURN 3");
+    assert_eq!(ok(&s, "SELECT f1()"), ["3"]);
+    assert_eq!(ok(&s, "SELECT default.f1()"), ["2"]);
+    ok(&s, "DROP TEMPORARY FUNCTION f1");
+    assert_eq!(ok(&s, "SELECT f1()"), ["2"]);
+    ok(&s, "DROP FUNCTION f1");
+    let (class, _) = class_and_params(&fails(&s, "SELECT f1()"));
+    assert_eq!(class, "UNRESOLVED_ROUTINE");
+    let (class, _) = class_and_params(&fails(&s, "DROP FUNCTION f1"));
+    assert_eq!(class, "ROUTINE_NOT_FOUND");
+    ok(&s, "DROP FUNCTION IF EXISTS f1");
+    // A namespace the catalog lacks.
+    let (class, _) = class_and_params(&fails(&s, "CREATE FUNCTION nope.f() RETURNS INT RETURN 1"));
+    assert_eq!(class, "SCHEMA_NOT_FOUND");
+    let (class, _) = class_and_params(&fails(&s, "DROP FUNCTION nope.f"));
+    assert_eq!(class, "SCHEMA_NOT_FOUND");
+}
+
+#[test]
+fn a_namespace_with_functions_is_not_empty() {
+    let s = session();
+    ok(&s, "CREATE SCHEMA ns1");
+    ok(&s, "CREATE FUNCTION ns1.f() RETURNS INT RETURN 1");
+    assert_eq!(ok(&s, "SELECT ns1.f()"), ["1"]);
+    let (class, _) = class_and_params(&fails(&s, "DROP SCHEMA ns1 RESTRICT"));
+    assert_eq!(class, "SCHEMA_NOT_EMPTY");
+    ok(&s, "DROP SCHEMA ns1 CASCADE");
+    let (class, _) = class_and_params(&fails(&s, "SELECT ns1.f()"));
+    assert_eq!(class, "UNRESOLVED_ROUTINE");
+}
+
+#[test]
+fn stored_functions_call_each_other_but_not_themselves() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE FUNCTION inner_f(x INT) RETURNS INT RETURN x + 1",
+    );
+    ok(
+        &s,
+        "CREATE FUNCTION outer_f(x INT) RETURNS INT RETURN inner_f(x) * 2",
+    );
+    assert_eq!(ok(&s, "SELECT outer_f(4)"), ["10"]);
+    // The caller reads the callee as it is when called.
+    ok(
+        &s,
+        "CREATE OR REPLACE FUNCTION inner_f(x INT) RETURNS INT RETURN x + 100",
+    );
+    assert_eq!(ok(&s, "SELECT outer_f(4)"), ["208"]);
+    let (class, _) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION rec(x INT) RETURNS INT RETURN rec(x)",
+    ));
+    assert_eq!(class, "CYCLIC_FUNCTION_REFERENCE");
+    // Arity errors name the stored function by the catalog's identifier.
+    let (class, params) = class_and_params(&fails(&s, "SELECT inner_f()"));
+    assert_eq!(class, "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
+    assert_eq!(
+        params["functionName"],
+        "`spark_catalog`.`default`.`inner_f`"
+    );
+}
+
+#[test]
+fn a_stored_function_cannot_read_a_temporary_view() {
+    let s = session();
+    ok(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x");
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION reads_tv() RETURNS INT RETURN (SELECT max(x) FROM tv)",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    // Spark's parameters (sql-udf.sql.out, foo3_5d).
+    assert_eq!(params["obj"], "FUNCTION");
+    assert_eq!(params["objName"], "`default`.`reads_tv`");
+    assert_eq!(params["tempObj"], "VIEW");
+    assert_eq!(params["tempObjName"], "`tv`");
+    // Nor a temporary function.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tmp_f(x INT) RETURNS INT RETURN x",
+    );
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION calls_tmp(x INT) RETURNS INT RETURN tmp_f(x)",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    assert_eq!(params["tempObj"], "FUNCTION");
+    assert_eq!(params["tempObjName"], "`tmp_f`");
+    // A temporary function may read it.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION reads_tv() RETURNS INT RETURN (SELECT max(x) FROM tv)",
+    );
+    assert_eq!(ok(&s, "SELECT reads_tv()"), ["1"]);
+}
+
+#[test]
+fn a_temporary_function_in_a_subquery_filter_is_found() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tmp_g(x INT) RETURNS INT RETURN x",
+    );
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION g() RETURNS INT RETURN (SELECT max(c) FROM (SELECT 1 AS c) WHERE c > tmp_g(0))",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    assert_eq!(params["tempObj"], "FUNCTION");
+    assert_eq!(params["tempObjName"], "`tmp_g`");
 }
