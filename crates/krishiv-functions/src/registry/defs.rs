@@ -509,7 +509,13 @@ fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![
         instant_input(c, 0),
         instant_input(c, 1),
-        exact(DataType::Boolean),
+        // Spark casts a string `roundOff` only under ANSI; without it the
+        // call is a type mismatch.
+        if c.ansi() {
+            exact(DataType::Boolean)
+        } else {
+            InputType::Strict(DataType::Boolean)
+        },
     ]
 }
 
