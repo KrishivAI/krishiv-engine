@@ -20,8 +20,8 @@ use krishiv_plan::analyzer::Privilege;
 
 use crate::ast::{
     AlterNamespaceAction, AlterTableAction, AlterViewAction, CacheKind, Compound, DdlName,
-    DescribeKind, ExplainMode, HandlerBody, MergeSource, Query, ScriptStatement, SetVariableKind,
-    ShowKind, Statement,
+    DescribeKind, ExplainMode, HandlerBody, MergeSource, Query, RefreshKind, ScriptStatement,
+    SetVariableKind, ShowKind, Statement,
 };
 
 /// What kind of effect a statement has.
@@ -544,10 +544,17 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                     vec![t(O::Table(name), Select)]
                 }
             }
-            CacheKind::Uncache { .. } => Vec::new(),
+            // Whether the table exists is answered, so naming it needs the right to read it.
+            CacheKind::Uncache { name, .. } => vec![t(O::Table(name), Select)],
             CacheKind::Clear => vec![t(O::Cluster, Monitor)],
         },
-        Statement::Refresh(_) | Statement::AddResource(_) => vec![t(O::Cluster, Monitor)],
+        Statement::Refresh(r) => match &r.kind {
+            RefreshKind::Table { name, .. } => {
+                vec![t(O::Table(name), Select), t(O::Cluster, Monitor)]
+            }
+            RefreshKind::Function { .. } | RefreshKind::Path { .. } => vec![t(O::Cluster, Monitor)],
+        },
+        Statement::AddResource(_) => vec![t(O::Cluster, Monitor)],
     }
 }
 

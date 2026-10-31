@@ -395,35 +395,27 @@ fn results_with_duplicate_column_names_run_uncached() {
 }
 
 #[test]
-fn cache_table_sql_stays_unsupported() {
-    let s = int_session(vec![1]);
-    for sql in [
-        "CACHE TABLE t",
-        "CACHE LAZY TABLE t",
-        "CACHE TABLE t AS SELECT id FROM t",
-    ] {
-        let e = block_on(s.sql(sql)).unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-    }
+fn cache_table_sql_reads_the_relation_into_the_cache() {
+    let s = int_session(vec![1, 2]);
+    assert_eq!(s.cache_reserved(), 0);
+    block_on(s.sql("CACHE TABLE t")).unwrap();
+    assert!(s.cache_reserved() > 0);
+    block_on(s.sql("UNCACHE TABLE t")).unwrap();
+    assert_eq!(s.cache_reserved(), 0);
+    // `LAZY` and `AS query` cache too; the query makes the temporary view first.
+    block_on(s.sql("CACHE LAZY TABLE t")).unwrap();
+    block_on(s.sql("CACHE TABLE doubled AS SELECT id * 2 AS d FROM t")).unwrap();
+    assert!(s.cache_reserved() > 0);
+    block_on(s.sql("CLEAR CACHE")).unwrap();
+    assert_eq!(s.cache_reserved(), 0);
     // Refreshing a function is a no-op; refreshing a path drops file entries.
     block_on(s.sql("REFRESH FUNCTION f")).unwrap();
     block_on(s.sql("REFRESH '/tmp/path'")).unwrap();
-    // Dynamic `IDENTIFIER(...)` names have no spelling to match entries on.
-    for sql in [
-        "REFRESH TABLE IDENTIFIER('t')",
-        "UNCACHE TABLE IDENTIFIER('t')",
-    ] {
-        let e = block_on(s.sql(sql)).unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-    }
+    // `IDENTIFIER(...)` names are evaluated first, so they match entries like any other spelling.
+    block_on(s.sql("CACHE TABLE IDENTIFIER('t')")).unwrap();
+    block_on(s.sql("REFRESH TABLE IDENTIFIER('t')")).unwrap();
+    block_on(s.sql("UNCACHE TABLE IDENTIFIER('t')")).unwrap();
+    assert_eq!(s.cache_reserved(), 0);
 }
 
 #[test]

@@ -52,6 +52,7 @@ mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;
+mod identifier_clause;
 mod introspection;
 mod locals;
 mod profile;
