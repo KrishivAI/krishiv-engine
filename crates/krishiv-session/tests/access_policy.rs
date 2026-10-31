@@ -701,10 +701,24 @@ fn a_directory_swapped_during_the_write_is_denied_and_cleaned_up() {
                     d.any(|e| e.is_ok_and(|e| e.file_name().to_string_lossy().starts_with("part-")))
                 });
                 if has_part {
-                    let old = out.with_file_name("out-old");
-                    std::fs::rename(&out, &old).unwrap();
-                    std::os::unix::fs::symlink(&outside, &out).unwrap();
-                    return true;
+                    // The writer may create `out` again, inside the root, in the gap
+                    // between the rename and the link (it makes missing directories
+                    // under the root it holds). That is harmless; move the new one
+                    // aside as well and put the link in its place.
+                    for attempt in 0..1000 {
+                        let name = if attempt == 0 {
+                            "out-old".to_owned()
+                        } else {
+                            format!("out-old-{attempt}")
+                        };
+                        std::fs::rename(&out, out.with_file_name(name)).unwrap();
+                        match std::os::unix::fs::symlink(&outside, &out) {
+                            Ok(()) => return true,
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                            Err(e) => panic!("symlink failed: {e}"),
+                        }
+                    }
+                    panic!("the writer kept recreating the target directory");
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
