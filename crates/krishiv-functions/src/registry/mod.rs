@@ -13,12 +13,14 @@
 //! [`Lookup::KnownUnsupported`] in profiles that have it, and
 //! [`Lookup::NotFound`] in older ones (as for an unknown name).
 
+mod array_edit;
 mod bitwise;
 mod catalog;
 mod collection;
 mod conditional;
 mod csv;
 mod defs;
+mod element;
 mod hashing;
 mod hof;
 mod json;
@@ -30,6 +32,7 @@ mod predicate;
 mod r#struct;
 mod text;
 mod url;
+mod vector;
 
 use std::collections::HashMap;
 use std::fmt;
