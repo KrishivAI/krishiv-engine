@@ -996,6 +996,8 @@ impl Lowerer {
         }
         let mut items = Vec::new();
         for (index, item) in s.projection.iter().enumerate() {
+            // With GROUP BY or HAVING the analyzer extracts the generator
+            // from the aggregate (Spark's `ExtractGenerator`).
             if s.group_by.is_none()
                 && s.having.is_none()
                 && Self::generator_of(&item.expr).is_some()

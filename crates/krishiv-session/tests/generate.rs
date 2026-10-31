@@ -297,3 +297,35 @@ fn a_generator_that_is_not_a_select_item_is_refused_as_spark_does() {
         assert_eq!(error_of(&s, sql).error_class().name(), class, "{sql}");
     }
 }
+
+#[test]
+fn a_generator_beside_group_by_runs_above_the_aggregate() {
+    let s = Session::new().unwrap();
+    // The argument is a grouping key under `GROUP BY ALL`.
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(arr) as package from (values (array('a', 'b'))) as t(arr) \
+             group by all order by package"
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    // An ordinal counts the generator's argument.
+    assert_eq!(
+        rows(
+            &s,
+            "select id, explode(arr) from (values (42, array('a', 'b', 'c'))) as t(id, arr) \
+             group by id, 2 order by 2"
+        ),
+        table(&[&["42", "a"], &["42", "b"], &["42", "c"]])
+    );
+    // HAVING reads the generated column.
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(packages) as package from (values (array('a', 'b'))) as t(packages) \
+             group by all having package in ('a')"
+        ),
+        table(&[&["a"]])
+    );
+}

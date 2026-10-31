@@ -216,3 +216,183 @@ impl Resolver<'_> {
             .collect())
     }
 }
+
+/// The generator of an aggregate's select list, taken out as Spark's
+/// `ExtractGenerator` does: the select item stands for the generator's
+/// argument (named `_gen_input_N`) while the aggregate is built, and a
+/// [`PlanNode::Generate`] over the aggregate's output generates the
+/// columns in the item's place.
+pub(super) struct ExtractedGenerator {
+    /// The select item the generator stood at.
+    index: usize,
+    kind: GeneratorKind,
+    outer: bool,
+    /// The column holding the argument in the aggregate's output.
+    input: BoundColumn,
+    /// The item's alias, when it had one.
+    name: Option<String>,
+}
+
+fn generator_kind(name: &str) -> Option<(GeneratorKind, bool)> {
+    let (base, outer) = match name.strip_suffix("_outer") {
+        Some(base) => (base, true),
+        None => (name, false),
+    };
+    let kind = match base {
+        "explode" => GeneratorKind::Explode,
+        "posexplode" => GeneratorKind::PosExplode,
+        "inline" => GeneratorKind::Inline,
+        _ => return None,
+    };
+    Some((kind, outer))
+}
+
+impl Resolver<'_> {
+    /// Replaces the one top-level generator of `items` by its argument. A
+    /// generator inside another expression is
+    /// `UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS`; the generators other
+    /// than the explode family, and several generators, are unsupported.
+    pub(super) fn extract_generator(
+        &mut self,
+        origin: Origin,
+        items: Vec<Bound>,
+    ) -> Result<(Vec<Bound>, Option<ExtractedGenerator>), AnalysisError> {
+        let zone = self.ctx.conf.session_zone;
+        let mut found = None;
+        for (i, b) in items.iter().enumerate() {
+            let inner = match &b.expr.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+                _ => &b.expr,
+            };
+            if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &inner.node
+                && f.kind == crate::FunctionKind::Generator
+            {
+                if found.is_some() {
+                    return Err(super::bind::unsupported(
+                        "several generators in one SELECT list",
+                        origin,
+                    ));
+                }
+                found = Some(i);
+            } else if super::ops::has_generator(inner) {
+                return Err(AnalysisError::new(
+                    UnsupportedGeneratorNestedInExpressions {
+                        expression: format!("\"{}\"", pretty(inner, zone)),
+                    },
+                    b.expr.origin,
+                ));
+            }
+        }
+        let Some(index) = found else {
+            return Ok((items, None));
+        };
+        let (inner, name) = match &items[index].expr.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
+                (Arc::clone(expr), Some(output.name.clone()))
+            }
+            _ => (Arc::clone(&items[index].expr), None),
+        };
+        let ExprNode::Resolved(ResolvedExpr::Function(call)) = &inner.node else {
+            return Err(super::bind::unsupported("a generator", origin));
+        };
+        let (Some((kind, outer)), [arg]) = (generator_kind(call.id.name()), &call.args[..]) else {
+            return Err(super::bind::unsupported(
+                format!(
+                    "the generator {} in an aggregate SELECT list",
+                    call.id.name()
+                ),
+                items[index].expr.origin,
+            ));
+        };
+        let (data_type, nullable) = super::subquery::typed(arg);
+        let ty = super::exprs::arg_type(data_type.unwrap_or(DataType::Null), nullable);
+        let input = self.attr(&format!("_gen_input_{index}"), &ty);
+        let mut items = items;
+        let replaced = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: Arc::clone(arg),
+                output: input.clone(),
+            }))
+            .with_origin(items[index].expr.origin),
+        );
+        items[index] = Bound {
+            expr: replaced,
+            ty,
+            ..items[index].clone()
+        };
+        let extracted = ExtractedGenerator {
+            index,
+            kind,
+            outer,
+            input,
+            name,
+        };
+        Ok((items, Some(extracted)))
+    }
+
+    /// The generator over the aggregate `agg`, and a projection restoring
+    /// the select list's order with the generated columns where the
+    /// generator stood.
+    pub(super) fn generate_over_aggregate(
+        &mut self,
+        origin: Origin,
+        agg: &Rel,
+        g: &ExtractedGenerator,
+    ) -> Result<Rel, AnalysisError> {
+        let arg_expr = col_expr(&g.input, origin);
+        let arg = Bound {
+            ty: super::exprs::arg_type(g.input.data_type.clone(), g.input.nullable),
+            expr: arg_expr,
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        };
+        let names: Vec<String> = g.name.iter().cloned().collect();
+        let columns = self.generated_columns(origin, g.kind, g.outer, &arg, &names)?;
+        let qual: Arc<[String]> = Arc::from(Vec::<String>::new());
+        let carried: Vec<Attr> = agg
+            .out
+            .iter()
+            .filter(|a| a.col.id != g.input.id)
+            .cloned()
+            .collect();
+        let generated: Vec<Attr> = columns
+            .iter()
+            .map(|col| Attr {
+                col: col.clone(),
+                qual: Arc::clone(&qual),
+                source: None,
+            })
+            .collect();
+        let mut out = carried;
+        out.extend(generated.iter().cloned());
+        let node = PlanNode::Generate {
+            input: Arc::clone(&agg.plan),
+            kind: g.kind,
+            outer: g.outer,
+            arg: col_expr(&g.input, origin),
+            output: columns,
+            names: Vec::new(),
+            qualifier: None,
+        };
+        let generate = self.make(origin, node, out, &[agg]);
+        // Select-list order: the aggregate's outputs, the generated
+        // columns in the place of the argument.
+        let mut exprs = Vec::new();
+        let mut order = Vec::new();
+        for (i, a) in agg.out.iter().enumerate() {
+            if i == g.index {
+                for a in &generated {
+                    exprs.push(col_expr(&a.col, origin));
+                    order.push(a.clone());
+                }
+            } else {
+                exprs.push(col_expr(&a.col, origin));
+                order.push(a.clone());
+            }
+        }
+        Ok(self.projection(origin, &generate, exprs, order))
+    }
+}
