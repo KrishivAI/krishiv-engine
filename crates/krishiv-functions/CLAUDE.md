@@ -55,8 +55,8 @@ Paths are relative to this crate.
   `to_timestamp`/`try_to_timestamp`/`to_timestamp_ltz`/`to_timestamp_ntz`, `unix_timestamp`/`to_unix_timestamp`,
   `from_unixtime` and `current_timezone`. Zones resolve through the kernels' `resolve_zone` (fixed offsets without the
   database, region and short ids against `jiff`'s bundled TZDB); anything else (`xx`, `abc`,
-  `etc/utc`, `Etc/GMT+05`) is `INVALID_TIMEZONE`. Region zones work as function arguments and in patterns; a region *session* zone
-  (`spark.sql.session.timeZone`) is still refused by the CLI (`krishiv-cli/src/sql.rs`) and read as a fixed offset by the analyzer. The
+  `etc/utc`, `Etc/GMT+05`) is `INVALID_TIMEZONE`. Region zones work as function arguments, in patterns and as the session zone (`spark.sql.session.timeZone`, whose
+  default is the machine's zone, as in Spark: `krishiv-session/src/conf.rs`). The
   database is `jiff-tzdb` 0.1.9 as pinned in `Cargo.lock`; the crate does not record its IANA release. `spark.sql.legacy.timeParserPolicy=LEGACY`
   (the `SimpleDateFormat` parser) is refused by name for the pattern functions. A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
   NULL for every row), a column resolves per row (the resolution itself is cached per thread). Out-of-range results raise `DATETIME_OVERFLOW` with ANSI on and are NULL
@@ -106,8 +106,8 @@ Paths are relative to this crate.
   (the registry rule refuses anything else) and the analyzer writes the omitted ones into the call, as Spark's constructors do (so the
   schema names `mask(s, X, x, n, NULL)`); the same holds for the start of `locate`/`position`. `elt` raises `INVALID_ARRAY_INDEX` only
   under ANSI; `split_part(.., 0)` raises `INVALID_INDEX_OF_ZERO` for the rows it is evaluated on. `base64` always writes MIME lines
-  (Spark's default of `spark.sql.chunkBase64String.enabled`; the switch is not read); `encode`/`decode` take Spark's default charsets
-  (`spark.sql.legacy.javaCharsets` and `...codingErrorAction` are not read yet: the kernels take them as `CharsetOptions`, the plan-codec plumbing is open) and report unmappable input. `split_part`/`substring_index`
+  (Spark's default of `spark.sql.chunkBase64String.enabled`; the switch is not read); `encode`/`decode` follow `spark.sql.legacy.javaCharsets` and `...codingErrorAction`
+  (`BindOptions::charsets`, plan data through the `legacy_charset_switches` codec feature); by default they report unmappable input. `split_part`/`substring_index`
   with `Int.MIN` return the algorithm's value where the JVM raises; `initcap`/`mask` classify non-ASCII with the toolchain's Unicode
   data (pinned by `toolchain_unicode_is_pinned`). A string is always valid UTF-8 here, so the validators only fail on `binary` input.
   `format_string`/`printf` (`scalar/format.rs`) is Java's `Formatter` over string, boolean, integral, float/double and (for `%s` only, as in Spark) decimal arguments: no `%h %a %t`; Java's format exceptions are `KRISHIV_INVALID_FORMAT_STRING`. The `decode(expr, search, result, ...)` form is a CASE the analyzer builds (`decode_case`).

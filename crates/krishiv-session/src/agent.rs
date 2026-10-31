@@ -70,6 +70,9 @@ use arrow_array::types::{
 };
 use arrow_schema::{DataType as ArrowType, Schema, TimeUnit};
 use krishiv_common::error::{ErrorContextType, KrishivError};
+use krishiv_kernels::cast::TimeZoneRules;
+pub use krishiv_kernels::datetime::ZoneRef;
+use krishiv_kernels::datetime::resolve_zone;
 use twox_hash::XxHash3_128;
 
 /// Default most rows rendered (`row cap` stops the stream past this).
@@ -147,7 +150,7 @@ pub struct AgentResult {
 }
 
 /// Inputs to [`render_batches`] besides the schema and batches.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct AgentRender<'a> {
     /// Tables the query read, in first-use order (empty renders `<none>`).
     pub tables: &'a [String],
@@ -157,8 +160,8 @@ pub struct AgentRender<'a> {
     pub elapsed_ms: u64,
     /// Query id, printed as `query <id>` when given.
     pub query_id: Option<&'a str>,
-    /// Session zone shift in microseconds east of UTC (see [`session_tz_micros`]).
-    pub tz_micros: i64,
+    /// The session time zone timestamps print in (see [`session_zone`]).
+    pub zone: &'a ZoneRef,
     /// Why the caller stopped reading before the end, if it did (a row
     /// cap is detected from the rows given).
     pub stop: Option<AgentStop>,
@@ -206,7 +209,7 @@ pub fn render_batches(
     let mut acc: u128 = 0;
     for b in batches {
         for r in 0..b.num_rows() {
-            let uncut = uncut_row(b, r, opts.tz_micros);
+            let uncut = uncut_row(b, r, opts.zone);
             acc = acc.wrapping_add(digest_row(&uncut));
             full_rows.push(render_row(&uncut, opts.limits.max_cell_chars));
         }
@@ -283,7 +286,7 @@ fn stopped(
                 break;
             }
             rows.push(render_row(
-                &uncut_row(b, r, opts.tz_micros),
+                &uncut_row(b, r, opts.zone),
                 opts.limits.max_cell_chars,
             ));
         }
@@ -423,7 +426,7 @@ struct UncutCell {
 /// Renders one row without cutting or escaping (cutting would change the
 /// hash input). The caller hashes it with [`digest_row`] and displays a
 /// cut copy, so uncut text is never buffered past one row.
-fn uncut_row(batch: &RecordBatch, row: usize, tz: i64) -> Vec<UncutCell> {
+fn uncut_row(batch: &RecordBatch, row: usize, tz: &ZoneRef) -> Vec<UncutCell> {
     batch
         .columns()
         .iter()
@@ -782,7 +785,7 @@ fn format_rows(rows: u64) -> String {
 /// too, so list items print as `[1,2]` and infinities as `Infinity`): decimals print at full scale,
 /// floats print Spark-style (`NaN`, `Infinity`), nested NULLs are
 /// lowercase and nested strings quoted, map entries sort as UTF-16.
-pub fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
+pub fn cell(a: &dyn Array, i: usize, null: &str, tz: &ZoneRef) -> String {
     if a.data_type() == &ArrowType::Null || a.is_null(i) {
         return null.to_owned();
     }
@@ -808,9 +811,13 @@ pub fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
             .value_as_date(i)
             .map_or_else(String::new, |d| d.to_string()),
         ArrowType::Timestamp(TimeUnit::Microsecond, zone) => {
-            let shift = if zone.is_some() { tz } else { 0 };
-            a.as_primitive::<TimestampMicrosecondType>()
-                .value(i)
+            let micros = a.as_primitive::<TimestampMicrosecondType>().value(i);
+            let shift = if zone.is_some() {
+                i64::from(tz.offset_at_utc(micros.div_euclid(1_000_000))) * 1_000_000
+            } else {
+                0
+            };
+            micros
                 .checked_add(shift)
                 .and_then(arrow_array::temporal_conversions::timestamp_us_to_datetime)
                 .map_or_else(String::new, |d| d.to_string())
@@ -859,7 +866,7 @@ pub fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
 /// One value nested inside an array, map or struct, as Spark's
 /// `toHiveString` prints it: NULL is lowercase `null`, strings are
 /// quoted, binary never is.
-fn nested(a: &dyn Array, i: usize, tz: i64) -> String {
+fn nested(a: &dyn Array, i: usize, tz: &ZoneRef) -> String {
     if a.data_type() == &ArrowType::Null || a.is_null(i) {
         return String::from("null");
     }
@@ -939,38 +946,13 @@ pub fn spark_float32(v: f32) -> String {
     }
 }
 
-/// The session time zone as microseconds east of UTC. Only `UTC` and fixed
-/// offsets are known (the engine has no time-zone database yet); unset is
-/// UTC, where Spark would use the local zone.
-pub fn session_tz_micros(zone: Option<&str>) -> Result<i64, String> {
-    let z = zone.map_or("UTC", str::trim);
-    let offset = z
-        .strip_prefix("UTC")
-        .or_else(|| z.strip_prefix("GMT"))
-        .unwrap_or(z);
-    if offset.is_empty() || offset == "Z" {
-        return Ok(0);
-    }
-    let (sign, rest) = match offset.split_at(1) {
-        ("+", r) => (1, r),
-        ("-", r) => (-1, r),
-        _ => return Err(unsupported_zone(z)),
-    };
-    let mut parts = rest.split(':');
-    let num = |p: Option<&str>| p.map_or(Some(0), |t| t.parse::<i64>().ok());
-    let (h, m, sec) = (num(parts.next()), num(parts.next()), num(parts.next()));
-    match (h, m, sec, parts.next()) {
-        (Some(h @ 0..=18), Some(m @ 0..=59), Some(sec @ 0..=59), None) if !rest.is_empty() => {
-            Ok(sign * (h * 3600 + m * 60 + sec) * 1_000_000)
-        }
-        _ => Err(unsupported_zone(z)),
-    }
-}
-
-fn unsupported_zone(z: &str) -> String {
-    format!(
-        "spark.sql.session.timeZone `{z}` is not supported: only UTC and fixed offsets (+HH:MM)"
-    )
+/// The rules of a `spark.sql.session.timeZone` value; `None` (a session
+/// always has one, so only a caller without a session passes it) is UTC.
+///
+/// # Errors
+/// The `INVALID_TIMEZONE` message when `zone` names no zone.
+pub fn session_zone(zone: Option<&str>) -> Result<ZoneRef, String> {
+    resolve_zone(zone.map_or("UTC", str::trim)).map_err(|e| e.to_string())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1030,16 +1012,27 @@ mod tests {
             (arr(NullArray::new(1)), "NULL"),
         ];
         for (a, want) in cases {
-            assert_eq!(cell(a.as_ref(), 0, "NULL", 0), want, "{:?}", a.data_type());
+            assert_eq!(
+                cell(a.as_ref(), 0, "NULL", &session_zone(None).unwrap()),
+                want,
+                "{:?}",
+                a.data_type()
+            );
         }
         let with_null =
             ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![None, Some(2)])]);
-        assert_eq!(cell(&with_null, 0, "NULL", 0), "[null,2]");
+        assert_eq!(
+            cell(&with_null, 0, "NULL", &session_zone(None).unwrap()),
+            "[null,2]"
+        );
         let struct_null = StructArray::from(vec![(
             Arc::new(Field::new("x", ArrowType::Int32, true)),
             arr(Int32Array::from(vec![None])),
         )]);
-        assert_eq!(cell(&struct_null, 0, "NULL", 0), "{\"x\":null}");
+        assert_eq!(
+            cell(&struct_null, 0, "NULL", &session_zone(None).unwrap()),
+            "{\"x\":null}"
+        );
         let map = {
             use arrow_array::builder::{BooleanBuilder, Int32Builder, MapBuilder};
             let mut b = MapBuilder::new(None, Int32Builder::new(), BooleanBuilder::new());
@@ -1050,10 +1043,21 @@ mod tests {
             b.append(true).expect("map entry");
             b.finish()
         };
-        assert_eq!(cell(&map, 0, "NULL", 0), "{10:false,2:true}");
+        assert_eq!(
+            cell(&map, 0, "NULL", &session_zone(None).unwrap()),
+            "{10:false,2:true}"
+        );
         let d = Decimal128Array::from(vec![None::<i128>]);
-        assert_eq!(cell(&d, 0, "-", 0), "-");
-        assert_eq!(cell(&arr(NullArray::new(1)), 0, "-", 0), "-");
+        assert_eq!(cell(&d, 0, "-", &session_zone(None).unwrap()), "-");
+        assert_eq!(
+            cell(
+                &arr(NullArray::new(1)),
+                0,
+                "-",
+                &session_zone(None).unwrap()
+            ),
+            "-"
+        );
     }
 
     #[test]
@@ -1063,25 +1067,43 @@ mod tests {
         assert_eq!(spark_float(f64::NAN), "NaN");
         assert_eq!(spark_float(1.0), "1.0");
         let inf = Float64Array::from(vec![f64::INFINITY]);
-        assert_eq!(cell(&inf, 0, "NULL", 0), "Infinity");
+        assert_eq!(
+            cell(&inf, 0, "NULL", &session_zone(None).unwrap()),
+            "Infinity"
+        );
     }
 
     #[test]
     fn session_zone_parsing_and_timestamp_shift() {
-        assert_eq!(session_tz_micros(None), Ok(0));
-        assert_eq!(session_tz_micros(Some("UTC")), Ok(0));
-        assert_eq!(session_tz_micros(Some("Z")), Ok(0));
-        assert_eq!(session_tz_micros(Some("+05:30")), Ok(19_800_000_000));
-        assert_eq!(session_tz_micros(Some("UTC-08:00")), Ok(-28_800_000_000));
-        assert_eq!(session_tz_micros(Some("-8")), Ok(-28_800_000_000));
-        for bad in ["America/Los_Angeles", "+25:00", "+", "+1:2:3:4", "+aa"] {
-            assert!(session_tz_micros(Some(bad)).is_err(), "{bad}");
-        }
         let with_zone = TimestampMicrosecondArray::from(vec![1_000_000]).with_timezone("UTC");
         let ntz = TimestampMicrosecondArray::from(vec![1_000_000]);
-        let east = 3_600_000_000;
-        assert_eq!(cell(&with_zone, 0, "", east), "1970-01-01 01:00:01");
-        assert_eq!(cell(&ntz, 0, "", east), "1970-01-01 00:00:01");
+        let shown = |array: &TimestampMicrosecondArray, zone: Option<&str>| {
+            cell(array, 0, "", &session_zone(zone).unwrap())
+        };
+        assert_eq!(shown(&with_zone, None), "1970-01-01 00:00:01");
+        assert_eq!(shown(&with_zone, Some("UTC")), "1970-01-01 00:00:01");
+        assert_eq!(shown(&with_zone, Some("Z")), "1970-01-01 00:00:01");
+        assert_eq!(shown(&with_zone, Some("+05:30")), "1970-01-01 05:30:01");
+        assert_eq!(shown(&with_zone, Some("UTC-08:00")), "1969-12-31 16:00:01");
+        assert_eq!(shown(&ntz, Some("+05:30")), "1970-01-01 00:00:01");
+        for bad in ["Mars/Base", "+25:00", "+", "+1:2:3:4", "+aa"] {
+            assert!(session_zone(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    /// A region's offset depends on the instant, and an instant before the
+    /// epoch reads the second it falls in.
+    #[test]
+    fn a_region_zone_shows_each_timestamp_at_its_own_offset() {
+        let zone = session_zone(Some("Europe/Berlin")).unwrap();
+        let winter = 1_704_067_200_000_000; // 2024-01-01 00:00 UTC
+        let summer = 1_719_792_000_000_000; // 2024-07-01 00:00 UTC
+        let before_epoch = -1_500_000; // 1969-12-31 23:59:58.5 UTC
+        let a = TimestampMicrosecondArray::from(vec![winter, summer, before_epoch])
+            .with_timezone("UTC");
+        assert_eq!(cell(&a, 0, "", &zone), "2024-01-01 01:00:00");
+        assert_eq!(cell(&a, 1, "", &zone), "2024-07-01 02:00:00");
+        assert_eq!(cell(&a, 2, "", &zone), "1970-01-01 00:59:58.500");
     }
 
     #[test]
@@ -1267,7 +1289,7 @@ mod tests {
                 limits: &limits,
                 elapsed_ms: 0,
                 query_id: None,
-                tz_micros: 0,
+                zone: &session_zone(None).unwrap(),
                 stop: None,
             },
         );

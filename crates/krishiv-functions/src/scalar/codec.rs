@@ -5,11 +5,8 @@
 //!
 //! `base64` always writes lines of 76 symbols separated by CRLF, as Spark
 //! does by default (`spark.sql.chunkBase64String.enabled`; the switch is not
-//! read, chunking is always on); the legacy charset switches
-//! (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`)
-//! are not read yet (the kernels take them; the plan-codec plumbing is
-//! open), so `encode`/`decode` always take Spark's default charsets
-//! and report unmappable input.
+//! read, chunking is always on). `encode`/`decode` follow the legacy switches
+//! in [`BindOptions::charsets`].
 //!
 //! The validators take `string` or `binary`: a string is always valid
 //! UTF-8 (Arrow's invariant), so only `binary` input can fail.
@@ -42,7 +39,8 @@ pub(super) const NAMES: &[&str] = &[
 ];
 
 /// Binds the encoding function `name`.
-pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
+pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
+    let charsets = opts.charsets;
     let listed = listed(NAMES, name)?;
     let shape = shape(args);
     let binding = match (listed, shape.as_str()) {
@@ -52,14 +50,18 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         ("unbase64", "S") => Binding::new(DataType::Binary, |x| {
             Ok(Arc::new(string::unbase64(&x.strings(0)?, false)?) as ArrayRef)
         }),
-        ("encode", "SS") => Binding::new(DataType::Binary, |x| {
+        ("encode", "SS") => Binding::new(DataType::Binary, move |x| {
             let (s, charset) = (x.str(0)?, x.str(1)?);
-            let out = string::encode(s.operand(), charset.operand())?;
+            let out = string::encode_with(s.operand(), charset.operand(), charsets)?;
             Ok(Arc::new(out) as ArrayRef)
         }),
-        ("decode", "BS") => Binding::new(DataType::Utf8, |x| {
+        ("decode", "BS") => Binding::new(DataType::Utf8, move |x| {
             let (b, charset) = (x.bin(0)?, x.str(1)?);
-            Ok(utf8(string::decode(b.operand(), charset.operand())?))
+            Ok(utf8(string::decode_with(
+                b.operand(),
+                charset.operand(),
+                charsets,
+            )?))
         }),
         ("to_binary" | "try_to_binary", "S" | "SS") => {
             let (with_format, try_) = (shape.len() == 2, listed == "try_to_binary");
