@@ -424,7 +424,7 @@ fn charset_of(
 }
 
 /// Java's aliases of the charsets above (lower-case), read from a Spark 4.2 run.
-const ALIASES: [(&str, &str); 130] = [
+const ALIASES: [(&str, &str); 131] = [
     ("646", "us-ascii"),
     ("8859_1", "iso-8859-1"),
     ("8859_13", "iso-8859-13"),
@@ -549,7 +549,8 @@ const ALIASES: [(&str, &str); 130] = [
     ("utf_16", "utf-16"),
     ("utf_16be", "utf-16be"),
     ("utf_16le", "utf-16le"),
-    ("utf_32", "utf-32be"),
+    ("utf32", "utf-32"),
+    ("utf_32", "utf-32"),
     ("utf_32be", "utf-32be"),
     ("utf_32le", "utf-32le"),
     ("x-iso-8859-11", "iso-8859-11"),
@@ -557,20 +558,56 @@ const ALIASES: [(&str, &str); 130] = [
     ("x-utf-32le", "utf-32le"),
 ];
 
-/// Java charsets Krishiv has no table for: named, so they fail as unsupported
-/// rather than as an unknown charset.
-const UNSUPPORTED: [&str; 18] = [
+/// Java charsets (and their aliases, lower-case) Krishiv has no table for,
+/// as a Spark 4.2 run accepts them: they fail as unsupported rather than as
+/// an unknown charset.
+const UNSUPPORTED: [&str; 61] = [
     "big5",
+    "cp1250",
+    "cp1251",
+    "cp1253",
+    "cp1254",
+    "cp1255",
+    "cp1256",
+    "cp1257",
+    "cp1258",
+    "cp437",
+    "cp850",
+    "cp866",
+    "cp936",
+    "csbig5",
+    "csshiftjis",
+    "euc-cn",
     "euc-jp",
     "euc-kr",
+    "euc_jp",
+    "euc_kr",
+    "euccn",
+    "eucjp",
+    "euckr",
     "gb18030",
+    "gb18030-2022",
     "gb2312",
+    "gb2312-80",
     "gbk",
+    "ibm437",
+    "ibm850",
+    "iso-2022-jp",
+    "koi8",
     "koi8-r",
+    "koi8_r",
+    "ksc5601",
+    "macroman",
+    "ms932",
+    "ms_kanji",
+    "shift-jis",
     "shift_jis",
+    "sjis",
     "tis-620",
+    "tis620",
     "unicodelittle",
     "utf-32be-bom",
+    "utf-32le-bom",
     "windows-1250",
     "windows-1251",
     "windows-1253",
@@ -578,6 +615,14 @@ const UNSUPPORTED: [&str; 18] = [
     "windows-1255",
     "windows-1256",
     "windows-1257",
+    "windows-1258",
+    "windows-31j",
+    "windows-936",
+    "x-euc-jp",
+    "x-sjis",
+    "x-utf-16le-bom",
+    "x-utf-32be-bom",
+    "x-utf-32le-bom",
 ];
 
 /// A charset under `spark.sql.legacy.javaCharsets`: Java's canonical name or
@@ -599,7 +644,7 @@ fn legacy_charset(name: &str) -> Result<Option<Charset>, ()> {
     if let Some(table) = SINGLE_BYTE.iter().position(|t| t.name == canonical) {
         return Ok(Some(Charset::Single(table)));
     }
-    if UNSUPPORTED.contains(&canonical) {
+    if UNSUPPORTED.contains(&lower.as_str()) {
         return Err(());
     }
     Ok(None)

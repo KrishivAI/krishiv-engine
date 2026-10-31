@@ -24,9 +24,7 @@
 //! - `encode`/`decode` take Spark's seven default charsets; `encode_with` /
 //!   `decode_with` take the two legacy switches (`CharsetOptions`: `windows-1252`
 //!   and the ISO-8859 family from own tables, `?` / U+FFFD replacement), which
-//!   the SQL layer does not pass yet. A UTF-8 byte string with an encoded
-//!   surrogate (`ED A0 80`) decodes to three U+FFFD under replacement where
-//!   Java gives one.
+//!   the SQL layer does not pass yet.
 //! - `base64` always writes MIME chunking (a CRLF every 76 symbols), Spark's
 //!   default; `spark.sql.chunkBase64String.enabled` is not read.
 //! - `split_part` and `substring_index` with `Int.MIN` return what Spark's

@@ -1114,10 +1114,28 @@ fn legacy_charsets_and_replacement() {
         dec(&[0, 0, 0xFE, 0xFF], "utf-32be", java).unwrap(),
         "\u{FEFF}"
     );
-    assert_eq!(
-        enc("a", "windows-1251", java).unwrap_err(),
-        ErrorClass::KrishivUnsupportedFeature
-    );
+    for name in [
+        "windows-1251",
+        "cp1251",
+        "sjis",
+        "windows-1258",
+        "UTF-32BE-BOM",
+    ] {
+        assert_eq!(
+            enc("a", name, java).unwrap_err(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{name}"
+        );
+    }
+    // `UTF_32` and `UTF32` are the BOM-aware `UTF-32`.
+    for name in ["utf_32", "UTF32"] {
+        assert_eq!(enc("a", name, java).unwrap(), [0, 0, 0, b'a'], "{name}");
+        assert_eq!(
+            dec(&[0xFF, 0xFE, 0, 0, b'a', 0, 0, 0], name, java).unwrap(),
+            "a",
+            "{name}"
+        );
+    }
     // Encoded surrogates and a high surrogate before an odd byte are one
     // malformed unit each.
     assert_eq!(
