@@ -107,6 +107,7 @@ impl Graph {
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
             | PlanNode::JoinHint { input, .. }
+            | PlanNode::Generate { input, .. }
             | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));

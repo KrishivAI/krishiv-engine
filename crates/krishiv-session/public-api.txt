@@ -336,6 +336,8 @@ pub async fn krishiv_session::DataFrame::explain_analyze_with(&self, krishiv_ses
 pub async fn krishiv_session::DataFrame::explain_verbose(&self) -> core::result::Result<krishiv_session::ExplainVerbose, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
+pub async fn krishiv_session::DataFrame::estimate(&self) -> core::result::Result<krishiv_session::Estimate, krishiv_common::error::KrishivError>
+impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::explain_with(&self, krishiv_session::ExplainMode, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::clone(&self) -> krishiv_session::DataFrame
@@ -384,6 +386,17 @@ impl core::clone::Clone for krishiv_session::DataFrameWriterV2
 pub fn krishiv_session::DataFrameWriterV2::clone(&self) -> krishiv_session::DataFrameWriterV2
 impl core::fmt::Debug for krishiv_session::DataFrameWriterV2
 pub fn krishiv_session::DataFrameWriterV2::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct krishiv_session::Estimate
+pub krishiv_session::Estimate::plan: alloc::vec::Vec<alloc::string::String>
+pub krishiv_session::Estimate::rows: core::option::Option<u64>
+pub krishiv_session::Estimate::scan_bytes: core::option::Option<u64>
+impl core::clone::Clone for krishiv_session::Estimate
+pub fn krishiv_session::Estimate::clone(&self) -> krishiv_session::Estimate
+impl core::cmp::PartialEq for krishiv_session::Estimate
+pub fn krishiv_session::Estimate::eq(&self, &krishiv_session::Estimate) -> bool
+impl core::fmt::Debug for krishiv_session::Estimate
+pub fn krishiv_session::Estimate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::Estimate
 pub struct krishiv_session::ExplainVerbose
 pub krishiv_session::ExplainVerbose::analyzed: alloc::string::String
 pub krishiv_session::ExplainVerbose::optimized: alloc::string::String
@@ -464,6 +477,8 @@ pub async fn krishiv_session::Session::sql(&self, &str) -> core::result::Result<
 pub fn krishiv_session::Session::table(&self, &str) -> krishiv_session::DataFrame
 pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn krishiv_session::Session::uncache_table(&self, &str)
+impl krishiv_session::Session
+pub async fn krishiv_session::Session::estimate_sql(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::Estimate>, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::statement_info(&self, &str) -> core::result::Result<krishiv_session::StatementInfo, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::Session

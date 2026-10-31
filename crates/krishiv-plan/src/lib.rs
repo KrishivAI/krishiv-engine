@@ -86,6 +86,7 @@
 //! | `PlanNode::Pivot` | U | - | - |
 //! | `PlanNode::Unpivot` | U | - | - |
 //! | `PlanNode::Expand` | R | - | - |
+//! | `PlanNode::Generate` | U, R | - | - |
 //! | `PlanNode::InlineTable` | U | - | - |
 //! | `PlanNode::Window` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
@@ -143,10 +144,14 @@ pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
+/// The qualifier prefix of the columns a select-list generator adds: an
+/// unqualified `*` skips them (the generator's own star reads them).
+pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
+
 pub use plan::{
-    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan,
-    PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP,
-    TableVersion, UnpivotColumnSet,
+    Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy,
+    LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
+    TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
 };
 pub use raises::{conjuncts, may_raise};
 pub use walk::{MAX_DEPTH, check_depth};

@@ -1243,6 +1243,15 @@ impl Resolver<'_> {
                 .scope
                 .iter()
                 .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                // The columns of a select-list generator are read by its own
+                // star, not by `*`.
+                .filter(|a| {
+                    !s.qualifier.is_empty()
+                        || !a
+                            .qual
+                            .iter()
+                            .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+                })
                 .cloned()
                 .collect(),
         };
@@ -1885,147 +1894,161 @@ impl Resolver<'_> {
                 // takes its arguments as written, as do the other built-in
                 // constructors below and the conditional rewrites.
                 let mut owned: Vec<Bound>;
-                let (kids, n) =
-                    if is_builtin_entry(&entry) && entry.id.name() == "assert_true" && n == 1 {
-                        owned = kids.clone();
-                        owned.insert(
-                            1,
-                            assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
-                        );
-                        (&owned[..], 2)
-                    } else if is_builtin_entry(&entry)
-                        && entry.id.name() == "mask"
-                        && (1..5).contains(&n)
-                    {
-                        owned = kids[..n].to_vec();
-                        owned.extend(MASK_DEFAULTS.iter().skip(n - 1).map(|d| match d {
-                            Some(text) => default_argument(
-                                Literal::String((*text).to_owned()),
-                                DataType::String,
-                                false,
-                                e.origin,
-                            ),
-                            None => default_argument(
-                                Literal::Null(Some(DataType::String)),
-                                DataType::String,
-                                true,
-                                e.origin,
-                            ),
-                        }));
-                        if let Some(filter) = kids.get(n) {
-                            owned.push(filter.clone());
-                        }
-                        (&owned[..], 5)
-                    } else if is_builtin_entry(&entry)
-                        && matches!(entry.id.name(), "locate" | "position")
-                        && n == 2
-                    {
-                        // `locate(sub, str)` is `locate(sub, str, 1)`.
-                        owned = kids[..n].to_vec();
-                        owned.push(default_argument(
-                            Literal::Integer(1),
-                            DataType::Integer,
+                let (kids, n) = if is_builtin_entry(&entry)
+                    && entry.id.name() == "assert_true"
+                    && n == 1
+                {
+                    owned = kids.clone();
+                    owned.insert(
+                        1,
+                        assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
+                    );
+                    (&owned[..], 2)
+                } else if is_builtin_entry(&entry)
+                    && entry.id.name() == "mask"
+                    && (1..5).contains(&n)
+                {
+                    owned = kids[..n].to_vec();
+                    owned.extend(MASK_DEFAULTS.iter().skip(n - 1).map(|d| match d {
+                        Some(text) => default_argument(
+                            Literal::String((*text).to_owned()),
+                            DataType::String,
                             false,
                             e.origin,
-                        ));
-                        if let Some(filter) = kids.get(n) {
-                            owned.push(filter.clone());
-                        }
-                        (&owned[..], 3)
-                    } else if is_builtin_entry(&entry) && entry.id.name() == "split" && n == 2 {
-                        // `split(str, pattern)` is `split(str, pattern, -1)`.
-                        owned = kids[..n].to_vec();
-                        owned.push(default_argument(
-                            Literal::Integer(-1),
-                            DataType::Integer,
-                            false,
+                        ),
+                        None => default_argument(
+                            Literal::Null(Some(DataType::String)),
+                            DataType::String,
+                            true,
                             e.origin,
-                        ));
-                        if let Some(filter) = kids.get(n) {
-                            owned.push(filter.clone());
-                        }
-                        (&owned[..], 3)
-                    } else if is_builtin_entry(&entry)
-                        && let Some(at) = options_index(entry.id.name())
-                        && n > at
-                        && let Some(pairs) = literal_map_pairs(&kids[at].expr)
-                    {
-                        // A `map('k', 'v', ...)` of string literals is the
-                        // options literal Spark's `convertToMapData` reads at
-                        // analysis; the executor binds it as a literal.
-                        // Spark evaluates the options `map(...)`: a repeated key
-                        // is `DUPLICATED_MAP_KEY` unless the session keeps the
-                        // last one.
-                        let mut distinct_pairs: Vec<(String, String)> = Vec::new();
-                        for (key, value) in pairs {
-                            if let Some(seen) = distinct_pairs.iter_mut().find(|(k, _)| *k == key) {
-                                if !self.ctx.conf.map_key_dedup_last_win {
-                                    return Err(AnalysisError::new(
-                                        DuplicatedMapKey {
-                                            key,
-                                            map_key_dedup_policy: "\"spark.sql.mapKeyDedupPolicy\""
-                                                .to_owned(),
-                                        },
-                                        e.origin,
-                                    ));
-                                }
-                                seen.1 = value;
-                            } else {
-                                distinct_pairs.push((key, value));
+                        ),
+                    }));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 5)
+                } else if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "locate" | "position")
+                    && n == 2
+                {
+                    // `locate(sub, str)` is `locate(sub, str, 1)`.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Integer(1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 3)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "sort_array" && n == 1 {
+                    // `sort_array(arr)` is `sort_array(arr, true)`.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Boolean(true),
+                        DataType::Boolean,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 2)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "split" && n == 2 {
+                    // `split(str, pattern)` is `split(str, pattern, -1)`.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Integer(-1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 3)
+                } else if is_builtin_entry(&entry)
+                    && let Some(at) = options_index(entry.id.name())
+                    && n > at
+                    && let Some(pairs) = literal_map_pairs(&kids[at].expr)
+                {
+                    // A `map('k', 'v', ...)` of string literals is the
+                    // options literal Spark's `convertToMapData` reads at
+                    // analysis; the executor binds it as a literal.
+                    // Spark evaluates the options `map(...)`: a repeated key
+                    // is `DUPLICATED_MAP_KEY` unless the session keeps the
+                    // last one.
+                    let mut distinct_pairs: Vec<(String, String)> = Vec::new();
+                    for (key, value) in pairs {
+                        if let Some(seen) = distinct_pairs.iter_mut().find(|(k, _)| *k == key) {
+                            if !self.ctx.conf.map_key_dedup_last_win {
+                                return Err(AnalysisError::new(
+                                    DuplicatedMapKey {
+                                        key,
+                                        map_key_dedup_policy: "\"spark.sql.mapKeyDedupPolicy\""
+                                            .to_owned(),
+                                    },
+                                    e.origin,
+                                ));
                             }
+                            seen.1 = value;
+                        } else {
+                            distinct_pairs.push((key, value));
                         }
-                        let pairs = distinct_pairs;
-                        owned = kids[..n].to_vec();
-                        let original = Arc::clone(&owned[at].expr);
-                        owned[at].shown = Some(Arc::clone(&original));
-                        owned[at].expr = Arc::new(
-                            Expr::new(ExprNode::Literal(Literal::Map(pairs)))
-                                .with_origin(original.origin),
-                        );
-                        if let Some(filter) = kids.get(n) {
-                            owned.push(filter.clone());
+                    }
+                    let pairs = distinct_pairs;
+                    owned = kids[..n].to_vec();
+                    let original = Arc::clone(&owned[at].expr);
+                    owned[at].shown = Some(Arc::clone(&original));
+                    owned[at].expr = Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Map(pairs)))
+                            .with_origin(original.origin),
+                    );
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], n)
+                } else if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "vector_norm" | "vector_normalize")
+                    && n == 1
+                {
+                    // `vector_norm(v)` is `vector_norm(v, 2.0)`.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Float(2.0),
+                        DataType::Float,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 2)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "named_struct" && n > 0 {
+                    owned = kids.clone();
+                    // A foldable name that is not a literal becomes one, so
+                    // the executor binds it (the result rule already read it
+                    // folded; the shown form keeps the written argument for
+                    // error quotes).
+                    for k in owned.iter_mut().step_by(2) {
+                        if !matches!(k.expr.node, ExprNode::Literal(_))
+                            && let Some(Constant::String(name)) =
+                                self.fold(&k.expr, self.ctx.conf.ansi)
+                        {
+                            let lit = Arc::new(
+                                Expr::new(ExprNode::Literal(Literal::String(name)))
+                                    .with_origin(k.expr.origin),
+                            );
+                            k.shown = Some(Arc::clone(&k.expr));
+                            k.expr = lit;
                         }
-                        (&owned[..], n)
-                    } else if is_builtin_entry(&entry)
-                        && matches!(entry.id.name(), "vector_norm" | "vector_normalize")
-                        && n == 1
-                    {
-                        // `vector_norm(v)` is `vector_norm(v, 2.0)`.
-                        owned = kids[..n].to_vec();
-                        owned.push(default_argument(
-                            Literal::Float(2.0),
-                            DataType::Float,
-                            false,
-                            e.origin,
-                        ));
-                        if let Some(filter) = kids.get(n) {
-                            owned.push(filter.clone());
-                        }
-                        (&owned[..], 2)
-                    } else if is_builtin_entry(&entry) && entry.id.name() == "named_struct" && n > 0
-                    {
-                        owned = kids.clone();
-                        // A foldable name that is not a literal becomes one, so
-                        // the executor binds it (the result rule already read it
-                        // folded; the shown form keeps the written argument for
-                        // error quotes).
-                        for k in owned.iter_mut().step_by(2) {
-                            if !matches!(k.expr.node, ExprNode::Literal(_))
-                                && let Some(Constant::String(name)) =
-                                    self.fold(&k.expr, self.ctx.conf.ansi)
-                            {
-                                let lit = Arc::new(
-                                    Expr::new(ExprNode::Literal(Literal::String(name)))
-                                        .with_origin(k.expr.origin),
-                                );
-                                k.shown = Some(Arc::clone(&k.expr));
-                                k.expr = lit;
-                            }
-                        }
-                        (&owned[..], n)
-                    } else {
-                        (&kids[..], n)
-                    };
+                    }
+                    (&owned[..], n)
+                } else {
+                    (&kids[..], n)
+                };
                 // Only for built-ins: a qualified session UDF named like a
                 // conditional (`session.nvl`, `system.session.nvl`, ...) runs
                 // the UDF, while a bare `nvl` runs the built-in (which wins
@@ -2063,7 +2086,58 @@ impl Resolver<'_> {
                     }
                     return self.cast_named_call(&entry, e, f, kids, to);
                 }
-                let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
+                let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // `arrays_zip(a, b)` names its struct fields after columns,
+                // struct fields and aliases (`0`, `1`, ... otherwise): the
+                // result is renamed and the names follow the arrays as
+                // string literals, which the executor reads.
+                let mut zip_names: Vec<Arc<Expr>> = Vec::new();
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "arrays_zip"
+                    && let Some(DataType::Array(a)) = &ty.data_type
+                    && let DataType::Struct(st) = a.element_type()
+                {
+                    let names: Vec<String> = kids[..n]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, k)| match &k.expr.node {
+                            ExprNode::Resolved(
+                                ResolvedExpr::Column(c)
+                                | ResolvedExpr::OuterColumn(c)
+                                | ResolvedExpr::LambdaVar(c),
+                            ) => c.name.clone(),
+                            ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
+                            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+                                output.name.clone()
+                            }
+                            _ => i.to_string(),
+                        })
+                        .collect();
+                    let fields = st
+                        .fields()
+                        .iter()
+                        .zip(&names)
+                        .map(|(f, name)| {
+                            StructField::new(name.clone(), f.data_type().clone(), f.nullable())
+                        })
+                        .collect::<Vec<_>>();
+                    ty.data_type = Some(DataType::Array(
+                        ArrayType::new(
+                            DataType::Struct(StructType::new(fields)),
+                            a.contains_null(),
+                        )
+                        .into(),
+                    ));
+                    zip_names = names
+                        .into_iter()
+                        .map(|name| {
+                            Arc::new(
+                                Expr::new(ExprNode::Literal(Literal::String(name)))
+                                    .with_origin(e.origin),
+                            )
+                        })
+                        .collect();
+                }
                 // `schema_of_csv(lit)` resolves below to the DDL literal.
                 // The registry lookup is ASCII case-insensitive and
                 // `id.name()` is the canonical lower-case name, so a
@@ -2089,10 +2163,13 @@ impl Resolver<'_> {
                 // built-in: a qualified session UDF named `typeof` runs
                 // the UDF.
                 let is_typeof = is_builtin_entry(&entry) && entry.id.name() == "typeof";
+                let plain_args: Vec<Arc<Expr>> =
+                    call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
+                let zipped = !zip_names.is_empty();
                 let call = ResolvedFunction {
                     id: entry.id,
                     kind: entry.kind,
-                    args: call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect(),
+                    args: plain_args.iter().cloned().chain(zip_names).collect(),
                     distinct: f.distinct,
                     filter: call_kids.get(n).map(|k| Arc::clone(&k.expr)),
                     within_group: Vec::new(),
@@ -2100,8 +2177,23 @@ impl Resolver<'_> {
                     nullable: ty.nullable,
                     deterministic: entry.deterministic,
                 };
+                // The names `arrays_zip` carries are not part of the call as
+                // written.
+                let plain = zipped.then(|| {
+                    rebuilt(ExprNode::Resolved(ResolvedExpr::Function(
+                        ResolvedFunction {
+                            args: plain_args,
+                            ..call.clone()
+                        },
+                    )))
+                });
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
-                let shown = self.call_shown(&parts, &expr, kids, &call_kids);
+                let shown = match plain {
+                    Some(plain) => self
+                        .call_shown(&parts, &plain, kids, &call_kids)
+                        .or(Some(plain)),
+                    None => self.call_shown(&parts, &expr, kids, &call_kids),
+                };
                 // `typeof(x)` is Spark's `RuntimeReplaceable`: the analyzer
                 // replaces it with the type name literal, keeping the call
                 // as the shown form (the executor gets no type logic).

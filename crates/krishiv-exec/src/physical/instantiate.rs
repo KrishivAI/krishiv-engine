@@ -63,7 +63,7 @@ use crate::join::{
 };
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
-    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, NullOf, Predicate, Project,
+    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, NullOf, Predicate, Project,
     ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown, ScanPushdowns, Sort,
     SortKey, TopN,
 };
@@ -534,6 +534,16 @@ impl Instantiation<'_> {
                 subqueries,
             } => self.with_subqueries(input, subqueries, |input, v| {
                 replicate_op(input, layout, count, v)
+            }),
+            PhysNode::Generate {
+                input,
+                layout,
+                kind,
+                outer,
+                arg,
+                subqueries,
+            } => self.with_subqueries(input, subqueries, |input, v| {
+                generate_op(input, layout, *kind, *outer, arg, v)
             }),
             PhysNode::Expand {
                 input,
@@ -1080,6 +1090,27 @@ pub(crate) fn replicate_op(
         Arc::clone(schema),
         Arc::new(Compiled(e)),
     ))
+}
+
+/// The generator `kind` over `arg`, on batches of `schema`.
+pub(crate) fn generate_op(
+    schema: &SchemaRef,
+    layout: &[AttrId],
+    kind: krishiv_plan::GeneratorKind,
+    outer: bool,
+    arg: &Expr,
+    v: &Values<'_>,
+) -> Result<Arc<dyn Operator>> {
+    let e = compile_one(arg, layout, schema, v)?;
+    // The argument is a column of the input, read but not carried.
+    let skip = krishiv_plan::generator_arg(arg).and_then(|id| layout.iter().position(|a| *a == id));
+    Ok(Generate::try_new(
+        schema,
+        kind,
+        outer,
+        Arc::new(Compiled(e)),
+        skip,
+    )?)
 }
 
 /// The exact window group limit `plan` over batches of `schema`.

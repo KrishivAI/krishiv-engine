@@ -76,6 +76,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &METRICS_ENABLED,
     &AVRO_COMPRESSION_CODEC,
     &AVRO_DATETIME_REBASE_MODE_IN_READ,
+    &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
 ];
 
@@ -94,6 +95,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.batchSize", &EXEC_BATCH_SIZE),
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
+    ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
@@ -1160,6 +1162,20 @@ pub static PARTITION_OVERWRITE_MODE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.sources.partitionOverwriteMode"),
+};
+
+/// `krishiv.agent.gateBytes`.
+pub static AGENT_GATE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.agent.gateBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(1024 * MIB)),
+    doc: "Agent mode (`krishiv sql --agent`, the REPL's agent output, MCP): a statement whose estimated \
+          table scans reach this many bytes is not run; the answer is the estimate and the plan \
+          outline, and the caller repeats it with `--allow-heavy` to run it anyway. A statement whose \
+          tables report no statistics runs. 0 turns the gate off.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
 };
 
 /// `krishiv.sql.optimizer.shareCteInstances`.

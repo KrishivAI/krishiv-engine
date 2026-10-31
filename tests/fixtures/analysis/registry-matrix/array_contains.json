@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "array_contains#7bf72e0d0f7a/ansi_on",
+      "reason": "SELECT array_contains(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_contains#7bf72e0d0f7a/ansi_off",
+      "reason": "SELECT array_contains(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_contains#814e2bd9809a/ansi_on",
+      "reason": "SELECT array_contains(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+    },
+    {
+      "id": "array_contains#814e2bd9809a/ansi_off",
+      "reason": "SELECT array_contains(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+    },
+    {
+      "id": "array_contains#b3de8aaf33e9/ansi_on",
+      "reason": "SELECT array_contains(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_contains#b3de8aaf33e9/ansi_off",
+      "reason": "SELECT array_contains(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_contains#d35bb855430a/ansi_on",
+      "reason": "SELECT array_contains(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+    },
+    {
+      "id": "array_contains#d35bb855430a/ansi_off",
+      "reason": "SELECT array_contains(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "array_contains"
+}
