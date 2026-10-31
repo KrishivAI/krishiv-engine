@@ -162,12 +162,26 @@ impl SpillUnread for Output {
                     Segment::File(_) => None,
                 })
                 .unwrap_or(0);
-            let written = self.write_segments(scope, consumer, work).await;
-            consumer.release_credit();
-            let written = written?;
-            let Some(written) = written else {
-                hook.set_spillable_bytes(self.memory_bytes());
-                return Ok(lent);
+            let written = match self.write_segments(scope, consumer, work).await {
+                Ok(Some(w)) => {
+                    consumer.release_credit();
+                    w
+                }
+                other => {
+                    // Nothing was replaced: the lent bytes go back to the segment they came from.
+                    for s in lock(&self.state).iter_mut() {
+                        if let Segment::Memory { reservation, .. } = s {
+                            let _ = reservation.try_grow(lent);
+                            break;
+                        }
+                    }
+                    consumer.release_credit();
+                    hook.set_spillable_bytes(self.memory_bytes());
+                    return match other {
+                        Err(e) => refused(e),
+                        _ => Ok(0),
+                    };
+                }
             };
             let mut freed = lent;
             {
@@ -357,14 +371,20 @@ impl Sink for SharedSink {
             let lent = l.reservation.size().min(SCRATCH_BYTES);
             l.reservation.shrink_to_credit(lent);
             let scratch = ctx.consumer().reservation().for_spill_scratch();
+            let restore = |l: &mut SinkLocal| {
+                // Nothing was written: the lent bytes go back to the batches' reservation.
+                let _ = l.reservation.try_grow(lent);
+                ctx.consumer().consumer().release_credit();
+            };
             let writer = match scope.writer(Arc::clone(&self.schema), scratch) {
                 Ok(w) => w,
                 Err(e) => {
-                    ctx.consumer().consumer().release_credit();
+                    restore(l);
                     return refused(KrishivError::from(e));
                 }
             };
-            let batches = std::mem::take(&mut l.batches);
+            // The batches stay in the local state until the file is complete.
+            let batches = l.batches.clone();
             let query = Arc::clone(ctx.query());
             let written = ctx
                 .run_blocking(move || {
@@ -376,8 +396,17 @@ impl Sink for SharedSink {
                     writer.finish().map_err(KrishivError::from)
                 })
                 .await;
-            ctx.consumer().consumer().release_credit();
-            let written = written?;
+            let written = match written {
+                Ok(file) => {
+                    ctx.consumer().consumer().release_credit();
+                    file
+                }
+                Err(e) => {
+                    restore(l);
+                    return refused(e);
+                }
+            };
+            l.batches.clear();
             let freed = l.reservation.size() + lent;
             let rest = l.reservation.size();
             l.reservation.shrink(rest);

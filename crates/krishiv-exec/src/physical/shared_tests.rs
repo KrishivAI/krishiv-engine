@@ -176,8 +176,9 @@ fn instantiation_declares_a_shared_plans_filters() {
     let p = plan(read(1))
         .with_shared(vec![shared(1, filtered_scan(7))])
         .unwrap();
-    // The filter of a scan inside the shared plan is declared before anything is built (the reader's schema
-    // here does not match the root's, so the instantiation itself fails).
-    assert!(instantiate(&p, &worker).is_err());
+    // The filter of a scan inside the shared plan is declared before anything is built (the instantiation then fails on the missing table).
+    let e = instantiate(&p, &worker).err().unwrap();
+    // The empty table provider has no `t`: the shared scan fails before the plan's schema is compared.
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
     assert_eq!(values.filter(FilterId(7)).unwrap().id(), FilterId(7));
 }

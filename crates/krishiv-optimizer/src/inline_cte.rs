@@ -47,8 +47,11 @@ pub(crate) fn inline(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, Krishiv
     let mut defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>> = HashMap::new();
     let mut refs: HashMap<Vec<AttrId>, usize> = HashMap::new();
     survey(&root, &mut defs, &mut refs);
+    // Definitions `ShareCte` made stay as they are, so optimizing a plan again is a no-op.
+    let generated = generated_keys(&root);
     let inline: HashSet<Vec<AttrId>> = defs
         .iter()
+        .filter(|(key, _)| !generated.contains(*key))
         .filter(|(key, def)| {
             // Spark's `shouldInline`: a definition holding an outer reference cannot be computed once per
             // query, so it is inlined however it is read.
@@ -67,6 +70,21 @@ pub(crate) fn inline(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, Krishiv
         next,
     };
     inliner.plan(root)
+}
+
+/// The keys (output ids) of the definitions [`crate::share_cte`] added at the root.
+fn generated_keys(root: &Arc<LogicalPlan>) -> HashSet<Vec<AttrId>> {
+    let mut keys = HashSet::new();
+    if let PlanNode::WithCte { ctes, .. } = &root.node {
+        for c in ctes {
+            if c.name.starts_with(crate::share_cte::SHARED_PREFIX)
+                && let Some(out) = c.plan.resolved_output()
+            {
+                keys.insert(out.iter().map(|o| o.id).collect());
+            }
+        }
+    }
+    keys
 }
 
 /// Whether a `WITH` is anywhere in `root` (subquery plans included).

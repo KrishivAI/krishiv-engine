@@ -17,7 +17,7 @@ fn both_references_of_a_rand_cte_see_the_same_values() {
     assert_eq!(reads, 2);
     let (_, rows) = env.rows(sql);
     // Rows with a NULL key do not join: the rest all match themselves.
-    assert!(!rows.is_empty());
+    assert_eq!(rows.len(), 8);
     assert!(rows.iter().all(|r| r.ends_with("|true")), "{rows:?}");
 }
 
@@ -207,7 +207,7 @@ fn nested_groups_are_shared_inside_the_outer_definition() {
         &[("krishiv.sql.optimizer.shareCteInstances", "false")],
     );
     assert_eq!(rows, same);
-    assert!(shared >= 1);
+    assert_eq!(shared, 2, "a and b are both shared");
 }
 
 /// A body without a pipeline breaker is not shared (rescanning is cheaper than buffering).
@@ -220,4 +220,23 @@ fn a_scan_only_body_is_not_shared() {
         &[],
     );
     assert_eq!(shared, 0);
+}
+
+/// Optimizing the optimized plan again changes nothing (the shared definitions are kept as they are).
+#[test]
+fn optimizing_a_shared_plan_again_is_a_fixed_point() {
+    use krishiv_common::config::Config;
+    use krishiv_optimizer::NoStatistics;
+    use krishiv_udf_sdk::UdfLibrary;
+
+    let env = env();
+    let sql = format!("{GROUPED} SELECT k, n FROM c UNION ALL SELECT k, n FROM c");
+    let config = Config::new();
+    let udfs = UdfLibrary::new();
+    let once =
+        krishiv_optimizer::optimize_with_udfs(&env.analyze(&sql), &NoStatistics, &udfs, &config)
+            .unwrap();
+    let twice =
+        krishiv_optimizer::optimize_with_udfs(&once, &NoStatistics, &udfs, &config).unwrap();
+    assert_eq!(once.root(), twice.root());
 }
