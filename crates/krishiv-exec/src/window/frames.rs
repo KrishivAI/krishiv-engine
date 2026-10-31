@@ -40,6 +40,9 @@ use super::eval::{
 };
 use super::{FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan};
 use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction};
+use krishiv_common::error::BinaryArithmeticOverflow;
+
+use crate::aggregate::long_overflow;
 use crate::error::{Result, internal};
 
 /// Merges per call of a frame query, and folded rows per call of an
@@ -53,12 +56,316 @@ pub(super) struct Rows<'a> {
     /// Each row's peer group, `[start, end)`.
     pub(super) peers: &'a dyn Fn(usize) -> (usize, usize),
     pub(super) n: usize,
+    /// The ordering key of each row, for `RANGE` frames with value bounds.
+    pub(super) order: Option<&'a RangeKeys>,
+}
+
+/// The values of the one ordering column of a unit, as a `RANGE` frame
+/// with value bounds compares them: integers, decimals (unscaled) and
+/// dates as `i128`, floats as `f64`.
+pub(super) struct RangeKeys {
+    keys: Keys,
+    valid: Vec<bool>,
+    descending: bool,
+    nulls_first: bool,
+    /// The range of the key's integer type (none for decimals and dates).
+    limits: Option<(i128, i128)>,
+    ansi: bool,
+}
+
+enum Keys {
+    Int(Vec<i128>),
+    Float(Vec<f64>),
+}
+
+/// Bytes per row of a [`RangeKeys`].
+pub(super) const RANGE_KEY_BYTES: usize = size_of::<i128>() + size_of::<bool>();
+
+impl RangeKeys {
+    /// The keys of column `column` over `slices`; `None` for a type a value
+    /// bound cannot be taken over.
+    pub(super) fn new(
+        slices: &[Slice<'_>],
+        column: usize,
+        descending: bool,
+        nulls_first: bool,
+        ansi: bool,
+    ) -> Result<Option<Self>> {
+        use arrow_array::types::{
+            Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+            Int64Type,
+        };
+        let Some(first) = slices.first() else {
+            return Ok(None);
+        };
+        let ty = first
+            .batch
+            .columns()
+            .get(column)
+            .ok_or_else(|| internal(format!("window order column {column} out of range")))?
+            .data_type()
+            .clone();
+        let float = matches!(ty, DataType::Float32 | DataType::Float64);
+        if !float
+            && !matches!(
+                ty,
+                DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::Date32
+                    | DataType::Decimal128(..)
+            )
+        {
+            return Ok(None);
+        }
+        let rows: usize = slices.iter().map(|s| s.len).sum();
+        let mut valid = Vec::with_capacity(rows);
+        let mut ints: Vec<i128> = Vec::with_capacity(if float { 0 } else { rows });
+        let mut floats: Vec<f64> = Vec::with_capacity(if float { rows } else { 0 });
+        for s in slices {
+            let col = s
+                .batch
+                .columns()
+                .get(column)
+                .ok_or_else(|| internal(format!("window order column {column} out of range")))?
+                .slice(s.offset, s.len);
+            for i in 0..col.len() {
+                valid.push(col.is_valid(i));
+            }
+            macro_rules! ints {
+                ($t:ty) => {{
+                    let a = col.as_primitive::<$t>();
+                    ints.extend((0..a.len()).map(|i| i128::from(a.value(i))));
+                }};
+            }
+            match col.data_type() {
+                DataType::Int8 => ints!(Int8Type),
+                DataType::Int16 => ints!(Int16Type),
+                DataType::Int32 => ints!(Int32Type),
+                DataType::Int64 => ints!(Int64Type),
+                DataType::Date32 => ints!(Date32Type),
+                DataType::Decimal128(..) => {
+                    let a = col.as_primitive::<Decimal128Type>();
+                    ints.extend((0..a.len()).map(|i| a.value(i)));
+                }
+                DataType::Float32 => {
+                    let a = col.as_primitive::<Float32Type>();
+                    floats.extend((0..a.len()).map(|i| f64::from(a.value(i))));
+                }
+                DataType::Float64 => {
+                    let a = col.as_primitive::<Float64Type>();
+                    floats.extend((0..a.len()).map(|i| a.value(i)));
+                }
+                other => return Err(internal(format!("a window order column of type {other}"))),
+            }
+        }
+        Ok(Some(Self {
+            keys: if float {
+                Keys::Float(floats)
+            } else {
+                Keys::Int(ints)
+            },
+            valid,
+            descending,
+            nulls_first,
+            limits: match ty {
+                DataType::Int8 => Some((i8::MIN.into(), i8::MAX.into())),
+                DataType::Int16 => Some((i16::MIN.into(), i16::MAX.into())),
+                DataType::Int32 => Some((i32::MIN.into(), i32::MAX.into())),
+                DataType::Int64 => Some((i64::MIN.into(), i64::MAX.into())),
+                _ => None,
+            },
+            ansi,
+        }))
+    }
+
+    /// How row `j` orders against `target` (the current row's key moved by
+    /// the bound; `None` when that key is NULL): `Less` when `j` sorts
+    /// before it.
+    fn cmp(&self, j: usize, target: Option<&Target>) -> Result<std::cmp::Ordering> {
+        use std::cmp::Ordering;
+        let Some(target) = target else {
+            return Ok(match (self.valid[j], self.nulls_first) {
+                (false, _) => Ordering::Equal,
+                (true, true) => Ordering::Greater,
+                (true, false) => Ordering::Less,
+            });
+        };
+        if !self.valid[j] {
+            return Ok(if self.nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            });
+        }
+        let ord = match (&self.keys, target) {
+            (Keys::Int(k), Target::Int(t)) => k[j].cmp(t),
+            (Keys::Float(k), Target::Float(t)) => float_cmp(k[j], *t),
+            _ => {
+                return Err(internal(
+                    "a range bound of another kind than its key".to_owned(),
+                ));
+            }
+        };
+        Ok(if self.descending { ord.reverse() } else { ord })
+    }
+
+    /// Row `i`'s key moved by the bound (`PRECEDING` is negative; a
+    /// descending order moves the other way), in the key's type: past its
+    /// range the sum raises under ANSI and wraps otherwise, as Spark's
+    /// `Add` of the key and the bound does. `None` for a NULL key.
+    fn target(&self, i: usize, bound: FrameBound) -> Result<Option<Target>> {
+        if !self.valid[i] {
+            return Ok(None);
+        }
+        let sign: i128 = if self.descending { -1 } else { 1 };
+        match (&self.keys, bound) {
+            (Keys::Int(k), FrameBound::RangeInt(off)) => {
+                let off = off.saturating_mul(sign);
+                let sum = k[i].saturating_add(off);
+                let Some((min, max)) = self.limits else {
+                    return Ok(Some(Target::Int(sum)));
+                };
+                if (min..=max).contains(&sum) {
+                    return Ok(Some(Target::Int(sum)));
+                }
+                if self.ansi {
+                    return Err(if max <= i128::from(i16::MAX) {
+                        BinaryArithmeticOverflow {
+                            value1: format!("{}S", k[i]),
+                            symbol: "+".to_owned(),
+                            value2: format!("{off}S"),
+                            function_name: "try_add".to_owned(),
+                        }
+                        .into()
+                    } else {
+                        long_overflow()
+                    });
+                }
+                let span = max - min + 1;
+                Ok(Some(Target::Int((sum - min).rem_euclid(span) + min)))
+            }
+            (Keys::Float(k), FrameBound::RangeFloat(bits)) => {
+                let off = f64::from_bits(bits);
+                Ok(Some(Target::Float(
+                    k[i] + if self.descending { -off } else { off },
+                )))
+            }
+            _ => Err(internal(
+                "a range bound of another kind than its key".to_owned(),
+            )),
+        }
+    }
+}
+
+enum Target {
+    Int(i128),
+    Float(f64),
+}
+
+/// Spark's order of doubles: `NaN` is greatest and equal to itself.
+fn float_cmp(a: f64, b: f64) -> std::cmp::Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        (false, false) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
+    }
+}
+
+/// Whether `b` is a value bound of a `RANGE` frame.
+pub(super) fn is_range_offset(b: FrameBound) -> bool {
+    matches!(b, FrameBound::RangeInt(_) | FrameBound::RangeFloat(_))
+}
+
+/// One edge of a `RANGE` frame with a value bound, as Spark's frames with
+/// one such bound find it: `at` only moves forward through the partition
+/// `[.., pe)` while the rows are before the bound (the first row at or
+/// after it, for a lower edge) or not past it (the first row past it, for
+/// an upper edge).
+fn range_edge(
+    order: &RangeKeys,
+    i: usize,
+    pe: usize,
+    at: &mut usize,
+    bound: FrameBound,
+    upper: bool,
+) -> Result<usize> {
+    let target = order.target(i, bound)?;
+    while *at < pe {
+        let c = order.cmp(*at, target.as_ref())?;
+        if if upper { c.is_gt() } else { c.is_ge() } {
+            break;
+        }
+        *at += 1;
+    }
+    Ok(*at)
+}
+
+/// The rows a sliding `RANGE` frame holds between two value bounds, as
+/// Spark's `SlidingWindowFunctionFrame` keeps them: a row joins when it is
+/// not past the upper bound and not before the lower bound *at that time*,
+/// and leaves from the front while it is before the lower bound. With
+/// bounds that move monotonically that is `[first row at or after the
+/// lower bound, first row past the upper)`; when a key wraps (non-ANSI
+/// overflow) rows can differ, and a frame that would skip a row is refused.
+#[derive(Default)]
+struct Sliding {
+    head: usize,
+    tail: usize,
+    next: usize,
+}
+
+impl Sliding {
+    fn window(
+        &mut self,
+        order: &RangeKeys,
+        i: usize,
+        (ps, pe): (usize, usize),
+        (lower, upper): (FrameBound, FrameBound),
+    ) -> Result<(usize, usize)> {
+        if i == ps {
+            *self = Self {
+                head: ps,
+                tail: ps,
+                next: ps,
+            };
+        }
+        let lo = order.target(i, lower)?;
+        let hi = order.target(i, upper)?;
+        while self.head < self.tail && order.cmp(self.head, lo.as_ref())?.is_lt() {
+            self.head += 1;
+        }
+        while self.next < pe && order.cmp(self.next, hi.as_ref())?.is_le() {
+            if order.cmp(self.next, lo.as_ref())?.is_ge() {
+                if self.head == self.tail {
+                    self.head = self.next;
+                } else if self.next != self.tail {
+                    return Err(crate::aggregate::unsupported(
+                        "a RANGE window frame over keys that wrapped around".to_owned(),
+                    ));
+                }
+                self.tail = self.next + 1;
+            }
+            self.next += 1;
+        }
+        Ok(if self.head < self.tail {
+            (self.head, self.tail)
+        } else {
+            (i, i)
+        })
+    }
 }
 
 /// Each row's frame, `[start, end)` in unit rows (empty when `start >=
 /// end`).
 pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u32)>> {
     let mut out = Vec::with_capacity(rows.n);
+    // The sliding edges of the partition being walked.
+    let (mut lower_at, mut upper_at) = (0, 0);
+    let mut sliding = Sliding::default();
+    let both = is_range_offset(frame.lower) && is_range_offset(frame.upper);
     for i in 0..rows.n {
         let (ps, pe) = (rows.part)(i);
         let at = |k: i64| -> usize {
@@ -68,11 +375,35 @@ pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u3
             usize::try_from(i.saturating_add(k).clamp(ps, pe)).unwrap_or(0)
         };
         let peers = || (rows.peers)(i);
+        if i == ps {
+            lower_at = ps;
+            upper_at = ps;
+        }
+        let mut ranged = |bound: FrameBound, upper: bool| match rows.order {
+            Some(order) => range_edge(
+                order,
+                i,
+                pe,
+                if upper { &mut upper_at } else { &mut lower_at },
+                bound,
+                upper,
+            ),
+            None => Err(internal("a range bound without an ordering key".to_owned())),
+        };
+        if both {
+            let Some(order) = rows.order else {
+                return Err(internal("a range bound without an ordering key".to_owned()));
+            };
+            let (start, end) = sliding.window(order, i, (ps, pe), (frame.lower, frame.upper))?;
+            out.push((id(start)?, id(end)?));
+            continue;
+        }
         let start = match (frame.units, frame.lower) {
             (_, FrameBound::UnboundedPreceding) => ps,
             (FrameUnits::Rows, FrameBound::CurrentRow) => i,
             (FrameUnits::Range, FrameBound::CurrentRow) => peers().0,
             (FrameUnits::Rows, FrameBound::Offset(k)) => at(k),
+            (FrameUnits::Range, b) if is_range_offset(b) => ranged(b, false)?,
             (units, lower) => {
                 return Err(internal(format!("a {units:?} frame starting at {lower:?}")));
             }
@@ -82,6 +413,7 @@ pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u3
             (FrameUnits::Rows, FrameBound::CurrentRow) => i + 1,
             (FrameUnits::Range, FrameBound::CurrentRow) => peers().1,
             (FrameUnits::Rows, FrameBound::Offset(k)) => at(k.saturating_add(1)),
+            (FrameUnits::Range, b) if is_range_offset(b) => ranged(b, true)?,
             (units, upper) => {
                 return Err(internal(format!("a {units:?} frame ending at {upper:?}")));
             }

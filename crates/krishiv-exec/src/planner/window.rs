@@ -347,14 +347,29 @@ fn call(e: &Expr) -> Result<Call<'_>> {
         .frame
         .as_ref()
         .ok_or_else(|| internal("a window without a frame"))?;
+    let range = frame.units == FrameUnits::Range;
     let bound = |b: &FrameBound| match b {
         FrameBound::UnboundedPreceding => Ok(Bound::UnboundedPreceding),
         FrameBound::CurrentRow => Ok(Bound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(Bound::UnboundedFollowing),
-        // The analyzer leaves a checked offset as an `int` literal.
-        FrameBound::Offset(e) => match &e.node {
-            ExprNode::Literal(krishiv_plan::Literal::Integer(v)) => {
+        // The analyzer leaves a checked offset as a literal: an `int` for
+        // `ROWS`, of the ordering key's type for `RANGE`.
+        FrameBound::Offset(e) => match (&e.node, range) {
+            (ExprNode::Literal(krishiv_plan::Literal::Integer(v)), false) => {
                 Ok(Bound::Offset(i64::from(*v)))
+            }
+            (ExprNode::Literal(l), true) => {
+                use krishiv_plan::Literal as L;
+                match l {
+                    L::Byte(v) => Ok(Bound::RangeInt(i128::from(*v))),
+                    L::Short(v) => Ok(Bound::RangeInt(i128::from(*v))),
+                    L::Integer(v) => Ok(Bound::RangeInt(i128::from(*v))),
+                    L::Long(v) => Ok(Bound::RangeInt(i128::from(*v))),
+                    L::Decimal { unscaled, .. } => Ok(Bound::RangeInt(*unscaled)),
+                    L::Float(v) => Ok(Bound::RangeFloat(f64::from(*v).to_bits())),
+                    L::Double(v) => Ok(Bound::RangeFloat(v.to_bits())),
+                    _ => Err(unsupported("this RANGE window frame bound")),
+                }
             }
             _ => Err(unsupported("window frame bounds that are not int literals")),
         },
