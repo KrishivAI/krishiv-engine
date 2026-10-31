@@ -228,6 +228,51 @@ fn a_scalar_subquery_without_an_aggregate_matches_at_most_one_row() {
 /// equality whose outer side reads no inner column.
 #[test]
 fn a_correlated_limit_keeps_its_order_and_partitions_by_clean_keys() {
+    let s = correlated_session();
+    let desc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC LIMIT 1)";
+    assert_eq!(rows(&s, desc), ["4"]);
+    let asc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y ASC LIMIT 1)";
+    assert_eq!(rows(&s, asc), ["1", "4"]);
+    // An outer side reading inner columns is refused, never partitioned on it.
+    let mixed = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g + lc.y = lt.id + lc.y ORDER BY lc.k DESC LIMIT 1)";
+    assert!(failure(&s, mixed).contains("LIMIT of this form"));
+    // So is a sort the rewrite would lose, below a derived table.
+    let derived = "SELECT id FROM lt WHERE k IN (SELECT k FROM (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC) q LIMIT 1)";
+    assert!(failure(&s, derived).contains("LIMIT of this form"));
+    // And a key the window and the join would evaluate apart.
+    let random = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE CAST(rand(1) * 2 AS INT) = lt.id ORDER BY y LIMIT 1)";
+    assert!(failure(&s, random).contains("LIMIT of this form"));
+}
+
+/// A correlated column that is a grouping key but not selected still reaches
+/// the aggregate's output, so the join above can read it.
+#[test]
+fn a_correlated_grouping_key_need_not_be_selected() {
+    let s = correlated_session();
+    let value =
+        "SELECT id FROM lt WHERE k IN (SELECT min(lc.k) FROM lc WHERE lc.g = lt.id GROUP BY lc.g)";
+    assert_eq!(rows(&s, value), ["1", "4"]);
+    let having = "SELECT id FROM lt WHERE EXISTS (SELECT 1 FROM lc WHERE lc.g = lt.id GROUP BY lc.g HAVING count(*) > 1)";
+    assert_eq!(rows(&s, having), ["1", "2"]);
+    let nested = "SELECT id, (SELECT max(c) FROM (SELECT count(*) c FROM lc WHERE lc.g = lt.id GROUP BY lc.g) q) FROM lt";
+    assert_eq!(rows(&s, nested), ["1,2", "2,2", "3,NULL", "4,1"]);
+}
+
+/// Outer references Spark refuses, also where the rows would not matter.
+#[test]
+fn correlated_references_spark_refuses() {
+    let s = correlated_session();
+    for query in [
+        "SELECT id FROM lt WHERE (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY lt.id) = 1",
+        "SELECT id FROM lt WHERE k IN (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY lt.id)",
+        "SELECT id FROM lt WHERE EXISTS (SELECT count(*) FROM (SELECT * FROM lc ORDER BY lt.id) q)",
+    ] {
+        let err = failure(&s, query);
+        assert!(err.contains("CORRELATED_REFERENCE"), "{query}: {err}");
+    }
+}
+
+fn correlated_session() -> Session {
     let s = session();
     for ddl in [
         "CREATE TEMPORARY VIEW lt AS SELECT * FROM VALUES (1, 1), (2, 2), (3, CAST(NULL AS INT)), (4, 4) AS lt(id, k)",
@@ -235,14 +280,16 @@ fn a_correlated_limit_keeps_its_order_and_partitions_by_clean_keys() {
     ] {
         block_on(s.sql(ddl)).unwrap();
     }
-    let desc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC LIMIT 1)";
-    assert_eq!(rows(&s, desc), ["4"]);
-    let asc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y ASC LIMIT 1)";
-    assert_eq!(rows(&s, asc), ["1", "4"]);
-    // An outer side reading inner columns is refused, never partitioned on it.
-    let mixed = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g + lc.y = lt.id + lc.y ORDER BY lc.k DESC LIMIT 1)";
-    if let Ok(df) = block_on(s.sql(mixed)) {
-        let got = block_on(df.collect());
-        assert!(got.is_err(), "mixed-side equality must be refused");
+    s
+}
+
+/// The error of `query`, from analysis or from running it; empty if it works.
+fn failure(s: &Session, query: &str) -> String {
+    match block_on(s.sql(query)) {
+        Err(e) => e.to_string(),
+        Ok(df) => block_on(df.collect())
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default(),
     }
 }

@@ -1122,17 +1122,14 @@ impl Rewriter {
             PlanNode::Aggregate { aggregates, .. }
                 if aggregates.iter().any(|e| has_outer(Node::Expr(e))) =>
             {
-                let outer: Vec<String> = aggregates
-                    .iter()
-                    .filter(|e| has_outer(Node::Expr(e)))
-                    .map(|e| format!("\"{}\"", pretty(e, None)))
-                    .collect();
-                Err(AnalysisError::new(
-                    UnsupportedSubqueryExpressionCategoryCorrelatedReference {
-                        sql_exprs: outer.join(", "),
-                    },
-                    plan.origin,
-                ))
+                Err(correlated_reference(aggregates, plan.origin))
+            }
+            // Nor may it group by one.
+            PlanNode::Aggregate {
+                grouping: Grouping::GroupBy(keys),
+                ..
+            } if keys.iter().any(|k| has_outer(Node::Expr(k))) => {
+                Err(correlated_reference(keys, plan.origin))
             }
             // EXISTS reads no column: a grouped aggregate with no HAVING
             // has a row exactly when its input has one, and a global one
@@ -1143,6 +1140,13 @@ impl Rewriter {
                 ..
             } if !keep && !keys.iter().any(|k| has_outer(Node::Expr(k))) => {
                 if keys.is_empty() {
+                    // The input's rows do not matter, but what Spark rejects
+                    // in it is still rejected.
+                    if let Err(e) = self.pull(input, false)
+                        && e.error.error_class().name() != "KRISHIV_UNSUPPORTED_FEATURE"
+                    {
+                        return Err(e);
+                    }
                     Ok((node(PlanNode::OneRowRelation, plan.origin), Vec::new()))
                 } else {
                     self.pull(input, false)
@@ -1166,17 +1170,23 @@ impl Rewriter {
                 }
                 let mut keys = keys.clone();
                 let mut aggregates = aggregates.clone();
-                let mut have: HashSet<AttrId> = HashSet::new();
-                for k in &keys {
-                    if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
-                        have.insert(c.id);
-                    }
-                }
+                // A key need not be selected: what the correlation reads is
+                // grouped by and output, each only if it is not already.
+                let mut grouped: HashSet<AttrId> = keys
+                    .iter()
+                    .filter_map(|k| match &k.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                        _ => None,
+                    })
+                    .collect();
+                let mut selected: HashSet<AttrId> = output(plan)?.iter().map(|c| c.id).collect();
                 for c in &corr {
                     for col in inner_columns(c) {
-                        if have.insert(col.id) {
-                            let e = col_expr(&col, Origin::UNKNOWN);
+                        let e = col_expr(&col, Origin::UNKNOWN);
+                        if grouped.insert(col.id) {
                             keys.push(Arc::clone(&e));
+                        }
+                        if selected.insert(col.id) {
                             aggregates.push(e);
                         }
                     }
@@ -1250,6 +1260,10 @@ impl Rewriter {
                 None => (Arc::clone(input), Vec::new(), None),
             },
         };
+        // `pull` drops a sort, which is right only with no limit above it.
+        if order.is_empty() && sorts(&below) {
+            return Err(unsupported_limit());
+        }
         let (inner, corr) = self.pull(&below, true)?;
         let mut partition_by = Vec::new();
         for c in &corr {
@@ -1260,6 +1274,10 @@ impl Rewriter {
                 return Err(unsupported_limit());
             }
             let (a, b) = (&f.args[0], &f.args[1]);
+            // The window partitions on one evaluation, the join reads another.
+            if !super::sqlfn::is_deterministic(a) || !super::sqlfn::is_deterministic(b) {
+                return Err(unsupported_limit());
+            }
             match (has_outer(Node::Expr(a)), has_outer(Node::Expr(b))) {
                 (false, true) if inner_columns(b).is_empty() => partition_by.push(Arc::clone(a)),
                 (true, false) if inner_columns(a).is_empty() => partition_by.push(Arc::clone(b)),
@@ -1424,6 +1442,9 @@ impl Rewriter {
         else {
             return self.scalar_single(base, plan);
         };
+        if keys.iter().any(|k| has_outer(Node::Expr(k))) {
+            return Err(correlated_reference(keys, plan.origin));
+        }
         let [item] = &aggregates[..] else {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
@@ -2088,4 +2109,31 @@ fn equality_keys(corr: &[Arc<Expr>], origin: Origin) -> R<Keys> {
         outer_keys.push(Arc::clone(o));
     }
     Ok((inner_keys, outer_keys))
+}
+
+/// Spark's refusal of a correlated reference where it cannot be lifted, naming
+/// those of `exprs` that hold one.
+fn correlated_reference(exprs: &[Arc<Expr>], origin: Origin) -> AnalysisError {
+    let outer: Vec<String> = exprs
+        .iter()
+        .filter(|e| has_outer(Node::Expr(e)))
+        .map(|e| format!("\"{}\"", pretty(e, None)))
+        .collect();
+    AnalysisError::new(
+        UnsupportedSubqueryExpressionCategoryCorrelatedReference {
+            sql_exprs: outer.join(", "),
+        },
+        origin,
+    )
+}
+
+/// Whether a sort lies on the path from `plan` down that keeps rows in order.
+fn sorts(plan: &Arc<LogicalPlan>) -> bool {
+    match &plan.node {
+        PlanNode::Sort { .. } => true,
+        PlanNode::Project { input, .. }
+        | PlanNode::Filter { input, .. }
+        | PlanNode::SubqueryAlias { input, .. } => sorts(input),
+        _ => false,
+    }
 }
