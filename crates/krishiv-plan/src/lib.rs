@@ -78,6 +78,7 @@
 //! | `PlanNode::CteRef` | R | - | - |
 //! | `PlanNode::Shift` | R | - | - |
 //! | `PlanNode::Hint` | U | - | - |
+//! | `PlanNode::PipeOperator` | U | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |

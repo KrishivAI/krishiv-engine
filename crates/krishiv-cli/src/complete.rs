@@ -150,6 +150,8 @@ pub(crate) fn function_names() -> Vec<&'static str> {
         .functions()
         .iter()
         .map(|d| d.name)
+        // `__subscript` and the like are lowering targets, not routines.
+        .filter(|n| !n.starts_with("__"))
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -399,6 +401,7 @@ mod tests {
         assert!(names.len() > 50, "{} functions", names.len());
         assert!(names.contains(&"abs"), "{names:?}");
         assert!(names.contains(&"count"), "{names:?}");
+        assert!(!names.contains(&"__subscript"), "{names:?}");
         let got = complete("select ab", 9, &ctx());
         assert!(got.contains(&"abs".to_owned()), "{got:?}");
     }

@@ -716,6 +716,10 @@ impl Encoder {
                 self.exprs(params, bias);
                 self.plan(input, bias);
             }
+            PlanNode::PipeOperator { input } => {
+                self.tag("PipeOperator");
+                self.plan(input, bias);
+            }
             PlanNode::JoinHint { input, strategy } => {
                 self.tag("JoinHint");
                 self.debug(strategy);
@@ -1381,6 +1385,10 @@ mod tests {
                         name: "h".into(),
                         params: vec![lit(1)],
                     }),
+                ),
+                (
+                    "pipe-operator",
+                    node(PlanNode::PipeOperator { input: base() }),
                 ),
                 (
                     "join-hint",
