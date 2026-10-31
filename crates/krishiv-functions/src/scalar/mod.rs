@@ -35,6 +35,7 @@ mod collection;
 mod csv;
 mod datetime;
 mod element;
+mod format;
 mod hash;
 mod json;
 mod json_tuple;
@@ -464,6 +465,7 @@ const FAMILIES: [(&[&str], Binder); 27] = [
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
     (csv::NAMES, csv::bind),
+    (format::NAMES, format::bind),
     (xml::NAMES, xml::bind),
     (vector::NAMES, vector::bind),
     (element::NAMES, element::bind),

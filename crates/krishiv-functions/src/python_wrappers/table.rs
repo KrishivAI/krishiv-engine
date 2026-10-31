@@ -581,6 +581,8 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("json_tuple", "col: ColumnOrName, *fields: str"),
         Row::new("decode", "col: ColumnOrName, charset: str"),
         Row::new("elt", "*inputs: ColumnOrName"),
+        Row::new("format_string", "format: str, *cols: ColumnOrName"),
+        Row::new("printf", "format: ColumnOrName, *cols: ColumnOrName"),
         Row::new("encode", "col: ColumnOrName, charset: str"),
         Row::new("find_in_set", "str: ColumnOrName, str_array: ColumnOrName"),
         Row::new("instr", "str: ColumnOrName, substr: str | Column"),
