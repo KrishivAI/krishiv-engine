@@ -30,6 +30,8 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "approx_count_distinct",
+    "approx_percentile",
     "array",
     "array_append",
     "array_compact",
@@ -180,6 +182,7 @@ __all__ = [
     "max",
     "md5",
     "mean",
+    "median",
     "min",
     "minute",
     "mode",
@@ -202,6 +205,8 @@ __all__ = [
     "overlay",
     "parse_url",
     "percent_rank",
+    "percentile",
+    "percentile_approx",
     "pi",
     "pmod",
     "position",
@@ -353,6 +358,16 @@ def acosh(col: ColumnOrName) -> Column:
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     """Calls the registry function ``add_months``."""
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
+
+
+def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None = None) -> Column:
+    """Calls the registry function ``approx_count_distinct``."""
+    return _call("approx_count_distinct", _named(col, "col"), *_opt(_lit, rsd, "rsd"))
+
+
+def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000) -> Column:
+    """Calls the registry function ``approx_percentile``."""
+    return _call("approx_percentile", _named(col, "col"), _lit(percentage, "percentage"), _lit(accuracy, "accuracy"))
 
 
 def array(*cols: ColumnOrName) -> Column:
@@ -1170,6 +1185,11 @@ def mean(col: ColumnOrName) -> Column:
     return _call("avg", _named(col, "col"))
 
 
+def median(col: ColumnOrName) -> Column:
+    """Calls the registry function ``median``."""
+    return _call("median", _named(col, "col"))
+
+
 def min(col: ColumnOrName) -> Column:
     """Calls the registry function ``min``."""
     return _call("min", _named(col, "col"))
@@ -1280,6 +1300,16 @@ def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName 
 def percent_rank() -> Column:
     """Calls the registry function ``percent_rank``."""
     return _call("percent_rank")
+
+
+def percentile(col: ColumnOrName, percentage: Column | float, frequency: Column | int = 1) -> Column:
+    """Calls the registry function ``percentile``."""
+    return _call("percentile", _named(col, "col"), _lit(percentage, "percentage"), _lit(frequency, "frequency"))
+
+
+def percentile_approx(col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000) -> Column:
+    """Calls the registry function ``percentile_approx``."""
+    return _call("percentile_approx", _named(col, "col"), _lit(percentage, "percentage"), _lit(accuracy, "accuracy"))
 
 
 def pi() -> Column:

@@ -150,8 +150,12 @@ impl Conv {
             "ColumnOrName" | "Column" => Some(Self::Column),
             "ColumnOrName | float" => Some(Self::Number),
             "ColumnOrName | int" => Some(Self::Int),
-            "Column | int" | "Column | str" | "int | Column" | "str | Column" | "bool | Column"
-            | "int" | "str" | "bool" | "Any" => Some(Self::Literal),
+            // (`Column | float` is `lit(percentage)` / `lit(rsd)` in PySpark: a
+            // Column stays, anything else is a literal.)
+            "Column | int" | "Column | float" | "Column | str" | "int | Column"
+            | "str | Column" | "bool | Column" | "int" | "str" | "bool" | "Any" => {
+                Some(Self::Literal)
+            }
             "dict[str, str]" => Some(Self::Opts),
             _ => None,
         }

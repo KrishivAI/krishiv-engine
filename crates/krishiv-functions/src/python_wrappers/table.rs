@@ -42,6 +42,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("luhn_check", "no PySpark function"),
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
+    (
+        "percentile_cont",
+        "ordered-set aggregate: SQL-only, needs WITHIN GROUP (ORDER BY ...)",
+    ),
+    (
+        "percentile_disc",
+        "ordered-set aggregate: SQL-only, needs WITHIN GROUP (ORDER BY ...)",
+    ),
     ("some", "no PySpark function"),
     ("vector_cosine_similarity", "no PySpark function in 4.2"),
     ("vector_inner_product", "no PySpark function in 4.2"),
@@ -443,6 +451,23 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "assert_true",
             "col: ColumnOrName, errMsg: Column | str = None",
+        ),
+        Row::new("median", C),
+        Row::new(
+            "percentile",
+            "col: ColumnOrName, percentage: Column | float, frequency: Column | int = 1",
+        ),
+        Row::new(
+            "percentile_approx",
+            "col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000",
+        ),
+        Row::new(
+            "approx_percentile",
+            "col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000",
+        ),
+        Row::new(
+            "approx_count_distinct",
+            "col: ColumnOrName, rsd: Column | float = None",
         ),
         Row::new("raise_error", "errMsg: Column | str"),
         Row::new("create_map", "*cols: ColumnOrName").to("map"),

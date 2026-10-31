@@ -199,13 +199,13 @@ fn every_expression_form_prints() {
         ),
         (
             Expr::new(ExprNode::Function(FunctionCall {
+                within_group: Vec::new(),
                 name: "sum".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
                 args: vec![col("a")],
                 distinct: false,
                 filter: Some(col("p")),
-                within_group: Vec::new(),
             })),
             "sum(a) FILTER (WHERE p)",
         ),
@@ -268,13 +268,13 @@ fn shared_subqueries_print_once() {
         LogicalPlan::table(["u"]),
     ));
     let both = Expr::new(ExprNode::Function(FunctionCall {
+        within_group: Vec::new(),
         name: Builtin::And.name().to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),
         args: vec![Arc::clone(&sub), sub],
         distinct: false,
         filter: None,
-        within_group: Vec::new(),
     }));
     let plan = LogicalPlan::table(["t"]).filter(both);
     assert_eq!(

@@ -84,12 +84,12 @@ fn decimal_input(keys: u64) -> Vec<Batch> {
 }
 
 /// `select k, f(v) group by k` over `batches` (`v` a decimal).
-fn decimal_plan(batches: &[Batch], f: AggregateFunction) -> Arc<dyn ExecNode> {
+fn decimal_plan(batches: &[Batch], f: &AggregateFunction) -> Arc<dyn ExecNode> {
     let s = schema_of(DECIMAL);
     let spec = AggregateSpec {
         input: Arc::clone(&s),
         group_by: vec![0],
-        aggregates: vec![AggregateExpr::new(f, 1, DECIMAL, "a")],
+        aggregates: vec![AggregateExpr::new(f.clone(), 1, DECIMAL, "a")],
         output: AggregateOutput::Final,
         ansi: true,
         spill: None,
@@ -226,7 +226,7 @@ fn bench(c: &mut Criterion) {
             for (suffix, mode) in modes {
                 g.bench_function(format!("decimal_{name}_{keys}_keys{suffix}"), |b| {
                     b.iter(|| {
-                        let p = decimal_plan(&batches, f.clone());
+                        let p = decimal_plan(&batches, &f);
                         black_box(run(&runner, &caller, p, 1 << 30, mode))
                     });
                 });
