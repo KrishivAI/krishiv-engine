@@ -135,6 +135,11 @@ impl Session {
     }
 }
 
+/// The parts of a function name as written.
+fn object_parts(name: &krishiv_sql::ast::ObjectName) -> Vec<String> {
+    name.parts.iter().map(|p| p.value.clone()).collect()
+}
+
 /// Logs `result`'s denial, if it is one, as a structured audit record
 /// (target `krishiv::audit`): the principal, the class of what was denied,
 /// and the denial (privilege and securable; never the policy's reason).
@@ -357,6 +362,32 @@ impl Session {
             }
             TargetObject::ParentOf(name) => {
                 let ident = table(&parts(name)?)?;
+                namespaces(
+                    std::iter::once(ident.catalog)
+                        .chain(ident.namespace)
+                        .collect(),
+                )
+            }
+            TargetObject::Function(name) => {
+                let ident = table(&object_parts(name))?;
+                let mut full = vec![ident.catalog];
+                full.extend(ident.namespace);
+                full.push(ident.name);
+                let mut out = vec![Securable::Function(full.clone())];
+                if fold {
+                    let folded: Vec<String> = full
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| if i == 0 { p.clone() } else { p.to_lowercase() })
+                        .collect();
+                    if folded != full {
+                        out.push(Securable::Function(folded));
+                    }
+                }
+                out
+            }
+            TargetObject::ParentOfFunction(name) => {
+                let ident = table(&object_parts(name))?;
                 namespaces(
                     std::iter::once(ident.catalog)
                         .chain(ident.namespace)

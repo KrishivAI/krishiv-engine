@@ -1033,6 +1033,61 @@ fn stored_function_bodies_are_read_through_the_policy() {
     assert_eq!(class(rows(&s, "SELECT ok_stored()")), DENIED);
 }
 
+fn only_function_privileges(securable: &Securable, p: Privilege) -> AccessDecision {
+    if matches!(
+        (securable, p),
+        (Securable::Function(_), Privilege::Drop) | (Securable::Namespace(_), Privilege::Create)
+    ) {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// Stored `CREATE FUNCTION` needs `CREATE` on the namespace (and `DROP` on
+/// the function to replace it), stored `DROP FUNCTION` needs `DROP` on the
+/// function; temporary functions are the session's own and need nothing.
+#[test]
+fn stored_function_statements_are_authorized() {
+    // Denied everywhere: nothing is created or dropped.
+    let policy = Policy::new(allow);
+    let s = session(Arc::<Policy>::clone(&policy));
+    assert_eq!(
+        class(block_on(s.sql("CREATE FUNCTION p() RETURNS INT RETURN 1"))),
+        "OK"
+    );
+    policy.deny_everything();
+    assert_eq!(
+        class(block_on(s.sql("CREATE FUNCTION q() RETURNS INT RETURN 1"))),
+        DENIED
+    );
+    assert_eq!(class(block_on(s.sql("DROP FUNCTION p"))), DENIED);
+    assert_eq!(class(block_on(s.sql("DROP FUNCTION IF EXISTS p"))), DENIED);
+    assert_eq!(
+        class(block_on(
+            s.sql("CREATE OR REPLACE FUNCTION p() RETURNS INT RETURN 2")
+        )),
+        DENIED
+    );
+    // A temporary function is the session's own.
+    assert_eq!(
+        class(block_on(
+            s.sql("CREATE TEMPORARY FUNCTION tmp() RETURNS INT RETURN 1")
+        )),
+        "OK"
+    );
+    assert_eq!(class(block_on(s.sql("DROP TEMPORARY FUNCTION tmp"))), "OK");
+    // The inverse policy denies only creating in the namespace and dropping
+    // a function: each statement is checked for its own privilege.
+    let s = session(Policy::new(only_function_privileges));
+    assert_eq!(
+        class(block_on(s.sql("CREATE FUNCTION p() RETURNS INT RETURN 1"))),
+        DENIED
+    );
+    assert_eq!(class(block_on(s.sql("DROP FUNCTION IF EXISTS p"))), DENIED);
+    assert_eq!(class(rows(&s, "SELECT 1")), "OK");
+}
+
 /// A stored function cannot read a temporary table (Spark checks this
 /// before any privilege): the temporary one `t` of the session stays
 /// out of the catalog.

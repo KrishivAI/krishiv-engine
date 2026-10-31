@@ -962,3 +962,19 @@ fn a_stored_function_cannot_read_a_temporary_view() {
     );
     assert_eq!(ok(&s, "SELECT reads_tv()"), ["1"]);
 }
+
+#[test]
+fn a_temporary_function_in_a_subquery_filter_is_found() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tmp_g(x INT) RETURNS INT RETURN x",
+    );
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION g() RETURNS INT RETURN (SELECT max(c) FROM (SELECT 1 AS c) WHERE c > tmp_g(0))",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    assert_eq!(params["tempObj"], "FUNCTION");
+    assert_eq!(params["tempObjName"], "`tmp_g`");
+}

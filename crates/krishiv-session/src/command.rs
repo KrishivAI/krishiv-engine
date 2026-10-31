@@ -1138,7 +1138,11 @@ impl Session {
                 }
             }
             if let ExprNode::Subquery { plan, .. } = &e.node {
-                plan.for_each_expr(&mut |x| stack.push(x));
+                let mut plans = vec![plan];
+                while let Some(p) = plans.pop() {
+                    p.for_each_expr(&mut |x| stack.push(x));
+                    p.for_each_child(&mut |c| plans.push(c));
+                }
             }
             e.for_each_child(&mut |c| stack.push(c));
         }
