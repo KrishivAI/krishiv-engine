@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{FunctionLookup, FunctionRegistry, SparkProfile, SqlFunction};
-use krishiv_plan::{Expr, LogicalPlan, PlanNode, SourceId};
+use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, SourceId};
 
 use crate::catalog::{SessionCatalog, expand_temp_views};
 use crate::store::{CatalogStore, StoredFunctions};
@@ -177,7 +177,7 @@ impl QueryFunctions {
     }
 
     /// `def` with the temporary views its body reads inlined.
-    fn expanded(&self, def: &Arc<SqlFunction>) -> Arc<SqlFunction> {
+    fn expanded(&self, def: &Arc<SqlFunction>, profile: SparkProfile) -> Arc<SqlFunction> {
         let mut cache = self.expanded.lock().unwrap_or_else(PoisonError::into_inner);
         let key = cache_key(def);
         if let Some(hit) = cache.get(&key) {
@@ -185,9 +185,18 @@ impl QueryFunctions {
         }
         // A stored function reads the catalog, not the caller's temporary
         // views (it could not have been created reading one).
-        if !def.qualifier.is_empty() {
-            cache.insert(key, Arc::clone(def));
-            return Arc::clone(def);
+        // Its bare function names resolve in its own namespace, not the
+        // caller's, and no temporary function of the session shadows them.
+        if let Some(namespace) = def.qualifier.last() {
+            let out = match self.qualify_calls(&def.body, namespace, profile) {
+                Some(body) => Arc::new(SqlFunction {
+                    body,
+                    ..(**def).clone()
+                }),
+                None => Arc::clone(def),
+            };
+            cache.insert(key, Arc::clone(&out));
+            return out;
         }
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
         // A body no view expansion can read (a snapshot name, a cycle)
@@ -211,6 +220,42 @@ impl QueryFunctions {
     }
 }
 
+impl QueryFunctions {
+    /// `body` with each bare call that is not a built-in qualified by
+    /// `namespace`; `None` when nothing changed. Calls inside subquery
+    /// plans are not entered.
+    fn qualify_calls(
+        &self,
+        body: &Arc<Expr>,
+        namespace: &str,
+        profile: SparkProfile,
+    ) -> Option<Arc<Expr>> {
+        let out = Arc::clone(body)
+            .transform_up(
+                &mut |e: Arc<Expr>| -> Result<Arc<Expr>, std::convert::Infallible> {
+                    let ExprNode::Function(call) = &e.node else {
+                        return Ok(e);
+                    };
+                    if !call.qualifier.is_empty()
+                        || !matches!(
+                            self.base.lookup(&[call.name.clone()], profile),
+                            FunctionLookup::NotFound
+                        )
+                    {
+                        return Ok(e);
+                    }
+                    let mut call = call.clone();
+                    call.qualifier = vec![namespace.to_owned()];
+                    let mut next = (*e).clone();
+                    next.node = ExprNode::Function(call);
+                    Ok(Arc::new(next))
+                },
+            )
+            .unwrap_or_else(|never| match never {});
+        (!Arc::ptr_eq(&out, body)).then_some(out)
+    }
+}
+
 impl FunctionRegistry for QueryFunctions {
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup {
         match self.base.lookup(name, profile) {
@@ -226,12 +271,12 @@ impl FunctionRegistry for QueryFunctions {
         let temporary = |f: &String| {
             self.map
                 .get(f)
-                .map(|entry| FunctionLookup::Sql(self.expanded(&entry.def)))
+                .map(|entry| FunctionLookup::Sql(self.expanded(&entry.def, profile)))
         };
         let stored = |namespace: &str, f: &String| {
             self.stored
                 .get(namespace, f)
-                .map(|stored| FunctionLookup::Sql(self.expanded(&stored.entry.def)))
+                .map(|stored| FunctionLookup::Sql(self.expanded(&stored.entry.def, profile)))
         };
         let found = match lower.as_slice() {
             [f] => temporary(f).or_else(|| stored(&self.namespace, f)),

@@ -1119,3 +1119,27 @@ fn a_table_function_takes_deterministic_arguments_and_no_temporary_ones() {
     );
     assert_eq!(ok(&s, "SELECT * FROM `d.t`()"), ["5"]);
 }
+
+#[test]
+fn a_stored_body_resolves_its_bare_names_in_its_own_namespace() {
+    let s = session();
+    ok(&s, "CREATE FUNCTION inner_f() RETURNS INT RETURN 1");
+    ok(
+        &s,
+        "CREATE FUNCTION outer_f() RETURNS INT RETURN inner_f() + 10",
+    );
+    // A temporary function of the caller's does not shadow the stored one
+    // the body names.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION inner_f() RETURNS INT RETURN 100",
+    );
+    assert_eq!(ok(&s, "SELECT inner_f()"), ["100"]);
+    assert_eq!(ok(&s, "SELECT outer_f()"), ["11"]);
+    // Built-ins in the body stay built-ins.
+    ok(
+        &s,
+        "CREATE FUNCTION abs_f(x INT) RETURNS INT RETURN abs(x) + 1",
+    );
+    assert_eq!(ok(&s, "SELECT abs_f(-4)"), ["5"]);
+}
