@@ -862,3 +862,22 @@ fn strings_to_booleans_match_spark() {
         &BooleanArray::from(vec![Some(true), None, Some(false)])
     );
 }
+
+#[test]
+fn numbers_to_booleans_match_spark() {
+    let b = DataType::Boolean;
+    let ints: ArrayRef = Arc::new(Int32Array::from(vec![Some(0), Some(-3), None, Some(7)]));
+    let want = BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
+    for mode in [Ansi, Legacy, Try] {
+        let out = run(&ints, &b, mode).unwrap();
+        assert_eq!(out.as_any().downcast_ref::<BooleanArray>().unwrap(), &want);
+    }
+    let floats: ArrayRef = Arc::new(Float64Array::from(vec![0.0, -0.0, f64::NAN, 0.5]));
+    let out = run(&floats, &b, Ansi).unwrap();
+    assert_eq!(
+        out.as_any().downcast_ref::<BooleanArray>().unwrap(),
+        &BooleanArray::from(vec![false, false, true, true])
+    );
+    assert_eq!(one(dec(0, 5, 2), b.clone(), Ansi), "false");
+    assert_eq!(one(dec(-1, 5, 2), b, Ansi), "true");
+}

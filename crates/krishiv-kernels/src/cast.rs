@@ -605,6 +605,19 @@ pub fn cast(
         (f, DataType::Int16) if is_numeric(f) => numeric_to_int!(Int16Type),
         (f, DataType::Int32) if is_numeric(f) => numeric_to_int!(Int32Type),
         (f, DataType::Int64) if is_numeric(f) => numeric_to_int!(Int64Type),
+        // Non-zero is `true` (a NaN is non-zero); never fails.
+        (f, DataType::Boolean) if is_numeric(f) && *f != DataType::Boolean => {
+            let nums = nums.ok_or_else(unsupported)?;
+            let out: BooleanArray = (0..input.len())
+                .map(|i| {
+                    input.is_valid(i).then(|| match nums.get(i) {
+                        Num::Int(v) | Num::Dec(v, _) => v != 0,
+                        Num::Float(v, _) => v != 0.0,
+                    })
+                })
+                .collect();
+            Ok(Arc::new(out))
+        }
         (f, DataType::Float32 | DataType::Float64) if is_numeric(f) => {
             let f32_target = *to == DataType::Float32;
             let nums = nums.ok_or_else(unsupported)?;
