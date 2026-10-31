@@ -214,4 +214,52 @@ mod tests {
         assert_eq!(format_time(45296 * S + 500_000_000), "12:34:56.5");
         assert_eq!(format_time(45296 * S + 789_123_000), "12:34:56.789123");
     }
+
+    fn times(v: &[Option<i64>]) -> PrimitiveArray<Time64NanosecondType> {
+        v.iter().copied().collect()
+    }
+
+    #[test]
+    fn trunc_and_diff_follow_spark() {
+        let units = StringArray::from(vec![
+            Some("hour"),
+            Some("MICROSECOND"),
+            None,
+            Some("minute"),
+        ]);
+        let t = times(&[
+            Some(45296 * S + 789_123_000),
+            Some(45296 * S + 789_123_000),
+            Some(0),
+            None,
+        ]);
+        let out = time_trunc(&units, &t).unwrap();
+        assert_eq!(out.value(0), 12 * 3600 * S);
+        assert_eq!(out.value(1), 45296 * S + 789_123_000);
+        assert!(out.is_null(2) && out.is_null(3));
+
+        let start = times(&[Some(0), Some(45296 * S), Some(0)]);
+        let end = times(&[Some(45296 * S + 100_000_000), Some(3723 * S), Some(0)]);
+        let units = StringArray::from(vec![Some("MILLISECOND"), Some("HOUR"), None]);
+        let out = time_diff(&units, &start, &end).unwrap();
+        assert_eq!(out.value(0), 45_296_100);
+        // Counted toward zero: -11 hours and a bit.
+        assert_eq!(out.value(1), -11);
+        assert!(out.is_null(2));
+    }
+
+    #[test]
+    fn an_unknown_unit_raises_for_a_non_null_row_only() {
+        let t = times(&[Some(1), None]);
+        for bad in ["MS", " ", "INVALID"] {
+            let units = StringArray::from(vec![Some(bad), Some(bad)]);
+            let e = time_trunc(&units, &t).unwrap_err();
+            assert_eq!(
+                e.error().error_class(),
+                krishiv_common::error::ErrorClass::InvalidParameterValueTimeUnit
+            );
+        }
+        let units = StringArray::from(vec![Some("HOUR"), Some("bad")]);
+        assert!(time_trunc(&units, &t).is_ok());
+    }
 }
