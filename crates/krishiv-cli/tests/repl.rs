@@ -350,3 +350,55 @@ fn a_statement_under_the_gate_or_with_the_gate_off_runs() {
     );
     assert!(o.status.success(), "{}", err(&o));
 }
+
+#[test]
+fn a_heavy_explain_analyze_is_gated_in_agent_mode_too() {
+    let o = krishiv(
+        &[
+            "sql",
+            "--agent",
+            "--explain-analyze",
+            "--table",
+            &lineitem(),
+            "--conf",
+            "krishiv.agent.gateBytes=1k",
+            "-e",
+            "select count(*) from lineitem",
+        ],
+        None,
+    );
+    assert_eq!(o.status.code(), Some(3), "{}", err(&o));
+    assert!(
+        out(&o).starts_with("-- not run: estimated scan "),
+        "{}",
+        out(&o)
+    );
+}
+
+#[test]
+fn a_table_without_statistics_has_an_unknown_estimate_and_runs() {
+    let dir = std::env::temp_dir().join(format!("krishiv-gate-csv-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let csv = dir.join("t.csv");
+    std::fs::write(&csv, "a\n1\n2\n3\n").expect("csv");
+    let sql = format!("select count(*) as n from csv.`{}`", csv.display());
+    let o = krishiv(
+        &[
+            "sql",
+            "--agent",
+            "--conf",
+            "krishiv.agent.gateBytes=1",
+            "-e",
+            &sql,
+        ],
+        None,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        o.status.success(),
+        "unknown estimates run: {}{}",
+        out(&o),
+        err(&o)
+    );
+    assert!(out(&o).contains("-- rows: 1 of 1"), "{}", out(&o));
+}

@@ -265,12 +265,13 @@ pub(crate) fn run_one(
         }
         describe(stmt, statement.line_offset, &e)
     })?;
+    // The gate guards what would run: agent output and `--explain-analyze` (which runs the query).
+    if agent && !args.allow_heavy && !args.explain_verbose && gated(session, &df, out)? {
+        return Ok(Ran::NotRun);
+    }
     if args.explain_analyze || args.explain_verbose {
         print_explain(out, &df, args).map(|()| Ran::Yes)
     } else if agent {
-        if !args.allow_heavy && gated(session, &df, out)? {
-            return Ok(Ran::NotRun);
-        }
         print_agent_result(out, statement, &df, session, args).map(|()| Ran::Yes)
     } else {
         print_result(out, &df, session, mode, args).map(|()| Ran::Yes)
@@ -297,7 +298,7 @@ fn gated(session: &krishiv::Session, df: &DataFrame, out: &mut dyn Write) -> Res
     let Ok(estimate) = futures::executor::block_on(df.estimate()) else {
         return Ok(false);
     };
-    let Some(scan) = estimate.scan_bytes.filter(|b| *b >= gate) else {
+    let Some(scan) = over_gate(estimate.scan_bytes, gate) else {
         return Ok(false);
     };
     write!(
@@ -307,6 +308,11 @@ fn gated(session: &krishiv::Session, df: &DataFrame, out: &mut dyn Write) -> Res
     )
     .map_err(|e| format!("cannot write output: {e}"))?;
     Ok(true)
+}
+
+/// The estimate when it reaches the gate; an unknown estimate and a gate of 0 never do.
+fn over_gate(scan_bytes: Option<u64>, gate: u64) -> Option<u64> {
+    scan_bytes.filter(|b| gate > 0 && *b >= gate)
 }
 
 /// `krishiv.agent.gateBytes` of the session (1 GiB when unset or unreadable).
@@ -711,6 +717,15 @@ mod tests {
         let (read, stop) = read_batches(&mut stream, 3, Some(1e30), Instant::now()).expect("read");
         assert_eq!(read.len(), 2, "stops one batch past the row cap");
         assert!(stop.is_none());
+    }
+
+    #[test]
+    fn the_gate_stops_at_the_threshold_and_never_on_unknown() {
+        assert_eq!(over_gate(Some(1000), 1000), Some(1000));
+        assert_eq!(over_gate(Some(999), 1000), None);
+        assert_eq!(over_gate(Some(5000), 1000), Some(5000));
+        assert_eq!(over_gate(None, 1000), None);
+        assert_eq!(over_gate(Some(u64::MAX), 0), None);
     }
 
     #[test]

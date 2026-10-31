@@ -729,6 +729,10 @@ fn format_gib(bytes: u64) -> String {
             format!("{:.1} GiB", bytes as f64 / GIB as f64)
         }
     } else if bytes >= MIB {
+        // A value that rounds up to 1024.0 MiB is a gibibyte.
+        if bytes as f64 / MIB as f64 >= 1023.95 {
+            return format!("{:.1} GiB", bytes as f64 / GIB as f64);
+        }
         format!("{:.1} MiB", bytes as f64 / MIB as f64)
     } else if bytes >= KIB {
         format!("{:.1} KiB", bytes as f64 / KIB as f64)

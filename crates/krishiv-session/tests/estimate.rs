@@ -54,3 +54,29 @@ fn a_join_adds_the_scans_of_both_sides() {
     let e = block_on(df.estimate()).unwrap();
     assert_eq!(e.scan_bytes, Some(2 * 100 * 16));
 }
+
+#[test]
+fn a_subquery_scan_counts() {
+    let s = session_with(1000);
+    let df = block_on(s.sql("SELECT (SELECT count(*) FROM t) AS n")).unwrap();
+    let e = block_on(df.estimate()).unwrap();
+    assert_eq!(e.scan_bytes, Some(1000 * 16));
+    let df = block_on(s.sql("SELECT a FROM t WHERE a IN (SELECT a FROM t WHERE a < 5)")).unwrap();
+    let e = block_on(df.estimate()).unwrap();
+    assert_eq!(e.scan_bytes, Some(2 * 1000 * 16));
+}
+
+#[test]
+fn a_table_without_statistics_has_an_unknown_estimate() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("t.csv");
+    std::fs::write(&csv, "a\n1\n2\n").unwrap();
+    let df = s
+        .read()
+        .format("csv")
+        .option("header", "true")
+        .load([csv.to_str().unwrap()]);
+    let e = block_on(df.estimate()).unwrap();
+    assert_eq!(e.scan_bytes, None);
+}

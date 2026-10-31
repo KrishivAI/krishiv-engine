@@ -258,7 +258,9 @@ impl DataFrame {
                 continue;
             }
             stack.push((Arc::clone(&p), true));
-            p.for_each_child(&mut |c| stack.push((Arc::clone(c), false)));
+            for c in plan_children(&p) {
+                stack.push((c, false));
+            }
         }
         let mut paths: std::collections::HashMap<*const LogicalPlan, u64> =
             std::collections::HashMap::new();
@@ -276,10 +278,10 @@ impl DataFrame {
                     _ => None,
                 };
             }
-            p.for_each_child(&mut |c| {
-                let slot = paths.entry(Arc::as_ptr(c)).or_insert(0);
+            for c in plan_children(p) {
+                let slot = paths.entry(Arc::as_ptr(&c)).or_insert(0);
                 *slot = slot.saturating_add(n);
-            });
+            }
         }
         let root = optimized.root();
         let rows = estimates
@@ -465,6 +467,26 @@ fn failed(
         ExplainMode::Codegen => format!("{error}\n"),
         _ => PLANNING_ERROR.to_owned(),
     }
+}
+
+/// The relations under `p`: its inputs and the plans of the subquery expressions it holds (scalar, `EXISTS`, `IN`),
+/// which `for_each_child` does not visit.
+fn plan_children(p: &Arc<LogicalPlan>) -> Vec<Arc<LogicalPlan>> {
+    let mut out = Vec::new();
+    p.for_each_child(&mut |c| out.push(Arc::clone(c)));
+    let mut exprs = Vec::new();
+    p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+    let mut seen = std::collections::HashSet::new();
+    while let Some(e) = exprs.pop() {
+        if !seen.insert(Arc::as_ptr(&e)) {
+            continue;
+        }
+        if let krishiv_plan::ExprNode::Subquery { plan, .. } = &e.node {
+            out.push(Arc::clone(plan));
+        }
+        e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
+    }
+    out
 }
 
 /// `v` as a whole number of at least 0 (saturating).
