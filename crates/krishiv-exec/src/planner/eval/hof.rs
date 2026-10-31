@@ -2274,6 +2274,8 @@ mod tests {
             user: Arc::from("test"),
             udfs: None,
             map_key_dedup_last_win: false,
+            legacy_java_charsets: false,
+            legacy_coding_error_action: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }

@@ -109,6 +109,16 @@ pub struct ExprEnv {
     /// feature: session_zone_name
     #[prost(string, optional, tag = "7")]
     pub zone_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// `spark.sql.legacy.javaCharsets`: `encode` and `decode` take Java's names;
+    /// a worker without the feature would refuse those charsets.
+    /// feature: legacy_charset_switches
+    #[prost(bool, optional, tag = "8")]
+    pub legacy_java_charsets: ::core::option::Option<bool>,
+    /// `spark.sql.legacy.codingErrorAction`: unmappable characters become `?` and
+    /// malformed input U+FFFD; a worker without the feature would raise.
+    /// feature: legacy_charset_switches
+    #[prost(bool, optional, tag = "9")]
+    pub legacy_coding_error_action: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

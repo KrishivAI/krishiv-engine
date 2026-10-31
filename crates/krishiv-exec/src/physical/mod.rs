@@ -288,6 +288,14 @@ pub struct ExprEnv {
     /// the value inserted last. A plan that sets it needs the
     /// `map_key_dedup_policy` codec feature.
     pub map_key_dedup_last_win: bool,
+    /// `spark.sql.legacy.javaCharsets`: `encode` and `decode` take Java's
+    /// names. A plan that sets it needs the `legacy_charset_switches` codec
+    /// feature.
+    pub legacy_java_charsets: bool,
+    /// `spark.sql.legacy.codingErrorAction`: `encode` and `decode` replace
+    /// what they cannot map instead of raising. A plan that sets it needs
+    /// the `legacy_charset_switches` codec feature.
+    pub legacy_coding_error_action: bool,
 }
 
 impl ExprEnv {
@@ -760,7 +768,9 @@ plan_data!(struct ExprEnv {
     zone_name,
     query_start_micros,
     user,
-    map_key_dedup_last_win
+    map_key_dedup_last_win,
+    legacy_java_charsets,
+    legacy_coding_error_action
 });
 plan_data!(enum PhysNode {
     Scan(scan),
