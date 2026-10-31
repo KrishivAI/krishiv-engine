@@ -30,6 +30,8 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "approx_count_distinct",
+    "approx_percentile",
     "array",
     "array_append",
     "array_compact",
@@ -92,6 +94,7 @@ __all__ = [
     "date_add",
     "date_diff",
     "date_format",
+    "date_from_unix_date",
     "date_part",
     "date_sub",
     "date_trunc",
@@ -180,6 +183,7 @@ __all__ = [
     "max",
     "md5",
     "mean",
+    "median",
     "min",
     "minute",
     "mode",
@@ -202,6 +206,8 @@ __all__ = [
     "overlay",
     "parse_url",
     "percent_rank",
+    "percentile",
+    "percentile_approx",
     "pi",
     "pmod",
     "position",
@@ -277,6 +283,9 @@ __all__ = [
     "sum",
     "tan",
     "tanh",
+    "timestamp_micros",
+    "timestamp_millis",
+    "timestamp_seconds",
     "toDegrees",
     "toRadians",
     "to_binary",
@@ -317,6 +326,9 @@ __all__ = [
     "unhex",
     "uniform",
     "unix_date",
+    "unix_micros",
+    "unix_millis",
+    "unix_seconds",
     "upper",
     "url_decode",
     "url_encode",
@@ -353,6 +365,16 @@ def acosh(col: ColumnOrName) -> Column:
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     """Calls the registry function ``add_months``."""
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
+
+
+def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None = None) -> Column:
+    """Calls the registry function ``approx_count_distinct``."""
+    return _call("approx_count_distinct", _named(col, "col"), *_opt(_lit, rsd, "rsd"))
+
+
+def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000) -> Column:
+    """Calls the registry function ``approx_percentile``."""
+    return _call("approx_percentile", _named(col, "col"), _lit(percentage, "percentage"), _lit(accuracy, "accuracy"))
 
 
 def array(*cols: ColumnOrName) -> Column:
@@ -664,6 +686,11 @@ def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column:
 def date_format(date: ColumnOrName, format: str) -> Column:
     """Calls the registry function ``date_format``."""
     return _call("date_format", _named(date, "date"), _lit(format, "format"))
+
+
+def date_from_unix_date(days: ColumnOrName) -> Column:
+    """Calls the registry function ``date_from_unix_date``."""
+    return _call("date_from_unix_date", _named(days, "days"))
 
 
 def date_part(field: Column, source: ColumnOrName) -> Column:
@@ -1170,6 +1197,11 @@ def mean(col: ColumnOrName) -> Column:
     return _call("avg", _named(col, "col"))
 
 
+def median(col: ColumnOrName) -> Column:
+    """Calls the registry function ``median``."""
+    return _call("median", _named(col, "col"))
+
+
 def min(col: ColumnOrName) -> Column:
     """Calls the registry function ``min``."""
     return _call("min", _named(col, "col"))
@@ -1280,6 +1312,16 @@ def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName 
 def percent_rank() -> Column:
     """Calls the registry function ``percent_rank``."""
     return _call("percent_rank")
+
+
+def percentile(col: ColumnOrName, percentage: Column | float, frequency: Column | int = 1) -> Column:
+    """Calls the registry function ``percentile``."""
+    return _call("percentile", _named(col, "col"), _lit(percentage, "percentage"), _lit(frequency, "frequency"))
+
+
+def percentile_approx(col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000) -> Column:
+    """Calls the registry function ``percentile_approx``."""
+    return _call("percentile_approx", _named(col, "col"), _lit(percentage, "percentage"), _lit(accuracy, "accuracy"))
 
 
 def pi() -> Column:
@@ -1670,6 +1712,21 @@ def tanh(col: ColumnOrName) -> Column:
     return _call("tanh", _named(col, "col"))
 
 
+def timestamp_micros(col: ColumnOrName) -> Column:
+    """Calls the registry function ``timestamp_micros``."""
+    return _call("timestamp_micros", _named(col, "col"))
+
+
+def timestamp_millis(col: ColumnOrName) -> Column:
+    """Calls the registry function ``timestamp_millis``."""
+    return _call("timestamp_millis", _named(col, "col"))
+
+
+def timestamp_seconds(col: ColumnOrName) -> Column:
+    """Calls the registry function ``timestamp_seconds``."""
+    return _call("timestamp_seconds", _named(col, "col"))
+
+
 def toDegrees(col: ColumnOrName) -> Column:
     """Deprecated alias; calls the registry function ``degrees``."""
     _deprecated("Deprecated in 2.1, use degrees instead.")
@@ -1919,6 +1976,21 @@ def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Co
 def unix_date(col: ColumnOrName) -> Column:
     """Calls the registry function ``unix_date``."""
     return _call("unix_date", _named(col, "col"))
+
+
+def unix_micros(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_micros``."""
+    return _call("unix_micros", _named(col, "col"))
+
+
+def unix_millis(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_millis``."""
+    return _call("unix_millis", _named(col, "col"))
+
+
+def unix_seconds(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_seconds``."""
+    return _call("unix_seconds", _named(col, "col"))
 
 
 def upper(col: ColumnOrName) -> Column:

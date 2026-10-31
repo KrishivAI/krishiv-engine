@@ -438,6 +438,14 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_TRY_SUM = 28;
   // feature: mode_regr_bit_listagg_aggs
   AGGREGATE_FUNCTION_TRY_AVG = 29;
+  // feature: percentile_aggregates
+  AGGREGATE_FUNCTION_PERCENTILE = 30;
+  // feature: percentile_aggregates
+  AGGREGATE_FUNCTION_PERCENTILE_APPROX = 31;
+  // feature: percentile_aggregates
+  AGGREGATE_FUNCTION_PERCENTILE_DISC = 32;
+  // feature: percentile_aggregates
+  AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT = 33;
 }
 
 enum AggregateInput {
@@ -468,6 +476,24 @@ message AggregateExpr {
   // feature: mode_regr_bit_listagg_aggs (`listagg` only: one per ordering
   // key, in order: nulls first).
   repeated bool listagg_nulls_first = 10;
+  // feature: percentile_aggregates (`percentile`, `percentile_approx` and
+  // `percentile_disc` only: the folded percentages, in order).
+  repeated double percentages = 11;
+  // feature: percentile_aggregates (the percentile family only: the
+  // percentage was an array, so the result is an array).
+  bool percentile_array = 12;
+  // feature: percentile_aggregates (`percentile` and `percentile_disc`
+  // only: descending order).
+  bool percentile_reverse = 13;
+  // feature: percentile_aggregates (`percentile_approx` only: the folded
+  // accuracy, a positive `int`).
+  int64 percentile_accuracy = 14;
+  // feature: percentile_aggregates (`percentile_disc` only: the legacy
+  // continuous-lower-bound calculation).
+  bool percentile_legacy = 15;
+  // feature: percentile_aggregates (`approx_count_distinct` only: the
+  // folded HyperLogLog++ addressing bits).
+  uint32 hll_precision = 16;
 }
 
 enum JoinType {

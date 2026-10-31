@@ -1150,8 +1150,11 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
         (_, InputType::Any)
         | (Some(DataType::Map(_)), InputType::Map)
         | (Some(DataType::Array(_)), InputType::Array) => Some(from.cloned()),
-        (Some(t), InputType::Numeric { .. }) if is_numeric(t) => Some(Some(t.clone())),
-        (None | Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
+        (Some(t), InputType::Numeric { .. } | InputType::StrictNumeric) if is_numeric(t) => {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::Numeric { .. } | InputType::StrictNumeric)
+        | (Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
         // A type of the collection stays; another takes the first member
         // it may be cast to (Spark's `TypeCollection`), except that a number
         // is not narrowed or widened into one (`date_add(d, 1L)` and
@@ -1350,8 +1353,14 @@ fn null_safe_decimal(from: &DataType, to: DecimalType) -> bool {
     let digits = to.precision() - to.scale();
     match from {
         DataType::Boolean => digits >= 1,
-        // Rounding to fewer decimals may carry into a new digit.
-        DataType::Decimal(d) => digits > d.precision() - d.scale(),
+        // A target that keeps every integer digit and every decimal loses
+        // nothing (Spark types `array(0.25, 0.5)` with `containsNull =
+        // false`); otherwise rounding to fewer decimals may carry into a
+        // new digit, so it needs a spare integer digit.
+        DataType::Decimal(d) => {
+            let from_digits = d.precision() - d.scale();
+            digits > from_digits || (digits >= from_digits && to.scale() >= d.scale())
+        }
         t => integral_digits(t).is_some_and(|p| digits >= p),
     }
 }

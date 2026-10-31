@@ -27,6 +27,7 @@ use arrow_buffer::NullBuffer;
 use arrow_schema::DataType;
 
 pub(crate) mod calendar;
+pub(crate) mod epoch;
 pub(crate) mod format;
 pub(crate) mod make;
 pub(crate) mod unit;
@@ -36,6 +37,10 @@ pub use crate::cast::{FixedOffset, TimeZoneRules};
 pub use calendar::{
     TruncUnit, Zones, convert_timezone, day_name, from_utc_timestamp, last_day, make_date,
     month_name, months_between, next_day, to_utc_timestamp, trunc_date, trunc_timestamp, unix_date,
+};
+pub use epoch::{
+    date_from_unix_date, timestamp_from_integral, timestamp_from_seconds,
+    timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
 };
 pub use format::{
     ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,

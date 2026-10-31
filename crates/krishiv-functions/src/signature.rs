@@ -327,6 +327,11 @@ pub enum InputType {
         /// Whether Spark's required type names ANSI intervals.
         intervals: bool,
     },
+    /// Any numeric type and nothing implicit: a string is
+    /// `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (Spark's `ExpectsInputTypes`
+    /// with `NumericType`, as `timestamp_seconds` has it); an untyped `NULL`
+    /// becomes `DOUBLE`.
+    StrictNumeric,
     /// Any map type; an untyped `NULL` becomes `map<null, null>` (Spark's
     /// implicit cast of `NULL` to the abstract map type).
     Map,
@@ -347,7 +352,7 @@ impl InputType {
             Self::Exact(t) | Self::Strict(t) => format!("\"{}\"", t.sql()),
             Self::Map => "\"MAP\"".to_owned(),
             Self::Array => "\"ARRAY\"".to_owned(),
-            Self::Numeric { intervals: false } => "\"NUMERIC\"".to_owned(),
+            Self::Numeric { intervals: false } | Self::StrictNumeric => "\"NUMERIC\"".to_owned(),
             Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
             // Spark's `AnyTimestampType` names itself in words.
             Self::OneOf(types)

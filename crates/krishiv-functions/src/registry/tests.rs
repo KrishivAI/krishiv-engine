@@ -3248,3 +3248,54 @@ fn cast_named_functions_rewrite_to_casts() {
         Lookup::Found(_)
     ));
 }
+
+/// The percentile family is typed by the shape of its percentage: a
+/// `double` (or the child's type for the approximate ones), or an array of it
+/// for an array percentage; `approx_count_distinct` is a `bigint` that is
+/// never NULL.
+#[test]
+fn quantile_results_follow_the_percentage_shape() {
+    let doubles = DataType::Array(ArrayType::new(DataType::Double, false).into());
+    let ints = DataType::Array(ArrayType::new(DataType::Integer, false).into());
+    let pct = ty(DataType::Double);
+    let pcts = ty(doubles.clone());
+    let value = ty(DataType::Integer);
+    {
+        let name = "percentile";
+        let one = result(name, &[value.clone(), pct.clone()], &[]).unwrap();
+        assert_eq!(
+            (one.data_type, one.nullable),
+            (Some(DataType::Double), true)
+        );
+        let many = result(name, &[value.clone(), pcts.clone()], &[]).unwrap();
+        assert_eq!(many.data_type, Some(doubles.clone()));
+    }
+    for name in ["percentile_approx", "approx_percentile"] {
+        let one = result(name, &[value.clone(), pct.clone()], &[]).unwrap();
+        assert_eq!(
+            (one.data_type, one.nullable),
+            (Some(DataType::Integer), true)
+        );
+        let many = result(name, &[value.clone(), pcts.clone()], &[]).unwrap();
+        assert_eq!(many.data_type, Some(ints.clone()));
+        // An untyped NULL child stays untyped NULL.
+        let none = result(name, &[null_ty(), pct.clone()], &[]).unwrap();
+        assert_eq!(none.data_type, Some(DataType::Null));
+    }
+    let median = result("median", std::slice::from_ref(&value), &[]).unwrap();
+    assert_eq!(
+        (median.data_type, median.nullable),
+        (Some(DataType::Double), true)
+    );
+    for name in ["percentile_cont", "percentile_disc"] {
+        let one = result(name, std::slice::from_ref(&pct), &[]).unwrap();
+        assert_eq!(one.data_type, Some(DataType::Double));
+        let many = result(name, std::slice::from_ref(&pcts), &[]).unwrap();
+        assert_eq!(many.data_type, Some(doubles.clone()));
+    }
+    let distinct = result("approx_count_distinct", std::slice::from_ref(&value), &[]).unwrap();
+    assert_eq!(
+        (distinct.data_type, distinct.nullable),
+        (Some(DataType::Long), false)
+    );
+}
