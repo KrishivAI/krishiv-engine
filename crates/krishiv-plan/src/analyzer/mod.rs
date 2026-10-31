@@ -314,6 +314,10 @@ pub struct ResolutionConf {
     /// `SimpleDateFormat` parser, which Krishiv does not implement (the
     /// datetime functions with a pattern are refused).
     pub legacy_time_parser: bool,
+    /// `spark.sql.timeType.enabled`: the `TIME` type may appear in a plan.
+    /// Spark 4.2 defaults it to false; Krishiv refuses a `TIME` anywhere
+    /// while it is off (stricter than Spark, design P2-T181 section 2).
+    pub time_type: bool,
 }
 
 impl Default for ResolutionConf {
@@ -337,13 +341,14 @@ impl Default for ResolutionConf {
             allow_star_with_single_table_identifier_in_count: false,
             udf_parameter_shadows_function: false,
             legacy_time_parser: false,
+            time_type: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 17] = [
+    pub const KEYS: [&'static str; 18] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -361,6 +366,7 @@ impl ResolutionConf {
         "spark.sql.legacy.allowStarWithSingleTableIdentifierInCount",
         "spark.sql.legacy.allowUdfParameterToShadowParameterlessFunction",
         "spark.sql.legacy.timeParserPolicy",
+        "spark.sql.timeType.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -412,6 +418,7 @@ impl ResolutionConf {
                 }),
             legacy_time_parser: conf(Self::KEYS[16])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
+            time_type: on(Self::KEYS[17]),
         }
     }
 }
@@ -505,6 +512,7 @@ impl ContextFingerprint {
             c.allow_parameterless_count,
             c.allow_star_with_single_table_identifier_in_count,
             c.udf_parameter_shadows_function,
+            c.time_type,
         ];
         num(
             &mut b,
@@ -761,7 +769,7 @@ impl Analyzer for DefaultAnalyzer {
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
             let (root, output, securables, warnings) = resolve::resolve(plan, ctx, &bindings)?;
-            unexecutable::check(&root)?;
+            unexecutable::check(&root, ctx.conf.time_type)?;
             let resolved =
                 Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
             let bind::Bindings {

@@ -2045,6 +2045,10 @@ fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
                     kind: IrTypedKind::TimestampLtz,
                     value: value.clone(),
                 },
+                TypedKind::Time => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Time,
+                    value: value.clone(),
+                },
                 TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(
                     literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
                 )),

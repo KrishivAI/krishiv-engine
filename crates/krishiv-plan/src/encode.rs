@@ -1243,6 +1243,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::TypedLiteralKind::Timestamp => 2,
                     crate::TypedLiteralKind::TimestampNtz => 3,
                     crate::TypedLiteralKind::TimestampLtz => 4,
+                    crate::TypedLiteralKind::Time => 5,
                 });
                 self.str(value);
             }

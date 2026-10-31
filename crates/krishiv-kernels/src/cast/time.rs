@@ -13,7 +13,7 @@
 pub(crate) const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
 /// Nanoseconds since midnight for `text`, or `None` when malformed.
-pub(crate) fn parse_time(text: &str) -> Option<i64> {
+pub fn parse_time(text: &str) -> Option<i64> {
     let s = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let s = s.strip_prefix('T').unwrap_or(s);
     let (clock, meridiem) = match s.rsplit_once(' ') {
@@ -57,7 +57,7 @@ pub(crate) fn parse_time(text: &str) -> Option<i64> {
 
 /// `HH:mm:ss` with the fraction's trailing zeros dropped, as Spark shows a
 /// `TIME`.
-pub(crate) fn format_time(nanos: i64) -> String {
+pub fn format_time(nanos: i64) -> String {
     let secs = nanos.div_euclid(NANOS_PER_SECOND);
     let frac = nanos.rem_euclid(NANOS_PER_SECOND);
     let mut out = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);

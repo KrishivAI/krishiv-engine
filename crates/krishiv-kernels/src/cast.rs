@@ -39,6 +39,7 @@ use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
 
 pub use datetime::{FixedOffset, TimeZoneRules};
+pub use time::{format_time, parse_time};
 pub use timestamp::{TimestampText, timestamp_has_zone, timestamp_text};
 
 use crate::decimal::DecimalNative;

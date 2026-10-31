@@ -1301,6 +1301,14 @@ pub(super) fn can_cast(
     if *from == T::String || *to == T::String {
         return Ok(());
     }
+    // A time casts to another time and to `int`/`bigint` (seconds); Spark
+    // 4.2 refuses every other cast, in either direction.
+    if matches!(from, T::Time { .. }) || matches!(to, T::Time { .. }) {
+        return match (from, to) {
+            (T::Time { .. }, T::Time { .. } | T::Integer | T::Long) => Ok(()),
+            _ => Err(BadCast::Without),
+        };
+    }
     match (from, to) {
         (f, T::Binary) if integral_digits(f).is_some() => conf(),
         (T::Binary, _) | (_, T::Binary) => Err(BadCast::Without),

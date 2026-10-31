@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray as _;
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
@@ -114,6 +115,10 @@ pub(super) struct CastParts {
     pub(super) kernel_to: ArrowType,
     pub(super) mode: KernelMode,
     pub(super) zone: krishiv_kernels::datetime::ZoneRef,
+    /// Nanoseconds per unit of a `time(p)` target (`10^(9-p)`); 1 for every
+    /// other target. A time cast to `time(p)` drops the digits below `p`
+    /// (a string cast keeps them, as Spark does).
+    pub(super) time_unit: i64,
 }
 
 /// The cast of `from` to `to` in `mode`, with the session zone of `env`.
@@ -144,6 +149,7 @@ pub(super) fn parts(
         kernel_to,
         mode,
         zone,
+        time_unit: 1,
     })
 }
 
@@ -161,6 +167,7 @@ impl CastParts {
             kernel_to,
             mode: self.mode,
             zone: self.zone.clone(),
+            time_unit: 1,
         }
     }
 }
@@ -180,6 +187,17 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &p.zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
+    let out = match (input.data_type(), out.data_type()) {
+        (ArrowType::Time64(_), ArrowType::Time64(_)) if p.time_unit > 1 => {
+            use arrow_array::types::Time64NanosecondType;
+            let unit = p.time_unit;
+            Arc::new(
+                out.as_primitive::<Time64NanosecondType>()
+                    .unary::<_, Time64NanosecondType>(|v| v - v % unit),
+            ) as ArrayRef
+        }
+        _ => out,
+    };
     let out: ArrayRef = match (out.data_type(), &p.to) {
         (a, b) if a == b => out,
         (ArrowType::Timestamp(..), ArrowType::Timestamp(..)) => {
@@ -204,7 +222,10 @@ pub(super) fn compile(
     mode: CastMode,
     input: Input<'_>,
 ) -> Result<Arc<dyn PhysExpr>> {
-    let parts = parts(e.data_type(), to.to_arrow(), mode, input.env)?;
+    let mut parts = parts(e.data_type(), to.to_arrow(), mode, input.env)?;
+    if let DataType::Time { precision } = to {
+        parts.time_unit = 10_i64.pow(9 - u32::from(*precision).min(9));
+    }
     // Every cast to a narrower or textual type can produce NULL in legacy
     // and `TRY_CAST` modes; ANSI keeps the input's nullability.
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
