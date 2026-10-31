@@ -481,7 +481,14 @@ fn names_are_checked_as_written_and_folded() {
             "CREATE namespace `spark_catalog`.`global_temp`"
         ]
     );
-    assert_eq!(asked("REFRESH TABLE t"), ["MONITOR system `cluster`"]);
+    // Naming a table answers whether it exists, so it needs the right to read it too.
+    assert_eq!(
+        asked("REFRESH TABLE t"),
+        [
+            "SELECT table `spark_catalog`.`default`.`t`",
+            "MONITOR system `cluster`"
+        ]
+    );
     assert_eq!(asked("SET a = b"), Vec::<String>::new());
     // A computed name is evaluated first and checked as the name it gives (`ab`, which is absent).
     assert_eq!(

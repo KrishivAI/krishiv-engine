@@ -124,7 +124,9 @@ impl Session {
         duplicate_aliases(&args, case_sensitive)?;
 
         let bound = bind(&statement_text, &args, case_sensitive)?;
+        // The text of a dynamic statement does not see a running script's locals.
         let bound = self
+            .with_locals(Vec::new())
             .resolve_identifier_clauses(&bound, &env0.parser)
             .await?
             .into_owned();

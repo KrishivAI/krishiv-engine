@@ -439,7 +439,8 @@ impl Session {
                             .join("."),
                     )
                     .cache();
-                frame.collect().await?;
+                // Counting reads every batch into the cache without keeping the rows.
+                frame.count().await?;
             }
             _ => {
                 return Err(crate::session::internal("unknown CACHE form".to_owned()));

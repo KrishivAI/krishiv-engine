@@ -172,10 +172,13 @@ fn cache_table_reads_a_relation_into_the_cache() {
         &s,
         "CACHE LAZY TABLE t OPTIONS ('storageLevel'='DISK_ONLY')",
     );
+    // The permanent table's entry is held until `UNCACHE` removes it.
+    assert!(s.cache_reserved() > 0);
+    run(&s, "UNCACHE TABLE t");
+    assert_eq!(s.cache_reserved(), 0);
     // A write drops the cached rows of its table.
     run(&s, "INSERT INTO t VALUES (4)");
     assert_eq!(first(&s, "SELECT sum(a) FROM t"), "10");
-    run(&s, "UNCACHE TABLE t");
     // `AS query` makes the temporary view first.
     run(&s, "CACHE TABLE v AS SELECT a * 2 AS b FROM t");
     assert_eq!(first(&s, "SELECT sum(b) FROM v"), "20");
@@ -204,4 +207,28 @@ fn text_that_is_not_a_clause_is_left_to_the_parser() {
         class(&s, "SELECT :IDENTIFIER('p') FROM VALUES (1) AS T(c)"),
         "PARSE_SYNTAX_ERROR"
     );
+}
+
+#[test]
+fn positions_that_take_no_clause_are_refused_as_spark_refuses_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    // An alias or a window name is one part.
+    for q in [
+        "SELECT row_number() OVER IDENTIFIER('x.win') FROM VALUES (1) AS T(c1) WINDOW win AS (ORDER BY c1)",
+        "SELECT * FROM VALUES (1, 2) AS IDENTIFIER('schema.table')(c1, c2)",
+        "SELECT 1 AS IDENTIFIER('col1.col2')",
+    ] {
+        assert_eq!(class(&s, q), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{q}");
+    }
+    // Hint arguments, `SHOW <scope> FUNCTIONS` and `EXTRACT(<field> FROM ...)` take no clause.
+    for q in [
+        "SELECT /*+ IDENTIFIER('BROADCAST')(t) */ 1",
+        "SHOW IDENTIFIER('USER') FUNCTIONS",
+        "SELECT EXTRACT(IDENTIFIER('YEAR') FROM DATE'2024-01-15')",
+    ] {
+        assert_eq!(class(&s, q), "PARSE_SYNTAX_ERROR", "{q}");
+    }
+    // A one-part alias still resolves.
+    assert_eq!(first(&s, "SELECT 1 AS IDENTIFIER('one')"), "1");
 }

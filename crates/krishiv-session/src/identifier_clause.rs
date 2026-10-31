@@ -10,8 +10,8 @@
 use std::borrow::Cow;
 
 use krishiv_common::error::{
-    KrishivError, NotAConstantStringNotConstant, NotAConstantStringNull,
-    NotAConstantStringWrongType,
+    IdentifierTooManyNameParts, KrishivError, NotAConstantStringNotConstant,
+    NotAConstantStringNull, NotAConstantStringWrongType,
 };
 use krishiv_plan::Literal;
 use krishiv_sql::ast::{Expr, ExprKind};
@@ -67,7 +67,13 @@ impl Session {
         let mut out = String::new();
         let mut copied = 0;
         let mut i = 0;
+        let mut in_hint = false;
         while i < tokens.len() {
+            match tokens[i].kind {
+                TokenKind::HintStart => in_hint = true,
+                TokenKind::HintEnd => in_hint = false,
+                _ => {}
+            }
             let t = tokens[i];
             let is_clause = t.kind == TokenKind::Word
                 && sql
@@ -78,7 +84,19 @@ impl Session {
                     .is_some_and(|n| n.kind == TokenKind::Sym(Sym::LParen));
             // `:IDENTIFIER(...)` is a named parameter marker, not a clause.
             let after_colon = i > 0 && tokens[i - 1].kind == TokenKind::Sym(Sym::Colon);
-            if !is_clause || after_colon {
+            // Positions whose grammar takes a plain identifier or a keyword, never the clause
+            // (hint arguments, `SHOW <scope> FUNCTIONS`, `EXTRACT(<field> FROM ...)`): the parser
+            // refuses them, as Spark does.
+            let prev = |n: usize| {
+                i.checked_sub(n)
+                    .map(word)
+                    .filter(|w| !w.is_empty())
+                    .unwrap_or_default()
+            };
+            let plain_position = in_hint
+                || prev(1).eq_ignore_ascii_case("SHOW")
+                || (prev(1) == "(" && prev(2).eq_ignore_ascii_case("EXTRACT"));
+            if !is_clause || after_colon || plain_position {
                 i += 1;
                 continue;
             }
@@ -115,10 +133,20 @@ impl Session {
                 i = close + 1;
                 continue;
             }
-            let Some(name) = self.identifier_of(inner, options).await? else {
+            let Some((name, parts)) = self.identifier_of(inner, options).await? else {
                 i = close + 1;
                 continue;
             };
+            // An alias or a window name is one part.
+            if parts > 1
+                && (prev(1).eq_ignore_ascii_case("AS") || prev(1).eq_ignore_ascii_case("OVER"))
+            {
+                return Err(IdentifierTooManyNameParts {
+                    identifier: name,
+                    limit: "1".to_owned(),
+                }
+                .into());
+            }
             out.push_str(sql.get(copied..t.span.start).unwrap_or_default());
             out.push_str(&name);
             copied = last.span.end;
@@ -136,7 +164,7 @@ impl Session {
         &self,
         inner: &str,
         options: &ParserOptions,
-    ) -> Result<Option<String>, KrishivError> {
+    ) -> Result<Option<(String, usize)>, KrishivError> {
         let name = || "IDENTIFIER".to_owned();
         // Not an expression (`CREATE TABLE identifier (a INT)`): a plain name, left to the parser.
         let item = match parse_named_expression(inner, options) {
@@ -175,14 +203,13 @@ impl Session {
             }
         };
         let parsed = parse_multipart_identifier(&text, options).map_err(|e| e.error)?;
-        Ok(Some(
-            parsed
-                .parts
-                .iter()
-                .map(|p| format!("`{}`", p.value.replace('`', "``")))
-                .collect::<Vec<_>>()
-                .join("."),
-        ))
+        let name = parsed
+            .parts
+            .iter()
+            .map(|p| format!("`{}`", p.value.replace('`', "``")))
+            .collect::<Vec<_>>()
+            .join(".");
+        Ok(Some((name, parsed.parts.len())))
     }
 }
 
