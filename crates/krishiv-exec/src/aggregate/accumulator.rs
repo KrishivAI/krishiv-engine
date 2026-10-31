@@ -479,7 +479,9 @@ impl DecFold<'_> {
             let x = v[i].wide();
             match self.w {
                 None => {
-                    if nonempty.is_some_and(|b| b.value(i)) {
+                    // A NULL `nonempty` is an unmatched outer join row's empty
+                    // state, not an overflow.
+                    if nonempty.is_some_and(|b| b.is_valid(i) && b.value(i)) {
                         // An overflowed partial (sum NULL, nonempty) has
                         // no magnitude: it is sticky on both paths.
                         if !self.valid(i) {
@@ -618,10 +620,17 @@ fn floats(a: &ArrayRef) -> Result<Cow<'_, [f64]>> {
 }
 
 /// A `bigint` state column (counts).
-fn counts_of(a: &ArrayRef) -> Result<&[i64]> {
-    a.as_primitive_opt::<Int64Type>()
-        .map(|c| c.values().as_ref())
-        .ok_or_else(|| internal(format!("count state of type {}", a.data_type())))
+fn counts_of(a: &ArrayRef) -> Result<Cow<'_, [i64]>> {
+    let c = a
+        .as_primitive_opt::<Int64Type>()
+        .ok_or_else(|| internal(format!("count state of type {}", a.data_type())))?;
+    // A NULL state is the empty state of an unmatched outer join row: it
+    // counts nothing, whatever its slot holds.
+    Ok(if c.null_count() == 0 {
+        Cow::Borrowed(c.values().as_ref())
+    } else {
+        Cow::Owned(c.iter().map(|v| v.unwrap_or(0)).collect())
+    })
 }
 
 /// A moment aggregate's state column: `double`s, none NULL (a buffer is
@@ -1589,7 +1598,7 @@ impl Accumulator {
             }
             (Kind::Count(c), true) => {
                 let s = counts_of(args[0])?;
-                for (&g, &v) in groups.iter().zip(s) {
+                for (&g, &v) in groups.iter().zip(s.iter()) {
                     let x = &mut c[g as usize];
                     *x = x.wrapping_add(v);
                 }
@@ -1750,7 +1759,7 @@ impl Accumulator {
                 let counts = args.get(1).map(|c| counts_of(c)).transpose()?;
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
-                    if let Some(c) = counts {
+                    if let Some(c) = &counts {
                         if valid(i) {
                             sum[g] += v[i];
                         }
@@ -1784,8 +1793,8 @@ impl Accumulator {
                     proofs,
                 };
                 match decimals(args[0])? {
-                    Decimals::I64(v) => f.avg(sum, count, overflow, v, counts),
-                    Decimals::I128(v) => f.avg(sum, count, overflow, v, counts),
+                    Decimals::I64(v) => f.avg(sum, count, overflow, v, counts.as_deref()),
+                    Decimals::I128(v) => f.avg(sum, count, overflow, v, counts.as_deref()),
                 }
             }
             (

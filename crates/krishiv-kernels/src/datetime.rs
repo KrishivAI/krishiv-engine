@@ -29,6 +29,8 @@ use arrow_schema::DataType;
 pub(crate) mod calendar;
 pub(crate) mod epoch;
 pub(crate) mod format;
+pub(crate) mod make;
+pub(crate) mod unit;
 pub(crate) mod zone;
 
 pub use crate::cast::{FixedOffset, TimeZoneRules};
@@ -44,6 +46,8 @@ pub use format::{
     ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,
     parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
 };
+pub use make::{TimestampFields, make_timestamp};
+pub use unit::{TimestampUnit, timestamp_add, timestamp_diff};
 pub use zone::{ZoneRef, resolve_zone, zone_id};
 
 use crate::cast::datetime::{

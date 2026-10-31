@@ -17,7 +17,7 @@ use std::sync::Arc;
 use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisError, AnalyzedPlan, Analyzer as _, DefaultAnalyzer, MemoryCatalog, QueryContext,
-    ResolutionConf, TableColumn,
+    ResolutionConf, SessionZone, TableColumn,
 };
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, Literal, LogicalPlan,
@@ -353,8 +353,10 @@ fn resolution_corpus_matches_spark() {
         failures.join("\n")
     );
     // The gaps stay the statements they are now (128 since P2-T115 unit 2a
-    // resolved four correlated `EXISTS` / `IN` under `OR` and `NOT`).
-    assert_eq!(gaps, 128, "statements in documented gaps");
+    // resolved four correlated `EXISTS` / `IN` under `OR` and `NOT`; 120
+    // since `date + int`, `int + date` and `date - int` became `date_add`
+    // and `date_sub`).
+    assert_eq!(gaps, 120, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -882,7 +884,7 @@ fn typed_timestamp_literals_resolve_like_spark() {
     let analyze_with = |sql: &str, timestamp_ntz: bool, zone: Option<i32>| {
         let conf = ResolutionConf {
             timestamp_ntz,
-            session_zone: zone,
+            session_zone: zone.map(SessionZone::Fixed),
             ..ResolutionConf::default()
         };
         let plan = parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).map_err(|e| {

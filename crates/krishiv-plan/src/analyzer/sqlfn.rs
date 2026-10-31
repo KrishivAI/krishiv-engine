@@ -86,6 +86,10 @@ pub struct SqlFunction {
     /// case-insensitive whatever `spark.sql.caseSensitive` says); it shows in
     /// errors.
     pub name: String,
+    /// The catalog and namespace of a function stored in the session's
+    /// catalog (`spark_catalog`, `default`); empty for a temporary one. Spark
+    /// names a stored function by all three parts in the errors of a call.
+    pub qualifier: Vec<String>,
     /// The parameters, in order.
     pub params: Vec<SqlParam>,
     /// The declared return type the body is cast to; `None` keeps the
@@ -105,6 +109,22 @@ pub struct SqlFunction {
 }
 
 impl SqlFunction {
+    /// The name as an error of a call quotes it: the qualifier, then the
+    /// name.
+    #[must_use]
+    pub fn routine_name(&self) -> String {
+        let mut parts = self.qualifier.clone();
+        parts.push(self.name.clone());
+        quoted(&parts)
+    }
+
+    /// What tells two functions apart in the path of nested calls.
+    fn path_key(&self) -> String {
+        let mut parts = self.qualifier.clone();
+        parts.push(self.name.clone());
+        parts.join(".")
+    }
+
     /// The number of leading parameters a call must supply: those before
     /// the first one with a default.
     #[must_use]
@@ -159,7 +179,7 @@ fn refs(e: &Arc<Expr>) -> Refs {
 }
 
 /// Whether `e` holds no call of a nondeterministic function.
-fn is_deterministic(e: &Arc<Expr>) -> bool {
+pub(super) fn is_deterministic(e: &Arc<Expr>) -> bool {
     visit_distinct(Node::Expr(e), |node| match node {
         Node::Expr(x)
             if matches!(
@@ -206,9 +226,9 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        if self.fn_path.iter().any(|f| f == &def.name) {
+        if self.fn_path.iter().any(|f| f == &def.path_key()) {
             let mut path = self.fn_path.clone();
-            path.push(def.name.clone());
+            path.push(def.path_key());
             return Err(cyclic(&path, e.origin));
         }
         if self.fn_path.len() >= NESTING || self.sql_calls >= MAX_INLINED_CALLS {
@@ -217,7 +237,7 @@ impl Resolver<'_> {
         self.sql_calls += 1;
         // Open while the defaults resolve too: a default may call the
         // function itself.
-        self.fn_path.push(def.name.clone());
+        self.fn_path.push(def.path_key());
         let hop = self.fn_path.len().is_multiple_of(STEP);
         let body = match self.arguments(def, e, call, &kids[..n]) {
             Ok(args) if hop => on_big_stack(|| self.inline(def, e, args))
@@ -227,12 +247,18 @@ impl Resolver<'_> {
         };
         self.fn_path.pop();
         let body = body?;
-        // The call as the user wrote it names the result.
+        // The call as the user wrote it names the result; a stored function
+        // is named by the catalog's identifier, as Spark names it.
+        let (name, qualifier) = if def.qualifier.is_empty() {
+            (call.name.clone(), Vec::new())
+        } else {
+            (def.name.clone(), def.qualifier.clone())
+        };
         let shown = Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
                 within_group: Vec::new(),
-                name: call.name.clone(),
-                qualifier: Vec::new(),
+                name,
+                qualifier,
                 args: kids[..n].iter().map(Bound::shown).collect(),
                 arg_names: call.arg_names.clone(),
                 distinct: false,
@@ -316,7 +342,7 @@ impl Resolver<'_> {
                     format!(
                         "a nondeterministic argument for parameter {} of function {}, which the body reads more than once",
                         quoted(std::slice::from_ref(&p.name)),
-                        quoted(std::slice::from_ref(&def.name)),
+                        def.routine_name(),
                     ),
                     e.origin,
                 ));
@@ -378,7 +404,7 @@ impl Resolver<'_> {
         call: &FunctionCall,
         kids: &[Bound],
     ) -> Result<Vec<Bound>, AnalysisError> {
-        let routine = quoted(std::slice::from_ref(&def.name));
+        let routine = def.routine_name();
         let total = def.params.len();
         let named: Vec<Option<&str>> = (0..call.args.len())
             .map(|i| call.arg_names.get(i).and_then(|n| n.as_deref()))

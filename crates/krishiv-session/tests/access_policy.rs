@@ -1005,21 +1005,101 @@ fn sql_function_bodies_are_read_through_the_policy() {
     assert_eq!(class(rows(&s, "SELECT ok_fn()")), DENIED);
 }
 
-/// Persisted functions are unsupported: the statements fail without
-/// changing the session.
+/// A stored function (`CREATE FUNCTION` without `TEMPORARY`) is read through
+/// the policy as a temporary one is: creating it probes the body, and a
+/// denied create stores nothing.
 #[test]
-fn persisted_function_statements_change_nothing() {
-    let s = session(Policy::new(allow));
-    for sql in [
-        "CREATE FUNCTION f() RETURNS INT RETURN 1",
-        "DROP FUNCTION f",
-    ] {
-        assert_eq!(
-            class(block_on(s.sql(sql))),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{sql}"
-        );
+fn stored_function_bodies_are_read_through_the_policy() {
+    let policy = Policy::new(no_reads_of_s);
+    let s = session(Arc::<Policy>::clone(&policy));
+    block_on(s.sql("CREATE TABLE s (a INT) USING parquet")).unwrap();
+    block_on(s.sql("CREATE TABLE p (a INT) USING parquet")).unwrap();
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION leak() RETURNS INT RETURN (SELECT max(a) FROM s)"
+        ))),
+        DENIED
+    );
+    // Nothing was stored by the denied statement.
+    assert_eq!(class(rows(&s, "SELECT leak()")), "UNRESOLVED_ROUTINE");
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION ok_stored() RETURNS INT RETURN (SELECT max(a) FROM p)"
+        ))),
+        "OK"
+    );
+    assert_eq!(class(rows(&s, "SELECT ok_stored()")), "OK");
+    policy.deny_everything();
+    assert_eq!(class(rows(&s, "SELECT ok_stored()")), DENIED);
+}
+
+fn only_function_privileges(securable: &Securable, p: Privilege) -> AccessDecision {
+    if matches!(
+        (securable, p),
+        (Securable::Function(_), Privilege::Drop) | (Securable::Namespace(_), Privilege::Create)
+    ) {
+        deny()
+    } else {
+        AccessDecision::Allow
     }
+}
+
+/// Stored `CREATE FUNCTION` needs `CREATE` on the namespace (and `DROP` on
+/// the function to replace it), stored `DROP FUNCTION` needs `DROP` on the
+/// function; temporary functions are the session's own and need nothing.
+#[test]
+fn stored_function_statements_are_authorized() {
+    // Denied everywhere: nothing is created or dropped.
+    let policy = Policy::new(allow);
+    let s = session(Arc::<Policy>::clone(&policy));
+    assert_eq!(
+        class(block_on(s.sql("CREATE FUNCTION p() RETURNS INT RETURN 1"))),
+        "OK"
+    );
+    policy.deny_everything();
+    assert_eq!(
+        class(block_on(s.sql("CREATE FUNCTION q() RETURNS INT RETURN 1"))),
+        DENIED
+    );
+    assert_eq!(class(block_on(s.sql("DROP FUNCTION p"))), DENIED);
+    assert_eq!(class(block_on(s.sql("DROP FUNCTION IF EXISTS p"))), DENIED);
+    assert_eq!(
+        class(block_on(
+            s.sql("CREATE OR REPLACE FUNCTION p() RETURNS INT RETURN 2")
+        )),
+        DENIED
+    );
+    // A temporary function is the session's own.
+    assert_eq!(
+        class(block_on(
+            s.sql("CREATE TEMPORARY FUNCTION tmp() RETURNS INT RETURN 1")
+        )),
+        "OK"
+    );
+    assert_eq!(class(block_on(s.sql("DROP TEMPORARY FUNCTION tmp"))), "OK");
+    // The inverse policy denies only creating in the namespace and dropping
+    // a function: each statement is checked for its own privilege.
+    let s = session(Policy::new(only_function_privileges));
+    assert_eq!(
+        class(block_on(s.sql("CREATE FUNCTION p() RETURNS INT RETURN 1"))),
+        DENIED
+    );
+    assert_eq!(class(block_on(s.sql("DROP FUNCTION IF EXISTS p"))), DENIED);
+    assert_eq!(class(rows(&s, "SELECT 1")), "OK");
+}
+
+/// A stored function cannot read a temporary table (Spark checks this
+/// before any privilege): the temporary one `t` of the session stays
+/// out of the catalog.
+#[test]
+fn a_stored_function_cannot_read_a_temporary_table() {
+    let s = session(Policy::new(allow));
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION reads_t() RETURNS INT RETURN (SELECT max(a) FROM t)"
+        ))),
+        "INVALID_TEMP_OBJ_REFERENCE"
+    );
 }
 
 static DENY_VIEWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

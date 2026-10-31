@@ -29,9 +29,10 @@ use krishiv_kernels::datetime::{
     date_add_months, date_diff, date_sub, day_name, extract_date, extract_timestamp,
     format_timestamps, from_utc_timestamp, last_day, make_date, month_name, months_between,
     next_day, parse_date_one, parse_dates, parse_ntz, parse_ntz_one, parse_timestamp_one,
-    parse_timestamps, seconds_to_timestamps, to_utc_timestamp, trunc_date, trunc_timestamp,
-    unix_date,
+    parse_timestamps, seconds_to_timestamps, timestamp_add, timestamp_diff, to_utc_timestamp,
+    trunc_date, trunc_timestamp, unix_date,
 };
+use krishiv_kernels::datetime::{TimeZoneRules, TimestampFields, TimestampUnit, make_timestamp};
 use krishiv_kernels::datetime::{
     date_from_unix_date, timestamp_from_integral, timestamp_from_seconds,
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
@@ -75,6 +76,14 @@ pub(super) const NAMES: &[&str] = &[
     "next_day",
     "trunc",
     "date_trunc",
+    "timestampadd",
+    "make_timestamp",
+    "make_timestamp_ltz",
+    "make_timestamp_ntz",
+    "try_make_timestamp",
+    "try_make_timestamp_ltz",
+    "try_make_timestamp_ntz",
+    "timestampdiff",
     "months_between",
     "make_date",
     "from_utc_timestamp",
@@ -183,6 +192,21 @@ fn widen<T: arrow_array::ArrowPrimitiveType>(
         .as_primitive_opt::<T>()
         .cloned()
         .ok_or_else(|| internal(format!("a column of type {to} after the cast")))
+}
+
+/// The unit of `timestampadd`/`timestampdiff`: a literal keyword.
+fn unit_arg(args: &[BindArg]) -> Result<TimestampUnit, KrishivError> {
+    let Some(BindArg::Literal(a)) = args.first() else {
+        return Err(unsupported(
+            "a datetime unit that is not a literal".to_owned(),
+        ));
+    };
+    let text = to_utf8(a.as_ref())?;
+    if text.is_null(0) {
+        return Err(unsupported("a NULL datetime unit".to_owned()));
+    }
+    TimestampUnit::parse(text.value(0))
+        .ok_or_else(|| unsupported("a datetime unit that is not a keyword".to_owned()))
 }
 
 /// A zone argument: a literal is resolved when the call is bound (`None` is
@@ -771,6 +795,106 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let utc = instants(x, 1, ntz, &o)?;
                 let out = trunc_timestamp(&x.strings(0)?, &utc, o.time_zone.as_ref(), ansi)?;
                 Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
+            })
+        }
+        (
+            "make_timestamp"
+            | "make_timestamp_ltz"
+            | "make_timestamp_ntz"
+            | "try_make_timestamp"
+            | "try_make_timestamp_ltz"
+            | "try_make_timestamp_ntz",
+            [
+                DataType::Int32,
+                DataType::Int32,
+                DataType::Int32,
+                DataType::Int32,
+                DataType::Int32,
+                DataType::Decimal128(16, 6),
+                ..,
+            ],
+        ) if types.len() == 6 || (types.len() == 7 && is_string(&types[6])) => {
+            let ntz = listed.ends_with("_ntz");
+            let fail = !listed.starts_with("try_") && opts.ansi;
+            let zone = if ntz || types.len() == 6 {
+                None
+            } else {
+                Some(match zone_arg(args, 6) {
+                    Ok(z) => z,
+                    Err(e) => return Some((listed, Err(e))),
+                })
+            };
+            let session_zone = !ntz && types.len() == 6;
+            Binding::new(
+                if ntz { ntz_type() } else { timestamp() },
+                move |x: &Inputs<'_>| {
+                    let fields = TimestampFields {
+                        years: &x.array::<Int32Type>(0)?,
+                        months: &x.array::<Int32Type>(1)?,
+                        days: &x.array::<Int32Type>(2)?,
+                        hours: &x.array::<Int32Type>(3)?,
+                        minutes: &x.array::<Int32Type>(4)?,
+                        seconds: &x.array::<Decimal128Type>(5)?,
+                    };
+                    let names;
+                    let zones = match &zone {
+                        None if session_zone => Some(Zones::One(o.time_zone.as_ref())),
+                        None => None,
+                        Some(ZoneArg::Literal(Some(one))) => Some(Zones::One(one)),
+                        Some(ZoneArg::Literal(None)) => {
+                            return Ok(Arc::new(null_instants(x.rows())) as ArrayRef);
+                        }
+                        Some(ZoneArg::Column) => {
+                            names = column_zones(&x.strings(6)?)?;
+                            Some(Zones::PerRow(&names))
+                        }
+                    };
+                    let out = make_timestamp(fields, zones.as_ref(), fail)?;
+                    Ok(Arc::new(if ntz { out } else { out.with_timezone("UTC") }) as ArrayRef)
+                },
+            )
+        }
+        ("timestampadd", [u, _, t]) if is_string(u) && is_timestamp(t) => {
+            let unit = match unit_arg(args) {
+                Ok(u) => u,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            let ntz = *t == ntz_type();
+            Binding::new(
+                if ntz { ntz_type() } else { timestamp() },
+                move |x: &Inputs<'_>| {
+                    let start = x.timestamps(2)?;
+                    let zone: Option<&dyn TimeZoneRules> = if ntz {
+                        None
+                    } else {
+                        Some(o.time_zone.as_ref())
+                    };
+                    let out = timestamp_add(
+                        unit,
+                        &x.array::<Int64Type>(1)?,
+                        &start,
+                        zone,
+                        o.time_zone.as_ref(),
+                    )?;
+                    Ok(Arc::new(if ntz { out } else { out.with_timezone("UTC") }) as ArrayRef)
+                },
+            )
+        }
+        ("timestampdiff", [u, a, b]) if is_string(u) && is_timestamp(a) && is_timestamp(b) => {
+            let unit = match unit_arg(args) {
+                Ok(u) => u,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            let (start_ntz, end_ntz) = (*a == ntz_type(), *b == ntz_type());
+            Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+                // Spark's `TimestampDiff` takes instants: a zone-less value
+                // is read in the session zone first (a time in a DST gap
+                // moves forward), then both sides are read back on the
+                // wall clock of that zone.
+                let start = instants(x, 1, start_ntz, &o)?;
+                let end = instants(x, 2, end_ntz, &o)?;
+                let out = timestamp_diff(unit, &start, &end, Some(o.time_zone.as_ref()))?;
+                Ok(Arc::new(out) as ArrayRef)
             })
         }
         ("months_between", [a, b] | [a, b, DataType::Boolean])

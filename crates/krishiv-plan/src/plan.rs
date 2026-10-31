@@ -114,6 +114,22 @@ pub enum PlanNode {
         /// Output expressions: keys and aggregates.
         aggregates: Vec<Arc<Expr>>,
     },
+    /// The partial phase of an aggregation: one row per key per task, with
+    /// each call's mergeable state instead of its result. Only the optimizer
+    /// produces it, below a join; an [`PlanNode::Aggregate`] above merges the
+    /// states through [`ResolvedExpr::StateInput`](crate::ResolvedExpr).
+    PartialAggregate {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// Grouping keys: columns of the input, which keep their attributes.
+        keys: Vec<Arc<Expr>>,
+        /// The aggregate calls, over raw input columns.
+        aggregates: Vec<Arc<Expr>>,
+        /// The state columns of the calls in order
+        /// ([`partial_state_columns`](crate::partial_state_columns)); the
+        /// output is the keys, then these.
+        states: Vec<BoundColumn>,
+    },
     /// A join; a comma in `FROM` is an inner join without a condition.
     Join {
         /// Left input.
@@ -726,6 +742,7 @@ impl LogicalPlan {
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
             | PlanNode::Aggregate { input, .. }
+            | PlanNode::PartialAggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
@@ -765,6 +782,7 @@ impl LogicalPlan {
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
             | PlanNode::Aggregate { input, .. }
+            | PlanNode::PartialAggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
@@ -813,6 +831,9 @@ impl LogicalPlan {
                 SqlArgs::Named(m) => m.values().for_each(f),
             },
             PlanNode::Project { exprs, .. } => exprs.iter().for_each(f),
+            PlanNode::PartialAggregate {
+                keys, aggregates, ..
+            } => keys.iter().chain(aggregates).for_each(f),
             PlanNode::WithColumns { columns, .. } => columns.iter().for_each(|(_, e)| f(e)),
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
@@ -891,6 +912,9 @@ impl LogicalPlan {
             PlanNode::WithColumns { columns, .. } => {
                 columns.iter_mut().for_each(|(_, e)| f(e));
             }
+            PlanNode::PartialAggregate {
+                keys, aggregates, ..
+            } => keys.iter_mut().chain(aggregates).for_each(f),
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
             | PlanNode::Offset { offset: e, .. }
@@ -1020,6 +1044,18 @@ impl LogicalPlan {
                                 ..c
                             })
                         })
+                        .collect();
+                }
+                PlanNode::PartialAggregate { keys, states, .. } => {
+                    return keys
+                        .iter()
+                        .map(|e| match &e.node {
+                            crate::ExprNode::Resolved(crate::ResolvedExpr::Column(c)) => {
+                                Some(c.clone())
+                            }
+                            _ => None,
+                        })
+                        .chain(states.iter().cloned().map(Some))
                         .collect();
                 }
                 PlanNode::Project { exprs, .. }

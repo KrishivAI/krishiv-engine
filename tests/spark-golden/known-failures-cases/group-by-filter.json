@@ -1,11 +1,5 @@
 {
   "cases": {
-    "datetime": [
-      8,
-      12,
-      30,
-      40
-    ],
     "fn-aggregate": [
       63
     ],

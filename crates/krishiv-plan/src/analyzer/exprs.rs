@@ -2,6 +2,8 @@
 //! Expression binding: names, stars, functions, casts, subqueries, output
 //! names (Spark's `toPrettySQL`) and semantic keys.
 
+use super::SessionZone;
+use krishiv_kernels::datetime::TimeZoneRules;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -214,7 +216,7 @@ fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> 
 
 /// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
 /// with casts stripped as Spark's `toPrettySQL` strips them.
-fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
+fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZone>) -> Bound {
     let mut shown = cond.shown();
     while let ExprNode::Cast { expr, .. } = &shown.node {
         shown = Arc::clone(expr);
@@ -239,8 +241,10 @@ const MASK_DEFAULTS: [Option<&str>; 4] = [Some("X"), Some("x"), Some("n"), None]
 /// The position of the options argument of the CSV and JSON functions.
 fn options_index(name: &str) -> Option<usize> {
     match name {
-        "from_csv" | "from_json" => Some(2),
-        "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" => Some(1),
+        "from_csv" | "from_json" | "from_xml" => Some(2),
+        "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" | "to_xml" | "schema_of_xml" => {
+            Some(1)
+        }
         _ => None,
     }
 }
@@ -413,7 +417,7 @@ fn bad_cast(
     arg: &Bound,
     to: &DataType,
     mode: CastMode,
-    zone: Option<i32>,
+    zone: Option<SessionZone>,
 ) -> AnalysisError {
     let shown = ExprNode::Cast {
         expr: arg.shown(),
@@ -628,7 +632,7 @@ fn typed_literal(
     }
     // One string cast through the kernels, as a microsecond instant or
     // NTZ wall-clock value.
-    let cast_one = |value: &str, to: &arrow_schema::DataType, zone: &FixedOffset| {
+    let cast_one = |value: &str, to: &arrow_schema::DataType, zone: &dyn TimeZoneRules| {
         use arrow_array::StringArray;
         use arrow_array::cast::AsArray as _;
         use arrow_array::types::TimestampMicrosecondType;
@@ -686,13 +690,12 @@ fn typed_literal(
                 Ok(Literal::Timestamp(micros))
             } else {
                 match conf.session_zone {
-                    Some(off) => {
-                        let micros =
-                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                    Some(zone) => {
+                        let micros = cast_one(value, &ltz_arrow(), &zone).map_err(map_error)?;
                         Ok(Literal::Timestamp(micros))
                     }
                     None => Err(unsupported(
-                        "a timestamp literal in a session time zone other than a fixed offset",
+                        "a timestamp literal in an unresolvable session time zone",
                     )),
                 }
             }
@@ -714,13 +717,12 @@ fn typed_literal(
                 Ok(Literal::Timestamp(micros))
             } else {
                 match conf.session_zone {
-                    Some(off) => {
-                        let micros =
-                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                    Some(zone) => {
+                        let micros = cast_one(value, &ltz_arrow(), &zone).map_err(map_error)?;
                         Ok(Literal::Timestamp(micros))
                     }
                     None => Err(unsupported(
-                        "a timestamp literal in a session time zone other than a fixed offset",
+                        "a timestamp literal in an unresolvable session time zone",
                     )),
                 }
             }
@@ -1562,6 +1564,20 @@ impl Resolver<'_> {
                 // `session.f` / `system.session.f` reach a session UDF only;
                 // any other qualifier is an unresolved routine.
                 // Grouping functions are never qualified.
+                // A function stored in a namespace of the session's catalog,
+                // named by its qualifier (`default.f`, `spark_catalog.default.f`).
+                if !f.qualifier.is_empty()
+                    && !super::bind::is_session_qualifier(&f.qualifier)
+                    && !super::bind::is_builtin_qualifier(&f.qualifier)
+                {
+                    let mut named = f.qualifier.clone();
+                    named.push(f.name.clone());
+                    if let FunctionLookup::Sql(def) =
+                        self.ctx.functions.lookup(&named, self.ctx.profile)
+                    {
+                        return self.sql_call(&def, e, f, kids);
+                    }
+                }
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
                 let session_qualified = super::bind::is_session_qualifier(&f.qualifier);
                 let lookup_name = builtin.as_deref().unwrap_or(&f.name);
@@ -1644,6 +1660,40 @@ impl Resolver<'_> {
                 }
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
+                }
+                // `date + int`, `int + date` and `date - int` are `date_add`
+                // and `date_sub` to Spark, which names them so.
+                if !session_qualified
+                    && n == 2
+                    && let Some((name, swap)) =
+                        date_with_days(lookup_name, &kids[0].ty, &kids[1].ty)
+                {
+                    let (first, second) = if swap { (1, 0) } else { (0, 1) };
+                    let call = Expr::function(
+                        name,
+                        vec![
+                            Expr::clone(&kids[first].expr),
+                            Expr::clone(&kids[second].expr),
+                        ],
+                    )
+                    .with_origin(e.origin);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    // Shown as Spark names it, over the operands as written
+                    // (a session variable keeps its name).
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            name,
+                            vec![kids[first].shown(), kids[second].shown()]
+                                .into_iter()
+                                .map(|k| Expr::clone(&k))
+                                .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
                 }
                 if !session_qualified && let Some(op) = builtin_op(lookup_name, n) {
                     // `ILIKE` and `LIKE|ILIKE ANY|SOME|ALL` are rewritten to
@@ -1996,11 +2046,15 @@ impl Resolver<'_> {
                 // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
                 // Only for the built-in: a qualified session UDF of the
                 // same name runs the UDF.
-                let is_schema_of_csv =
-                    is_builtin_entry(&entry) && entry.id.name() == "schema_of_csv";
+                let is_schema_of_csv = is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "schema_of_csv" | "schema_of_xml");
+                let of_xml = entry.id.name() == "schema_of_xml";
                 // `from_csv` and `to_csv` show only their first argument.
-                let is_csv =
-                    is_builtin_entry(&entry) && matches!(entry.id.name(), "from_csv" | "to_csv");
+                let is_csv = is_builtin_entry(&entry)
+                    && matches!(
+                        entry.id.name(),
+                        "from_csv" | "to_csv" | "from_xml" | "to_xml"
+                    );
                 if is_builtin_entry(&entry) && entry.id.name() == "mask" {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
@@ -2053,7 +2107,7 @@ impl Resolver<'_> {
                 // `SchemaOfCsv` evaluates its foldable child): the DDL
                 // literal, shown as the call.
                 if is_schema_of_csv {
-                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound)?;
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml)?;
                 }
                 // `from_csv` and `to_csv` show only their first argument
                 // (Spark's `toPrettySQL` drops the schema and options).
@@ -2180,6 +2234,7 @@ impl Resolver<'_> {
                     Column(c) | OuterColumn(c) | LambdaVar(c) => column(c),
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+                    ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
                     ResolvedExpr::Field {
                         data_type,
                         nullable,
@@ -2915,6 +2970,7 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         kids: &[Bound],
         bound: &mut Bound,
+        xml: bool,
     ) -> Result<(), AnalysisError> {
         if kids.is_empty() || kids.len() > 2 {
             return Ok(());
@@ -2925,13 +2981,57 @@ impl Resolver<'_> {
         let Some(Constant::String(csv)) = csv else {
             return Ok(());
         };
-        let options = match kids.get(1) {
+        let ddl = if xml {
+            // `schema_of_xml`: the document under the written options.
+            let pairs = match kids.get(1) {
+                None => Vec::new(),
+                Some(opts) => match &opts.expr.node {
+                    ExprNode::Literal(Literal::Map(pairs)) => pairs.clone(),
+                    // Spark reads the options only from a `map(...)` call.
+                    _ => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::InvalidOptionsNonMapFunction {},
+                            e.origin,
+                        ));
+                    }
+                },
+            };
+            krishiv_functions::scalar::schema_of_xml_ddl(&csv, &pairs)
+                .map_err(|err| AnalysisError::new(err, e.origin))?
+        } else {
+            // Options other than a map literal keep the call (the signature
+            // accepts them; the executor has no binding for it).
+            if kids
+                .get(1)
+                .is_some_and(|o| !matches!(o.expr.node, ExprNode::Literal(Literal::Map(_))))
+            {
+                return Ok(());
+            }
+            self.csv_ddl(e, &csv, kids.get(1))?
+        };
+        self.show_schema_literal(e, kids.len(), bound, ddl);
+        Ok(())
+    }
+
+    /// The DDL `schema_of_csv(csv[, options])` resolves to (`None`: defaults).
+    fn csv_ddl(
+        &self,
+        e: &Arc<Expr>,
+        csv: &str,
+        options: Option<&Bound>,
+    ) -> Result<String, AnalysisError> {
+        let options = match options {
             None => krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema()),
             Some(opts) => {
                 // Options other than a literal map keep the call (the
                 // signature accepts them; the executor has no binding).
                 let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
-                    return Ok(());
+                    return Err(AnalysisError::new(
+                        InternalError {
+                            message: "schema_of_csv options are not a map literal".to_owned(),
+                        },
+                        e.origin,
+                    ));
                 };
                 // Option names are case-insensitive: of two spellings of one
                 // name, the one written last wins (Spark's `CaseInsensitiveMap`).
@@ -2952,7 +3052,7 @@ impl Resolver<'_> {
                     .0
             }
         };
-        let ddl = krishiv_io::csv::ddl_of_string(&csv, &options).map_err(|err| {
+        krishiv_io::csv::ddl_of_string(csv, &options).map_err(|err| {
             AnalysisError::new(
                 match err {
                     krishiv_io::FormatError::Other(e) => e,
@@ -2963,14 +3063,19 @@ impl Resolver<'_> {
                 },
                 e.origin,
             )
-        })?;
+        })
+    }
+
+    /// Replaces the resolved call by its DDL literal, shown as the call
+    /// without its options.
+    fn show_schema_literal(&self, e: &Arc<Expr>, args: usize, bound: &mut Bound, ddl: String) {
         // Keep the form the call already shows (a session variable's name,
         // not its value); otherwise show the call itself.
         if bound.shown.is_none() {
             bound.shown = Some(Arc::clone(&bound.expr));
         }
         // Spark's output name drops the options (`schema_of_csv(1|abc)`).
-        if kids.len() == 2
+        if args == 2
             && let Some(shown) = &bound.shown
             && let ExprNode::Resolved(ResolvedExpr::Function(call)) = &shown.node
         {
@@ -2983,7 +3088,6 @@ impl Resolver<'_> {
         }
         bound.expr =
             Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
-        Ok(())
     }
 
     /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,
@@ -3011,7 +3115,7 @@ impl Resolver<'_> {
             self.ctx.conf.decimal_precision_loss,
             self.ctx.conf.map_key_dedup_last_win,
             self.ctx.profile,
-            self.ctx.conf.session_zone,
+            self.ctx.conf.session_zone.and_then(SessionZone::fixed),
         );
         fold::constant(
             e,
@@ -5142,7 +5246,7 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
 /// explicit stack, once per distinct node. Timestamp literals render in
 /// `zone`, the session's resolved zone, through the same cast-to-string
 /// kernels `CAST(ts AS STRING)` uses.
-pub(super) fn pretty(e: &Expr, zone: Option<i32>) -> String {
+pub(super) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String {
     let mut done: HashMap<usize, String> = HashMap::new();
     let mut stack = vec![(e, false)];
     while let Some((x, expanded)) = stack.pop() {
@@ -5197,7 +5301,7 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         .join(", ")
 }
 
-fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
+fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
     match &x.node {
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
             c.name.clone()
@@ -5237,6 +5341,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         // one is its expression (its output names the attribute).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
             format!("{}.{}", k[0], name)
         }
@@ -5445,7 +5550,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
 /// `DENSE_RANK()` and `PERCENT_RANK()` upper case, as Spark's `RankLike`
 /// writes them), then the window as `WindowSpecDefinition.sql` writes it.
 /// `k` holds the children's names in [`Expr::for_each_child`] order.
-fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<i32>) -> String {
+fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<SessionZone>) -> String {
     use crate::{FrameBound, FrameUnits, WindowSpecRef};
     let function = match &w.function.node {
         ExprNode::Resolved(ResolvedExpr::Function(f))
@@ -5770,7 +5875,7 @@ fn is_upper_math(name: &str) -> bool {
     )
 }
 
-fn pretty_literal(v: &Literal, zone: Option<i32>) -> String {
+fn pretty_literal(v: &Literal, zone: Option<SessionZone>) -> String {
     match v {
         // A URL's credentials never reach a name (ADR 0038).
         Literal::String(s) => krishiv_common::secret::SecretUrl::parse(s)
@@ -5801,10 +5906,9 @@ fn pretty_literal(v: &Literal, zone: Option<i32>) -> String {
         Literal::Date(days) => crate::spark_fmt::date(*days),
         // An instant renders in the session zone (a fixed offset; UTC when
         // unset), as Spark's `toPrettySQL` of a timestamp literal does.
-        Literal::Timestamp(us) => crate::spark_fmt::timestamp(
-            us.saturating_add(i64::from(zone.unwrap_or(0)).saturating_mul(1_000_000)),
-            false,
-        ),
+        Literal::Timestamp(us) => {
+            crate::spark_fmt::timestamp(SessionZone::local_micros(zone, *us), false)
+        }
         Literal::TimestampNtz(us) => crate::spark_fmt::timestamp(*us, true),
         _ => v.to_string(),
     }
@@ -6021,6 +6125,26 @@ fn is_pattern_function(name: &str, args: &[Bound]) -> bool {
         "to_date" | "try_to_date" | "to_timestamp" | "try_to_timestamp" | "to_timestamp_ntz"
         | "to_timestamp_ltz" => args.len() >= 2,
         _ => false,
+    }
+}
+
+/// The function Spark rewrites `+`/`-` to when one operand is a date and
+/// the other a byte, short or int (`date_add`, `date_sub`), and whether the
+/// operands swap (`int + date`). Other mixes of dates and numbers stay
+/// refused by the coercion.
+fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static str, bool)> {
+    let days = |t: &ArgType| {
+        matches!(
+            t.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer)
+        )
+    };
+    let date = |t: &ArgType| matches!(t.data_type, Some(DataType::Date));
+    match op {
+        "+" if date(left) && days(right) => Some(("date_add", false)),
+        "+" if days(left) && date(right) => Some(("date_add", true)),
+        "-" if date(left) && days(right) => Some(("date_sub", false)),
+        _ => None,
     }
 }
 

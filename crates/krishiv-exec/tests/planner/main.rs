@@ -11,7 +11,9 @@
 )]
 
 mod conditionals;
+mod correlated_or;
 mod cse;
+mod date_arith;
 mod exchanges;
 mod existence;
 mod folding;
@@ -19,6 +21,7 @@ mod group_limit;
 mod hints;
 mod listing;
 mod orientation;
+mod partial_aggregate;
 mod physical;
 mod plan_stats;
 mod runtime_filters;

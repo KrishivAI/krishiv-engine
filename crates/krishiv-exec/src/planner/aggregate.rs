@@ -9,10 +9,15 @@
 //! under an alias). A call with a filter reads only the rows where its
 //! mask column is true (Spark's `FILTER (WHERE ...)`); other aggregates
 //! read all rows.
+//!
+//! A `PartialAggregate` is the hash aggregate alone, emitting states; a call
+//! whose argument is a `StateInput` merges those states instead of reading
+//! raw values (design P2-T167).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::Field;
 use krishiv_functions::registry::{Lookup, builtins};
 use krishiv_functions::signature::SparkProfile;
 use krishiv_plan::{
@@ -22,7 +27,7 @@ use krishiv_plan::{
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
 use super::properties::Distribution;
-use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, arity};
+use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput, arity};
 use crate::error::Result;
 use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
@@ -58,8 +63,9 @@ impl Planner<'_> {
         for c in &calls {
             let l = lower(&c.f)
                 .ok_or_else(|| unsupported(&format!("the aggregate function {}", c.f.id.name())))?;
-            arg_at.push(wanted.len()..wanted.len() + l.args.len());
-            wanted.extend(l.args.iter().cloned());
+            let args = state_input(&c.f).map_or(l.args, |(columns, _)| columns.to_vec());
+            arg_at.push(wanted.len()..wanted.len() + args.len());
+            wanted.extend(args);
             lowered.push(l.function);
         }
         let mut mask_at = Vec::with_capacity(calls.len());
@@ -77,7 +83,13 @@ impl Planner<'_> {
         for (((c, at), function), mask) in calls.iter().zip(&arg_at).zip(lowered).zip(mask_at) {
             let args: Vec<usize> = columns[at.clone()].to_vec();
             let mask = mask.map(|m| columns[m]);
-            let agg = aggregate_expr(function, args, mask, &input.schema, c.key.clone())?;
+            let agg = match state_input(&c.f) {
+                Some((_, raw_type)) if mask.is_none() => {
+                    merging_expr(function, args, raw_type, &input.schema, c.key.clone())?
+                }
+                Some(_) => return Err(internal("a filter on a call merging states")),
+                None => aggregate_expr(function, args, mask, &input.schema, c.key.clone())?,
+            };
             let want = c.f.data_type.to_arrow();
             if agg.result_type()? != want {
                 return Err(internal(&format!(
@@ -175,6 +187,90 @@ impl Planner<'_> {
     }
 
     /// Collects the aggregate calls of `e`.
+    /// The partial phase of an aggregation: the keys, which keep their
+    /// attributes, then `states`. It needs no distribution: a later aggregate
+    /// merges what each task's rows left.
+    pub(crate) fn partial_aggregate(
+        &mut self,
+        input: Planned,
+        keys: &[Arc<Expr>],
+        calls: &[Arc<Expr>],
+        states: &[BoundColumn],
+    ) -> Result<Planned> {
+        if keys.iter().any(|k| column_of(k).is_none()) {
+            return Err(internal("a partial aggregate key that is not a column"));
+        }
+        let mut wanted: Vec<Arc<Expr>> = keys.to_vec();
+        let mut arg_at = Vec::with_capacity(calls.len());
+        let mut functions = Vec::with_capacity(calls.len());
+        let mut names = Vec::with_capacity(calls.len());
+        for e in calls {
+            let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+                return Err(internal(&format!("{e} is not a partial aggregate call")));
+            };
+            if f.kind != FunctionKind::Aggregate || f.distinct || f.filter.is_some() {
+                return Err(internal(&format!("{e} cannot run as a partial aggregate")));
+            }
+            let l = lower(f)
+                .ok_or_else(|| unsupported(&format!("the aggregate function {}", f.id.name())))?;
+            arg_at.push(wanted.len()..wanted.len() + l.args.len());
+            wanted.extend(l.args);
+            functions.push(l.function);
+            names.push(e.to_string());
+        }
+        let (input, columns) = self.with_columns(input, &wanted)?;
+        let k = keys.len();
+        let mut aggregates = Vec::with_capacity(calls.len());
+        for ((function, at), name) in functions.into_iter().zip(arg_at).zip(&names) {
+            let args = columns[at].to_vec();
+            aggregates.push(aggregate_expr(
+                function,
+                args,
+                None,
+                &input.schema,
+                name.clone(),
+            )?);
+        }
+        let plan = AggregatePlan {
+            group_by: columns[..k].to_vec(),
+            distinct: vec![false; aggregates.len()],
+            aggregates,
+            output: AggregateOutput::Partial,
+        };
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
+        let schema = spec.output_schema()?;
+        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        // The optimizer typed the states without the executor's help.
+        let produced = schema.fields().iter().skip(k).map(|f| f.data_type());
+        let declared = states.iter().map(|c| c.data_type.to_arrow());
+        if produced.len() != states.len() || !produced.eq(declared.collect::<Vec<_>>().iter()) {
+            return Err(internal(&format!(
+                "partial states {:?} where the plan declares {states:?}",
+                schema.fields()
+            )));
+        }
+        let mut layout: Vec<AttrId> = columns[..k].iter().map(|c| input.layout[*c]).collect();
+        layout.extend(states.iter().map(|c| c.id));
+        let detail = format!("keys={}, functions=[{}]", list(keys), names.join(", "));
+        let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
+        let placement = input.placement.clone().restrict(&layout);
+        Ok(Planned {
+            node: PhysNode::Aggregate {
+                input: Box::new(input.node),
+                aggregate: plan,
+            },
+            schema,
+            layout,
+            explain: super::explain::ExplainNode::new(
+                "PartialHashAggregate",
+                detail,
+                vec![input.explain],
+            ),
+            sites,
+            placement,
+        })
+    }
+
     fn calls(&mut self, e: &Expr, out: &mut Vec<Call>) -> Result<()> {
         if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
             && f.kind == FunctionKind::Aggregate
@@ -396,14 +492,9 @@ fn null_if_false(c: &Arc<Expr>) -> Option<Arc<Expr>> {
 /// mask column `mask` (`FILTER (WHERE ...)`; `None` reads all rows), of
 /// `schema`. Spark's STRING and BINARY are views here whatever carrier a
 /// registered table uses; the accumulators read any carrier.
-pub(super) fn aggregate_expr(
-    function: AggregateFunction,
-    args: Vec<usize>,
-    mask: Option<usize>,
-    schema: &arrow_schema::Schema,
-    name: String,
-) -> Result<AggregateExpr> {
-    let typed = |a: &usize| match schema.field(*a).data_type() {
+/// The arrow type an aggregate reads `t` as.
+fn view_type(t: &arrow_schema::DataType) -> arrow_schema::DataType {
+    match t {
         arrow_schema::DataType::Utf8 | arrow_schema::DataType::LargeUtf8 => {
             arrow_schema::DataType::Utf8View
         }
@@ -411,7 +502,58 @@ pub(super) fn aggregate_expr(
             arrow_schema::DataType::BinaryView
         }
         t => t.clone(),
+    }
+}
+
+/// The state columns and raw argument type of a call merging partial states.
+fn state_input(f: &ResolvedFunction) -> Option<(&[Arc<Expr>], &krishiv_types::DataType)> {
+    match f.args.as_slice() {
+        [arg] => match &arg.node {
+            ExprNode::Resolved(ResolvedExpr::StateInput { columns, raw_type }) => {
+                Some((columns, raw_type))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The aggregate merging the state columns `args` of `function` over a raw
+/// argument of type `raw_type`.
+fn merging_expr(
+    function: AggregateFunction,
+    args: Vec<usize>,
+    raw_type: &krishiv_types::DataType,
+    schema: &arrow_schema::Schema,
+    name: String,
+) -> Result<AggregateExpr> {
+    let expr = AggregateExpr {
+        function,
+        args,
+        input: AggInput::State,
+        arg_type: view_type(&raw_type.to_arrow()),
+        name,
+        mask: None,
     };
+    let fields = expr.state_fields()?;
+    let read = expr.args.iter().map(|a| schema.field(*a).data_type());
+    if fields.len() != expr.args.len() || !read.eq(fields.iter().map(Field::data_type)) {
+        return Err(internal(&format!(
+            "{} merges columns {:?} where its states are {fields:?}",
+            expr.name, expr.args
+        )));
+    }
+    Ok(expr)
+}
+
+pub(super) fn aggregate_expr(
+    function: AggregateFunction,
+    args: Vec<usize>,
+    mask: Option<usize>,
+    schema: &arrow_schema::Schema,
+    name: String,
+) -> Result<AggregateExpr> {
+    let typed = |a: &usize| view_type(schema.field(*a).data_type());
     if matches!(
         function,
         AggregateFunction::MaxBy | AggregateFunction::MinBy

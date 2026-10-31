@@ -129,6 +129,8 @@ regex-automata = { version = "0.4", default-features = false }
 regex-syntax = { version = "0.8", default-features = false }
 fancy-regex = { version = "0.19", default-features = false }
 memchr = { version = "2.8", default-features = false }
+# XML reader for `from_xml`; already in the lock file through the object-store stack.
+quick-xml = { version = "0.41", default-features = false }
 jiff = { version = "0.2.38", default-features = false }
 slatedb = { version = "0.17", default-features = false }
 foyer = { version = "0.22.6", default-features = false }
