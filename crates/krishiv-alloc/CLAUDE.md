@@ -17,7 +17,8 @@ Paths are relative to this crate.
 - `release` the pressure release hook (`mi_collect(true)`)
 - `install` links the constructor and returns `release` for `krishiv_memory::set_release_hook`
 - `src/heap.rs` (feature `heap-stats`) `Counting<A>`, a global-allocator wrapper that counts live and peak heap bytes for memory measurements; `tests/heap_stats.rs` covers it
-- `Cargo.toml` depends on `libmimalloc-sys` (`extended`) only
+- `cpu_check` (x86-64 glibc, `.preinit_array`) runs `krishiv_common::cpu::check_cpuid_or_exit` before `init`, which is compiled for the build's CPU level
+- `Cargo.toml` depends on `libmimalloc-sys` (`extended`) and `krishiv-common`
 
 ## Extension points
 - A new allocator option: add a row to `LIMITED_OPTIONS` with its mimalloc `mi_option_e` number and pin the number in a test.

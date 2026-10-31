@@ -4,17 +4,22 @@ name: Binaries
 # the plain x86-64 baseline (published as `krishiv-compat`), and neoverse-n1 on
 # aarch64. The level is set through RUSTFLAGS on these build steps only, never
 # in .cargo/config.toml, so development, tests, regular CI and the benchmark
-# jobs keep the default target. The binary checks the CPU on start and names
-# the missing feature and the compat binary (krishiv_common::cpu). Nothing is
+# jobs keep the default target. The binary checks the CPU on start, before its
+# constructors (krishiv_alloc), and names the missing feature and the compat
+# binary (krishiv_common::cpu). Nothing is
 # published here.
 #
-# Runs when this file changes, by hand, and from other workflows.
+# Runs when this file or the start-up CPU check changes, by hand, and from other
+# workflows.
 on:
   workflow_call:
   workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/binaries.yml
+      - crates/krishiv-alloc/**
+      - crates/krishiv-common/src/cpu.rs
+      - crates/krishiv-cli/src/main.rs
 
 permissions:
   contents: read
@@ -51,7 +56,10 @@ jobs:
     needs: nightly-green
     if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
     name: cli (${{ matrix.artifact }})
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: since 26.04 its system packages are built for x86-64-v3
+    # (amd64v3). Its own ld.so faults under the QEMU step whatever we build, and a
+    # compat binary should not be linked on a v3 system.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
