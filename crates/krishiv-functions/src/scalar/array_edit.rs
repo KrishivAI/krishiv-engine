@@ -34,7 +34,7 @@ pub(super) const NAMES: &[&str] = &[
 ];
 
 /// Spark's `ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH`.
-const MAX_ARRAY_LENGTH: usize = 2_147_483_632;
+pub(super) const MAX_ARRAY_LENGTH: usize = 2_147_483_632;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Edit {
@@ -108,13 +108,13 @@ fn element_field(t: &DataType) -> Result<arrow_schema::FieldRef, KrishivError> {
     }
 }
 
-fn list_of<'a>(c: &'a ArrayRef, name: &str) -> Result<&'a ListArray, KrishivError> {
+pub(super) fn list_of<'a>(c: &'a ArrayRef, name: &str) -> Result<&'a ListArray, KrishivError> {
     c.as_list_opt::<i32>()
         .ok_or_else(|| internal(format!("{name} of {}", c.data_type())))
 }
 
 /// The first child index and the length of row `row`.
-fn span(list: &ListArray, row: usize) -> (usize, usize) {
+pub(super) fn span(list: &ListArray, row: usize) -> (usize, usize) {
     (
         usize::try_from(list.value_offsets()[row]).unwrap_or(0),
         usize::try_from(list.value_length(row)).unwrap_or(0),
@@ -122,7 +122,7 @@ fn span(list: &ListArray, row: usize) -> (usize, usize) {
 }
 
 /// `COLLECTION_SIZE_LIMIT_EXCEEDED.FUNCTION` for a result of `elements`.
-fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
+pub(super) fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
     CollectionSizeLimitExceededFunction {
         function_name: format!("`{name}`"),
         number_of_elements: elements.to_string(),
@@ -132,7 +132,7 @@ fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
 }
 
 /// `UNABLE_TO_ACQUIRE_MEMORY` for a result of `elements` indices.
-fn no_memory(elements: usize) -> KrishivError {
+pub(super) fn no_memory(elements: usize) -> KrishivError {
     UnableToAcquireMemory {
         requested_bytes: elements
             .saturating_mul(std::mem::size_of::<Option<u32>>())
@@ -142,13 +142,13 @@ fn no_memory(elements: usize) -> KrishivError {
     .into()
 }
 
-fn index(i: usize) -> Result<u32, KrishivError> {
+pub(super) fn index(i: usize) -> Result<u32, KrishivError> {
     u32::try_from(i).map_err(|_| internal("an array past 2^32 elements".to_owned()))
 }
 
 /// The list made of `pieces` (child indexes, `None` for a NULL element) per
 /// row, taken from `values`.
-fn rebuild(
+pub(super) fn rebuild(
     field: &arrow_schema::FieldRef,
     values: &ArrayRef,
     rows: &[Option<Vec<Option<u32>>>],
