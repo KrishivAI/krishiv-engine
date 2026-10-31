@@ -357,6 +357,27 @@ impl Display for NodeLine<'_> {
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
             }
+            // Spark's `Generate explode(a), false, [col#3]`.
+            PlanNode::Generate {
+                kind,
+                outer,
+                arg,
+                output,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Generate {}{}({}), {}, [",
+                    kind.name(),
+                    if *outer { "_outer" } else { "" },
+                    Text(arg),
+                    outer
+                )?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
             // Spark's `Expand [[a, null, 1], [a, b, 0]], [a, b, spark_grouping_id]`.
             PlanNode::Expand {
                 projections,

@@ -709,20 +709,36 @@ pub fn render_estimate(
         format_rows(rows),
     );
     for line in plan_lines {
-        out.push_str(line);
+        // Plan text holds names and literals of the query: escaped like a cell, so it cannot forge a line.
+        out.push_str(&escape_text(line));
         out.push('\n');
     }
     out
 }
 
 /// Formats bytes as GiB: whole gibibytes bare (`1 GiB`), else one decimal
-/// (`38.2 GiB`).
+/// (`38.2 GiB`). Under a gibibyte (a small gate or scan) the unit follows the
+/// size: `512.0 MiB`, `3.0 KiB`, `900 B`; zero stays `0 GiB`.
 fn format_gib(bytes: u64) -> String {
     const GIB: u64 = 1 << 30;
-    if bytes.is_multiple_of(GIB) {
-        format!("{} GiB", bytes / GIB)
+    const MIB: u64 = 1 << 20;
+    const KIB: u64 = 1 << 10;
+    if bytes == 0 || bytes >= GIB {
+        if bytes.is_multiple_of(GIB) {
+            format!("{} GiB", bytes / GIB)
+        } else {
+            format!("{:.1} GiB", bytes as f64 / GIB as f64)
+        }
+    } else if bytes >= MIB {
+        // A value that rounds up to 1024.0 MiB is a gibibyte.
+        if bytes as f64 / MIB as f64 >= 1023.95 {
+            return format!("{:.1} GiB", bytes as f64 / GIB as f64);
+        }
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
     } else {
-        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+        format!("{bytes} B")
     }
 }
 

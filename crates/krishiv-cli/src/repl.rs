@@ -276,7 +276,7 @@ fn run_statement(
         let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
     }
     match outcome {
-        Ok(()) => true,
+        Ok(_) => true,
         Err(msg) => {
             if !msg.is_empty() {
                 let _ = writeln!(io::stderr(), "{msg}");

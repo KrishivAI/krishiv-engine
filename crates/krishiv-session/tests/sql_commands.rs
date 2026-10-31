@@ -235,14 +235,14 @@ fn bucketing_max_buckets_limit_is_configured_and_validated() {
     let e = block_on(s.sql("CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 3 BUCKETS")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InvalidBucketCount);
     assert!(e.to_string().contains("(`2`). Got `3`"), "{e}");
-    // A count within it passes validation (CREATE TABLE itself is not a
-    // session statement).
-    assert_eq!(
-        class(block_on(s.sql(
-            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS"
-        ))),
-        ErrorClass::KrishivUnsupportedFeature
-    );
+    // A count within it passes validation, and the table is created.
+    block_on(async {
+        s.sql("CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
     // Resetting restores the default limit.
     block_on(s.sql("RESET spark.sql.sources.bucketing.maxBuckets")).unwrap();
     assert_eq!(class(block_on(s.sql(over))), ErrorClass::InvalidBucketCount);
@@ -252,12 +252,13 @@ fn bucketing_max_buckets_limit_is_configured_and_validated() {
     let e = block_on(s.sql("CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 3 BUCKETS")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InvalidBucketCount);
     assert!(e.to_string().contains("(`2`). Got `3`"), "{e}");
-    assert_eq!(
-        class(block_on(s.sql(
-            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS"
-        ))),
-        ErrorClass::KrishivUnsupportedFeature
-    );
+    block_on(async {
+        s.sql("CREATE TABLE t2 (a INT) CLUSTERED BY (a) INTO 2 BUCKETS")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
     block_on(s.sql("RESET krishiv.sql.sources.bucketing.maxBuckets")).unwrap();
     assert_eq!(class(block_on(s.sql(over))), ErrorClass::InvalidBucketCount);
 }
@@ -718,9 +719,9 @@ fn set_time_zone_sets_the_session_zone() {
         s.conf().get("spark.sql.session.timeZone").as_deref(),
         Some(found[0][1].as_str())
     );
-    // An invalid zone fails through the session configuration.
+    // An invalid zone fails as Spark's time zone check does.
     let e = block_on(s.sql("SET TIME ZONE 'not a zone!'")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    assert_eq!(e.error_class(), ErrorClass::InvalidConfValueTimeZone);
     // `INTERVAL` zones name their unsupported form.
     let e = block_on(s.sql("SET TIME ZONE INTERVAL '1' DAY")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -810,22 +811,14 @@ fn explain_runs_commands() {
 #[test]
 fn unexecuted_commands_parse_and_report_unsupported() {
     let s = session();
-    for sql in [
-        "CREATE TABLE t (a INT NOT NULL DEFAULT 1, b STRING COMMENT 'x') USING parquet \
-         PARTITIONED BY (a) TBLPROPERTIES ('k' = 'v')",
-        "CREATE TABLE t USING parquet PARTITIONED BY (a) AS SELECT id AS a FROM people",
-        "EXPLAIN CREATE TABLE t (a INT)",
-    ] {
-        let e = block_on(s.sql(sql)).unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-        if !sql.contains("PARTITIONED BY") {
-            assert!(e.to_string().contains("in sessions"), "{sql}: {e}");
-        }
-    }
+    let sql = "EXPLAIN CREATE TABLE t (a INT)";
+    let e = block_on(s.sql(sql)).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{sql}"
+    );
+    assert!(e.to_string().contains("in sessions"), "{sql}: {e}");
     // Executed since the permanent catalog: table DDL on the session catalog.
     block_on(async { s.sql("CREATE TABLE t LIKE people").await?.collect().await }).unwrap();
     block_on(async { s.sql("DROP TABLE IF EXISTS t PURGE").await?.collect().await }).unwrap();

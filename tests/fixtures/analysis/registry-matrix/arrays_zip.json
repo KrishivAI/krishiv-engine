@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "arrays_zip#2f1d5fdb3b91/ansi_on",
+      "reason": "SELECT arrays_zip(array(1, 2), INTERVAL '1-2' YEAR TO MONTH, array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#2f1d5fdb3b91/ansi_off",
+      "reason": "SELECT arrays_zip(array(1, 2), INTERVAL '1-2' YEAR TO MONTH, array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#4d0783d03126/ansi_on",
+      "reason": "SELECT arrays_zip(INTERVAL '1-2' YEAR TO MONTH, array(2, 3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#4d0783d03126/ansi_off",
+      "reason": "SELECT arrays_zip(INTERVAL '1-2' YEAR TO MONTH, array(2, 3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#5493f5b241c6/ansi_on",
+      "reason": "SELECT arrays_zip(INTERVAL '1-2' YEAR TO MONTH, array(2, 3), array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#5493f5b241c6/ansi_off",
+      "reason": "SELECT arrays_zip(INTERVAL '1-2' YEAR TO MONTH, array(2, 3), array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#5976925d7d9b/ansi_on",
+      "reason": "SELECT arrays_zip(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#5976925d7d9b/ansi_off",
+      "reason": "SELECT arrays_zip(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#5fbc8135dda4/ansi_on",
+      "reason": "SELECT arrays_zip(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#5fbc8135dda4/ansi_off",
+      "reason": "SELECT arrays_zip(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#7231c140d38d/ansi_on",
+      "reason": "SELECT arrays_zip(array(1, 2), array(2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#7231c140d38d/ansi_off",
+      "reason": "SELECT arrays_zip(array(1, 2), array(2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#a770ce5d7752/ansi_on",
+      "reason": "SELECT arrays_zip(array(1, 2), INTERVAL '1 02:03:04' DAY TO SECOND, array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#a770ce5d7752/ansi_off",
+      "reason": "SELECT arrays_zip(array(1, 2), INTERVAL '1 02:03:04' DAY TO SECOND, array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#b2e1571d5e3d/ansi_on",
+      "reason": "SELECT arrays_zip(INTERVAL '1 02:03:04' DAY TO SECOND, array(2, 3), array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#b2e1571d5e3d/ansi_off",
+      "reason": "SELECT arrays_zip(INTERVAL '1 02:03:04' DAY TO SECOND, array(2, 3), array(3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#ed0d11bdb84d/ansi_on",
+      "reason": "SELECT arrays_zip(INTERVAL '1 02:03:04' DAY TO SECOND, array(2, 3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#ed0d11bdb84d/ansi_off",
+      "reason": "SELECT arrays_zip(INTERVAL '1 02:03:04' DAY TO SECOND, array(2, 3, 4)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#f04597665854/ansi_on",
+      "reason": "SELECT arrays_zip(array(1, 2), array(2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "arrays_zip#f04597665854/ansi_off",
+      "reason": "SELECT arrays_zip(array(1, 2), array(2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "arrays_zip"
+}

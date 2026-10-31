@@ -153,8 +153,9 @@ impl<'s> Parser<'s> {
         let parts = self.comma_sep(|p| {
             let start = p.start();
             let key = p.name_part(true)?;
+            // `partitionVal: identifier (EQ constant)? | identifier EQ DEFAULT`.
             let value = if p.eat_sym(Sym::Eq) {
-                Some(p.expr()?)
+                Some(p.constant_or_default()?)
             } else {
                 None
             };

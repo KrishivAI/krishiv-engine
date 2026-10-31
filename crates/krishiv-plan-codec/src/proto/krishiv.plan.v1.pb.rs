@@ -123,7 +123,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -174,6 +174,9 @@ pub mod node {
         /// feature: shared_subplan
         #[prost(message, tag = "19")]
         SharedRead(super::SharedReadNode),
+        /// feature: generate
+        #[prost(message, tag = "20")]
+        Generate(super::GenerateNode),
     }
 }
 /// feature: shared_subplan
@@ -305,6 +308,25 @@ pub struct ReplicateRowsNode {
     #[prost(uint32, tag = "3")]
     pub count: u32,
     #[prost(message, repeated, tag = "4")]
+    pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
+}
+/// feature: generate
+/// Each input row once per element of an array or map (explode, posexplode,
+/// inline): the input's columns, then the generated ones.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GenerateNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(enumeration = "GeneratorKind", tag = "3")]
+    pub kind: i32,
+    /// Keep a row whose argument has no element, with NULL columns.
+    #[prost(bool, tag = "4")]
+    pub outer: bool,
+    #[prost(uint32, tag = "5")]
+    pub arg: u32,
+    #[prost(message, repeated, tag = "6")]
     pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
 }
 /// feature: expand
@@ -1200,6 +1222,39 @@ impl SubqueryValueKind {
             "SUBQUERY_VALUE_KIND_UNSPECIFIED" => Some(Self::Unspecified),
             "SUBQUERY_VALUE_KIND_SCALAR" => Some(Self::Scalar),
             "SUBQUERY_VALUE_KIND_EXISTS" => Some(Self::Exists),
+            _ => None,
+        }
+    }
+}
+/// feature: generate
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GeneratorKind {
+    Unspecified = 0,
+    Explode = 1,
+    PosExplode = 2,
+    Inline = 3,
+}
+impl GeneratorKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GENERATOR_KIND_UNSPECIFIED",
+            Self::Explode => "GENERATOR_KIND_EXPLODE",
+            Self::PosExplode => "GENERATOR_KIND_POS_EXPLODE",
+            Self::Inline => "GENERATOR_KIND_INLINE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GENERATOR_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "GENERATOR_KIND_EXPLODE" => Some(Self::Explode),
+            "GENERATOR_KIND_POS_EXPLODE" => Some(Self::PosExplode),
+            "GENERATOR_KIND_INLINE" => Some(Self::Inline),
             _ => None,
         }
     }

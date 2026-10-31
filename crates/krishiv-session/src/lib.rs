@@ -55,6 +55,7 @@ pub mod functions;
 mod identifier_clause;
 mod introspection;
 mod locals;
+mod partitions;
 mod profile;
 mod scripting;
 mod session;
@@ -76,6 +77,7 @@ pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, DataFrameWriterV2, ExplainMode, GroupedData,
     JoinType, StorageLevel,
 };
+pub use explain::Estimate;
 pub use explain_graph::{
     GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
 };

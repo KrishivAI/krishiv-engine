@@ -65,7 +65,7 @@ class Case:
     sql: str
     rows_in: int  # rows the operator consumes (the fact rows; the probe side of a join)
     ops: tuple[str, ...]  # Krishiv operators whose compute seconds are "the operator" of this case
-    twin: str  # the criterion bench of krishiv-exec that measures this operator alone, or ``stub: <proposed id>``
+    twin: str  # the criterion bench of krishiv-exec that measures this operator alone
     params: dict[str, Any] = field(default_factory=dict)
     # Expressions summed over the answer's columns to check it (None: the answer is small, its rows are compared)
     check: tuple[str, ...] | None = None
@@ -135,7 +135,7 @@ def _scan_cases(p: MicroSizes) -> list[Case]:
             "scan",
             "SELECT SUM(u) AS s FROM fact",
             SCAN_OPERATORS,
-            "stub: scan/parquet_int_1m_rows",
+            "scan/parquet_int_1m_rows",
             (_int("s"),),
         ),
         _case(
@@ -144,7 +144,7 @@ def _scan_cases(p: MicroSizes) -> list[Case]:
             "scan",
             "SELECT SUM(LENGTH(s)) AS s FROM fact",
             SCAN_OPERATORS,
-            "stub: scan/parquet_string_1m_rows",
+            "scan/parquet_string_1m_rows",
             (_int("s"),),
         ),
     ]
@@ -154,7 +154,7 @@ def _filter_cases(p: MicroSizes) -> list[Case]:
     out = []
     for pm in MATERIALISED_PER_MILLE:
         limit = p.rows * pm // 1000
-        twin = "operators/filter_1m_rows/50_percent" if pm == 500 else "stub: operators/filter_1m_rows/selectivity"
+        twin = "operators/filter_1m_rows/50_percent" if pm == 500 else "operators/filter_1m_rows/selectivity"
         sql = f"SELECT id, v1, v3 FROM fact WHERE u < {limit}"
         checks = (_int("id"), _int("v1"), _float("v3"))
         out.append(
@@ -163,7 +163,7 @@ def _filter_cases(p: MicroSizes) -> list[Case]:
     for pm in COUNT_PER_MILLE:
         limit = p.rows * pm // 1000
         sql = f"SELECT COUNT(*) AS n, SUM(v1) AS s FROM fact WHERE u < {limit}"
-        twin = "stub: operators/filter_count_1m_rows/selectivity"
+        twin = "operators/filter_count_1m_rows/selectivity"
         out.append(
             _case(
                 p,
@@ -189,7 +189,7 @@ def _string_cases(p: MicroSizes) -> list[Case]:
         "str_like_contains": ("s LIKE '%ab%'", "contains, about 2 %"),
         "str_like_rare": ("s LIKE '%stack0%'", "contains a rare literal: the needle, 0.1 %"),
     }
-    twin = "stub: operators/filter_string_1m_rows/predicate"
+    twin = "operators/filter_string_1m_rows/predicate"
     return [
         _case(
             p,
@@ -240,7 +240,7 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
             "sort",
             f"SELECT {gi} AS g, u FROM fact ORDER BY {gi}, u",
             sort,
-            "stub: sort/in_memory_1m_rows/two_int_keys",
+            "sort/in_memory_1m_rows/two_int_keys",
             sorted_check(_int("g"), _int("u"), _assoc("g", "u")),
         ),
         _case(
@@ -258,7 +258,7 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
             "topn",
             "SELECT id, v3 FROM fact ORDER BY v3 DESC, id LIMIT 1000",
             topn,
-            "stub: sort/topn_k1000_float_1m_rows",
+            "sort/topn_k1000_float_1m_rows",
             k=1000,
         ),
         _case(
@@ -267,7 +267,7 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
             "topn",
             "SELECT id, s FROM fact ORDER BY s, id LIMIT 100",
             topn,
-            "stub: sort/topn_k100_string_1m_rows",
+            "sort/topn_k100_string_1m_rows",
             k=100,
         ),
     ]
@@ -280,7 +280,7 @@ def _groupby_cases(p: MicroSizes) -> list[Case]:
             ("int", col_gi(c), _int, "g"),
             ("str", col_gs(c), _text_key, _text_number("g")),
         ):
-            sum_twin = _agg_twin(c) if kind == "int" else "stub: aggregate/grouped_sum_string_keys"
+            sum_twin = _agg_twin(c) if kind == "int" else "aggregate/grouped_sum_string_keys"
             by = f"FROM fact GROUP BY {key}"
             out.append(
                 _case(
@@ -303,7 +303,7 @@ def _groupby_cases(p: MicroSizes) -> list[Case]:
                     "groupby",
                     f"SELECT {key} AS g, SUM(v1) AS s, AVG(v3) AS a, COUNT(*) AS n {by}",
                     AGG_OPS,
-                    "stub: aggregate/grouped_multi_agg",
+                    "aggregate/grouped_multi_agg",
                     (key_check("g"), _int("s"), _float("a"), _int("n"), _assoc(number, "s"), _assoc(number, "n")),
                     groups=c,
                     key=kind,
@@ -319,7 +319,7 @@ def _groupby_cases(p: MicroSizes) -> list[Case]:
                 "groupby",
                 f"SELECT {col_gi(c)} AS g1, {col_gj(c)} AS g2, SUM(v1) AS s FROM fact GROUP BY {keys}",
                 AGG_OPS,
-                "stub: aggregate/grouped_sum_two_keys",
+                "aggregate/grouped_sum_two_keys",
                 (_int("g1"), _int("g2"), _int("s"), _assoc("g1", "s"), _assoc("g2", "s")),
                 groups=c * c,
                 key="int, int",
@@ -373,11 +373,11 @@ def _join_cases(p: MicroSizes) -> list[Case]:
         for pct in MATCH_PCTS_INT:
             out.append(join(f"join_int_b{sci(b)}_m{pct}", col_ji(b, pct), "k", twin, key="int64", match_pct=pct))
         for pct in MATCH_PCTS_STR:
-            str_twin = "stub: hash_join/probe_string_keys_1m_rows"
+            str_twin = "hash_join/probe_string_keys_1m_rows"
             out.append(join(f"join_str_b{sci(b)}_m{pct}", col_js(b, pct), "ks", str_twin, key="string", match_pct=pct))
         for alpha in ZIPF_ALPHAS:
             cid = f"join_zipf_b{sci(b)}_a{round(alpha * 10):02d}"
-            zipf_twin = "stub: hash_join/probe_zipf_1m_rows"
+            zipf_twin = "hash_join/probe_zipf_1m_rows"
             out.append(join(cid, col_jz(b, alpha), "k", zipf_twin, key="int64", match_pct=100, zipf_alpha=alpha))
     return out
 

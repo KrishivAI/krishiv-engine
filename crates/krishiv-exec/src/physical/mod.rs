@@ -67,8 +67,9 @@ mod shared_tests;
 pub(crate) use instantiate::node_ids;
 pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub(crate) use instantiate::{
-    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, group_limit_op,
-    hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
+    group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op,
+    top_n_op,
 };
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
 pub use splits::{
@@ -355,6 +356,22 @@ pub enum PhysNode {
         /// The replication count.
         count: Arc<Expr>,
         /// The subqueries `count` reads.
+        subqueries: Vec<SubqueryPlan>,
+    },
+    /// Each row of `input` once per element of `arg` (`explode`,
+    /// `posexplode`, `inline`): the input's columns, then the generated ones.
+    Generate {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The attribute of each input column.
+        layout: Vec<AttrId>,
+        /// What is generated.
+        kind: krishiv_plan::GeneratorKind,
+        /// Keep a row whose argument has no element, with NULL columns.
+        outer: bool,
+        /// The array or map column expression.
+        arg: Arc<Expr>,
+        /// The subqueries `arg` reads.
         subqueries: Vec<SubqueryPlan>,
     },
     /// Each row of `input` once per projection (`ROLLUP`, `CUBE`,
@@ -753,6 +770,7 @@ plan_data!(enum PhysNode {
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
+    Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
     TopN { input, keys, limit },
@@ -815,6 +833,9 @@ impl PhysNode {
             }
             | Self::ReplicateRows {
                 input, subqueries, ..
+            }
+            | Self::Generate {
+                input, subqueries, ..
             } => std::iter::once(input.as_ref())
                 .chain(subqueries.iter().map(|s| &s.plan))
                 .collect(),
@@ -846,6 +867,9 @@ impl PhysNode {
                 input, subqueries, ..
             }
             | Self::ReplicateRows {
+                input, subqueries, ..
+            }
+            | Self::Generate {
                 input, subqueries, ..
             } => std::iter::once(input.as_mut())
                 .chain(subqueries.iter_mut().map(|s| &mut s.plan))

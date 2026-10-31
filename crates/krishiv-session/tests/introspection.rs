@@ -220,9 +220,10 @@ fn temporary_views_and_unsupported_layouts() {
         class(&s, "SHOW CREATE TABLE tv"),
         "EXPECT_PERMANENT_VIEW_NOT_TEMP"
     );
+    // `FORMATTED` is `EXTENDED` (Spark's `DescribeTableCommand` takes either as `isExtended`).
     assert_eq!(
-        class(&s, "DESCRIBE FORMATTED t"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        rows(&s, "DESCRIBE FORMATTED t"),
+        rows(&s, "DESCRIBE EXTENDED t")
     );
     // The `IN`/`FROM` namespace must agree with a qualified table name.
     assert_eq!(

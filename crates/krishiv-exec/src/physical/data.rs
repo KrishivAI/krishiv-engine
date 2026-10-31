@@ -120,6 +120,7 @@ value_types!(
     krishiv_plan::Expr,
     krishiv_plan::Scan,
     krishiv_plan::AttrId,
+    krishiv_plan::GeneratorKind,
     // Scan and runtime-filter descriptions.
     krishiv_io::ColumnPath,
     krishiv_io::FilterId,
