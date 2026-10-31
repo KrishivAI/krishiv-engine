@@ -10,9 +10,12 @@ use std::sync::Arc;
 use arrow_array::{Decimal128Array, Int32Array, Int64Array, RecordBatch, StringViewArray};
 use arrow_schema::{DataType, Field, Schema};
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_exec::planner::{DefaultPlanner, PhysicalPlanner as _, PlanningContext};
+use krishiv_exec::planner::{
+    DefaultPlanner, PhysicalPlanner as _, PlanningContext, ProviderStatistics,
+};
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{FileFormat as _, FormatOptions};
+use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
     AttrId, BoundColumn, Expr, ExprNode, Grouping, LogicalPlan, Plan, PlanNode, ResolvedExpr,
     ResolvedFunction, partial_state_columns,
@@ -456,6 +459,31 @@ fn with_filter(e: &Arc<Expr>) -> Arc<Expr> {
         }
         other => panic!("not an aggregate call: {other:?}"),
     }
+}
+
+/// The estimator gives the node one row per key and knows its state columns.
+#[test]
+fn the_estimate_covers_keys_and_states() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let rows: Vec<Row> = (0..200).map(|i| (i % 4, Some(1), None, None)).collect();
+    let t = tables(dir.path(), &rows, &[0, 1], &rt);
+    let plan = t.optimized(QUERY, Order::Statistics).unwrap();
+    let split = eager(&plan, &|s| s);
+    let stats = ProviderStatistics(Arc::clone(&t.tables) as _);
+    let computed = PlanStats::compute(split.root(), &stats);
+    let mut stack = vec![Arc::clone(split.root())];
+    let mut seen = 0;
+    while let Some(p) = stack.pop() {
+        if let PlanNode::PartialAggregate { input, states, .. } = &p.node {
+            seen += 1;
+            assert!(computed.rows(&p) <= computed.rows(input), "{p:?}");
+            let est = computed.get(&p).unwrap();
+            assert!(states.iter().all(|c| est.cols.contains_key(&c.id)));
+        }
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    assert_eq!(seen, 1);
 }
 
 /// States are already filtered: a merge with a filter is a malformed plan.

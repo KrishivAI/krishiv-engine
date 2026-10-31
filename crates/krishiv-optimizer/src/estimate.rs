@@ -395,14 +395,22 @@ impl<'a> Estimator<'a> {
                     from_statistics: est.from_statistics,
                 }
             }
-            PlanNode::PartialAggregate { input, keys, .. } => {
+            PlanNode::PartialAggregate {
+                input,
+                keys,
+                states,
+                ..
+            } => {
                 let est = self.plan(input);
                 let rows = keys
                     .iter()
                     .map(|k| column_ndv(k, &est).unwrap_or(est.rows))
                     .product::<f64>()
                     .min(est.rows);
-                outputs(&est, keys, rows, self.propagate)
+                let mut out = outputs(&est, keys, rows, self.propagate);
+                out.cols
+                    .extend(states.iter().map(|c| (c.id, AttrStats::guess(rows))));
+                out
             }
             _ => RelStats::unknown(DEFAULT_ROWS, ids()),
         }

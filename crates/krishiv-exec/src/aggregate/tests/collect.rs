@@ -1194,28 +1194,32 @@ fn null_states_merge_as_empty_whatever_their_slots_hold() {
         f.evaluate(&[0]).unwrap()
     };
     let dec = DataType::Decimal128(10, 2);
-    let cases: [(AggregateExpr, Vec<ArrayRef>); 4] = [
+    let cases: [(AggregateExpr, Vec<ArrayRef>, &str); 4] = [
         (
             AggregateExpr::new(AggregateFunction::Count, 0, DataType::Int64, "c"),
             vec![counts()],
+            "2",
         ),
         (
             AggregateExpr::new(AggregateFunction::Avg, 0, DataType::Float64, "a"),
             vec![doubles(), counts()],
+            "2.0",
         ),
         (
             AggregateExpr::new(AggregateFunction::Avg, 0, dec.clone(), "a"),
             vec![decimals(), counts()],
+            "1.000000",
         ),
         (
             AggregateExpr::new(AggregateFunction::Sum, 0, dec, "s"),
             vec![decimals(), nonempty()],
+            "2.00",
         ),
     ];
-    for (raw, cols) in cases {
+    for (raw, cols, want) in cases {
         let both = merged(&raw, &cols, 2);
         let one = merged(&raw, &cols, 1);
         assert_eq!(both.as_ref(), one.as_ref(), "{:?}", raw.function);
-        assert!(both.is_valid(0), "{:?}", raw.function);
+        assert_eq!(shown(&both, 0), want, "{:?}", raw.function);
     }
 }
