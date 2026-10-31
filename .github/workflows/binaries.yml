@@ -83,6 +83,7 @@ jobs:
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
           ARTIFACT: ${{ matrix.artifact }}
+          CARGO_PROFILE_DIST_STRIP: "false"
         run: |
           cargo build --profile dist --locked -p krishiv-cli
           mkdir -p out
@@ -116,6 +117,17 @@ jobs:
             grep -q 'krishiv-compat' old-cpu.out
             ! grep -qi 'illegal instruction' old-cpu.out
           fi
+      - name: Old CPU diagnostics
+        if: failure()
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          readelf -p .comment "out/$ARTIFACT" | head -12
+          readelf -d "out/$ARTIFACT" | grep -E 'PREINIT|INIT_ARRAY|NEEDED|FLAGS'
+          qemu-x86_64 -L / -cpu Nehalem -d in_asm,nochain -D asm.log "out/$ARTIFACT" --version || true
+          wc -l asm.log
+          grep '^IN:' asm.log | tail -n 8
+          tail -n 14 asm.log
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
