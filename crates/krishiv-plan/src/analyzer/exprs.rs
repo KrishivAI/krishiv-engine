@@ -5168,9 +5168,11 @@ impl Resolver<'_> {
                             | DataType::Float
                             | DataType::Double
                             | DataType::Decimal(_)
-                            | DataType::String
                             | DataType::Null
-                    );
+                    )
+                    || (!self.ctx.conf.ansi && element == DataType::String);
+                // (Under ANSI Spark refuses an array of strings, where it casts a
+                // string percentage.)
                 if !castable {
                     let sql = pct_sql(&pct);
                     return Err(AnalysisError::new(
