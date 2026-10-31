@@ -167,8 +167,13 @@ def test_every_twin_is_documented_and_the_existing_ones_exist():
             group, _, name = twin.partition("/")
             src = (benches / f"{group}.rs").read_text()
             assert f'benchmark_group("{group}")' in src, f"{c.id}: no bench group {group}"
-            stem = name.split("_")[0] + "_"
-            assert stem in src, f"{c.id}: no bench like {twin}"
+            # A parametrized bench spells its id as a format string in the source.
+            literal = name
+            if name.startswith("decimal_"):
+                literal = "decimal_{name}_{keys}_keys"
+            elif name.startswith("grouped_sum_"):
+                literal = "grouped_sum_{keys}_keys"
+            assert literal in src, f"{c.id}: no bench like {twin}"
 
 
 # ---------------------------------------------------------------- derived numbers
@@ -419,7 +424,9 @@ def test_report_renders_the_newest_result(kd: Path, monkeypatch, capsys):
     cli.main(["report", "--suite", "micro"])
     assert result.with_suffix(".md").is_file()
     assert "report:" in capsys.readouterr().out
+    result.with_suffix(".md").unlink()
     cli.main(["report", "--suite", "micro", str(result)])
+    assert result.with_suffix(".md").is_file()
 
 
 def test_result_lookup_without_results_says_what_to_run(tmp_path: Path, monkeypatch):

@@ -241,7 +241,7 @@ def test_process_engine_reports_the_cpu_seconds_of_a_timed_run(tiny):
     eng.setup(tiny)
     try:
         assert eng.last_cpu_seconds is None
-        eng.timed_run(q("SELECT sum(a * a) FROM range(30000000) t(a)"))
+        eng.timed_run(q("SELECT sum(a * a) FROM range(300000000) t(a)"))
         busy = eng.last_cpu_seconds
         assert busy is not None
         assert busy > 0.05  # real work, read from the worker's /proc entries
