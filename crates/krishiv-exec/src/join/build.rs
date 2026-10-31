@@ -478,6 +478,18 @@ impl Sink for BuildSink {
         "HashJoinBuild"
     }
 
+    fn published_filters(&self) -> Vec<FilterId> {
+        if self.0.publisher.is_none() {
+            return Vec::new();
+        }
+        self.0
+            .runtime
+            .iter()
+            .filter(|f| f.options.scan_waits)
+            .map(|f| f.filter.id())
+            .collect()
+    }
+
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let hashing = self.0.hashing(ctx.query().config());
         let fanout = hashing.fanout0();

@@ -61,6 +61,24 @@ async fn run_build(
     out
 }
 
+/// A scan's pipeline waits for the build only for the filters that ask for it.
+#[test]
+fn a_build_reports_only_the_filters_a_scan_waits_for() {
+    let (_manager, scope) = spill();
+    let waits = KeyFilterOptions {
+        scan_waits: true,
+        ..KeyFilterOptions::default()
+    };
+    let join = HashJoin::try_new(case(JoinType::Inner, 2, false, false).spec(Some(scope)))
+        .unwrap()
+        .with_runtime_filters(vec![
+            filter(1, 0, waits),
+            filter(2, 1, KeyFilterOptions::default()),
+        ])
+        .unwrap();
+    assert_eq!(join.build_sink().published_filters(), [FilterId(1)]);
+}
+
 #[tokio::test]
 async fn builds_publish_the_keys_they_store() {
     let build = vec![

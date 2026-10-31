@@ -21,7 +21,10 @@
 //!   turns it on for the next row group only when that fraction is at most
 //!   [`KEEP_MAX`]. It is never used when the projected columns outside the
 //!   predicate are small next to the predicate columns (the decoder's size
-//!   rule). All state is the decoder's own (one split, one task).
+//!   rule). All state is the decoder's own (one piece of a split, one
+//!   driver), except that a later piece of the file may start from what the
+//!   last one measured, so cutting a split finer does not guess again
+//!   ([`LateMaterialization::resuming`]).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -435,6 +438,14 @@ impl Counters {
         )
     }
 
+    /// `(seen, kept)` since the last [`take`](Self::take).
+    pub(crate) fn pending(&self) -> (u64, u64) {
+        (
+            self.seen.load(Ordering::Relaxed),
+            self.kept.load(Ordering::Relaxed),
+        )
+    }
+
     /// `(seen, kept)`, and resets both.
     pub(crate) fn take(&self) -> (u64, u64) {
         (
@@ -552,6 +563,13 @@ pub(crate) enum Worth {
     Never,
 }
 
+/// Whether a measured fraction is low enough for the filter to pay.
+fn keeps_few(seen: u64, kept: u64) -> bool {
+    #[expect(clippy::cast_precision_loss, reason = "a ratio")]
+    let fraction = kept as f64 / seen as f64;
+    fraction <= KEEP_MAX
+}
+
 /// The late-materialisation state of one decoder (see the module docs).
 pub(crate) struct LateMaterialization {
     policy: crate::request::RowFilterPolicy,
@@ -610,6 +628,37 @@ impl LateMaterialization {
             idle: false,
             groups_on: 0,
             groups_off: 0,
+        }
+    }
+
+    /// Starts from what an earlier piece of the file measured (`prior`)
+    /// instead of the first guess, as the next row group of that piece
+    /// would. Only [`RowFilterPolicy::Auto`] adapts.
+    ///
+    /// [`RowFilterPolicy::Auto`]: crate::request::RowFilterPolicy::Auto
+    #[must_use]
+    pub(crate) fn resuming(mut self, prior: Option<bool>) -> Self {
+        if let Some(on) =
+            prior.filter(|_| !self.disabled && self.policy == crate::request::RowFilterPolicy::Auto)
+        {
+            self.on = on;
+            self.wanted = on;
+            self.measured = true;
+        }
+        self
+    }
+
+    /// What the row groups so far ask of the next one: `None` before any
+    /// measurement, and for a filter that does not adapt.
+    pub(crate) fn measurement(&self) -> Option<bool> {
+        if self.disabled || self.idle || self.policy != crate::request::RowFilterPolicy::Auto {
+            return None;
+        }
+        let (seen, kept) = self.counters.pending();
+        if seen > 0 {
+            Some(keeps_few(seen, kept))
+        } else {
+            self.measured.then_some(self.wanted)
         }
     }
 
@@ -705,9 +754,7 @@ impl LateMaterialization {
         let (seen, kept) = self.counters.take();
         if seen > 0 {
             self.measured = true;
-            #[expect(clippy::cast_precision_loss, reason = "a ratio")]
-            let fraction = kept as f64 / seen as f64;
-            self.wanted = fraction <= KEEP_MAX;
+            self.wanted = keeps_few(seen, kept);
         }
         self.wanted
     }

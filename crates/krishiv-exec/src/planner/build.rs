@@ -793,6 +793,7 @@ impl<'a> Planner<'a> {
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
             let name = source_name(scan);
+            let source = Arc::new(scan.source.clone());
             scan.output
                 .iter()
                 .zip(&projection)
@@ -802,6 +803,7 @@ impl<'a> Planner<'a> {
                     scan: id,
                     scan_rows,
                     scan_name: name.clone(),
+                    source: Arc::clone(&source),
                 })
                 .collect()
         } else {
