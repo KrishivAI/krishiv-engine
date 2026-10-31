@@ -523,6 +523,33 @@ fn pkg_args(scope: &Scope, dependents: bool) -> Vec<String> {
     }
 }
 
+/// `pkg_args` for `cargo test --doc`: binary-only packages (a `main.rs` and no `lib.rs`, such as `krishiv-cli`)
+/// have no doctests, and `cargo test --doc -p <bin-only>` fails with "no library targets found". `None` when
+/// the scope holds only such packages, so the step is left out.
+pub fn doc_pkg_args(scope: &Scope) -> Option<Vec<String>> {
+    let Scope::Packages {
+        with_dependents, ..
+    } = scope
+    else {
+        return Some(pkg_args(scope, true));
+    };
+    let libs: Vec<&String> = with_dependents
+        .iter()
+        .filter(|n| {
+            let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../crates")
+                .join(n.as_str())
+                .join("src");
+            src.join("lib.rs").is_file() || !src.join("main.rs").is_file()
+        })
+        .collect();
+    (!libs.is_empty()).then(|| {
+        libs.iter()
+            .flat_map(|n| ["-p".to_owned(), (*n).clone()])
+            .collect()
+    })
+}
+
 fn scope_label(scope: &Scope) -> String {
     match scope {
         Scope::None => "no Rust change".to_owned(),
@@ -698,10 +725,14 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
                         kernel_require_targets(host_has_x86_64v3()),
                     )
                     .heavy(),
+            ]
+            .into_iter()
+            .chain(doc_pkg_args(&ch.scope).map(|pkgs| {
                 Cmd::new("cargo", &["test", "--doc", "--locked"])
-                    .args_owned(pkg_args(&ch.scope, true))
-                    .heavy(),
-            ],
+                    .args_owned(pkgs)
+                    .heavy()
+            }))
+            .collect(),
         ));
     } else {
         for id in ["clippy", "doc", "nextest"] {

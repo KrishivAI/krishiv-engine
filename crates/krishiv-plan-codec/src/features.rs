@@ -137,6 +137,7 @@ registry! {
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
+    (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
@@ -291,6 +292,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::Range(_) => Some(Feature::Range),
+            PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
@@ -478,6 +480,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
         PhysNode::Scan(_)
         | PhysNode::OneRow
+        | PhysNode::SharedRead { .. }
         | PhysNode::Range(_)
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
@@ -593,6 +596,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
+        | PhysNode::SharedRead { .. }
         | PhysNode::Limit { .. }
         | PhysNode::Range(_)
         | PhysNode::Sort { .. }
@@ -648,11 +652,14 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     if plan.env().zone_name.is_some() {
         out.insert(Feature::SessionZoneName);
     }
-    if partial_below_join(plan.root()) {
+    if plan.roots().any(partial_below_join) {
         out.insert(Feature::PartialAggregate);
     }
     let mut has_moment = false;
-    let mut stack = vec![plan.root()];
+    if !plan.shared().is_empty() {
+        out.insert(Feature::SharedSubplan);
+    }
+    let mut stack: Vec<&PhysNode> = plan.roots().collect();
     while let Some(node) = stack.pop() {
         constructs_of(node, &mut |c| {
             if matches!(c, Construct::Aggregate(a) if is_moment(&a.function)) {

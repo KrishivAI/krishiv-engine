@@ -1307,6 +1307,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
+    out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
         typed()
             .into_iter()
@@ -1334,6 +1335,40 @@ fn session_zone_name() -> PhysicalPlan {
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
     PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// Two shared plans, the second reading the first, read by a union.
+pub(crate) fn shared_subplan() -> PhysicalPlan {
+    use krishiv_exec::physical::{SharedId, SharedPlan};
+
+    let read = |id| PhysNode::SharedRead {
+        id: SharedId(id),
+        layout: scan_columns().iter().map(|c| c.id).collect(),
+    };
+    plan_of(PhysNode::Union {
+        inputs: vec![read(2), read(5)],
+    })
+    .with_shared(vec![
+        SharedPlan {
+            id: SharedId(2),
+            plan: scan(),
+            explain: ExplainNode::leaf("Scan", "t"),
+            deterministic: true,
+            ordered: false,
+        },
+        SharedPlan {
+            id: SharedId(5),
+            plan: PhysNode::Limit {
+                input: boxed(read(2)),
+                offset: 0,
+                limit: 3,
+            },
+            explain: ExplainNode::new("Limit", "3", vec![ExplainNode::leaf("SharedRead", "#2")]),
+            deterministic: false,
+            ordered: true,
+        },
+    ])
+    .unwrap()
 }
 
 /// A struct field access (`GetStructField`): the `b` of a struct column.

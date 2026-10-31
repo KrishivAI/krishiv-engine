@@ -71,7 +71,7 @@ impl PhysicalPlanner for DefaultPlanner {
             let mut planner = Planner::new(cx, root);
             let planned = planner.plan(root)?;
             let mut planned = select(planned, &output, "Project")?;
-            planner.attach_runtime_filters(&mut planned.node);
+            attach_runtime_filters(&mut planner.scan_filters, [&mut planned.node]);
             Ok::<_, KrishivError>(
                 PhysicalPlan::new(
                     planned.node,
@@ -84,6 +84,22 @@ impl PhysicalPlanner for DefaultPlanner {
         };
         krishiv_common::stack::on_big_stack(run)
             .ok_or_else(|| internal("cannot start a planner thread"))?
+    }
+}
+
+/// Hands each scan under `roots` the runtime filters joins publish to it.
+fn attach_runtime_filters<'a>(
+    filters: &mut HashMap<ScanId, Vec<ScanRuntimeFilter>>,
+    roots: impl IntoIterator<Item = &'a mut PhysNode>,
+) {
+    let mut stack: Vec<&mut PhysNode> = roots.into_iter().collect();
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Scan(s) = n
+            && let Some(f) = filters.remove(&s.id)
+        {
+            s.runtime_filters = f;
+        }
+        stack.extend(n.children_mut());
     }
 }
 
@@ -238,19 +254,6 @@ impl<'a> Planner<'a> {
             values.declare_filter(f.id, f.column.clone(), f.key_type.clone())?;
         }
         Ok(Arc::new(values))
-    }
-
-    /// Hands each scan of `node` the runtime filters joins publish to it.
-    fn attach_runtime_filters(&mut self, node: &mut PhysNode) {
-        let mut stack = vec![node];
-        while let Some(n) = stack.pop() {
-            if let PhysNode::Scan(s) = n
-                && let Some(filters) = self.scan_filters.remove(&s.id)
-            {
-                s.runtime_filters = filters;
-            }
-            stack.extend(n.children_mut());
-        }
     }
 
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
@@ -1571,4 +1574,58 @@ pub(crate) fn unsupported(feature: &str) -> KrishivError {
         feature: feature.to_owned(),
     }
     .into()
+}
+
+#[cfg(test)]
+mod attach_tests {
+    use std::collections::BTreeMap;
+
+    use arrow_schema::DataType;
+    use krishiv_io::{ColumnPath, FilterId};
+    use krishiv_plan::{ReadSource, Scan};
+
+    use super::*;
+    use crate::physical::ScanNode;
+
+    fn scan(id: u64) -> PhysNode {
+        PhysNode::Scan(ScanNode {
+            id: ScanId(id),
+            scan: Scan {
+                source: ReadSource::Table {
+                    name: vec!["t".to_owned()],
+                    options: BTreeMap::new(),
+                },
+                output: Vec::new(),
+                version: None,
+            },
+            projection: Vec::new(),
+            filter: None,
+            runtime_filters: Vec::new(),
+            row_stage: crate::operators::RowStageSettings::default(),
+        })
+    }
+
+    fn filter_of(node: &PhysNode) -> Vec<FilterId> {
+        match node {
+            PhysNode::Scan(s) => s.runtime_filters.iter().map(|f| f.id).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A filter reaches its scan in whichever tree holds it.
+    #[test]
+    fn filters_reach_the_scans_of_every_root() {
+        let filter = |id| ScanRuntimeFilter {
+            id: FilterId(id),
+            column: ColumnPath::new("k"),
+            key_type: DataType::Int64,
+        };
+        let mut filters =
+            HashMap::from([(ScanId(0), vec![filter(10)]), (ScanId(1), vec![filter(11)])]);
+        let (mut a, mut b) = (scan(0), scan(1));
+        attach_runtime_filters(&mut filters, [&mut a, &mut b]);
+        assert_eq!(filter_of(&a), [FilterId(10)]);
+        assert_eq!(filter_of(&b), [FilterId(11)]);
+        assert!(filters.is_empty());
+    }
 }

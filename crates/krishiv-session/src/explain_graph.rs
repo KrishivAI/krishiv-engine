@@ -466,7 +466,7 @@ impl DataFrame {
                     .session
                     .physical(&analysis.analyzed, &analysis.env)
                     .await?;
-                Ok(render(physical.explain()))
+                Ok(render(&physical.explain_all()))
             })
             .await
     }

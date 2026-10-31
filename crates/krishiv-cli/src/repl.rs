@@ -15,7 +15,7 @@ use std::io::{self, BufRead, Write};
 use crate::common::split_statements;
 use crate::complete::CompletionContext;
 use crate::format::OutputMode;
-use crate::sql::print_batches;
+use crate::sql::{AgentStatement, DEFAULT_MAX_ROWS, SqlArgs, is_agent, run_one};
 
 /// Dot-commands the REPL understands.
 const HELP: &str = "\
@@ -23,12 +23,13 @@ dot-commands:
   .help              show this help
   .quit | .exit      leave the REPL
   .timer on|off      print wall time after each statement (default off)
+  .agent on|off      agent output (krishiv.agent-result v1 table) instead of the mode
   .format NAME       output mode: table csv tsv json markdown line (default table)
   .complete PREFIX   list completions for PREFIX (keywords, functions, tables, …)
   .history [N]       show the last N history entries (default 20)
 SQL statements end with `;`; an empty line runs nothing.";
 
-/// REPL state: timer flag and output mode.
+/// REPL state: timer flag, output mode and agent output.
 #[derive(Debug)]
 pub(crate) struct Repl {
     /// Print wall time after each statement.
@@ -37,15 +38,30 @@ pub(crate) struct Repl {
     pub(crate) mode: OutputMode,
     /// Most result rows printed per statement.
     pub(crate) max_rows: usize,
+    /// Print results as the `krishiv.agent-result` v1 table instead of `mode`.
+    pub(crate) agent: bool,
 }
 
 impl Repl {
-    /// Default state: timer off, table output.
+    /// Default state: timer off, table output (tests; the REPL starts from the flags).
+    #[cfg(test)]
     pub(crate) fn new(max_rows: usize) -> Self {
         Self {
             timer: false,
             mode: OutputMode::Table,
             max_rows,
+            agent: false,
+        }
+    }
+
+    /// The state the command-line flags ask for: `-o` picks the mode, `--timing` turns the timer on, `--agent`
+    /// (or a piped stdout without `-o`) selects agent output.
+    pub(crate) fn from_args(args: &SqlArgs) -> Self {
+        Self {
+            timer: args.timing,
+            mode: args.output_mode(),
+            max_rows: args.max_rows.unwrap_or(DEFAULT_MAX_ROWS),
+            agent: is_agent(args),
         }
     }
 
@@ -81,10 +97,24 @@ impl Repl {
                 let _ = writeln!(out, "timer {}", if self.timer { "on" } else { "off" });
                 false
             }
+            ".agent" => {
+                match words.next().unwrap_or("") {
+                    "on" => self.agent = true,
+                    "off" => self.agent = false,
+                    other => {
+                        let _ = writeln!(out, "usage: .agent on|off (got `{other}`)");
+                        return Some(false);
+                    }
+                }
+                let _ = writeln!(out, "agent {}", if self.agent { "on" } else { "off" });
+                false
+            }
             ".format" | ".mode" => {
                 match parse_mode(words.next().unwrap_or("")) {
                     Some(mode) => {
                         self.mode = mode;
+                        // Choosing a format means plain rows: agent output would hide it.
+                        self.agent = false;
                         let _ = writeln!(out, "format {}", self.mode.name());
                     }
                     None => {
@@ -138,8 +168,11 @@ pub(crate) fn parse_mode(name: &str) -> Option<OutputMode> {
 }
 
 /// Runs the REPL on `session`; returns the process exit code.
-pub(crate) fn run_repl(session: &krishiv::Session, max_rows: usize) -> i32 {
-    let mut repl = Repl::new(max_rows);
+pub(crate) fn run_repl(session: &krishiv::Session, args: &SqlArgs) -> i32 {
+    let mut repl = Repl::from_args(args);
+    // Every statement runs with the command-line flags (`--max-seconds`, the explain flags) and the REPL's cap.
+    let mut run_args = args.clone();
+    let mut query_count = 0_usize;
     let ctx = CompletionContext::gather(session);
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
@@ -202,20 +235,55 @@ pub(crate) fn run_repl(session: &krishiv::Session, max_rows: usize) -> i32 {
             if crate::highlight::colors_enabled() {
                 let _ = writeln!(stdout, "{}", crate::highlight::highlight(&stmt));
             }
-            let code = print_batches(
+            query_count = query_count.saturating_add(1);
+            if !run_statement(
                 session,
+                &repl,
+                &mut run_args,
+                query_count,
                 &stmt,
-                repl.mode,
-                repl.max_rows,
-                repl.timer,
                 &mut stdout,
-            );
-            if code != 0 {
+            ) {
                 failures += 1;
             }
         }
     }
     i32::from(failures > 0)
+}
+
+/// Runs one statement with the REPL's state and the command-line flags; prints a failure on stderr and the
+/// elapsed time when the timer is on. Whether it succeeded.
+fn run_statement(
+    session: &krishiv::Session,
+    repl: &Repl,
+    args: &mut SqlArgs,
+    number: usize,
+    stmt: &str,
+    out: &mut dyn Write,
+) -> bool {
+    args.max_rows = Some(repl.max_rows);
+    let start = std::time::Instant::now();
+    let query_id = format!("q{number}");
+    let statement = AgentStatement {
+        text: stmt,
+        line_offset: 0,
+        query_id: &query_id,
+        start: &start,
+    };
+    let outcome = run_one(session, args, repl.agent, repl.mode, &statement, out);
+    let _ = out.flush();
+    if repl.timer {
+        let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
+    }
+    match outcome {
+        Ok(()) => true,
+        Err(msg) => {
+            if !msg.is_empty() {
+                let _ = writeln!(io::stderr(), "{msg}");
+            }
+            false
+        }
+    }
 }
 
 /// Whether `buffer` holds a complete statement: a `;` outside quotes and
@@ -276,7 +344,25 @@ fn statement_complete(buffer: &str) -> bool {
 mod tests {
     use crate::format::render_mode;
 
+    use clap::Parser as _;
+
     use super::*;
+
+    #[derive(clap::Parser)]
+    struct Flags {
+        #[command(flatten)]
+        args: SqlArgs,
+    }
+
+    fn flags(argv: &[&str]) -> SqlArgs {
+        Flags::try_parse_from(std::iter::once("t").chain(argv.iter().copied()))
+            .expect("flags")
+            .args
+    }
+
+    fn session() -> krishiv::Session {
+        crate::common::build_session(&[], &[]).expect("session")
+    }
 
     fn repl() -> (Repl, Vec<u8>) {
         (Repl::new(1000), Vec::new())
@@ -408,5 +494,134 @@ mod tests {
             &nulls,
         );
         assert_eq!(line, "a = 1\n\n");
+    }
+
+    #[test]
+    fn flags_set_the_starting_state() {
+        let r = Repl::from_args(&flags(&[
+            "-o",
+            "csv",
+            "--timing",
+            "--max-rows",
+            "7",
+            "--agent",
+        ]));
+        assert_eq!(
+            (r.mode, r.timer, r.max_rows, r.agent),
+            (OutputMode::Csv, true, 7, true)
+        );
+        let plain = Repl::from_args(&flags(&["-o", "json"]));
+        assert_eq!(plain.mode, OutputMode::Json);
+        assert!(!plain.timer);
+        assert_eq!(plain.max_rows, DEFAULT_MAX_ROWS);
+    }
+
+    #[test]
+    fn the_agent_command_toggles_agent_output() {
+        let (mut r, mut out) = repl();
+        let ctx = ctx();
+        assert_eq!(r.handle_dot(".agent on", &ctx, &mut out), Some(false));
+        assert!(r.agent);
+        assert_eq!(r.handle_dot(".agent off", &ctx, &mut out), Some(false));
+        assert!(!r.agent);
+        assert_eq!(r.handle_dot(".agent on", &ctx, &mut out), Some(false));
+        assert_eq!(r.handle_dot(".format csv", &ctx, &mut out), Some(false));
+        assert!(!r.agent, "choosing a format leaves agent output");
+        assert_eq!(r.handle_dot(".agent maybe", &ctx, &mut out), Some(false));
+        let text = String::from_utf8(out).expect("utf-8");
+        assert!(
+            text.contains("agent on")
+                && text.contains("agent off")
+                && text.contains("usage: .agent"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn statements_use_the_repl_mode_agent_flag_and_row_cap() {
+        let session = session();
+        let mut args = flags(&["--max-seconds", "30"]);
+        let mut r = Repl::new(2);
+        let mut out = Vec::new();
+        assert!(run_statement(
+            &session,
+            &r,
+            &mut args,
+            1,
+            "SELECT id FROM range(5)",
+            &mut out
+        ));
+        let table = String::from_utf8(std::mem::take(&mut out)).expect("utf-8");
+        assert!(
+            table.contains("2 rows") && !table.contains("-- rows:"),
+            "{table}"
+        );
+        r.agent = true;
+        assert!(run_statement(
+            &session,
+            &r,
+            &mut args,
+            2,
+            "SELECT id FROM range(5)",
+            &mut out
+        ));
+        let agent = String::from_utf8(std::mem::take(&mut out)).expect("utf-8");
+        assert!(
+            agent.contains("| id:bigint |")
+                && agent.contains("-- rows: 2 of ≥ 3 · stopped (row cap)"),
+            "{agent}"
+        );
+        r.agent = false;
+        r.mode = OutputMode::Csv;
+        assert!(run_statement(
+            &session,
+            &r,
+            &mut args,
+            3,
+            "SELECT 1 AS a",
+            &mut out
+        ));
+        assert_eq!(
+            String::from_utf8(std::mem::take(&mut out)).expect("utf-8"),
+            "a\n1\n"
+        );
+        assert!(!run_statement(
+            &session,
+            &r,
+            &mut args,
+            4,
+            "NOT SQL AT ALL",
+            &mut out
+        ));
+        // In agent mode a failure prints one JSON error object on `out`.
+        r.agent = true;
+        assert!(!run_statement(
+            &session,
+            &r,
+            &mut args,
+            6,
+            "NOT SQL AT ALL",
+            &mut out
+        ));
+        let error = String::from_utf8(std::mem::take(&mut out)).expect("utf-8");
+        assert!(
+            error.starts_with('{') && error.contains("\"query_id\":\"q6\""),
+            "{error}"
+        );
+        r.agent = false;
+        let mut args = flags(&["--explain-verbose"]);
+        assert!(run_statement(
+            &session,
+            &r,
+            &mut args,
+            5,
+            "SELECT 1 AS a",
+            &mut out
+        ));
+        let plan = String::from_utf8(std::mem::take(&mut out)).expect("utf-8");
+        assert!(
+            !plan.is_empty() && !plan.contains("-- rows:"),
+            "explain output goes to the writer: {plan}"
+        );
     }
 }
