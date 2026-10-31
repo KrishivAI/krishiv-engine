@@ -138,6 +138,18 @@ pub trait CatalogResolver: Send + Sync {
     /// Changes whenever the set of catalogs or their names change; part of
     /// the context fingerprint.
     fn epoch(&self) -> u64;
+    /// The SQL path unqualified routines and relations resolve through, in
+    /// order, each entry as its parts (`SET PATH`). The default is Spark's:
+    /// `system.builtin`, `system.session`, the current namespace.
+    fn sql_path(&self) -> Vec<Vec<String>> {
+        let mut current = vec![self.current_catalog().to_owned()];
+        current.extend(self.current_namespace().iter().cloned());
+        vec![
+            vec!["system".to_owned(), "builtin".to_owned()],
+            vec!["system".to_owned(), "session".to_owned()],
+            current,
+        ]
+    }
 }
 
 pub use krishiv_functions::signature::{

@@ -1045,6 +1045,10 @@ impl Session {
             Arc::clone(&self.state.cache),
             Arc::clone(&files),
             scans,
+            &config
+                .get(&krishiv_common::config::SQL_DEFAULT_PATH)
+                .map(ToString::to_string)
+                .unwrap_or_default(),
         ));
         let resolution = {
             let values = conf_values(&config, &ResolutionConf::KEYS);

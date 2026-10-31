@@ -109,6 +109,8 @@ pub(crate) struct SessionCatalog {
     pub(crate) warehouse: Warehouse,
     /// The namespace bare table names resolve in (`USE`).
     current_namespace: RwLock<String>,
+    /// The entries `SET PATH` stored; `None` is the default path.
+    path: RwLock<Option<Vec<crate::sql_path::Entry>>>,
 }
 
 impl SessionCatalog {
@@ -217,6 +219,30 @@ impl SessionCatalog {
         }
     }
 
+    /// The stored path entries, `None` for the default.
+    pub(crate) fn stored_path(&self) -> Option<Vec<crate::sql_path::Entry>> {
+        self.path
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// `SET PATH`: stores the expanded entries.
+    pub(crate) fn set_path(&self, entries: Vec<crate::sql_path::Entry>) {
+        *self.path.write().unwrap_or_else(PoisonError::into_inner) = Some(entries);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The SQL path as parts, `CURRENT_SCHEMA` resolved; `default_conf` is
+    /// `krishiv.sql.defaultPath`, read when no `SET PATH` ran.
+    pub(crate) fn sql_path(&self, default_conf: &str) -> Vec<Vec<String>> {
+        let entries = self
+            .stored_path()
+            .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
+        let namespace = self.current_namespace();
+        entries.iter().map(|e| e.parts(&namespace)).collect()
+    }
+
     /// `USE namespace`.
     pub(crate) fn use_namespace(&self, namespace: &str) {
         namespace.clone_into(
@@ -312,6 +338,8 @@ pub(crate) struct QueryCatalog {
     epoch: u64,
     /// The current namespace (`USE`) as this query sees it.
     namespace: Vec<String>,
+    /// The SQL path (`SET PATH`) as this query sees it.
+    path: Vec<Vec<String>>,
 }
 
 impl QueryCatalog {
@@ -335,9 +363,11 @@ impl QueryCatalog {
         cache: Arc<RelationCache>,
         files: Arc<FileReads>,
         scans: FileScans,
+        default_path: &str,
     ) -> Self {
         let epoch = session.epoch();
         let namespace = vec![session.current_namespace()];
+        let path = session.sql_path(default_path);
         Self {
             session,
             cache,
@@ -348,6 +378,7 @@ impl QueryCatalog {
             opened: Mutex::new(Vec::new()),
             epoch,
             namespace,
+            path,
         }
     }
 
@@ -1011,6 +1042,10 @@ impl CatalogResolver for QueryCatalogs {
 
     fn current_namespace(&self) -> &[String] {
         &self.0.namespace
+    }
+
+    fn sql_path(&self) -> Vec<Vec<String>> {
+        self.0.path.clone()
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {

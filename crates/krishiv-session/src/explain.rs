@@ -85,6 +85,7 @@ fn command_plan(statement: &Statement) -> Result<String, KrishivError> {
             SetKind::Verbose => "SET -v".to_owned(),
             SetKind::Show { key, .. } => format!("SET {key}"),
             SetKind::Assign { key, value, .. } => format!("SET {key}={value}"),
+            SetKind::Path { .. } => "SET PATH".to_owned(),
             SetKind::TimeZone { zone, .. } => match zone {
                 TimeZone::Local => "SET TIME ZONE LOCAL".to_owned(),
                 TimeZone::Named(zone) => format!("SET TIME ZONE '{zone}'"),

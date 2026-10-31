@@ -24,8 +24,8 @@ use krishiv_common::error::{
     ErrorQueryContext, InvalidDefaultValueSubqueryExpression, InvalidSqlFunctionDataAccess,
     KrishivError, KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound,
     RowSubqueryTooManyRows, SchemaNotFound, TableOrViewNotFound, TempTableOrViewAlreadyExists,
-    UnresolvedVariable, UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetVariableUsingSet,
-    UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
+    UnresolvedVariable, UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetPathWhenDisabled,
+    UnsupportedFeatureSetVariableUsingSet, UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
     UserDefinedFunctionsNotAValidDefaultExpression,
     UserDefinedFunctionsNotAValidDefaultParameterPosition,
     UserDefinedFunctionsNotNullOnFunctionParameters,
@@ -184,6 +184,31 @@ impl Session {
                     vec![vec![Some(TIME_ZONE_KEY.to_owned()), Some(value)]],
                 )
                 .await
+            }
+            SetKind::Path { elements } => {
+                let config = self.state.conf.snapshot();
+                let enabled = config
+                    .get(&krishiv_common::config::SQL_PATH_ENABLED)
+                    .is_some_and(|v| v.to_string() == "true");
+                if !enabled {
+                    return Err(UnsupportedFeatureSetPathWhenDisabled {
+                        config: "spark.sql.path.enabled".to_owned(),
+                    }
+                    .into());
+                }
+                let default_conf = config
+                    .get(&krishiv_common::config::SQL_DEFAULT_PATH)
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                let namespace = self.state.catalog.current_namespace();
+                let live = self
+                    .state
+                    .catalog
+                    .stored_path()
+                    .unwrap_or_else(|| crate::sql_path::default_entries(&default_conf));
+                let entries = crate::sql_path::expand(elements, &live, &default_conf, &namespace)?;
+                self.state.catalog.set_path(entries);
+                self.empty_frame().await
             }
             // Later `SET` forms.
             _ => Err(crate::session::internal("unknown SET form".to_owned())),
