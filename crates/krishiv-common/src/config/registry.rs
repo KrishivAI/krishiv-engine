@@ -70,6 +70,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &LEGACY_CODING_ERROR_ACTION,
+    &LEGACY_JAVA_CHARSETS,
     &LEGACY_STATISTICAL_AGGREGATE,
     &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     &LEGACY_VIEW_SCHEMA_COMPENSATION,
@@ -125,6 +127,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     (
         "krishiv.io.coalesceWasteDivisor",
@@ -134,6 +137,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.spillWaitTimeout",
         &MEMORY_SPILL_WAIT_TIMEOUT,
     ),
+    ("krishiv.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("spark.sql.files.maxPartitionNum", &FILES_MAX_PARTITION_NUM),
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
@@ -185,6 +189,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &SHUFFLE_PARTITIONS_HINT,
     ),
     (
+        "spark.sql.legacy.codingErrorAction",
+        &LEGACY_CODING_ERROR_ACTION,
+    ),
+    (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
     ),
@@ -195,6 +203,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.maxItems",
         &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    ),
+    (
+        "krishiv.sql.legacy.codingErrorAction",
+        &LEGACY_CODING_ERROR_ACTION,
     ),
     (
         "spark.sql.leafNodeDefaultParallelism",
@@ -1060,6 +1072,32 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `spark.sql.legacy.codingErrorAction`.
+pub static LEGACY_CODING_ERROR_ACTION: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.codingErrorAction",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, `encode` writes `?` for a character the charset cannot hold and `decode` \
+          reads malformed input as U+FFFD; when false both raise \
+          `MALFORMED_CHARACTER_CODING`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.codingErrorAction"),
+};
+
+/// `spark.sql.legacy.javaCharsets`.
+pub static LEGACY_JAVA_CHARSETS: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.javaCharsets",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, `encode` and `decode` also accept `windows-1252` and the ISO-8859 family \
+          under Java's names; other Java charsets are not supported. When false they accept \
+          only Spark's default seven.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.javaCharsets"),
 };
 
 /// `spark.sql.legacy.statisticalAggregate`.

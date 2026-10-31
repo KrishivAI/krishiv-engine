@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Decimal128Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
+use krishiv_kernels::cast::FixedOffset;
 use krishiv_session::Session;
 use krishiv_session::agent::{
     AgentLimits, AgentRender, AgentStatus, AgentStop, DEFAULT_MAX_BYTES, DEFAULT_MAX_CELL_CHARS,
-    DEFAULT_MAX_ROWS, ErrorSource, render_batches, render_error, render_estimate,
+    DEFAULT_MAX_ROWS, ErrorSource, ZoneRef, render_batches, render_error, render_estimate,
 };
 
 fn int_str_schema() -> SchemaRef {
@@ -42,6 +43,8 @@ fn limits() -> AgentLimits {
     }
 }
 
+static UTC: ZoneRef = ZoneRef::Fixed(FixedOffset(0));
+
 fn opts<'a>(
     tables: &'a [String],
     limits: &'a AgentLimits,
@@ -53,7 +56,7 @@ fn opts<'a>(
         limits,
         elapsed_ms,
         query_id,
-        tz_micros: 0,
+        zone: &UTC,
         stop: None,
     }
 }
@@ -234,7 +237,7 @@ fn stopped_by_time_cap_reports_the_rows_read_as_a_lower_bound() {
         limits: &limits,
         elapsed_ms: 5_000,
         query_id: None,
-        tz_micros: 0,
+        zone: &UTC,
         stop: Some(AgentStop::TimeCap),
     };
     let out = render_batches(&schema, &batches, &render);
@@ -255,7 +258,7 @@ fn cancelled_reports_a_lower_bound() {
         limits: &limits,
         elapsed_ms: 1,
         query_id: None,
-        tz_micros: 0,
+        zone: &UTC,
         stop: Some(AgentStop::Cancelled),
     };
     let out = render_batches(&schema, &batches, &render);

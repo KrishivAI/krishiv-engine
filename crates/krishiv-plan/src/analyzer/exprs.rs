@@ -3262,6 +3262,10 @@ impl Resolver<'_> {
             ansi,
             self.ctx.conf.decimal_precision_loss,
             self.ctx.conf.map_key_dedup_last_win,
+            (
+                self.ctx.conf.legacy_java_charsets,
+                self.ctx.conf.legacy_coding_error_action,
+            ),
             self.ctx.profile,
             self.ctx.conf.session_zone.and_then(SessionZone::fixed),
         );
@@ -5483,6 +5487,10 @@ impl Resolver<'_> {
                 self.ctx.conf.ansi,
                 self.ctx.conf.decimal_precision_loss,
                 self.ctx.conf.map_key_dedup_last_win,
+                (
+                    self.ctx.conf.legacy_java_charsets,
+                    self.ctx.conf.legacy_coding_error_action,
+                ),
                 self.ctx.profile,
                 self.ctx.conf.session_zone.and_then(SessionZone::fixed),
             );
