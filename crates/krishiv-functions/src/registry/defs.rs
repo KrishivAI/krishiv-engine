@@ -1456,6 +1456,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::misc::specs());
     out.extend(super::url::specs());
     out.extend(super::csv::specs());
+    out.extend(super::xml::specs());
     out.extend(super::vector::specs());
     out.extend(super::element::specs());
     out.extend(super::array_edit::specs());

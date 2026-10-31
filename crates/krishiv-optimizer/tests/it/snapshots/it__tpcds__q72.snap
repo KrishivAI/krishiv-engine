@@ -1,0 +1,48 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [total_cnt#220 DESC NULLS FIRST, i_item_desc#56 ASC NULLS FIRST, w_warehouse_name#40 ASC NULLS FIRST, d_week_seq#92 ASC NULLS FIRST], true
+   +- Aggregate [i_item_desc#56, w_warehouse_name#40, d_week_seq#92], [i_item_desc#56, w_warehouse_name#40, d_week_seq#92, sum(CASE WHEN isnull(p_promo_sk#172) THEN 1 ELSE 0 END) AS no_promo#218, sum(CASE WHEN isnotnull(p_promo_sk#172) THEN 1 ELSE 0 END) AS promo#219, count(1) AS total_cnt#220]
+      +- Project [w_warehouse_name#40, i_item_desc#56, d_week_seq#92, p_promo_sk#172]
+         +- Join LeftOuter, ((cr_item_sk#193 == cs_item_sk#15) and (cr_order_number#207 == cs_order_number#17))
+            :- Project [w_warehouse_name#40, i_item_desc#56, cs_item_sk#15, cs_order_number#17, d_week_seq#92, p_promo_sk#172]
+            :  +- Join LeftOuter, (cs_promo_sk#16 == p_promo_sk#172)
+            :     :- Project [w_warehouse_name#40, i_item_desc#56, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, d_week_seq#92]
+            :     :  +- Join Inner, (w_warehouse_sk#38 == inv_warehouse_sk#36)
+            :     :     :- Scan spark_catalog.default.warehouse [w_warehouse_sk#38, w_warehouse_name#40]
+            :     :     +- Project [i_item_desc#56, inv_warehouse_sk#36, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, d_week_seq#92]
+            :     :        +- Join Inner, (i_item_sk#52 == cs_item_sk#15)
+            :     :           :- Scan spark_catalog.default.item [i_item_sk#52, i_item_desc#56]
+            :     :           +- Project [inv_warehouse_sk#36, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, d_week_seq#92]
+            :     :              +- Join Inner, ((cs_ship_date_sk#2 == d_date_sk#144) and (d_date#146 > date_add(d_date#90, 5)))
+            :     :                 :- Project [d_date_sk#144, d_date#146]
+            :     :                 :  +- Shift +56
+            :     :                 :     +- Scan spark_catalog.default.date_dim [d_date_sk#88, d_date#90, d_week_seq#92, d_year#94] (shared #1)
+            :     :                 +- Project [inv_warehouse_sk#36, cs_ship_date_sk#2, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, d_date#90, d_week_seq#92]
+            :     :                    +- Join Inner, ((inv_date_sk#34 == d_date_sk#116) and (d_week_seq#92 == d_week_seq#120))
+            :     :                       :- Project [d_date_sk#116, d_week_seq#120]
+            :     :                       :  +- Shift +28
+            :     :                       :     +- Shared #1, printed above
+            :     :                       +- Project [inv_date_sk#34, inv_warehouse_sk#36, cs_ship_date_sk#2, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, d_date#90, d_week_seq#92]
+            :     :                          +- Join Inner, ((cs_item_sk#15 == inv_item_sk#35) and (inv_quantity_on_hand#37 < cs_quantity#18))
+            :     :                             :- Scan spark_catalog.default.inventory [inv_date_sk#34, inv_item_sk#35, inv_warehouse_sk#36, inv_quantity_on_hand#37]
+            :     :                             +- Project [cs_ship_date_sk#2, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, cs_quantity#18, d_date#90, d_week_seq#92]
+            :     :                                +- Join Inner, (cs_bill_cdemo_sk#4 == cd_demo_sk#74)
+            :     :                                   :- Project [cd_demo_sk#74]
+            :     :                                   :  +- Filter (cd_marital_status#76 == 'D')
+            :     :                                   :     +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#74, cd_marital_status#76]
+            :     :                                   +- Project [cs_ship_date_sk#2, cs_bill_cdemo_sk#4, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, cs_quantity#18, d_date#90, d_week_seq#92]
+            :     :                                      +- Join Inner, (cs_bill_hdemo_sk#5 == hd_demo_sk#83)
+            :     :                                         :- Project [cs_ship_date_sk#2, cs_bill_cdemo_sk#4, cs_bill_hdemo_sk#5, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, cs_quantity#18, d_date#90, d_week_seq#92]
+            :     :                                         :  +- Join Inner, (cs_sold_date_sk#0 == d_date_sk#88)
+            :     :                                         :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_ship_date_sk#2, cs_bill_cdemo_sk#4, cs_bill_hdemo_sk#5, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, cs_quantity#18]
+            :     :                                         :     +- Project [d_date_sk#88, d_date#90, d_week_seq#92]
+            :     :                                         :        +- Filter (d_year#94 == 1999)
+            :     :                                         :           +- Shared #1, printed above
+            :     :                                         +- Project [hd_demo_sk#83]
+            :     :                                            +- Filter (hd_buy_potential#85 == '>10000')
+            :     :                                               +- Scan spark_catalog.default.household_demographics [hd_demo_sk#83, hd_buy_potential#85]
+            :     +- Scan spark_catalog.default.promotion [p_promo_sk#172]
+            +- Scan spark_catalog.default.catalog_returns [cr_item_sk#193, cr_order_number#207]

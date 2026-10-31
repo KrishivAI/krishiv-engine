@@ -58,7 +58,6 @@ pub(crate) const UNSUPPORTED: &[(usize, &str)] = &[
     (32, "double-quoted aliases do not parse"),
     (50, "double-quoted aliases do not parse"),
     (62, "double-quoted aliases do not parse"),
-    (72, "date arithmetic"),
     (92, "double-quoted aliases do not parse"),
     (94, "double-quoted aliases do not parse"),
     (95, "double-quoted aliases do not parse"),

@@ -1,0 +1,166 @@
+{
+  "entries": [
+    {
+      "id": "schema_of_xml#07b9e7c09b35/ansi_on",
+      "reason": "SELECT schema_of_xml(array(1, 2), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#07b9e7c09b35/ansi_off",
+      "reason": "SELECT schema_of_xml(array(1, 2), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#10141e3af409/ansi_on",
+      "reason": "SELECT schema_of_xml('', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#10141e3af409/ansi_off",
+      "reason": "SELECT schema_of_xml('', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#1fff726835a7/ansi_on",
+      "reason": "SELECT schema_of_xml(map('a', 1)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#1fff726835a7/ansi_off",
+      "reason": "SELECT schema_of_xml(map('a', 1)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#2ac077691275/ansi_on",
+      "reason": "SELECT schema_of_xml('Ä€日本語😀é', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#2ac077691275/ansi_off",
+      "reason": "SELECT schema_of_xml('Ä€日本語😀é', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#2b0f7253d62f/ansi_on",
+      "reason": "SELECT schema_of_xml(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#2b0f7253d62f/ansi_off",
+      "reason": "SELECT schema_of_xml(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#3febfd35b2ea/ansi_on",
+      "reason": "SELECT schema_of_xml(map('a', 1), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#3febfd35b2ea/ansi_off",
+      "reason": "SELECT schema_of_xml(map('a', 1), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#44aa3834437c/ansi_on",
+      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "schema_of_xml#44aa3834437c/ansi_off",
+      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "schema_of_xml#5cf98736e767/ansi_on",
+      "reason": "SELECT schema_of_xml(INTERVAL '1 02:03:04' DAY TO SECOND, map('excludeAttribute', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#5cf98736e767/ansi_off",
+      "reason": "SELECT schema_of_xml(INTERVAL '1 02:03:04' DAY TO SECOND, map('excludeAttribute', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#7f504ef0c560/ansi_on",
+      "reason": "SELECT schema_of_xml(CAST(X'C328FF' AS STRING), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    },
+    {
+      "id": "schema_of_xml#7f504ef0c560/ansi_off",
+      "reason": "SELECT schema_of_xml(CAST(X'C328FF' AS STRING), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    },
+    {
+      "id": "schema_of_xml#924b83cc2ad2/ansi_on",
+      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#924b83cc2ad2/ansi_off",
+      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#9950410ce7ca/ansi_on",
+      "reason": "SELECT schema_of_xml(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#9950410ce7ca/ansi_off",
+      "reason": "SELECT schema_of_xml(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#a197104aab65/ansi_on",
+      "reason": "SELECT schema_of_xml(INTERVAL '1-2' YEAR TO MONTH, map('excludeAttribute', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#a197104aab65/ansi_off",
+      "reason": "SELECT schema_of_xml(INTERVAL '1-2' YEAR TO MONTH, map('excludeAttribute', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#a62532acca0e/ansi_on",
+      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "schema_of_xml#a62532acca0e/ansi_off",
+      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "schema_of_xml#a6fa74796cd3/ansi_on",
+      "reason": "SELECT schema_of_xml(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#a6fa74796cd3/ansi_off",
+      "reason": "SELECT schema_of_xml(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#a7ffed60d87d/ansi_on",
+      "reason": "SELECT schema_of_xml(' \\t a\\u3000\\n ', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#a7ffed60d87d/ansi_off",
+      "reason": "SELECT schema_of_xml(' \\t a\\u3000\\n ', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#ad4f724c3259/ansi_on",
+      "reason": "SELECT schema_of_xml('abc', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#ad4f724c3259/ansi_off",
+      "reason": "SELECT schema_of_xml('abc', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#bc2d27a18e8e/ansi_on",
+      "reason": "SELECT schema_of_xml(named_struct('a', 1, 'b', 'x'), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#bc2d27a18e8e/ansi_off",
+      "reason": "SELECT schema_of_xml(named_struct('a', 1, 'b', 'x'), map('excludeAttribute', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#cc58a32f3506/ansi_on",
+      "reason": "SELECT schema_of_xml('1', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#cc58a32f3506/ansi_off",
+      "reason": "SELECT schema_of_xml('1', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
+    },
+    {
+      "id": "schema_of_xml#d9be1c6c8c8a/ansi_on",
+      "reason": "SELECT schema_of_xml(array(1, 2)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#d9be1c6c8c8a/ansi_off",
+      "reason": "SELECT schema_of_xml(array(1, 2)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "schema_of_xml#e417f313587f/ansi_on",
+      "reason": "SELECT schema_of_xml(CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    },
+    {
+      "id": "schema_of_xml#e417f313587f/ansi_off",
+      "reason": "SELECT schema_of_xml(CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    }
+  ],
+  "format_version": 1,
+  "function": "schema_of_xml"
+}
