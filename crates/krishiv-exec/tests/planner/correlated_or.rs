@@ -57,3 +57,19 @@ fn a_correlation_only_one_disjunct_holds_stays_refused() {
         "{e}"
     );
 }
+
+#[test]
+fn a_nondeterministic_disjunction_is_not_factored() {
+    let env = env();
+    let sql = "SELECT a FROM t x WHERE (SELECT count(*) FROM t y \
+               WHERE (y.a = x.a AND rand() < 0.5) OR (y.a = x.a AND y.b > 50)) > 0";
+    let plan =
+        krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+            .unwrap();
+    let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "KRISHIV_UNSUPPORTED_FEATURE",
+        "{e}"
+    );
+}

@@ -159,7 +159,7 @@ fn refs(e: &Arc<Expr>) -> Refs {
 }
 
 /// Whether `e` holds no call of a nondeterministic function.
-fn is_deterministic(e: &Arc<Expr>) -> bool {
+pub(super) fn is_deterministic(e: &Arc<Expr>) -> bool {
     visit_distinct(Node::Expr(e), |node| match node {
         Node::Expr(x)
             if matches!(

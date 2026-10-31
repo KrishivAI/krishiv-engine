@@ -194,10 +194,12 @@ fn disjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
 /// `e` with the conjuncts every disjunct of a top-level `OR` holds taken
 /// out: `(a AND b) OR (a AND c)` is `a AND (b OR c)`, which is three-valued
 /// exact. `e` itself when it is no disjunction or the disjuncts share no
-/// conjunct.
+/// conjunct. A nondeterministic predicate is left whole: factoring moves
+/// part of it below the join, where it would run once per inner row instead
+/// of once per joined pair.
 fn factor_or(e: &Arc<Expr>) -> Arc<Expr> {
     let parts = disjuncts(e);
-    if parts.len() < 2 {
+    if parts.len() < 2 || !super::sqlfn::is_deterministic(e) {
         return Arc::clone(e);
     }
     let rows: Vec<Vec<(Arc<Expr>, Arc<Expr>)>> = parts
