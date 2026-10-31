@@ -105,6 +105,9 @@ fn decode_picks_the_first_match_or_the_default() {
     assert_eq!(case("select decode(1, '1', 'a')"), "a");
     assert_eq!(case("select decode(1, 1.0, 'a', 'b')"), "a");
     assert_eq!(case("select typeof(decode(1, 1, 2, 3, 4L))"), "bigint");
+    // Without a default the CASE ends in a string NULL.
+    assert_eq!(case("select typeof(decode(1, 2, 2, 3))"), "int");
+    assert_eq!(case("select typeof(decode(1, 1, 'a'))"), "string");
 }
 
 #[test]

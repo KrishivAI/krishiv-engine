@@ -3795,6 +3795,24 @@ impl Resolver<'_> {
                 parts.extend(pair.iter().cloned());
             }
         }
+        // Without a default Spark ends the CASE with a string-typed NULL,
+        // which takes part in the result type (`typeof(decode(1, 1, 2))` is
+        // `string` outside ANSI mode).
+        if kids.len() % 2 == 1 {
+            let null = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Null(Some(DataType::String))))
+                    .with_origin(origin),
+            );
+            parts.push(Bound {
+                expr: null,
+                ty: arg_type(DataType::String, true),
+                agg: None,
+                win: None,
+                outer: None,
+                lateral: Vec::new(),
+                shown: None,
+            });
+        }
         let mut b = self.operator_call(Builtin::When, origin, &parts)?;
         b.carry_markers(kids);
         b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));

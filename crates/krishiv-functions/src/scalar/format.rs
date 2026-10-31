@@ -61,6 +61,19 @@ impl Val {
     }
 }
 
+/// The widest width or precision, and the longest result of one row, taken
+/// before anything is allocated (Java would build strings up to 2 GiB).
+const MAX_FIELD: usize = 1 << 24;
+const MAX_ROW: usize = 1 << 28;
+
+fn too_big(requested: usize) -> KrishivError {
+    UnableToAcquireMemory {
+        requested_bytes: requested.to_string(),
+        received_bytes: "0".to_owned(),
+    }
+    .into()
+}
+
 fn bad(reason: impl Into<String>) -> KrishivError {
     KrishivInvalidFormatString {
         reason: reason.into(),
@@ -110,6 +123,14 @@ fn digits(chars: &[char], at: &mut usize) -> Option<usize> {
 }
 
 /// Parses the specifier after the `%` at `chars[*at - 1]`.
+/// Sets a flag; a flag given twice is Java's `DuplicateFormatFlags`.
+fn dup(flag: &mut bool) -> Result<(), KrishivError> {
+    if std::mem::replace(flag, true) {
+        return Err(bad("a flag is given twice"));
+    }
+    Ok(())
+}
+
 fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, KrishivError> {
     let start = *at;
     let mut index = Index::Ordinary;
@@ -130,13 +151,13 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, KrishivError> {
     let mut flags = Flags::default();
     loop {
         match chars.get(*at) {
-            Some('-') => flags.left = true,
-            Some('#') => flags.alt = true,
-            Some('+') => flags.plus = true,
-            Some(' ') => flags.space = true,
-            Some('0') => flags.zero = true,
-            Some(',') => flags.group = true,
-            Some('(') => flags.paren = true,
+            Some('-') => dup(&mut flags.left)?,
+            Some('#') => dup(&mut flags.alt)?,
+            Some('+') => dup(&mut flags.plus)?,
+            Some(' ') => dup(&mut flags.space)?,
+            Some('0') => dup(&mut flags.zero)?,
+            Some(',') => dup(&mut flags.group)?,
+            Some('(') => dup(&mut flags.paren)?,
             Some('<') => index = Index::Previous,
             _ => break,
         }
@@ -158,12 +179,22 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, KrishivError> {
         .collect();
     let upper = conv.is_ascii_uppercase();
     let lower = conv.to_ascii_lowercase();
-    match lower {
-        'b' | 's' | 'c' | 'd' | 'o' | 'x' | 'e' | 'f' | 'g' | 'n' | '%' => {}
+    // Java has an upper-case form of only some conversions.
+    let known = match lower {
+        'b' | 's' | 'c' | 'x' | 'e' | 'g' => true,
+        'd' | 'o' | 'f' | 'n' | '%' => !upper,
         'h' | 'a' | 't' => {
             return Err(unsupported(format!("format_string with {text}")));
         }
-        _ => return Err(bad(format!("an unknown conversion '{conv}' in '{text}'"))),
+        _ => false,
+    };
+    if !known {
+        return Err(bad(format!("an unknown conversion '{conv}' in '{text}'")));
+    }
+    for n in [width, precision].into_iter().flatten() {
+        if n > MAX_FIELD {
+            return Err(too_big(n));
+        }
     }
     if (flags.left || flags.zero) && width.is_none() && lower != 'n' {
         return Err(bad(format!("{text} needs a width")));
@@ -174,7 +205,7 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, KrishivError> {
     if flags.plus && flags.space {
         return Err(bad(format!("illegal flags in {text}")));
     }
-    Ok(Spec {
+    let spec = Spec {
         index,
         flags,
         width,
@@ -182,7 +213,57 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, KrishivError> {
         conv: lower,
         upper,
         text,
-    })
+    };
+    check_flags(&spec)?;
+    Ok(spec)
+}
+
+/// Java's per-conversion rules for flags and precision, checked whatever
+/// the argument is (a NULL argument does not skip them).
+fn check_flags(spec: &Spec) -> Result<(), KrishivError> {
+    let f = spec.flags;
+    let first = |names: &[(bool, char)]| names.iter().find(|(on, _)| *on).map(|(_, c)| *c);
+    let others = [
+        (f.alt, '#'),
+        (f.plus, '+'),
+        (f.space, ' '),
+        (f.zero, '0'),
+        (f.group, ','),
+        (f.paren, '('),
+    ];
+    let banned = match spec.conv {
+        'n' => {
+            if spec.width.is_some() || spec.precision.is_some() {
+                return Err(bad(format!("{} takes no width or precision", spec.text)));
+            }
+            first(&others).or(f.left.then_some('-'))
+        }
+        '%' | 'c' | 's' | 'b' => {
+            if spec.precision.is_some() && matches!(spec.conv, '%' | 'c') {
+                return Err(bad(format!("precision does not fit {}", spec.text)));
+            }
+            first(&others)
+        }
+        'd' | 'o' | 'x' => {
+            if spec.precision.is_some() {
+                return Err(bad(format!("precision does not fit {}", spec.text)));
+            }
+            if spec.conv == 'd' {
+                f.alt.then_some('#')
+            } else {
+                first(&[
+                    (f.plus, '+'),
+                    (f.space, ' '),
+                    (f.group, ','),
+                    (f.paren, '('),
+                ])
+            }
+        }
+        'e' => f.group.then_some(','),
+        'g' => f.alt.then_some('#'),
+        _ => None,
+    };
+    banned.map_or(Ok(()), |c| Err(flags_mismatch(spec, c)))
 }
 
 /// The length Java pads by: UTF-16 code units.
@@ -347,6 +428,13 @@ impl Dec {
 }
 
 fn nan_or_infinity(v: f64, spec: &Spec) -> Option<String> {
+    if spec.upper {
+        return nan_or_infinity_lower(v, spec).map(|t| t.to_uppercase());
+    }
+    nan_or_infinity_lower(v, spec)
+}
+
+fn nan_or_infinity_lower(v: f64, spec: &Spec) -> Option<String> {
     if v.is_nan() {
         return Some(pad("NaN".to_owned(), spec));
     }
@@ -470,15 +558,9 @@ fn format_integer(v: &Val, spec: &Spec) -> Result<String, KrishivError> {
     let Val::Int(n, bits) = v else {
         return Err(mismatch(spec, v));
     };
-    if spec.precision.is_some() {
-        return Err(bad(format!("precision does not fit {}", spec.text)));
-    }
     let f = spec.flags;
     match spec.conv {
         'd' => {
-            if f.alt {
-                return Err(flags_mismatch(spec, '#'));
-            }
             let mut body = n.unsigned_abs().to_string();
             if f.group {
                 body = group(&body);
@@ -486,16 +568,6 @@ fn format_integer(v: &Val, spec: &Spec) -> Result<String, KrishivError> {
             Ok(finish_number(*n < 0, body, spec))
         }
         _ => {
-            for (on, c) in [
-                (f.plus, '+'),
-                (f.space, ' '),
-                (f.group, ','),
-                (f.paren, '('),
-            ] {
-                if on {
-                    return Err(flags_mismatch(spec, c));
-                }
-            }
             let mask = if *bits >= 64 {
                 u64::MAX
             } else {
@@ -551,7 +623,6 @@ fn truncate(mut s: String, precision: Option<usize>) -> String {
 }
 
 fn format_one(v: &Val, spec: &Spec) -> Result<String, KrishivError> {
-    let f = spec.flags;
     if matches!(v, Val::Null) && !matches!(spec.conv, 'b' | 's') {
         // Java prints `null` for any other conversion.
         let t = truncate("null".to_owned(), spec.precision);
@@ -559,17 +630,6 @@ fn format_one(v: &Val, spec: &Spec) -> Result<String, KrishivError> {
     }
     match spec.conv {
         's' | 'b' => {
-            for (on, c) in [
-                (f.plus, '+'),
-                (f.space, ' '),
-                (f.group, ','),
-                (f.paren, '('),
-                (f.zero, '0'),
-            ] {
-                if on {
-                    return Err(flags_mismatch(spec, c));
-                }
-            }
             let text = if spec.conv == 'b' {
                 match v {
                     Val::Null => "false".to_owned(),
@@ -583,10 +643,7 @@ fn format_one(v: &Val, spec: &Spec) -> Result<String, KrishivError> {
             Ok(pad(if spec.upper { t.to_uppercase() } else { t }, spec))
         }
         'c' => {
-            if spec.precision.is_some() {
-                return Err(bad(format!("precision does not fit {}", spec.text)));
-            }
-            let Val::Int(n, _) = v else {
+            let Val::Int(n, 8 | 16 | 32) = v else {
                 return Err(mismatch(spec, v));
             };
             let c = u32::try_from(*n)
@@ -640,6 +697,9 @@ fn format(fmt: &str, args: &[Val]) -> Result<String, KrishivError> {
             .ok_or_else(|| bad(format!("no argument for {}", spec.text)))?;
         last = Some(idx);
         out.push_str(&format_one(v, &spec)?);
+        if out.len() > MAX_ROW {
+            return Err(too_big(out.len()));
+        }
     }
     Ok(out)
 }
@@ -821,9 +881,33 @@ mod tests {
             ("%c", vec![i(-1)]),
             ("%tY", vec![i(1)]),
             ("%.1f", vec![Val::Dec(15, 1)]),
+            ("%D", vec![i(1)]),
+            ("%F", vec![Val::F64(1.0)]),
+            ("%N", vec![]),
+            ("%--5d", vec![i(1)]),
+            ("%5n", vec![]),
+            ("%.2%", vec![]),
+            ("%#s", vec![s("x")]),
+            ("%,e", vec![Val::F64(1.0)]),
+            ("%#g", vec![Val::F64(1.0)]),
+            ("%2c", vec![Val::Int(65, 64)]),
+            ("%+c", vec![i(65)]),
+            ("%.2d", vec![Val::Null]),
+            ("%#d", vec![Val::Null]),
+            ("%,x", vec![Val::Null]),
+            ("%99999999999999999999s", vec![s("x")]),
+            ("%.2147483647f", vec![Val::F64(1.0)]),
+            ("%2147483647s", vec![s("x")]),
         ] {
             assert!(f(fmt, &args).starts_with("ERR"), "{fmt}");
         }
         assert!(format("%0$s", &[s("x")]).is_err());
+        assert_eq!(
+            f("%E %G", &[Val::F64(f64::NAN), Val::F64(f64::INFINITY)]),
+            "NAN INFINITY"
+        );
+        // Many wide fields stay under the row cap.
+        let wide = "%16777216s".repeat(20);
+        assert!(format(&wide, &[s("x")]).is_err());
     }
 }
