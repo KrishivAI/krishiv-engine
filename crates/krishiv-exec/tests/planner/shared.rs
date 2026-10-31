@@ -57,3 +57,53 @@ fn an_ordered_body_is_read_in_order() {
     let runs = firsts.windows(2).filter(|w| w[0] < w[1]).count();
     assert!(runs <= 1, "{rows:?}");
 }
+
+/// Under a small memory limit the shared list spills (the readers continue from the files) and every reader
+/// still gets every row; the pool is empty at the end.
+#[test]
+fn a_spilled_shared_list_is_read_in_full_by_each_reader() {
+    use krishiv_memory::{MemoryConfig, MemoryPool as _, SpillConfig, SpillManager, TreePool};
+
+    let env = env();
+    let dir = tempfile::tempdir().unwrap();
+    let scope = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap()
+    .scope()
+    .unwrap();
+    let sql = "WITH c AS (SELECT id, rand() AS r FROM range(300000)) \
+               SELECT id FROM c UNION ALL SELECT id FROM c";
+    let plan = env.plan(sql).unwrap().with_spill(scope);
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(6 << 20),
+        ..MemoryConfig::default()
+    });
+    let (out, query) = super::run_in(&plan, &root);
+    let rows: usize = out.unwrap().iter().map(arrow_array::RecordBatch::num_rows).sum();
+    assert_eq!(rows, 600_000);
+    let files: u64 = query
+        .metrics()
+        .operators
+        .values()
+        .map(|o| o.metrics.spill_files)
+        .sum();
+    assert!(files > 0, "the shared list did not spill");
+    assert_eq!(root.reserved(), 0, "the pool is empty at the end");
+}
+
+/// A failing body fails the query for every reader, and the pool is empty afterwards.
+#[test]
+fn a_failing_shared_body_fails_the_query_and_releases_its_memory() {
+    use krishiv_memory::{MemoryConfig, MemoryPool as _, TreePool};
+
+    let env = env();
+    let sql = "WITH c AS (SELECT id, rand() AS r, 1 / (id - 5) AS q FROM range(10)) \
+               SELECT x.id FROM c x JOIN c y ON x.id = y.id";
+    let plan = env.plan(sql).unwrap();
+    let root = TreePool::new(&MemoryConfig::default());
+    let (out, _query) = super::run_in(&plan, &root);
+    assert!(out.is_err(), "division by zero must fail the query");
+    assert_eq!(root.reserved(), 0, "the pool is empty after the failure");
+}
