@@ -156,6 +156,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Project { .. }
                 | PlanNode::Filter { .. }
                 | PlanNode::Aggregate { .. }
+                | PlanNode::PartialAggregate { .. }
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
@@ -313,6 +314,16 @@ impl Teardown {
             PlanNode::TableFunction { args, .. } => {
                 self.exprs.extend(args);
             }
+            PlanNode::PartialAggregate {
+                input,
+                keys,
+                aggregates,
+                ..
+            } => {
+                self.plans.push(input);
+                self.exprs.extend(keys);
+                self.exprs.extend(aggregates);
+            }
             PlanNode::Aggregate {
                 input,
                 grouping,
@@ -404,6 +415,9 @@ impl Teardown {
                 self.exprs.extend(filter);
                 self.exprs
                     .extend(within_group.into_iter().map(|SortOrder { expr, .. }| expr));
+            }
+            ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
+                self.exprs.extend(columns);
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }

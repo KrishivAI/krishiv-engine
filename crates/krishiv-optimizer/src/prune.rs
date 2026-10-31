@@ -95,6 +95,13 @@ impl Graph {
                 // A renaming alias keeps its input whole.
                 child(input, columns.is_empty().then(|| req.clone()));
             }
+            // Every state column stays: an aggregate above reads a call's
+            // states together, or not at all.
+            PlanNode::PartialAggregate { input, .. } => {
+                let mut need = Attrs::new();
+                p.for_each_expr(&mut |e| references_into(e, &mut need));
+                child(input, Some(need));
+            }
             PlanNode::Filter { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
