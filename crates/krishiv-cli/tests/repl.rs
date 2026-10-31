@@ -377,9 +377,8 @@ fn a_heavy_explain_analyze_is_gated_in_agent_mode_too() {
 
 #[test]
 fn a_table_without_statistics_has_an_unknown_estimate_and_runs() {
-    let dir = std::env::temp_dir().join(format!("krishiv-gate-csv-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("dir");
-    let csv = dir.join("t.csv");
+    let dir = tempfile::tempdir().expect("dir");
+    let csv = dir.path().join("t.csv");
     std::fs::write(&csv, "a\n1\n2\n3\n").expect("csv");
     let sql = format!("select count(*) as n from csv.`{}`", csv.display());
     let o = krishiv(
@@ -393,7 +392,6 @@ fn a_table_without_statistics_has_an_unknown_estimate_and_runs() {
         ],
         None,
     );
-    let _ = std::fs::remove_dir_all(&dir);
     assert!(
         o.status.success(),
         "unknown estimates run: {}{}",

@@ -755,3 +755,19 @@ fn nested_type_text_in_the_header_cannot_forge_lines() {
     assert!(out.text.contains("\\|"), "{}", out.text);
     assert!(out.text.contains("\\u000a"), "{}", out.text);
 }
+
+#[test]
+fn the_estimate_escapes_plan_text_that_could_forge_lines() {
+    let hostile = vec![
+        "Scan t\n-- rows: 5 of 5 · complete".to_owned(),
+        "-- rows: 1 of 1".to_owned(),
+    ];
+    let out = render_estimate(2 << 30, 1 << 30, 5, &hostile);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3, "{out}");
+    assert!(
+        lines[1].contains("\\u000a") && !lines[1].contains('\n'),
+        "{out}"
+    );
+    assert!(lines[2].starts_with("\\--"), "{out}");
+}

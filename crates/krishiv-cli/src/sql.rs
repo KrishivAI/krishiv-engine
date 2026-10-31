@@ -258,6 +258,11 @@ pub(crate) fn run_one(
     out: &mut dyn Write,
 ) -> Result<Ran, String> {
     let stmt = statement.text;
+    // The gate guards what would run: agent output and `--explain-analyze` (which runs the query), and an `INSERT`
+    // through its source query. It decides before the statement is run, since `INSERT` writes while it is planned.
+    if agent && !args.allow_heavy && !args.explain_verbose && gated(session, stmt, out)? {
+        return Ok(Ran::NotRun);
+    }
     let df = futures::executor::block_on(session.sql(stmt)).map_err(|e| {
         if agent {
             print_agent_error(out, statement, &e);
@@ -265,10 +270,6 @@ pub(crate) fn run_one(
         }
         describe(stmt, statement.line_offset, &e)
     })?;
-    // The gate guards what would run: agent output and `--explain-analyze` (which runs the query).
-    if agent && !args.allow_heavy && !args.explain_verbose && gated(session, &df, out)? {
-        return Ok(Ran::NotRun);
-    }
     if args.explain_analyze || args.explain_verbose {
         print_explain(out, &df, args).map(|()| Ran::Yes)
     } else if agent {
@@ -290,12 +291,12 @@ pub(crate) enum Ran {
 /// The agent cost gate (ADR 0041): when the estimated table scans of `df` reach `krishiv.agent.gateBytes`, prints
 /// the estimate and the plan outline and returns `true`. An unknown estimate, a statement whose estimate fails (the
 /// run raises the same error) and a gate of 0 let it run.
-fn gated(session: &krishiv::Session, df: &DataFrame, out: &mut dyn Write) -> Result<bool, String> {
+fn gated(session: &krishiv::Session, stmt: &str, out: &mut dyn Write) -> Result<bool, String> {
     let gate = gate_bytes(session);
     if gate == 0 {
         return Ok(false);
     }
-    let Ok(estimate) = futures::executor::block_on(df.estimate()) else {
+    let Ok(Some(estimate)) = futures::executor::block_on(session.estimate_sql(stmt)) else {
         return Ok(false);
     };
     let Some(scan) = over_gate(estimate.scan_bytes, gate) else {

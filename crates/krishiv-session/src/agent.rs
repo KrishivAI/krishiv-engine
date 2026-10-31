@@ -709,7 +709,8 @@ pub fn render_estimate(
         format_rows(rows),
     );
     for line in plan_lines {
-        out.push_str(line);
+        // Plan text holds names and literals of the query: escaped like a cell, so it cannot forge a line.
+        out.push_str(&escape_text(line));
         out.push('\n');
     }
     out

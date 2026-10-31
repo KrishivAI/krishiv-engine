@@ -214,6 +214,53 @@ pub struct Estimate {
     pub plan: Vec<String>,
 }
 
+impl Session {
+    /// The estimate of what the SQL `query` would scan, before it runs anything (ADR 0041): for a query, the
+    /// query; for `INSERT ... SELECT`, the source query (the write itself is not planned, so nothing is written).
+    /// `None` for any other statement (DDL, commands, other writes): there is nothing to estimate.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let e = futures::executor::block_on(s.estimate_sql("SELECT a FROM t"))?;
+    /// assert!(e.is_some());
+    /// assert!(futures::executor::block_on(s.estimate_sql("SET a.b = 1"))?.is_none());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Parse, analysis, access-policy and planning errors of the query, as for `sql`.
+    pub async fn estimate_sql(&self, query: &str) -> Result<Option<Estimate>, KrishivError> {
+        let (session, query) = (self.clone(), query.to_owned());
+        self.on_executor(async move { session.estimate_sql_here(&query).await })
+            .await
+    }
+
+    async fn estimate_sql_here(&self, query: &str) -> Result<Option<Estimate>, KrishivError> {
+        let env = self.query_env();
+        let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        let redacted = krishiv_sql::redact_sql(&resolved);
+        let statement = krishiv_sql::parse_statement(&resolved, &env.parser).map_err(|e| {
+            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
+        })?;
+        let source = match &statement {
+            Statement::Query(q) => q,
+            Statement::Insert(i) if i.source.is_none() && i.clauses.len() == 1 => {
+                &i.clauses[0].query
+            }
+            _ => return Ok(None),
+        };
+        let plan = krishiv_sql::lower(source, krishiv_plan::SourceId(0)).map_err(|e| {
+            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
+        })?;
+        DataFrame::new(self.clone(), Arc::clone(plan.root()))
+            .estimate_inner()
+            .await
+            .map(Some)
+    }
+}
+
 impl DataFrame {
     /// Plans this statement as an action would and estimates what it reads, without running it.
     ///
