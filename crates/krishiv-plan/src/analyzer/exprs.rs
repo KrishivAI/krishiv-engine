@@ -6752,11 +6752,10 @@ fn call(
         // A map schema is the exception: Spark 4.2 names the column `entries`.
         _ if name.eq_ignore_ascii_case("from_json")
             && k.get(1).is_some_and(|schema| {
-                schema
-                    .trim_matches('\'')
-                    .trim_start()
-                    .get(..4)
-                    .is_some_and(|head| head.eq_ignore_ascii_case("map<"))
+                let text = schema.trim_matches('\'').trim_start();
+                text.get(..3)
+                    .is_some_and(|head| head.eq_ignore_ascii_case("map"))
+                    && text[3..].trim_start().starts_with('<')
             }) =>
         {
             "entries".to_owned()
