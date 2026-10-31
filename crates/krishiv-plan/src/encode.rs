@@ -811,6 +811,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.str(name);
                 self.exprs(params);
             }
+            PlanNode::PipeOperator { .. } => self.u8(31),
             PlanNode::JoinHint { strategy, .. } => {
                 self.u8(17);
                 self.str(strategy.name());

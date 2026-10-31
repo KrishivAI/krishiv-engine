@@ -47,14 +47,42 @@ use object_store::path::Path;
 /// experiments only.
 const STALL_THRESHOLD_MS: u64 = 10;
 
+/// Instrumented builds (`cargo llvm-cov` sets `LLVM_PROFILE_FILE` for the test
+/// binary) do the same work more slowly: a slice of 24 ms with no time waiting
+/// for a CPU has been seen on a coverage runner. The bound is a property of the
+/// uninstrumented code, which the plain test job holds to it; here it scales.
+const INSTRUMENTED_STALL_THRESHOLD_MS: u64 = 100;
+
+/// The threshold given the override and the profile-file variable.
+fn stall_threshold_for(stall_ms: Option<&str>, profile_file: Option<&std::ffi::OsStr>) -> Duration {
+    let default = if profile_file.is_some() {
+        INSTRUMENTED_STALL_THRESHOLD_MS
+    } else {
+        STALL_THRESHOLD_MS
+    };
+    Duration::from_millis(stall_ms.and_then(|v| v.parse().ok()).unwrap_or(default))
+}
+
 fn stall_threshold() -> Duration {
-    std::env::var("KRISHIV_YIELD_STALL_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .map_or(
-            Duration::from_millis(STALL_THRESHOLD_MS),
-            Duration::from_millis,
-        )
+    stall_threshold_for(
+        std::env::var("KRISHIV_YIELD_STALL_MS").ok().as_deref(),
+        std::env::var_os("LLVM_PROFILE_FILE").as_deref(),
+    )
+}
+
+#[test]
+fn only_instrumented_builds_get_a_longer_stall_threshold() {
+    use std::ffi::OsStr;
+    let profile = Some(OsStr::new("x.profraw"));
+    assert_eq!(stall_threshold_for(None, None), Duration::from_millis(10));
+    assert_eq!(
+        stall_threshold_for(None, profile),
+        Duration::from_millis(100)
+    );
+    assert_eq!(
+        stall_threshold_for(Some("7"), profile),
+        Duration::from_millis(7)
+    );
 }
 
 fn root(limit: usize) -> Arc<TreePool> {
@@ -662,7 +690,7 @@ impl Operator for Chunked {
     }
 }
 
-/// Spins for 30 ms of CPU time in one `execute` call: the negative
+/// Spins for three stall thresholds of CPU time in one `execute` call: the negative
 /// control showing the stall detector trips on an unchunked operator over
 /// a large batch.
 struct Spin;
@@ -705,7 +733,7 @@ impl Operator for Spin {
     }
 
     fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
-        spin_on_cpu(Duration::from_millis(30));
+        spin_on_cpu(stall_threshold() * 3);
         Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
     }
 }

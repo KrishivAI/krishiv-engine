@@ -23,6 +23,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("time_diff", "TIME has no Python mapping yet (P2-T181)"),
     ("time_trunc", "TIME has no Python mapping yet (P2-T181)"),
     (
+        "__subscript",
+        "the lowering of `base[index]`; PySpark: `Column.getItem`",
+    ),
+    (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",
     ),
