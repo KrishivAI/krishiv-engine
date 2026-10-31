@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The sort breakers over a prebuilt 1M-row table, on one deterministic
 //! worker: `in_memory_1m_rows/{int,string}` (scan → sort by a random
-//! `Int64` or a 12-byte string key), `topn_k100_1m_rows` (`LIMIT 100`) and
+//! `Int64` or a 12-byte string key), `in_memory_1m_rows/two_int_keys` (a
+//! 100-value key, then a random one), `topn_k100_1m_rows` (`LIMIT 100`),
+//! `topn_k1000_float_1m_rows` and `topn_k100_string_1m_rows` (the same over a
+//! `Float64` and a string key) and
 //! `external_1m_rows/int` (under a 4 MiB cap, about a tenth of the data:
 //! sorted runs spill and merge with fan-in 8 through spill files).
 
@@ -18,7 +21,7 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arrow_array::{Int64Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
@@ -37,6 +40,17 @@ const ROWS: u64 = (BATCHES * BATCH_ROWS) as u64;
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int64, false),
+        Field::new("s", DataType::Utf8, false),
+    ]))
+}
+
+/// `k`, a 100-value `g`, a float `f` and the string `s`: the keys of the
+/// multi-key, float and string top-N cases.
+fn wide_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("g", DataType::Int64, false),
+        Field::new("f", DataType::Float64, false),
         Field::new("s", DataType::Utf8, false),
     ]))
 }
@@ -60,9 +74,33 @@ fn table() -> Vec<Batch> {
         .collect()
 }
 
+fn wide_table() -> Vec<Batch> {
+    (0..BATCHES)
+        .map(|b| {
+            let ids = (b * BATCH_ROWS) as u64..((b + 1) * BATCH_ROWS) as u64;
+            let k = Int64Array::from_iter_values(ids.clone().map(|i| (mix(i) >> 1) as i64));
+            let g = Int64Array::from_iter_values(ids.clone().map(|i| (mix(i ^ 7) % 100) as i64));
+            let f = Float64Array::from_iter_values(
+                ids.clone().map(|i| (mix(i ^ 11) >> 11) as f64 / 1e6),
+            );
+            let s = StringArray::from_iter_values(ids.map(|i| format!("{:012x}", mix(i) >> 16)));
+            let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(g), Arc::new(f), Arc::new(s)];
+            Batch::new(RecordBatch::try_new(wide_schema(), cols).expect("batch"))
+        })
+        .collect()
+}
+
 fn plan<B: Breaker + 'static>(table: &[Batch], breaker: B) -> Arc<dyn ExecNode> {
+    plan_of(schema(), table, breaker)
+}
+
+fn plan_of<B: Breaker + 'static>(
+    schema: SchemaRef,
+    table: &[Batch],
+    breaker: B,
+) -> Arc<dyn ExecNode> {
     let scan: Arc<dyn Source> =
-        Arc::new(MemoryScan::try_new(schema(), table.to_vec()).expect("scan"));
+        Arc::new(MemoryScan::try_new(schema, table.to_vec()).expect("scan"));
     Arc::new(Break(Arc::new(Scan(scan)), Arc::new(breaker), true))
 }
 
@@ -120,6 +158,35 @@ fn bench(c: &mut Criterion) {
     g.bench_function("in_memory_1m_rows/string", |b| {
         b.iter(|| black_box(run(&runner, &caller, plan(&table, sort(1)), None)));
     });
+    let wide = wide_table();
+    g.bench_function("in_memory_1m_rows/two_int_keys", |b| {
+        b.iter(|| {
+            let keys = [SortKey::asc(1), SortKey::asc(0)];
+            let sort = Sort::new(wide_schema(), &keys, None).expect("sort");
+            black_box(run(
+                &runner,
+                &caller,
+                plan_of(wide_schema(), &wide, sort),
+                None,
+            ))
+        });
+    });
+    for (name, key, k) in [
+        ("topn_k1000_float_1m_rows", 2, 1000),
+        ("topn_k100_string_1m_rows", 3, 100),
+    ] {
+        g.bench_function(name, |b| {
+            b.iter(|| {
+                let topn = TopN::new(wide_schema(), &[SortKey::asc(key)], 0, k).expect("topn");
+                black_box(run(
+                    &runner,
+                    &caller,
+                    plan_of(wide_schema(), &wide, topn),
+                    None,
+                ))
+            });
+        });
+    }
     g.bench_function("topn_k100_1m_rows", |b| {
         b.iter(|| {
             let topn = TopN::new(schema(), &[SortKey::asc(0)], 0, 100).expect("topn");
