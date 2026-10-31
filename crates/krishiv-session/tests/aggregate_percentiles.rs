@@ -3,8 +3,8 @@
 //! `depends-on-command` in the golden baseline, since the file creates the
 //! view first): the same data registered through the Rust API, asserting
 //! the golden's rows and error class for each statement this change
-//! covers. `FILTER`, window and interval statements are not covered (the
-//! engine refuses `FILTER` and window percentile aggregates, and has no
+//! covers. Window and interval statements are not covered (the
+//! engine refuses window percentile aggregates, and has no
 //! interval type).
 #![forbid(unsafe_code)]
 
@@ -222,6 +222,128 @@ fn quantile_failures_carry_sparks_classes() -> R {
     assert_eq!(
         err.error_class().name(),
         "NEGATIVE_VALUES_IN_FREQUENCY_EXPRESSION"
+    );
+    Ok(())
+}
+
+/// Column 0 of every row of `sql`, rendered: `NULL`, a number, `[a, b]` for a
+/// list of doubles, or the decimal text.
+fn shown(s: &Session, sql: &str) -> R<Vec<String>> {
+    use arrow_array::types::Int64Type;
+    use arrow_array::{Decimal64Array, Decimal128Array};
+    let df = block_on(s.sql(sql))?;
+    let mut out = Vec::new();
+    for batch in block_on(df.collect())? {
+        let c = batch.column(0);
+        for row in 0..c.len() {
+            out.push(if c.is_null(row) {
+                "NULL".to_owned()
+            } else {
+                match c.data_type() {
+                    DataType::Int64 => c.as_primitive::<Int64Type>().value(row).to_string(),
+                    DataType::Float64 => c.as_primitive::<Float64Type>().value(row).to_string(),
+                    DataType::List(_) => {
+                        let list = c.as_list::<i32>().value(row);
+                        let doubles = list.as_primitive::<Float64Type>();
+                        let items: Vec<String> = doubles
+                            .iter()
+                            .map(|v| v.unwrap_or(f64::NAN).to_string())
+                            .collect();
+                        format!("[{}]", items.join(", "))
+                    }
+                    DataType::Decimal128(..) => c
+                        .as_any()
+                        .downcast_ref::<Decimal128Array>()
+                        .map(|a| a.value_as_string(row))
+                        .unwrap_or_default(),
+                    DataType::Decimal64(..) => c
+                        .as_any()
+                        .downcast_ref::<Decimal64Array>()
+                        .map(|a| a.value_as_string(row))
+                        .unwrap_or_default(),
+                    other => format!("<{other}>"),
+                }
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Statements checked on a Spark 4.2.0 run: a `FILTER` on `approx_count_distinct`,
+/// NULL (not an empty list) for a group without values or percentages, a
+/// decimal that keeps its text, and a NULL frequency.
+#[test]
+fn quantile_edge_cases_follow_spark() -> R {
+    let s = Session::new()?;
+    for (sql, want) in [
+        (
+            "SELECT approx_count_distinct(v) FILTER (WHERE false) FROM VALUES (1),(2) t(v)",
+            vec!["0"],
+        ),
+        (
+            "SELECT approx_count_distinct(v) FILTER (WHERE v > 1) FROM VALUES (1),(2),(3) t(v)",
+            vec!["2"],
+        ),
+        (
+            "SELECT percentile(v, array(0.5)) FROM VALUES (CAST(NULL AS DOUBLE)) t(v)",
+            vec!["NULL"],
+        ),
+        (
+            "SELECT percentile_approx(v, array(0.5)) FROM VALUES (CAST(NULL AS DOUBLE)) t(v)",
+            vec!["NULL"],
+        ),
+        (
+            "SELECT percentile(v, array()) FROM VALUES (1.0) t(v)",
+            vec!["NULL"],
+        ),
+        (
+            "SELECT percentile_approx(c, 0.5) FROM VALUES (CAST(1.15 AS DECIMAL(10,2))) t(c)",
+            vec!["1.15"],
+        ),
+        (
+            "SELECT percentile(v, 0.5, NULL) FROM VALUES (1.0) t(v)",
+            vec!["NULL"],
+        ),
+    ] {
+        assert_eq!(shown(&s, sql)?, want, "{sql}");
+    }
+    // A group of only NULLs is NULL, not an empty list.
+    let grouped = "SELECT percentile(v, array(0.5)) FROM \
+                   VALUES (1, 1.0), (1, 2.0), (2, CAST(NULL AS DOUBLE)) t(k, v) GROUP BY k ORDER BY k";
+    assert_eq!(shown(&s, grouped)?, vec!["[1.5]", "NULL"]);
+    Ok(())
+}
+
+/// A negative frequency and a too-large `relativeSD` carry Spark's parameters.
+#[test]
+fn quantile_error_parameters_follow_spark() -> R {
+    let s = Session::new()?;
+    let param = |e: &KrishivError, key: &str| -> Option<String> {
+        e.message_parameters()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.clone())
+    };
+    let sql = "SELECT percentile(v, 0.5, -1) FROM VALUES (1.0) t(v)";
+    let err = match block_on(s.sql(sql)) {
+        Ok(df) => block_on(df.collect()).expect_err("negative frequency"),
+        Err(e) => e,
+    };
+    assert_eq!(
+        err.error_class().name(),
+        "NEGATIVE_VALUES_IN_FREQUENCY_EXPRESSION"
+    );
+    assert_eq!(
+        param(&err, "frequencyExpression").as_deref(),
+        Some("\"-1\"")
+    );
+    assert_eq!(param(&err, "negativeValue").as_deref(), Some("-1L"));
+    let err = block_on(s.sql("SELECT approx_count_distinct(v, 0.5) FROM VALUES (1) t(v)"))
+        .expect_err("relativeSD above 39%");
+    assert_eq!(err.error_class().name(), "FAILED_FUNCTION_CALL");
+    assert_eq!(
+        param(&err, "funcName").as_deref(),
+        Some("`approx_count_distinct`")
     );
     Ok(())
 }

@@ -599,6 +599,8 @@ fn ints(a: &ArrayRef) -> Result<Cow<'_, [i64]>> {
         DataType::Int32 => widen(a.as_primitive::<Int32Type>()),
         DataType::Int16 => widen(a.as_primitive::<Int16Type>()),
         DataType::Int8 => widen(a.as_primitive::<Int8Type>()),
+        // An untyped NULL column: every row is NULL, so no value is read.
+        DataType::Null => Cow::Owned(vec![0; a.len()]),
         t => return Err(internal(format!("integral argument of type {t}"))),
     })
 }
@@ -2265,6 +2267,10 @@ impl Accumulator {
                     ));
                 }
                 for (i, &g) in groups.iter().enumerate() {
+                    // A row the `FILTER` mask drops is skipped like a NULL.
+                    if !valid(i) {
+                        continue;
+                    }
                     if let Some(x) = hll::hash_of(a, i)? {
                         h.add(g as usize, x);
                     }
@@ -2737,8 +2743,11 @@ impl Accumulator {
 /// per-row frequency of an exact percentile.
 fn negative_frequency(value: i64) -> KrishivError {
     NegativeValuesInFrequencyExpression {
-        frequency_expression: "the frequency argument".to_owned(),
-        negative_value: value.to_string(),
+        // Spark quotes the frequency expression and writes the value as a
+        // bigint literal. Only the value is known here, so a frequency that is
+        // not a literal shows its value, not its text.
+        frequency_expression: format!("\"{value}\""),
+        negative_value: format!("{value}L"),
     }
     .into()
 }
@@ -2769,20 +2778,23 @@ fn exact_results(
     }
     let mut values = Float64Builder::new();
     let mut offsets = Vec::with_capacity(ids.len() + 1);
+    let mut present = Vec::with_capacity(ids.len());
     offsets.push(0);
     for &i in ids {
-        if let Some(vs) = acc.evaluate(i as usize, percentages, reverse, cont, legacy_disc) {
-            for v in vs {
-                values.append_value(v);
-            }
+        // A group with no values (or an empty list of percentages) is NULL,
+        // as Spark's `generateOutput` returns it.
+        let got = acc
+            .evaluate(i as usize, percentages, reverse, cont, legacy_disc)
+            .filter(|vs| !vs.is_empty());
+        present.push(got.is_some());
+        for v in got.into_iter().flatten() {
+            values.append_value(v);
         }
         offsets.push(
             i32::try_from(values.len())
                 .map_err(|_| internal("a percentile of too many values".to_owned()))?,
         );
     }
-    // A group with no values still yields its (empty) list: every group
-    // has one.
     let Some(field) = field else {
         return Err(internal(
             "an exact percentile array without its element field".to_owned(),
@@ -2792,6 +2804,7 @@ fn exact_results(
         Arc::new(values.finish()),
         offsets,
         Arc::clone(field),
+        Some(&present),
     ))
 }
 
@@ -2833,19 +2846,24 @@ fn approx_results(
     let mut offsets = Vec::with_capacity(ids.len() + 1);
     offsets.push(0);
     let mut flat: Vec<Option<f64>> = Vec::new();
+    let mut present = Vec::with_capacity(ids.len());
     for v in values {
-        if let Some(vs) = v {
-            flat.extend(vs.into_iter().map(Some));
-        }
+        // No values, or an empty list of percentages: NULL, as in Spark.
+        let got = v.filter(|vs| !vs.is_empty());
+        present.push(got.is_some());
+        flat.extend(got.into_iter().flatten().map(Some));
         offsets.push(
             i32::try_from(flat.len())
                 .map_err(|_| internal("a percentile of too many values".to_owned()))?,
         );
     }
-    // A group with no values still yields its (empty) list: every group
-    // has one.
     let flat = approx_column(flat.into_iter(), field.data_type())?;
-    Ok(quantile::finish_lists(flat, offsets, Arc::clone(field)))
+    Ok(quantile::finish_lists(
+        flat,
+        offsets,
+        Arc::clone(field),
+        Some(&present),
+    ))
 }
 
 /// Approximate values as a column of type `t`: integers, dates and
@@ -2879,11 +2897,11 @@ fn approx_ints(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<A
     narrow(it, t)
 }
 
-/// The unscaled value of the decimal `v` at `scale`, truncated (as
-/// Spark's conversions truncate; the quantile of fitting inputs fits).
+/// The unscaled value of the decimal `v` at `scale`: `v`'s shortest decimal
+/// text rounded half up, which is how Spark builds a decimal from a double
+/// (`BigDecimal.valueOf`), so `1.15` stays `1.15` at scale 2. A value too
+/// big for `i128` saturates.
 fn decimal_unscaled(v: f64, scale: i8) -> i128 {
-    let scale = u32::try_from(scale).unwrap_or(0);
-    let factor = 10_f64.powi(scale as i32);
     if !v.is_finite() {
         return if v.is_sign_negative() {
             i128::MIN
@@ -2891,10 +2909,31 @@ fn decimal_unscaled(v: f64, scale: i8) -> i128 {
             i128::MAX
         };
     }
-    // `as` saturates like Java narrowing (inputs that fit the decimal fit).
-    #[expect(clippy::cast_possible_truncation, reason = "Java narrowing parity")]
-    let unscaled = (v * factor) as i128;
-    unscaled
+    // `{:e}` is the shortest text that reads back as `v`: `d.ddde<exp>`.
+    let text = format!("{:e}", v.abs());
+    let (mantissa, exp) = text.split_once('e').unwrap_or((&text, "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let n: i128 = digits.parse().unwrap_or(0);
+    let frac = i32::try_from(digits.len()).unwrap_or(0) - 1;
+    // `n * 10^(exp - frac)` is `|v|`; at `scale` it is `n * 10^shift`.
+    let shift = exp - frac + i32::from(scale);
+    let magnitude = if shift >= 0 {
+        10_i128
+            .checked_pow(u32::try_from(shift).unwrap_or(u32::MAX))
+            .and_then(|f| n.checked_mul(f))
+            .unwrap_or(i128::MAX)
+    } else {
+        match 10_i128.checked_pow(u32::try_from(-shift).unwrap_or(u32::MAX)) {
+            Some(d) => n / d + i128::from(n % d >= d - d / 2),
+            None => 0,
+        }
+    };
+    if v.is_sign_negative() {
+        -magnitude
+    } else {
+        magnitude
+    }
 }
 
 /// Builds an array of type `t` from `i128` values (inverse of `int_like`).
@@ -3557,6 +3596,28 @@ mod proof_tests {
 #[cfg(not(loom))]
 mod tests {
     use super::*;
+
+    /// A double becomes a decimal through its shortest text, rounded half up
+    /// (Spark's `BigDecimal.valueOf(d).setScale(scale, HALF_UP)`).
+    #[test]
+    fn a_double_becomes_a_decimal_through_its_text() {
+        for (v, scale, want) in [
+            (1.15, 2, 115),
+            (-1.15, 2, -115),
+            // 1.005 is below 1.005 in binary, but its text rounds up.
+            (1.005, 2, 101),
+            (2.5, 0, 3),
+            (-2.5, 0, -3),
+            (0.0, 2, 0),
+            (123.456, 1, 1235),
+            (0.000_001, 2, 0),
+            (1e20, 2, 10_i128.pow(22)),
+        ] {
+            assert_eq!(decimal_unscaled(v, scale), want, "{v} at scale {scale}");
+        }
+        assert_eq!(decimal_unscaled(f64::INFINITY, 2), i128::MAX);
+        assert_eq!(decimal_unscaled(f64::NEG_INFINITY, 2), i128::MIN);
+    }
 
     #[test]
     fn avg_decimal_rounds_like_spark() {

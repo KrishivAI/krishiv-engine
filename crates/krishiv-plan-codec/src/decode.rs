@@ -995,7 +995,7 @@ fn percentile_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
     if a.percentile_accuracy != 0 || a.percentile_legacy || a.hll_precision != 0 {
         return Err(bad());
     }
-    if a.percentages.is_empty()
+    if (a.percentages.is_empty() && !a.percentile_array)
         || a.percentages
             .iter()
             .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
@@ -1016,7 +1016,7 @@ fn percentile_approx_function(a: &pb::AggregateExpr) -> Result<AggregateFunction
         return Err(bad());
     }
     if a.percentile_accuracy <= 0
-        || a.percentages.is_empty()
+        || (a.percentages.is_empty() && !a.percentile_array)
         || a.percentages
             .iter()
             .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
@@ -1036,7 +1036,7 @@ fn percentile_disc_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> 
     if a.percentile_accuracy != 0 || a.hll_precision != 0 {
         return Err(bad());
     }
-    if a.percentages.is_empty()
+    if (a.percentages.is_empty() && !a.percentile_array)
         || a.percentages
             .iter()
             .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))

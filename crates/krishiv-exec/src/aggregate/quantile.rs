@@ -50,15 +50,24 @@ pub(crate) fn counts_list_field() -> Arc<Field> {
     Arc::new(Field::new("element", DataType::Int64, false))
 }
 
-/// A `ListArray` of `values` cut by `offsets` (one list per group, all
-/// present), with element field `field`.
-pub(crate) fn finish_lists(values: ArrayRef, offsets: Vec<i32>, field: Arc<Field>) -> ArrayRef {
-    use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+/// A `ListArray` of `values` cut by `offsets` (one list per group), with
+/// element field `field`. `present` says which groups have a list; `None`
+/// means all do.
+pub(crate) fn finish_lists(
+    values: ArrayRef,
+    offsets: Vec<i32>,
+    field: Arc<Field>,
+    present: Option<&[bool]>,
+) -> ArrayRef {
+    use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    let nulls = present
+        .filter(|p| p.iter().any(|&b| !b))
+        .map(|p| NullBuffer::from(p.to_vec()));
     Arc::new(ListArray::new(
         field,
         OffsetBuffer::new(ScalarBuffer::from(offsets)),
         values,
-        None,
+        nulls,
     )) as ArrayRef
 }
 
@@ -236,8 +245,8 @@ impl ExactAcc {
             co.push(i32::try_from(counts.len()).map_err(|_| too_many())?);
         }
         Ok(vec![
-            finish_lists(Arc::new(values.finish()), vo, values_list_field()),
-            finish_lists(Arc::new(counts.finish()), co, counts_list_field()),
+            finish_lists(Arc::new(values.finish()), vo, values_list_field(), None),
+            finish_lists(Arc::new(counts.finish()), co, counts_list_field(), None),
         ])
     }
 

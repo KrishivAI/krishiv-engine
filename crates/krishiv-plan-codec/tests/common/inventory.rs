@@ -266,6 +266,16 @@ pub(crate) fn percentile_aggregate_exprs() -> Vec<AggregateExpr> {
             AggregateFunction::ApproxCountDistinct { p: 14 },
             ArrowType::Utf8View,
         ),
+        // An empty list of percentages is a valid array percentage (the
+        // result is NULL).
+        a(
+            AggregateFunction::Percentile {
+                percentages: Vec::new(),
+                array: true,
+                reverse: false,
+            },
+            ArrowType::Int32,
+        ),
     ]
 }
 
@@ -895,7 +905,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 aggregate: AggregatePlan {
                     group_by: vec![0],
                     aggregates: percentile_aggregate_exprs(),
-                    distinct: vec![false; 4],
+                    distinct: vec![false; 5],
                     output: AggregateOutput::Final,
                 },
             },

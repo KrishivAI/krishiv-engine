@@ -18,8 +18,8 @@ use krishiv_common::error::{
     DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
     DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
-    ExceptOverlappingColumns, FailedToParseTooComplex, FieldNotFound, InternalError,
-    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
+    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
@@ -5401,11 +5401,29 @@ impl Resolver<'_> {
                 },
                 Some(k) => k.clone(),
             };
-            match &rsd.expr.node {
-                ExprNode::Literal(Literal::Double(_) | Literal::Decimal { .. }) => {}
-                _ => {
-                    return Err(AnalysisError::new(LegacyErrorTemp1104 {}, origin));
-                }
+            // The written value as a double (`0.5` is a decimal literal).
+            let written = match &rsd.expr.node {
+                ExprNode::Literal(Literal::Double(d)) => Some(*d),
+                ExprNode::Literal(Literal::Decimal {
+                    unscaled,
+                    data_type,
+                }) => Some(*unscaled as f64 / 10_f64.powi(i32::from(data_type.scale()))),
+                _ => None,
+            };
+            let Some(written) = written else {
+                return Err(AnalysisError::new(LegacyErrorTemp1104 {}, origin));
+            };
+            // Spark's `require(p >= 4)` on the addressing bits
+            // (`p = ceil(2 * log2(1.106 / relativeSD))`) fails the call when
+            // the error is above about 39%.
+            let p = (2.0 * (1.106 / written).ln() / std::f64::consts::LN_2).ceil();
+            if written.is_finite() && written > 0.0 && p < 4.0 {
+                return Err(AnalysisError::new(
+                    FailedFunctionCall {
+                        func_name: "`approx_count_distinct`".to_owned(),
+                    },
+                    origin,
+                ));
             }
             // The executor derives the addressing bits and refuses precisions
             // Spark's `require` refuses.
