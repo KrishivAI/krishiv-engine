@@ -54,6 +54,7 @@ variants!(
     Union,
     WriteFiles,
     Exchange,
+    SharedRead,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -76,6 +77,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
         PhysNode::Exchange(_) => Variant::Exchange,
+        PhysNode::SharedRead { .. } => Variant::SharedRead,
     }
 }
 
@@ -442,6 +444,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "shared_subplan"
             | "rust_udf"
             | "nested_types"
             | "struct_field"
@@ -538,6 +541,39 @@ fn a_corrupt_window_is_refused() {
         }),
         "ntile with a bucket count below one",
     );
+}
+
+#[test]
+fn a_corrupt_shared_plan_is_refused() {
+    use pb::node::Kind;
+    let plan = message("shared_subplan");
+    let read_ids = |m: &mut pb::PhysicalPlan, id: u64| {
+        for node in &mut m.nodes {
+            if let Some(Kind::SharedRead(r)) = &mut node.kind {
+                r.id = id;
+            }
+        }
+    };
+    let mut m = plan.clone();
+    read_ids(&mut m, 9);
+    corrupt(&m, "a shared plan read before it is listed");
+    let mut m = plan.clone();
+    m.shared.reverse();
+    corrupt(&m, "a shared plan read before it is listed");
+    let mut m = plan.clone();
+    m.shared[1].id = m.shared[0].id;
+    corrupt(&m, "a shared plan read before it is listed");
+    // A node the root also uses, and a shared root out of range.
+    let mut m = plan.clone();
+    m.shared[0].root = m.root;
+    corrupt(&m, "a node used by two parents");
+    let mut m = plan.clone();
+    m.shared[0].root = u32::MAX;
+    assert!(decode(&m.encode_to_vec()).is_err());
+    // A read with no shared plan listed.
+    let mut m = plan;
+    m.shared.clear();
+    assert!(decode(&m.encode_to_vec()).is_err());
 }
 
 #[test]

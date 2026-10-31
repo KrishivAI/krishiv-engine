@@ -19,7 +19,7 @@ mod text;
 use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
 
 use crate::metrics::QueryMetrics;
-use crate::physical::{PhysNode, PhysicalPlan};
+use crate::physical::{PhysNode, PhysicalPlan, SHARED_PLAN, WITH_SHARED};
 use crate::planner::ExplainNode;
 
 pub use text::TextOptions;
@@ -51,7 +51,27 @@ impl ProfileNode {
     #[must_use]
     pub fn of(plan: &PhysicalPlan) -> Self {
         let mut next = 0;
-        annotate(plan.root(), plan.explain(), &mut next)
+        let mut children: Vec<Self> = plan
+            .shared()
+            .iter()
+            .map(|s| Self {
+                id: None,
+                name: SHARED_PLAN.to_owned(),
+                detail: format!("#{}", s.id.0),
+                children: vec![annotate(&s.plan, &s.explain, &mut next)],
+            })
+            .collect();
+        let root = annotate(plan.root(), plan.explain(), &mut next);
+        if children.is_empty() {
+            return root;
+        }
+        children.push(root);
+        Self {
+            id: None,
+            name: WITH_SHARED.to_owned(),
+            detail: String::new(),
+            children,
+        }
     }
 
     fn unmatched(e: &ExplainNode) -> Self {

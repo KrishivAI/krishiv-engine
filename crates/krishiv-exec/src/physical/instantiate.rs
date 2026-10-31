@@ -302,9 +302,11 @@ pub fn instantiate_task(
                 .values
                 .clone()
                 .unwrap_or_else(|| Arc::new(LocalValues::new())),
-            ids: node_ids(plan.root()),
+            ids: node_ids(plan.roots()),
         };
-        cx.declare_filters(plan.root())?;
+        for root in plan.roots() {
+            cx.declare_filters(root)?;
+        }
         let built = cx.node(plan.root())?;
         if built.schema.fields() != plan.schema().fields() {
             return Err(internal(format!(
@@ -352,16 +354,19 @@ struct Instantiation<'a> {
     ids: HashMap<usize, u32>,
 }
 
-/// The pre-order index of every node under `root` (children in
+/// The pre-order index of every node under `roots`, numbered on from one
+/// root to the next (children in
 /// [`PhysNode::children`] order), by address: `EXPLAIN ANALYZE`'s node ids.
-pub(crate) fn node_ids(root: &PhysNode) -> HashMap<usize, u32> {
+pub(crate) fn node_ids<'a>(roots: impl IntoIterator<Item = &'a PhysNode>) -> HashMap<usize, u32> {
     let mut ids = HashMap::new();
-    let mut stack = vec![root];
     let mut next = 0_u32;
-    while let Some(n) = stack.pop() {
-        ids.insert(std::ptr::from_ref(n).addr(), next);
-        next = next.saturating_add(1);
-        stack.extend(n.children().into_iter().rev());
+    for root in roots {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            ids.insert(std::ptr::from_ref(n).addr(), next);
+            next = next.saturating_add(1);
+            stack.extend(n.children().into_iter().rev());
+        }
     }
     ids
 }
@@ -438,6 +443,10 @@ impl Instantiation<'_> {
                     node: Arc::new(SourceNode(source)),
                 })
             }
+            PhysNode::SharedRead { id, .. } => Err(internal(format!(
+                "shared plan {} cannot be read: this executor does not run shared plans",
+                id.0
+            ))),
             PhysNode::OneRow => {
                 let source = one_row()?;
                 Ok(Built {
