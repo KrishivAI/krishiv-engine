@@ -27,6 +27,7 @@ mod args;
 mod arith;
 mod array;
 mod array_edit;
+mod array_set;
 mod bitwise;
 mod chars;
 mod codec;
@@ -440,7 +441,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 26] = [
+const FAMILIES: [(&[&str], Binder); 27] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -467,6 +468,7 @@ const FAMILIES: [(&[&str], Binder); 26] = [
     (vector::NAMES, vector::bind),
     (element::NAMES, element::bind),
     (array_edit::NAMES, array_edit::bind),
+    (array_set::NAMES, array_set::bind),
 ];
 
 /// The name of every scalar function [`bind_scalar`] binds, aliases

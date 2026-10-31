@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
 use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::map::DedupPolicy;
@@ -63,8 +64,55 @@ pub(super) fn compile_udf(
         args,
         out,
         view,
+        relabel: false,
         nullable: f.nullable,
     }))
+}
+
+/// Whether `a` and `b` differ at most in the nullability of nested fields.
+fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
+    match (a, b) {
+        (ArrowType::List(x), ArrowType::List(y)) => same_shape(x.data_type(), y.data_type()),
+        (ArrowType::Struct(x), ArrowType::Struct(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|(p, q)| p.name() == q.name() && same_shape(p.data_type(), q.data_type()))
+        }
+        _ => a == b,
+    }
+}
+
+/// `array` with the nested field flags of `to` (see [`same_shape`]).
+fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
+    match to {
+        ArrowType::List(f) if array.data_type() != to => {
+            let list = array.as_list::<i32>();
+            Ok(Arc::new(
+                ListArray::try_new(
+                    Arc::clone(f),
+                    list.offsets().clone(),
+                    relabeled(list.values(), f.data_type())?,
+                    list.nulls().cloned(),
+                )
+                .map_err(|e| internal(&e.to_string()))?,
+            ))
+        }
+        ArrowType::Struct(fields) if array.data_type() != to => {
+            let s = array.as_struct();
+            let columns = s
+                .columns()
+                .iter()
+                .zip(fields.iter())
+                .map(|(c, f)| relabeled(c, f.data_type()))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(
+                StructArray::try_new(fields.clone(), columns, s.nulls().cloned())
+                    .map_err(|e| internal(&e.to_string()))?,
+            ))
+        }
+        _ => Ok(Arc::clone(array)),
+    }
 }
 
 pub(super) fn compile(
@@ -119,8 +167,16 @@ pub(super) fn compile(
         }
     })?;
     // The binding returns plain carriers; Spark's `STRING` is a view here.
+    let mut relabel = false;
     let view = match (function.return_type(), &out) {
         (a, b) if a == b => false,
+        // The analyzer types a result nullable where the folded arguments
+        // are not (a cast of a literal): the data is the same, so the
+        // result takes the analyzer's field flags.
+        (a, b) if same_shape(a, b) => {
+            relabel = true;
+            false
+        }
         (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView) => true,
         (a, b) => {
             return Err(internal(&format!(
@@ -133,6 +189,7 @@ pub(super) fn compile(
         args,
         out,
         view,
+        relabel,
         nullable: f.nullable,
     }))
 }
@@ -145,6 +202,8 @@ struct Call {
     out: ArrowType,
     /// Convert the result to a view (`Utf8View`, `BinaryView`).
     view: bool,
+    /// Give the result the analyzer's nested field flags.
+    relabel: bool,
     nullable: bool,
 }
 
@@ -171,6 +230,11 @@ impl PhysExpr for Call {
         let out = self
             .function
             .invoke_in(&args, batch.num_rows(), partition)?;
+        let out = if self.relabel {
+            relabeled(&out, &self.out)?
+        } else {
+            out
+        };
         Ok(Value::Array(if self.view { to_view(&out)? } else { out }))
     }
 }

@@ -1007,7 +1007,7 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// Whether Spark orders `t` (`RowOrdering.isOrderable`): atomic types,
 /// arrays of an orderable element and structs of orderable fields; maps do
 /// not.
-fn spark_orderable(t: &DataType) -> bool {
+pub(super) fn spark_orderable(t: &DataType) -> bool {
     match t {
         DataType::Map(_) => false,
         DataType::Array(a) => spark_orderable(a.element_type()),
@@ -1705,6 +1705,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::vector::specs());
     out.extend(super::element::specs());
     out.extend(super::array_edit::specs());
+    out.extend(super::array_set::specs());
     out.extend(super::text::specs());
     out.extend(super::hof::specs());
     out.extend(super::collection::specs());
