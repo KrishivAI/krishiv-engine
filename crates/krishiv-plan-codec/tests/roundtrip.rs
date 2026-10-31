@@ -569,7 +569,7 @@ fn a_corrupt_shared_plan_is_refused() {
     corrupt(&m, "a node used by two parents");
     let mut m = plan.clone();
     m.shared[0].root = u32::MAX;
-    assert!(decode(&m.encode_to_vec()).is_err());
+    corrupt(&m, "a reference to a later or missing entry");
     // A shared plan's printable tree.
     let mut m = plan.clone();
     m.shared[0].explain_root = u32::MAX;
@@ -593,10 +593,20 @@ fn a_corrupt_shared_plan_is_refused() {
         decode_with(&bytes, &few, &ReaderFeatures::all()).unwrap_err(),
         CodecError::Limit(e) if e.contains("explain nodes")
     ));
-    // A read with no shared plan listed.
+    // Listed plans gone, their nodes left behind.
     let mut m = plan;
     m.shared.clear();
-    assert!(decode(&m.encode_to_vec()).is_err());
+    corrupt(&m, "a node no other node or the root uses");
+    // A root reading a plan no message lists.
+    let unlisted = plan_of(PhysNode::SharedRead {
+        id: krishiv_exec::physical::SharedId(9),
+        layout: Vec::new(),
+    });
+    let err = decode(&encode(&unlisted).unwrap()).unwrap_err();
+    assert!(
+        matches!(&err, CodecError::Corrupt(e) if e.contains("a shared plan read before it is listed")),
+        "{err:?}"
+    );
 }
 
 #[test]
