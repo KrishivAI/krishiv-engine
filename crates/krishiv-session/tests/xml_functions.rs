@@ -155,10 +155,8 @@ fn from_xml_reads_the_golden_statements() {
             "<p><d>2012-12-15</d><t>2012-12-15 15:15:15</t></p>",
             "d date, t timestamp",
             ""
-        )
-        .split(',')
-        .next(),
-        Some(r#"{"d":"2012-12-15""#)
+        ),
+        r#"{"d":"2012-12-15","t":"2012-12-15T15:15:15.000Z"}"#
     );
     // Formats that do not match give NULL.
     assert_eq!(
@@ -745,5 +743,49 @@ fn to_xml_formats_timestamps_in_the_session_zone() {
             "'indent', '', 'timestampFormat', 'yyyy-MM-dd HH:mm VV XXX'"
         ),
         "<ROW><a>2020-01-02 03:04 +05:00 +05:00</a></ROW>\n"
+    );
+}
+
+#[test]
+fn from_xml_refuses_complex_map_values_and_schema_of_xml_options() {
+    let s = session();
+    for ty in ["map<string, struct<a: int>>", "map<string, array<int>>"] {
+        let sql = format!("select from_xml('<p><k>1</k></p>', 'm {ty}')");
+        assert_eq!(class_of(&s, &sql), ErrorClass::KrishivUnsupportedFeature);
+    }
+    let sql = "select schema_of_xml('<p><a>1</a></p>', map('mode', c)) from (select 'x' c)";
+    assert!(
+        matches!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::KrishivUnsupportedFeature | ErrorClass::DatatypeMismatchNonFoldableInput
+        ),
+        "{sql}: {:?}",
+        error_of(&s, sql)
+    );
+}
+
+#[test]
+fn from_xml_reads_every_scalar_type_and_entities() {
+    let s = session();
+    assert_eq!(
+        read(
+            &s,
+            "<p><a>1</a><b>2</b><c>3</c><d>1.5</d><e>2.5</e><f>3.25</f><g>true</g>\
+             <h>2020-01-02</h><i>2020-01-02 03:04:05</i><j>1</j><j>2</j>\
+             <k><x>7</x></k><l><x>9</x></l></p>",
+            "a tinyint, b smallint, c int, d float, e double, f decimal(5,2), g boolean, \
+             h date, i timestamp_ntz, j array<int>, k map<string,int>, l struct<x:int>",
+            ""
+        ),
+        r#"{"a":1,"b":2,"c":3,"d":1.5,"e":2.5,"f":3.25,"g":true,"h":"2020-01-02","i":"2020-01-02T03:04:05.000","j":[1,2],"k":{"x":7},"l":{"x":9}}"#
+    );
+    assert_eq!(
+        read(&s, "<p><a>x &amp; &#65;&#x42; &lt;</a></p>", "a string", ""),
+        r#"{"a":"x & AB <"}"#
+    );
+    // A value that does not fit the type reads as NULL.
+    assert_eq!(
+        read(&s, "<p><a>300</a><b>x</b></p>", "a tinyint, b float", ""),
+        r#"{"a":null,"b":null}"#
     );
 }

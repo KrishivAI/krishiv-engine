@@ -2335,7 +2335,17 @@ impl Resolver<'_> {
                 None => Vec::new(),
                 Some(opts) => match &opts.expr.node {
                     ExprNode::Literal(Literal::Map(pairs)) => pairs.clone(),
-                    _ => return Ok(()),
+                    // The scalar family does not bind `schema_of_xml`, so a
+                    // retained call could only fail later in planning.
+                    _ => {
+                        return Err(AnalysisError::new(
+                            KrishivUnsupportedFeature {
+                                feature: "schema_of_xml with options that are not a map literal"
+                                    .to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
                 },
             };
             krishiv_functions::scalar::schema_of_xml_ddl(&csv, &pairs)

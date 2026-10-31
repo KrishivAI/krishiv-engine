@@ -780,7 +780,24 @@ fn check_read_type(dt: &DataType) -> Result<(), KrishivError> {
             }
             check_read_type(f.data_type())
         }
-        DataType::Map(e, _) => check_read_type(e.data_type()),
+        DataType::Map(e, _) => {
+            // The reader keeps map values to scalars; a struct, array or map
+            // value has no child/attribute reading yet.
+            if let DataType::Struct(kv) = e.data_type()
+                && kv.get(1).is_some_and(|v| {
+                    matches!(
+                        v.data_type(),
+                        DataType::Struct(_)
+                            | DataType::Map(..)
+                            | DataType::List(_)
+                            | DataType::LargeList(_)
+                    )
+                })
+            {
+                return Err(unsupported("from_xml", "a map with a complex value"));
+            }
+            check_read_type(e.data_type())
+        }
         other => FieldKind::of(other)
             .map(|_| ())
             .map_err(|_| unsupported("from_xml", &format!("a field of type {other}"))),
@@ -1084,6 +1101,7 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
             ntz: &ntz,
         };
         let mut out = arrow_array::builder::StringBuilder::new();
+        let mut total = 0usize;
         for i in 0..rows.len() {
             if rows.is_null(i) {
                 out.append_null();
@@ -1094,6 +1112,15 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
             // Without pretty-printing the document ends with a line feed.
             if writing.indent().is_none() {
                 text.push('\n');
+            }
+            // The builder's offsets are i32: report instead of panicking.
+            total = total.saturating_add(text.len());
+            if total > i32::MAX as usize {
+                return Err(krishiv_common::error::UnableToAcquireMemory {
+                    requested_bytes: total.to_string(),
+                    received_bytes: "0".to_owned(),
+                }
+                .into());
             }
             out.append_value(text);
         }
