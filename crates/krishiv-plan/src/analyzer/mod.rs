@@ -303,6 +303,9 @@ pub struct ResolutionConf {
     /// unknown zone. Unset is `UTC`, the default the cast path uses, so the
     /// default session resolves timestamp literals.
     pub session_zone: Option<SessionZone>,
+    /// `spark.sql.legacy.negativeIndexInArrayInsert`: a negative
+    /// `array_insert` position counts one place further from the end.
+    pub legacy_negative_index_in_array_insert: bool,
     /// `spark.sql.legacy.ctePrecedencePolicy`.
     pub cte_precedence: CtePrecedencePolicy,
     /// `spark.sql.legacy.allowParameterlessCount`: `count()` counts no
@@ -338,6 +341,7 @@ impl Default for ResolutionConf {
             legacy_coding_error_action: false,
             run_sql_on_files: true,
             legacy_percentile_disc: false,
+            legacy_negative_index_in_array_insert: false,
             timestamp_ntz: false,
             session_zone: Some(SessionZone::Fixed(0)),
             cte_precedence: CtePrecedencePolicy::default(),
@@ -351,7 +355,7 @@ impl Default for ResolutionConf {
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 19] = [
+    pub const KEYS: [&'static str; 20] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -371,6 +375,7 @@ impl ResolutionConf {
         "spark.sql.legacy.timeParserPolicy",
         "spark.sql.legacy.javaCharsets",
         "spark.sql.legacy.codingErrorAction",
+        "spark.sql.legacy.negativeIndexInArrayInsert",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -424,6 +429,7 @@ impl ResolutionConf {
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
             legacy_java_charsets: on(Self::KEYS[17]),
             legacy_coding_error_action: on(Self::KEYS[18]),
+            legacy_negative_index_in_array_insert: on(Self::KEYS[19]),
         }
     }
 }
@@ -519,6 +525,7 @@ impl ContextFingerprint {
             c.allow_parameterless_count,
             c.allow_star_with_single_table_identifier_in_count,
             c.udf_parameter_shadows_function,
+            c.legacy_negative_index_in_array_insert,
         ];
         num(
             &mut b,
