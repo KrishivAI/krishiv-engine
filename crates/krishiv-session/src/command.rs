@@ -21,10 +21,10 @@ use krishiv_common::error::{
     CreateViewColumnArityMismatchTooManyDataColumns, CreateViewWithIfNotExistsAndReplace,
     DefaultPlacementInvalid, DuplicateAssignments, DuplicateRoutineParameterNames,
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
-    ErrorQueryContext, InvalidDefaultValueSubqueryExpression, KrishivError,
-    KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound, RowSubqueryTooManyRows,
-    SchemaNotFound, TableOrViewNotFound, TempTableOrViewAlreadyExists, UnresolvedVariable,
-    UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetVariableUsingSet,
+    ErrorQueryContext, InvalidDefaultValueSubqueryExpression, InvalidSqlFunctionDataAccess,
+    KrishivError, KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound,
+    RowSubqueryTooManyRows, SchemaNotFound, TableOrViewNotFound, TempTableOrViewAlreadyExists,
+    UnresolvedVariable, UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetVariableUsingSet,
     UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
     UserDefinedFunctionsNotAValidDefaultExpression,
     UserDefinedFunctionsNotAValidDefaultParameterPosition,
@@ -34,13 +34,14 @@ use krishiv_common::error::{
 use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{FunctionLookup, SqlFunction, SqlParam, TableColumn, variable_name};
 use krishiv_plan::{
-    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
+    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, ReadSource, SourceId,
+    SubqueryKind,
 };
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
     DataTypeSpec, DdlName, DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind,
     FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Refresh, RefreshKind, Reset, Set,
-    SetKind, SetVariable, SetVariableKind, Span, TimeZone,
+    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
 };
 use krishiv_types::{DataType, DecimalType};
 
@@ -827,6 +828,14 @@ impl Session {
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let source = self.next_source_id();
         let mut entry = self.declare(f, &name, source, case_sensitive, redacted)?;
+        let reads = self.reads_data(&entry.def);
+        if reads && f.characteristics.data_access == Some(SqlDataAccess::ContainsSql) {
+            return Err(InvalidSqlFunctionDataAccess {}.into());
+        }
+        entry.def = Arc::new(SqlFunction {
+            reads_data: reads,
+            ..(*entry.def).clone()
+        });
         if let Some(namespace) = &namespace {
             entry.def = Arc::new(SqlFunction {
                 qualifier: vec![crate::catalog::CATALOG.to_owned(), namespace.clone()],
@@ -1048,6 +1057,7 @@ impl Session {
             body_text: redacted.fragment(f.body.span.range()).to_owned(),
             source,
             deterministic: f.characteristics.deterministic.unwrap_or(true),
+            reads_data: f.characteristics.data_access == Some(SqlDataAccess::ReadsSqlData),
         };
         Ok(Entry {
             def: Arc::new(def),
@@ -1196,6 +1206,80 @@ impl Session {
             e.for_each_child(&mut |c| stack.push(c));
         }
         None
+    }
+
+    /// Whether the function reads data: its declaration says so, or says
+    /// nothing and its body reads a relation (not `range` or `VALUES`) or
+    /// calls a function that reads data.
+    fn reads_data(&self, def: &SqlFunction) -> bool {
+        if def.reads_data {
+            return true;
+        }
+        let functions = self.query_env().sql_functions;
+        let reads_calls = |name: &[String]| {
+            matches!(
+                krishiv_plan::analyzer::FunctionRegistry::lookup(&*functions, name, self.state.profile),
+                FunctionLookup::Sql(d) if d.reads_data
+            )
+        };
+        // Names a `WITH` of the body defines: reads of them are not reads
+        // of a relation.
+        let mut ctes: HashSet<String> = HashSet::new();
+        let mut stack: Vec<&PlanExpr> = std::iter::once(&*def.body)
+            .chain(def.params.iter().filter_map(|p| p.default.as_deref()))
+            .collect();
+        let mut plans = Vec::new();
+        while let Some(e) = stack.pop() {
+            if let ExprNode::Function(call) = &e.node {
+                let mut name = call.qualifier.clone();
+                name.push(call.name.clone());
+                if reads_calls(&name) {
+                    return true;
+                }
+            }
+            if let ExprNode::Subquery { plan, .. } = &e.node {
+                plans.push(plan);
+                while let Some(p) = plans.pop() {
+                    match &p.node {
+                        PlanNode::WithCte { ctes: defined, .. } => {
+                            ctes.extend(defined.iter().map(|c| c.name.to_lowercase()));
+                        }
+                        PlanNode::TableFunction { name, .. } => {
+                            let parts: Vec<String> = name
+                                .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
+                                .map(str::to_owned)
+                                .collect();
+                            if reads_calls(&parts) {
+                                return true;
+                            }
+                        }
+                        _ => {}
+                    }
+                    p.for_each_expr(&mut |x| stack.push(x));
+                    p.for_each_child(&mut |c| plans.push(c));
+                }
+            }
+            e.for_each_child(&mut |c| stack.push(c));
+        }
+        // The relations: a second walk, once the `WITH` names are known.
+        let mut reads = false;
+        let mut stack: Vec<&PlanExpr> = vec![&*def.body];
+        while let Some(e) = stack.pop() {
+            if let ExprNode::Subquery { plan, .. } = &e.node {
+                let mut plans = vec![plan];
+                while let Some(p) = plans.pop() {
+                    if let PlanNode::Read(source) = &p.node {
+                        let shadowed = matches!(source, ReadSource::Table { name, .. }
+                            if matches!(name.as_slice(), [n] if ctes.contains(&n.to_lowercase())));
+                        reads |= !shadowed;
+                    }
+                    p.for_each_expr(&mut |x| stack.push(x));
+                    p.for_each_child(&mut |c| plans.push(c));
+                }
+            }
+            e.for_each_child(&mut |c| stack.push(c));
+        }
+        reads
     }
 
     /// `CREATE [OR REPLACE] FUNCTION` of a function stored in `namespace`

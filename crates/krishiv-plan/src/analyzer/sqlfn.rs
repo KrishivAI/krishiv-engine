@@ -111,6 +111,11 @@ pub struct SqlFunction {
     /// that it is, as in Spark). Recorded for the front end; calls keep the
     /// determinism of the body's own expressions.
     pub deterministic: bool,
+    /// Whether the function reads data: declared `READS SQL DATA`, or
+    /// declared nothing and its body reads a relation or calls a function
+    /// that does. A function declared `CONTAINS SQL` may call none that
+    /// does (Spark: `INVALID_SQL_FUNCTION_DATA_ACCESS`).
+    pub reads_data: bool,
 }
 
 impl SqlFunction {

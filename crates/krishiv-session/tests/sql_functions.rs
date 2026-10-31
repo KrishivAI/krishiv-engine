@@ -1119,3 +1119,40 @@ fn a_table_function_takes_deterministic_arguments_and_no_temporary_ones() {
     );
     assert_eq!(ok(&s, "SELECT * FROM `d.t`()"), ["5"]);
 }
+
+#[test]
+fn contains_sql_functions_may_not_read_data() {
+    let s = session();
+    ok(&s, "CREATE TABLE pt USING PARQUET AS SELECT 1 AS id");
+    // Bodies that read no relation (sql-udf.sql.out, foo3_12a..j).
+    for sql in [
+        "CREATE FUNCTION f_a(x INT) RETURNS INT CONTAINS SQL RETURN (SELECT COUNT(*) FROM range(0, 3))",
+        "CREATE FUNCTION f_b(x INT) RETURNS INT CONTAINS SQL RETURN (SELECT COUNT(*) FROM VALUES (0, 1))",
+        "CREATE FUNCTION f_c(x INT) RETURNS TABLE (a INT, b INT) CONTAINS SQL RETURN SELECT x, x + 1",
+        "CREATE FUNCTION f_d(x INT) RETURNS TABLE (a INT) CONTAINS SQL RETURN WITH c AS (SELECT x AS a) SELECT a FROM c",
+        "CREATE FUNCTION f_reads(x INT) RETURNS INT READS SQL DATA RETURN x",
+        "CREATE FUNCTION f_reads_t(x INT) RETURNS TABLE (a INT, b INT) READS SQL DATA RETURN SELECT x, x + 1",
+        "CREATE FUNCTION f_infer(x INT) RETURNS INT RETURN (SELECT max(id) FROM pt)",
+    ] {
+        ok(&s, sql);
+    }
+    // Bodies that do, directly or through a function that reads data.
+    for sql in [
+        "CREATE FUNCTION g1(x INT) RETURNS INT CONTAINS SQL RETURN (SELECT SUM(id) FROM pt)",
+        "CREATE FUNCTION g2(x INT) RETURNS INT CONTAINS SQL RETURN 1 + (SELECT SUM(id) FROM pt)",
+        "CREATE FUNCTION g3(x INT) RETURNS INT CONTAINS SQL RETURN f_reads(x) + 1",
+        "CREATE FUNCTION g4(x INT) RETURNS INT CONTAINS SQL RETURN f_infer(x)",
+        "CREATE FUNCTION g5(x INT) RETURNS TABLE (a INT) CONTAINS SQL RETURN SELECT * FROM f_reads_t(x)",
+        "CREATE FUNCTION g6(x INT) RETURNS TABLE (a INT) CONTAINS SQL RETURN SELECT id FROM pt",
+        "CREATE TEMPORARY FUNCTION g7(x INT) RETURNS INT CONTAINS SQL RETURN f_reads(x)",
+    ] {
+        let (class, params) = class_and_params(&fails(&s, sql));
+        assert_eq!(class, "INVALID_SQL_FUNCTION_DATA_ACCESS", "{sql}");
+        assert!(params.is_empty(), "{sql}");
+    }
+    // Nothing was created by the refused statements.
+    assert_eq!(
+        class_and_params(&fails(&s, "SELECT g1(1)")).0,
+        "UNRESOLVED_ROUTINE"
+    );
+}

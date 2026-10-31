@@ -319,6 +319,7 @@ mod tests {
                 body_text: value.to_string(),
                 source: SourceId(7),
                 deterministic: true,
+                reads_data: false,
             }),
             text: krishiv_sql::redact_sql("CREATE FUNCTION f() RETURN 1"),
         }
