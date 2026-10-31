@@ -601,6 +601,22 @@ pub fn cast(
         }};
     }
     match (from, to) {
+        // Spark: a number is `true` unless it is zero; NaN is not zero.
+        (f, DataType::Boolean) if is_numeric(f) && *f != DataType::Boolean => {
+            let nums = nums.ok_or_else(unsupported)?;
+            let mut out = arrow_array::builder::BooleanBuilder::with_capacity(input.len());
+            for i in 0..input.len() {
+                if input.is_null(i) {
+                    out.append_null();
+                } else {
+                    out.append_value(match nums.get(i) {
+                        Num::Int(x) | Num::Dec(x, _) => x != 0,
+                        Num::Float(x, _) => x != 0.0,
+                    });
+                }
+            }
+            Ok(Arc::new(out.finish()))
+        }
         (f, DataType::Int8) if is_numeric(f) => numeric_to_int!(Int8Type),
         (f, DataType::Int16) if is_numeric(f) => numeric_to_int!(Int16Type),
         (f, DataType::Int32) if is_numeric(f) => numeric_to_int!(Int32Type),

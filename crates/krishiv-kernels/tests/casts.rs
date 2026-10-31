@@ -61,6 +61,14 @@ fn s(v: &str) -> ArrayRef {
     Arc::new(StringArray::from(vec![v]))
 }
 
+fn i32s(v: i32) -> ArrayRef {
+    Arc::new(Int32Array::from(vec![v]))
+}
+
+fn f64s(v: f64) -> ArrayRef {
+    Arc::new(Float64Array::from(vec![v]))
+}
+
 fn dec(v: i128, p: u8, sc: i8) -> ArrayRef {
     Arc::new(
         Decimal128Array::from(vec![v])
@@ -249,6 +257,27 @@ fn strings_to_booleans_match_spark() {
     assert_eq!(
         out.as_ref(),
         &BooleanArray::from(vec![Some(true), None, None]) as &dyn Array
+    );
+}
+
+#[test]
+fn numbers_to_booleans_are_nonzero() {
+    let b = DataType::Boolean;
+    for mode in [Ansi, Legacy, Try] {
+        assert_eq!(one(i32s(0), b.clone(), mode), "false");
+        assert_eq!(one(i32s(-3), b.clone(), mode), "true");
+        assert_eq!(one(dec(0, 5, 2), b.clone(), mode), "false");
+        assert_eq!(one(dec(1, 5, 2), b.clone(), mode), "true");
+        assert_eq!(one(f64s(0.0), b.clone(), mode), "false");
+        assert_eq!(one(f64s(-0.0), b.clone(), mode), "false");
+        assert_eq!(one(f64s(f64::NAN), b.clone(), mode), "true");
+        assert_eq!(one(f64s(0.5), b.clone(), mode), "true");
+    }
+    let nulls = Int32Array::from(vec![Some(2), None, Some(0)]);
+    let out = run(&nulls, &b, Ansi).unwrap();
+    assert_eq!(
+        out.as_ref(),
+        &BooleanArray::from(vec![Some(true), None, Some(false)]) as &dyn Array
     );
 }
 
