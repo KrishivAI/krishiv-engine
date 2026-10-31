@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     FailedToParseTooComplex, UnsupportedSubqueryExpressionCategoryCorrelatedReference,
+    UnsupportedSubqueryExpressionCategoryUnsupportedCorrelatedExpressionInJoinCondition,
 };
 use krishiv_types::DataType;
 
@@ -780,9 +781,24 @@ impl Rewriter {
                 on_left.push(c);
             } else if ids.iter().all(|i| right_ids.contains(i)) {
                 on_right.push(c);
+            } else if ids
+                .iter()
+                .all(|i| left_ids.contains(i) || right_ids.contains(i))
+            {
+                let shown = subqueries(&c)
+                    .iter()
+                    .map(|s| pretty(s, None))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(AnalysisError::new(
+                    UnsupportedSubqueryExpressionCategoryUnsupportedCorrelatedExpressionInJoinCondition {
+                        subquery_expression: shown,
+                    },
+                    c.origin,
+                ));
             } else {
                 return Err(unsupported(
-                    "correlated subqueries in a join condition that read both sides",
+                    "correlated subqueries in a join condition that read an enclosing query",
                     c.origin,
                 ));
             }

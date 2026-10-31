@@ -239,7 +239,7 @@ fn a_correlated_limit_keeps_its_order_and_partitions_by_clean_keys() {
     assert_eq!(rows(&s, desc), ["4"]);
     let asc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y ASC LIMIT 1)";
     assert_eq!(rows(&s, asc), ["1", "4"]);
-    // An outer side reading inner columns is refused, never mis-partitioned.
+    // An outer side reading inner columns is refused, never partitioned on it.
     let mixed = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g + lc.y = lt.id + lc.y ORDER BY lc.k DESC LIMIT 1)";
     if let Ok(df) = block_on(s.sql(mixed)) {
         let got = block_on(df.collect());
