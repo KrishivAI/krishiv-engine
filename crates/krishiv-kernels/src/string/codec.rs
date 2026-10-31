@@ -18,7 +18,7 @@
 use arrow_array::{Array, BooleanArray, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
 use krishiv_common::error::{
     CannotDecodeUrl, ConversionInvalidInput, InvalidParameterValueCharset,
-    KrishivInvalidBase64Input, MalformedCharacterCoding,
+    KrishivInvalidBase64Input, KrishivUnsupportedFeature, MalformedCharacterCoding,
 };
 
 use super::charsets::{SINGLE_BYTE, UNMAPPED};
@@ -346,6 +346,9 @@ enum Charset {
     /// Java's `UTF-32`: big-endian without a BOM on output, a BOM honoured
     /// on input.
     Utf32,
+    /// Java's `UTF-32BE` / `UTF-32LE`: no byte order mark either way.
+    Utf32Be,
+    Utf32Le,
     /// A single-byte table of [`SINGLE_BYTE`] (legacy Java charsets only).
     Single(usize),
 }
@@ -396,46 +399,210 @@ fn charset_of(
     name: &str,
     opts: CharsetOptions,
 ) -> Result<Charset, KernelError> {
-    CHARSET_NAMES
+    if let Some((_, cs)) = CHARSET_NAMES
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name))
-        .map(|(_, c)| *c)
-        .or_else(|| opts.java_charsets.then(|| legacy_charset(name)).flatten())
-        .ok_or_else(|| invalid_charset(row, function, name))
+    {
+        return Ok(*cs);
+    }
+    if opts.java_charsets {
+        match legacy_charset(name) {
+            Ok(Some(cs)) => return Ok(cs),
+            Ok(None) => {}
+            Err(()) => {
+                return Err(KernelError::with_row(
+                    Some(row),
+                    KrishivUnsupportedFeature {
+                        feature: format!("the charset {name}"),
+                    }
+                    .into(),
+                ));
+            }
+        }
+    }
+    Err(invalid_charset(row, function, name))
 }
+
+/// Java's aliases of the charsets above (lower-case), read from a Spark 4.2 run.
+const ALIASES: [(&str, &str); 130] = [
+    ("646", "us-ascii"),
+    ("8859_1", "iso-8859-1"),
+    ("8859_13", "iso-8859-13"),
+    ("8859_15", "iso-8859-15"),
+    ("8859_2", "iso-8859-2"),
+    ("8859_3", "iso-8859-3"),
+    ("8859_4", "iso-8859-4"),
+    ("8859_5", "iso-8859-5"),
+    ("8859_6", "iso-8859-6"),
+    ("8859_7", "iso-8859-7"),
+    ("8859_8", "iso-8859-8"),
+    ("8859_9", "iso-8859-9"),
+    ("ansi_x3.4-1968", "us-ascii"),
+    ("ansi_x3.4-1986", "us-ascii"),
+    ("arabic", "iso-8859-6"),
+    ("ascii", "us-ascii"),
+    ("ascii7", "us-ascii"),
+    ("cp1252", "windows-1252"),
+    ("cp367", "us-ascii"),
+    ("cp5348", "windows-1252"),
+    ("cp819", "iso-8859-1"),
+    ("cp912", "iso-8859-2"),
+    ("cp920", "iso-8859-9"),
+    ("cp921", "iso-8859-13"),
+    ("csascii", "us-ascii"),
+    ("csisolatin1", "iso-8859-1"),
+    ("csisolatin2", "iso-8859-2"),
+    ("csisolatin5", "iso-8859-9"),
+    ("csisolatinarabic", "iso-8859-6"),
+    ("csisolatincyrillic", "iso-8859-5"),
+    ("csisolatingreek", "iso-8859-7"),
+    ("csisolatinhebrew", "iso-8859-8"),
+    ("cyrillic", "iso-8859-5"),
+    ("ecma-114", "iso-8859-6"),
+    ("ecma-118", "iso-8859-7"),
+    ("greek", "iso-8859-7"),
+    ("greek8", "iso-8859-7"),
+    ("hebrew", "iso-8859-8"),
+    ("ibm-1252", "windows-1252"),
+    ("ibm-912", "iso-8859-2"),
+    ("ibm-920", "iso-8859-9"),
+    ("ibm-921", "iso-8859-13"),
+    ("ibm1252", "windows-1252"),
+    ("ibm367", "us-ascii"),
+    ("ibm819", "iso-8859-1"),
+    ("ibm912", "iso-8859-2"),
+    ("ibm920", "iso-8859-9"),
+    ("ibm921", "iso-8859-13"),
+    ("iso-ir-101", "iso-8859-2"),
+    ("iso-ir-109", "iso-8859-3"),
+    ("iso-ir-110", "iso-8859-4"),
+    ("iso-ir-126", "iso-8859-7"),
+    ("iso-ir-127", "iso-8859-6"),
+    ("iso-ir-138", "iso-8859-8"),
+    ("iso-ir-144", "iso-8859-5"),
+    ("iso-ir-148", "iso-8859-9"),
+    ("iso-ir-6", "us-ascii"),
+    ("iso646-us", "us-ascii"),
+    ("iso8859-1", "iso-8859-1"),
+    ("iso8859-13", "iso-8859-13"),
+    ("iso8859-15", "iso-8859-15"),
+    ("iso8859-2", "iso-8859-2"),
+    ("iso8859-3", "iso-8859-3"),
+    ("iso8859-4", "iso-8859-4"),
+    ("iso8859-5", "iso-8859-5"),
+    ("iso8859-6", "iso-8859-6"),
+    ("iso8859-7", "iso-8859-7"),
+    ("iso8859-8", "iso-8859-8"),
+    ("iso8859-9", "iso-8859-9"),
+    ("iso8859_1", "iso-8859-1"),
+    ("iso8859_11", "iso-8859-11"),
+    ("iso8859_13", "iso-8859-13"),
+    ("iso8859_15", "iso-8859-15"),
+    ("iso8859_16", "iso-8859-16"),
+    ("iso8859_2", "iso-8859-2"),
+    ("iso8859_3", "iso-8859-3"),
+    ("iso8859_4", "iso-8859-4"),
+    ("iso8859_5", "iso-8859-5"),
+    ("iso8859_6", "iso-8859-6"),
+    ("iso8859_7", "iso-8859-7"),
+    ("iso8859_8", "iso-8859-8"),
+    ("iso8859_9", "iso-8859-9"),
+    ("iso_646.irv:1991", "us-ascii"),
+    ("iso_8859-1", "iso-8859-1"),
+    ("iso_8859-13", "iso-8859-13"),
+    ("iso_8859-15", "iso-8859-15"),
+    ("iso_8859-16", "iso-8859-16"),
+    ("iso_8859-1:1987", "iso-8859-1"),
+    ("iso_8859-2", "iso-8859-2"),
+    ("iso_8859-2:1987", "iso-8859-2"),
+    ("iso_8859-3", "iso-8859-3"),
+    ("iso_8859-4", "iso-8859-4"),
+    ("iso_8859-5", "iso-8859-5"),
+    ("iso_8859-6", "iso-8859-6"),
+    ("iso_8859-6:1987", "iso-8859-6"),
+    ("iso_8859-7", "iso-8859-7"),
+    ("iso_8859-7:1987", "iso-8859-7"),
+    ("iso_8859-8", "iso-8859-8"),
+    ("iso_8859-9", "iso-8859-9"),
+    ("iso_8859_1", "iso-8859-1"),
+    ("l1", "iso-8859-1"),
+    ("l2", "iso-8859-2"),
+    ("l3", "iso-8859-3"),
+    ("l4", "iso-8859-4"),
+    ("l5", "iso-8859-9"),
+    ("l9", "iso-8859-15"),
+    ("latin0", "iso-8859-15"),
+    ("latin1", "iso-8859-1"),
+    ("latin2", "iso-8859-2"),
+    ("latin3", "iso-8859-3"),
+    ("latin4", "iso-8859-4"),
+    ("latin5", "iso-8859-9"),
+    ("latin9", "iso-8859-15"),
+    ("unicode", "utf-16"),
+    ("unicode-1-1-utf-8", "utf-8"),
+    ("unicodebig", "utf-16"),
+    ("unicodebigunmarked", "utf-16be"),
+    ("unicodelittleunmarked", "utf-16le"),
+    ("us", "us-ascii"),
+    ("utf16", "utf-16"),
+    ("utf8", "utf-8"),
+    ("utf_16", "utf-16"),
+    ("utf_16be", "utf-16be"),
+    ("utf_16le", "utf-16le"),
+    ("utf_32", "utf-32be"),
+    ("utf_32be", "utf-32be"),
+    ("utf_32le", "utf-32le"),
+    ("x-iso-8859-11", "iso-8859-11"),
+    ("x-utf-32be", "utf-32be"),
+    ("x-utf-32le", "utf-32le"),
+];
+
+/// Java charsets Krishiv has no table for: named, so they fail as unsupported
+/// rather than as an unknown charset.
+const UNSUPPORTED: [&str; 18] = [
+    "big5",
+    "euc-jp",
+    "euc-kr",
+    "gb18030",
+    "gb2312",
+    "gbk",
+    "koi8-r",
+    "shift_jis",
+    "tis-620",
+    "unicodelittle",
+    "utf-32be-bom",
+    "windows-1250",
+    "windows-1251",
+    "windows-1253",
+    "windows-1254",
+    "windows-1255",
+    "windows-1256",
+    "windows-1257",
+];
 
 /// A charset under `spark.sql.legacy.javaCharsets`: Java's canonical name or
 /// one of its aliases, case-insensitively.
-fn legacy_charset(name: &str) -> Option<Charset> {
+fn legacy_charset(name: &str) -> Result<Option<Charset>, ()> {
     let lower = name.to_ascii_lowercase();
-    let canonical: String = match lower.as_str() {
-        "ascii" => "us-ascii".to_owned(),
-        "utf8" => "utf-8".to_owned(),
-        "utf16" | "unicodebig" => "utf-16".to_owned(),
-        "latin1" | "l1" | "cp819" => "iso-8859-1".to_owned(),
-        "latin2" => "iso-8859-2".to_owned(),
-        "latin3" => "iso-8859-3".to_owned(),
-        "latin4" => "iso-8859-4".to_owned(),
-        "latin5" => "iso-8859-9".to_owned(),
-        "cp1252" => "windows-1252".to_owned(),
-        other => [
-            "iso-8859-",
-            "iso8859_",
-            "iso8859-",
-            "iso_8859-",
-            "iso_8859_",
-        ]
+    let canonical = ALIASES
         .iter()
-        .find_map(|prefix| other.strip_prefix(prefix))
-        .map_or_else(|| other.to_owned(), |n| format!("iso-8859-{n}")),
-    };
+        .find(|(alias, _)| *alias == lower)
+        .map_or(lower.as_str(), |(_, canonical)| *canonical);
     if let Some((_, cs)) = CHARSET_NAMES.iter().find(|(n, _)| *n == canonical) {
-        return Some(*cs);
+        return Ok(Some(*cs));
     }
-    SINGLE_BYTE
-        .iter()
-        .position(|t| t.name == canonical)
-        .map(Charset::Single)
+    match canonical {
+        "utf-32be" => return Ok(Some(Charset::Utf32Be)),
+        "utf-32le" => return Ok(Some(Charset::Utf32Le)),
+        _ => {}
+    }
+    if let Some(table) = SINGLE_BYTE.iter().position(|t| t.name == canonical) {
+        return Ok(Some(Charset::Single(table)));
+    }
+    if UNSUPPORTED.contains(&canonical) {
+        return Err(());
+    }
+    Ok(None)
 }
 
 /// `MALFORMED_CHARACTER_CODING`.
@@ -478,13 +645,21 @@ pub fn encode_with<O: OffsetSizeTrait>(
     let rows = row_count(&slots)?;
     let mut sink = BinSink::<O>::new(rows, 0);
     let mut scratch = Vec::new();
+    let mut last: Option<(&str, Charset)> = None;
     for i in 0..rows {
         if !all_valid(&slots, i) {
             sink.push_null();
             continue;
         }
         let (s, name) = (input.at(i), charset.at(i));
-        let cs = charset_of(i, "encode", name, opts)?;
+        let cs = match last {
+            Some((previous, cs)) if previous == name => cs,
+            _ => {
+                let cs = charset_of(i, "encode", name, opts)?;
+                last = Some((name, cs));
+                cs
+            }
+        };
         scratch.clear();
         if !s.is_empty() {
             // UTF-32 writes 4 bytes per character (plus a 2-byte BOM for
@@ -544,9 +719,14 @@ fn encode_into(cs: Charset, s: &str, out: &mut Vec<u8>, replace: bool) -> Result
                 });
             }
         }
-        Charset::Utf32 => {
+        Charset::Utf32 | Charset::Utf32Be => {
             for c in s.chars() {
                 out.extend_from_slice(&u32::from(c).to_be_bytes());
+            }
+        }
+        Charset::Utf32Le => {
+            for c in s.chars() {
+                out.extend_from_slice(&u32::from(c).to_le_bytes());
             }
         }
     }
@@ -581,13 +761,21 @@ pub fn decode_with<O: OffsetSizeTrait>(
     let rows = row_count(&slots)?;
     let mut sink = StrSink::<O>::new(rows, 0);
     let mut scratch = String::new();
+    let mut last: Option<(&str, Charset)> = None;
     for i in 0..rows {
         if !all_valid(&slots, i) {
             sink.push_null();
             continue;
         }
         let (bytes, name) = (input.at(i), charset.at(i));
-        let cs = charset_of(i, "decode", name, opts)?;
+        let cs = match last {
+            Some((previous, cs)) if previous == name => cs,
+            _ => {
+                let cs = charset_of(i, "decode", name, opts)?;
+                last = Some((name, cs));
+                cs
+            }
+        };
         scratch.clear();
         // UTF-16/32 expand at most: 2 bytes decode to up to 3 UTF-8 bytes.
         scratch
@@ -600,13 +788,34 @@ pub fn decode_with<O: OffsetSizeTrait>(
     Ok(sink.finish())
 }
 
+/// `bytes` as UTF-8 with each malformed unit replaced by U+FFFD: Java's
+/// maximal subparts, except that an encoded surrogate (`ED A0..BF 80..BF`)
+/// is one unit.
+fn utf8_replacing(mut bytes: &[u8], out: &mut String) {
+    while let Err(e) = std::str::from_utf8(bytes) {
+        let (valid, bad) = bytes.split_at(e.valid_up_to());
+        if let Ok(text) = std::str::from_utf8(valid) {
+            out.push_str(text);
+        }
+        out.push('\u{FFFD}');
+        let skip = match bad {
+            [0xED, 0xA0..=0xBF, 0x80..=0xBF, ..] => 3,
+            _ => e.error_len().unwrap_or(bad.len()),
+        };
+        bytes = bad.get(skip..).unwrap_or_default();
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        out.push_str(text);
+    }
+}
+
 /// The text of `bytes` in `cs`; `Err` for bytes that are not valid in it,
 /// unless `replace`, which writes U+FFFD for each malformed unit (as Java's
 /// replacing decoder does).
 fn decode_into(cs: Charset, bytes: &[u8], out: &mut String, replace: bool) -> Result<(), ()> {
     const BAD: char = '\u{FFFD}';
     match cs {
-        Charset::Utf8 if replace => out.push_str(&String::from_utf8_lossy(bytes)),
+        Charset::Utf8 if replace => utf8_replacing(bytes, out),
         Charset::Utf8 => out.push_str(std::str::from_utf8(bytes).map_err(|_| ())?),
         Charset::Ascii => {
             for b in bytes {
@@ -651,6 +860,7 @@ fn decode_into(cs: Charset, bytes: &[u8], out: &mut String, replace: bool) -> Re
                     u16::from_be_bytes(*pair)
                 }
             });
+            let mut tail_taken = false;
             while let Some(unit) = units.next() {
                 match unit {
                     0xD800..=0xDBFF => {
@@ -661,6 +871,12 @@ fn decode_into(cs: Charset, bytes: &[u8], out: &mut String, replace: bool) -> Re
                                 let pair = char::decode_utf16([unit, low]).next();
                                 out.push(pair.and_then(Result::ok).ok_or(())?);
                             }
+                            None if replace => {
+                                // An odd trailing byte belongs to the same
+                                // malformed unit.
+                                out.push(BAD);
+                                tail_taken = true;
+                            }
                             _ if replace => out.push(BAD),
                             _ => return Err(()),
                         }
@@ -670,16 +886,18 @@ fn decode_into(cs: Charset, bytes: &[u8], out: &mut String, replace: bool) -> Re
                     _ => out.push(char::from_u32(u32::from(unit)).ok_or(())?),
                 }
             }
-            if body.len() % 2 != 0 {
+            if body.len() % 2 != 0 && !tail_taken {
                 out.push(BAD);
             }
         }
-        Charset::Utf32 => {
-            let (mut little, mut body) = (false, bytes);
-            match body {
-                [0, 0, 0xFE, 0xFF, rest @ ..] => body = rest,
-                [0xFF, 0xFE, 0, 0, rest @ ..] => (little, body) = (true, rest),
-                _ => {}
+        Charset::Utf32 | Charset::Utf32Be | Charset::Utf32Le => {
+            let (mut little, mut body) = (cs == Charset::Utf32Le, bytes);
+            if cs == Charset::Utf32 {
+                match body {
+                    [0, 0, 0xFE, 0xFF, rest @ ..] => body = rest,
+                    [0xFF, 0xFE, 0, 0, rest @ ..] => (little, body) = (true, rest),
+                    _ => {}
+                }
             }
             if body.len() % 4 != 0 && !replace {
                 return Err(());

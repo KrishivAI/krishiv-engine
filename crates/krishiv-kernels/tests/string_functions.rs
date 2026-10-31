@@ -1089,6 +1089,57 @@ fn legacy_charsets_and_replacement() {
     assert_eq!(enc("€", "iso-8859-15", java).unwrap(), [0xA4]);
     assert_eq!(enc("Ž", "cp1252", java).unwrap(), [0x8E]);
     assert_eq!(enc("a", "latin1", java).unwrap(), b"a");
+    // Only the aliases Java has: `iso_8859_2` and `iso8859-16` are not names.
+    for bad in ["iso_8859_2", "iso_8859_13", "iso8859-16", "iso-8859-10"] {
+        assert_eq!(
+            enc("a", bad, java).unwrap_err(),
+            ErrorClass::InvalidParameterValueCharset,
+            "{bad}"
+        );
+    }
+    for good in [
+        "x-iso-8859-11",
+        "latin9",
+        "l2",
+        "8859_2",
+        "ibm819",
+        "iso_8859_1",
+    ] {
+        assert_eq!(enc("a", good, java).unwrap(), b"a", "{good}");
+    }
+    assert_eq!(enc("a", "UTF-32BE", java).unwrap(), [0, 0, 0, b'a']);
+    assert_eq!(enc("a", "utf-32le", java).unwrap(), [b'a', 0, 0, 0]);
+    // No BOM handling in the explicit byte orders.
+    assert_eq!(
+        dec(&[0, 0, 0xFE, 0xFF], "utf-32be", java).unwrap(),
+        "\u{FEFF}"
+    );
+    assert_eq!(
+        enc("a", "windows-1251", java).unwrap_err(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // Encoded surrogates and a high surrogate before an odd byte are one
+    // malformed unit each.
+    assert_eq!(
+        dec(&[0xED, 0xA0, 0x80], "utf-8", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0xED, 0xA0, 0x80, 0x41], "utf-8", replace).unwrap(),
+        "\u{FFFD}A"
+    );
+    assert_eq!(
+        dec(&[0xD8, 0x3D, 0x00], "utf-16", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0xD8, 0x3D, 0xD8], "utf-16be", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0x3D, 0xD8, 0x00], "utf-16le", replace).unwrap(),
+        "\u{FFFD}"
+    );
     assert_eq!(dec(&[0x80], "windows-1252", java).unwrap(), "€");
     assert_eq!(dec(&[0xA4], "iso-8859-15", java).unwrap(), "€");
     assert_eq!(dec(&[0xE9], "ISO-8859-1", java).unwrap(), "é");
