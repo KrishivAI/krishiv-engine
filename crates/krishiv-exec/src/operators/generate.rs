@@ -30,6 +30,8 @@ pub struct Generate {
     kind: GeneratorKind,
     outer: bool,
     arg: Arc<dyn ScalarExpr>,
+    /// The input column that is the argument: read, not carried.
+    skip: Option<usize>,
 }
 
 impl Generate {
@@ -45,8 +47,15 @@ impl Generate {
         kind: GeneratorKind,
         outer: bool,
         arg: Arc<dyn ScalarExpr>,
+        skip: Option<usize>,
     ) -> Result<Arc<Self>> {
-        let mut fields: Vec<Arc<Field>> = input.fields().iter().cloned().collect();
+        let mut fields: Vec<Arc<Field>> = input
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != skip)
+            .map(|(_, f)| Arc::clone(f))
+            .collect();
         fields.extend(generated_fields(kind, outer, &arg.data_type())?);
         let schema = Arc::new(Schema::new(fields));
         Ok(Arc::new(Self {
@@ -54,6 +63,7 @@ impl Generate {
             kind,
             outer,
             arg,
+            skip,
         }))
     }
 }
@@ -232,10 +242,14 @@ impl Operator for Generate {
         let arrow = |e: arrow_schema::ArrowError| internal(e.to_string());
         let indices = UInt32Array::from(rows);
         // A relation without columns (`FROM explode(...)`) has rows only.
-        let mut columns: Vec<ArrayRef> = if input.data().num_columns() == 0 {
+        let kept: Vec<usize> = (0..input.data().num_columns())
+            .filter(|i| Some(*i) != self.skip)
+            .collect();
+        let mut columns: Vec<ArrayRef> = if kept.is_empty() {
             Vec::new()
         } else {
-            take_record_batch(input.data(), &indices)
+            let carried = input.data().project(&kept).map_err(arrow)?;
+            take_record_batch(&carried, &indices)
                 .map_err(arrow)?
                 .columns()
                 .to_vec()

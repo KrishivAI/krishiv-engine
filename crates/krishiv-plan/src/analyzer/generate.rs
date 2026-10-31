@@ -16,8 +16,11 @@ use krishiv_types::DataType;
 use super::AnalysisError;
 use super::coerce::quoted_type;
 use super::exprs::{Bound, pretty};
+use super::ops::col_expr;
 use super::resolve::{Attr, Env, Rel, Resolver};
-use crate::{BoundColumn, Expr, GeneratorKind, LogicalPlan, Origin, PlanNode};
+use crate::{
+    BoundColumn, Expr, ExprNode, GeneratorKind, LogicalPlan, Origin, PlanNode, ResolvedExpr,
+};
 
 /// The generated columns' names and types for an argument of type `ty`, or
 /// `None` when the generator does not take the type.
@@ -93,28 +96,63 @@ impl Resolver<'_> {
         let rels = [&c];
         let cx = Self::cx(&c.out, &rels, env, "Generate");
         let b = self.bind(arg, &cx)?;
-        let columns = if output.is_empty() {
-            self.generated_columns(origin, kind, outer, &b, names)?
-        } else {
+        let resolved = !output.is_empty();
+        let columns = if resolved {
             output.to_vec()
+        } else {
+            self.generated_columns(origin, kind, outer, &b, names)?
         };
+        // The argument is a column of its own, which the node reads but
+        // does not carry: an exploded array is not copied once per element.
+        // A resolved node read again already has it as a column.
+        let (below, arg_col) = match crate::generator_arg(&b.expr) {
+            Some(_) if resolved => (c.clone(), Arc::clone(&b.expr)),
+            _ => {
+                let col = self.attr("_generate_arg", &b.ty);
+                let mut items: Vec<Arc<Expr>> = c
+                    .out
+                    .iter()
+                    .map(|a| col_expr(&a.col, Origin::UNKNOWN))
+                    .collect();
+                items.push(Arc::new(Expr::new(ExprNode::Resolved(
+                    ResolvedExpr::Alias {
+                        expr: Arc::clone(&b.expr),
+                        output: col.clone(),
+                    },
+                ))));
+                let mut out = c.out.to_vec();
+                out.push(Attr {
+                    col: col.clone(),
+                    qual: super::ops::no_qual(),
+                    source: None,
+                });
+                let below = self.projection(origin, &c, items, out);
+                (below, col_expr(&col, Origin::UNKNOWN))
+            }
+        };
+        let carried: Vec<Attr> = below
+            .out
+            .iter()
+            .filter(|a| crate::generator_arg(&arg_col) != Some(a.col.id))
+            .cloned()
+            .collect();
         let qual: Arc<[String]> = Arc::from(qualifier.cloned().into_iter().collect::<Vec<_>>());
-        let mut out = c.out.to_vec();
+        let mut out = carried;
         out.extend(columns.iter().map(|col| Attr {
             col: col.clone(),
             qual: Arc::clone(&qual),
             source: None,
         }));
         let node = PlanNode::Generate {
-            input: Arc::clone(&c.plan),
+            input: Arc::clone(&below.plan),
             kind,
             outer,
-            arg: b.expr,
+            arg: arg_col,
             output: columns,
             names: Vec::new(),
             qualifier: None,
         };
-        Ok(self.make(origin, node, out, &[&c]))
+        Ok(self.make(origin, node, out, &[&below]))
     }
 
     fn generated_columns(

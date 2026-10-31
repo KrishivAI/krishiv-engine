@@ -1099,10 +1099,22 @@ impl<'a> Planner<'a> {
             &e,
             &self.values(&prepared),
         )?;
-        if op.schema().fields().len() != input.schema.fields().len() + output.len() {
+        let arg_id = krishiv_plan::generator_arg(arg);
+        let carried = input
+            .layout
+            .iter()
+            .filter(|id| Some(**id) != arg_id)
+            .count();
+        if op.schema().fields().len() != carried + output.len() {
             return Err(internal("a generator of the wrong width"));
         }
-        let mut layout = input.layout.clone();
+        // The argument column is read, not carried.
+        let mut layout: Vec<AttrId> = input
+            .layout
+            .iter()
+            .copied()
+            .filter(|id| Some(*id) != arg_id)
+            .collect();
         layout.extend(output.iter().map(|c| c.id));
         let name = format!("{}{}", kind.name(), if outer { "_outer" } else { "" });
         let mut planned = Self::attach(

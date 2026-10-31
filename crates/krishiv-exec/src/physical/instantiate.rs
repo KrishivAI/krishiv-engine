@@ -1102,11 +1102,14 @@ pub(crate) fn generate_op(
     v: &Values<'_>,
 ) -> Result<Arc<dyn Operator>> {
     let e = compile_one(arg, layout, schema, v)?;
+    // The argument is a column of the input, read but not carried.
+    let skip = krishiv_plan::generator_arg(arg).and_then(|id| layout.iter().position(|a| *a == id));
     Ok(Generate::try_new(
         schema,
         kind,
         outer,
         Arc::new(Compiled(e)),
+        skip,
     )?)
 }
 

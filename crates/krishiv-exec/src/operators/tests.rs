@@ -1157,6 +1157,7 @@ fn generate_repeats_rows_with_positions_weights_and_outer_nulls() {
             GeneratorKind::PosExplode,
             outer,
             Arc::clone(&arg) as Arc<dyn ScalarExpr>,
+            None,
         )
         .unwrap();
         assert_eq!(op.name(), "Generate");
@@ -1226,7 +1227,7 @@ fn generate_without_input_columns_and_with_an_all_empty_input() {
         )
     };
     let arg = Arc::new(Fixed(lists(vec![Some(vec![Some(1), Some(2)])])));
-    let op = Generate::try_new(&input_schema, GeneratorKind::Explode, false, arg).unwrap();
+    let op = Generate::try_new(&input_schema, GeneratorKind::Explode, false, arg, None).unwrap();
     let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
     let OperatorOutput::NeedMoreInput(Some(out)) = op.execute(&one_row(), &mut local).unwrap()
     else {
@@ -1242,7 +1243,7 @@ fn generate_without_input_columns_and_with_an_all_empty_input() {
     );
     // Rows that all have no element produce no batch.
     let none = Arc::new(Fixed(lists(vec![Some(vec![])])));
-    let op = Generate::try_new(&input_schema, GeneratorKind::Explode, false, none).unwrap();
+    let op = Generate::try_new(&input_schema, GeneratorKind::Explode, false, none, None).unwrap();
     let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
     assert!(matches!(
         op.execute(&one_row(), &mut local).unwrap(),
@@ -1261,7 +1262,8 @@ fn generate_refuses_arguments_it_cannot_take() {
             DataType::new_list(DataType::Int64, true),
         ),
     ] {
-        let err = Generate::try_new(&schema, kind, false, Arc::new(Typed(0, ty))).unwrap_err();
+        let err =
+            Generate::try_new(&schema, kind, false, Arc::new(Typed(0, ty)), None).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::InternalError, "{kind:?}");
     }
     // A column that is not a list fails when it is evaluated.
@@ -1270,10 +1272,49 @@ fn generate_refuses_arguments_it_cannot_take() {
         GeneratorKind::Explode,
         false,
         Arc::new(Typed(0, DataType::new_list(DataType::Int64, true))),
+        None,
     )
     .unwrap();
     let (_root, ctx) = ctx();
     let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
     let err = op.execute(&ints(&[1]), &mut local).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InternalError);
+}
+
+#[test]
+fn generate_does_not_carry_its_argument_column() {
+    let (_root, ctx) = ctx();
+    let xs = lists(vec![Some(vec![Some(1), Some(2)]), Some(vec![Some(3)])]);
+    let id: ArrayRef = Arc::new(Int64Array::from(vec![10, 20]));
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new("xs", xs.data_type().clone(), true),
+        Field::new("id", DataType::Int64, false),
+    ]));
+    let batch = Batch::new(RecordBatch::try_new(Arc::clone(&input_schema), vec![xs, id]).unwrap());
+    let arg = Arc::new(Typed(0, input_schema.field(0).data_type().clone()));
+    let op = Generate::try_new(&input_schema, GeneratorKind::Explode, false, arg, Some(0)).unwrap();
+    // `id`, then the element: the list column is read and dropped.
+    assert_eq!(op.schema().fields().len(), 2);
+    assert_eq!(op.schema().field(0).name(), "id");
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let OperatorOutput::NeedMoreInput(Some(out)) = op.execute(&batch, &mut local).unwrap() else {
+        unreachable!("one batch");
+    };
+    assert_eq!(out.data().num_columns(), 2);
+    assert_eq!(
+        out.data()
+            .column(0)
+            .as_primitive::<Int64Type>()
+            .values()
+            .to_vec(),
+        [10, 10, 20]
+    );
+    assert_eq!(
+        out.data()
+            .column(1)
+            .as_primitive::<Int64Type>()
+            .values()
+            .to_vec(),
+        [1, 2, 3]
+    );
 }

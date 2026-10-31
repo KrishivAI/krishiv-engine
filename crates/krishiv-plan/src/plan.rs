@@ -374,7 +374,10 @@ pub enum PlanNode {
     },
     /// A generator over `input` (Spark's `Generate`): every input row, with
     /// the generator's columns after the input's, once per element of
-    /// `arg` (an array, or a map for `explode` and `posexplode`). With
+    /// `arg` (an array, or a map for `explode` and `posexplode`). Resolved,
+    /// `arg` is a column of `input` that is not part of the output (see
+    /// [`generator_arg`]); the analyzer computes the argument in a projection
+    /// below when it is an expression. With
     /// `outer`, a row whose argument is NULL or empty is kept once, with
     /// NULL generated columns; without, it is dropped. Resolved plans only.
     Generate {
@@ -419,6 +422,17 @@ pub enum PlanNode {
         /// analyzer-assigned id.
         output: BoundColumn,
     },
+}
+
+/// The attribute a resolved generator reads: its argument is always a
+/// column of its input, which the generator does not carry to its output
+/// (so an exploded array is not copied once per element).
+#[must_use]
+pub fn generator_arg(arg: &Expr) -> Option<AttrId> {
+    match &arg.node {
+        crate::ExprNode::Resolved(crate::ResolvedExpr::Column(c)) => Some(c.id),
+        _ => None,
+    }
 }
 
 /// What a [`PlanNode::Generate`] produces for each element of its argument
@@ -1096,8 +1110,14 @@ impl LogicalPlan {
                 }
                 PlanNode::OneRowRelation => return Some(Vec::new()),
                 PlanNode::Expand { output, .. } => return Some(output.clone()),
-                PlanNode::Generate { input, output, .. } => {
+                PlanNode::Generate {
+                    input, arg, output, ..
+                } => {
                     let mut out = input.resolved_output()?;
+                    // The argument column is read, not carried.
+                    if let Some(id) = generator_arg(arg) {
+                        out.retain(|c| c.id != id);
+                    }
                     out.extend(output.iter().cloned());
                     return Some(out);
                 }
