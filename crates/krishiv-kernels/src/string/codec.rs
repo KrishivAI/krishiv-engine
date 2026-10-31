@@ -8,9 +8,10 @@
 //! judged as Spark's `UTF8String` does (the Unicode "maximal subpart"
 //! rules, which `std::str` implements).
 //!
-//! Spark's defaults apply; the switches are not read: `encode`/`decode` take
-//! Spark's seven default charsets (`spark.sql.legacy.javaCharsets` and
-//! `spark.sql.legacy.codingErrorAction` are ignored), and `base64` always
+//! Spark's defaults apply unless told otherwise: `encode`/`decode` take
+//! Spark's seven default charsets, and `encode_with`/`decode_with` the two
+//! legacy switches through [`CharsetOptions`] (`spark.sql.legacy.javaCharsets`,
+//! `spark.sql.legacy.codingErrorAction`); `base64` always
 //! writes MIME chunking (Spark's default of
 //! `spark.sql.chunkBase64String.enabled`).
 
@@ -20,6 +21,7 @@ use krishiv_common::error::{
     KrishivInvalidBase64Input, MalformedCharacterCoding,
 };
 
+use super::charsets::{SINGLE_BYTE, UNMAPPED};
 use super::{
     BinOperand, BinSink, Slot, StrOperand, StrSink, all_valid, bool_result, check_offset, reserve,
     row_count,
@@ -344,6 +346,22 @@ enum Charset {
     /// Java's `UTF-32`: big-endian without a BOM on output, a BOM honoured
     /// on input.
     Utf32,
+    /// A single-byte table of [`SINGLE_BYTE`] (legacy Java charsets only).
+    Single(usize),
+}
+
+/// What the legacy switches change in `encode`/`decode`; the default is
+/// Spark's own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CharsetOptions {
+    /// `spark.sql.legacy.javaCharsets`: any charset Java knows is accepted
+    /// (here: the default seven, `windows-1252` and the ISO-8859 family,
+    /// under Java's names and common aliases).
+    pub java_charsets: bool,
+    /// `spark.sql.legacy.codingErrorAction`: a character the charset cannot
+    /// hold encodes as `?` and malformed input decodes to U+FFFD, instead
+    /// of `MALFORMED_CHARACTER_CODING`.
+    pub replace_malformed: bool,
 }
 
 /// The names `encode`/`decode` accept, sorted as Spark's error lists them.
@@ -372,12 +390,52 @@ fn invalid_charset(row: usize, function: &str, name: &str) -> KernelError {
     )
 }
 
-fn charset_of(row: usize, function: &str, name: &str) -> Result<Charset, KernelError> {
+fn charset_of(
+    row: usize,
+    function: &str,
+    name: &str,
+    opts: CharsetOptions,
+) -> Result<Charset, KernelError> {
     CHARSET_NAMES
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name))
         .map(|(_, c)| *c)
+        .or_else(|| opts.java_charsets.then(|| legacy_charset(name)).flatten())
         .ok_or_else(|| invalid_charset(row, function, name))
+}
+
+/// A charset under `spark.sql.legacy.javaCharsets`: Java's canonical name or
+/// one of its aliases, case-insensitively.
+fn legacy_charset(name: &str) -> Option<Charset> {
+    let lower = name.to_ascii_lowercase();
+    let canonical: String = match lower.as_str() {
+        "ascii" => "us-ascii".to_owned(),
+        "utf8" => "utf-8".to_owned(),
+        "utf16" | "unicodebig" => "utf-16".to_owned(),
+        "latin1" | "l1" | "cp819" => "iso-8859-1".to_owned(),
+        "latin2" => "iso-8859-2".to_owned(),
+        "latin3" => "iso-8859-3".to_owned(),
+        "latin4" => "iso-8859-4".to_owned(),
+        "latin5" => "iso-8859-9".to_owned(),
+        "cp1252" => "windows-1252".to_owned(),
+        other => [
+            "iso-8859-",
+            "iso8859_",
+            "iso8859-",
+            "iso_8859-",
+            "iso_8859_",
+        ]
+        .iter()
+        .find_map(|prefix| other.strip_prefix(prefix))
+        .map_or_else(|| other.to_owned(), |n| format!("iso-8859-{n}")),
+    };
+    if let Some((_, cs)) = CHARSET_NAMES.iter().find(|(n, _)| *n == canonical) {
+        return Some(*cs);
+    }
+    SINGLE_BYTE
+        .iter()
+        .position(|t| t.name == canonical)
+        .map(Charset::Single)
 }
 
 /// `MALFORMED_CHARACTER_CODING`.
@@ -403,6 +461,19 @@ pub fn encode<O: OffsetSizeTrait>(
     input: StrOperand<'_, O>,
     charset: StrOperand<'_, O>,
 ) -> Result<GenericBinaryArray<O>, KernelError> {
+    encode_with(input, charset, CharsetOptions::default())
+}
+
+/// [`encode`] under the legacy switches in `opts`.
+///
+/// # Errors
+/// As [`encode`]; `MALFORMED_CHARACTER_CODING` only without
+/// `opts.replace_malformed`.
+pub fn encode_with<O: OffsetSizeTrait>(
+    input: StrOperand<'_, O>,
+    charset: StrOperand<'_, O>,
+    opts: CharsetOptions,
+) -> Result<GenericBinaryArray<O>, KernelError> {
     let slots: [&dyn Slot; 2] = [&input, &charset];
     let rows = row_count(&slots)?;
     let mut sink = BinSink::<O>::new(rows, 0);
@@ -413,36 +484,52 @@ pub fn encode<O: OffsetSizeTrait>(
             continue;
         }
         let (s, name) = (input.at(i), charset.at(i));
-        let cs = charset_of(i, "encode", name)?;
+        let cs = charset_of(i, "encode", name, opts)?;
         scratch.clear();
         if !s.is_empty() {
             // UTF-32 writes 4 bytes per character (plus a 2-byte BOM for
             // UTF-16), so `4 * len + 2` bounds every charset.
             reserve(&mut scratch, s.len().saturating_mul(4).saturating_add(2))?;
-            encode_into(cs, s, &mut scratch).map_err(|()| malformed(i, "encode", name))?;
+            encode_into(cs, s, &mut scratch, opts.replace_malformed)
+                .map_err(|()| malformed(i, "encode", name))?;
         }
         sink.push(&scratch)?;
     }
     Ok(sink.finish())
 }
 
-/// `s` in `cs`; `Err` for a character the charset cannot hold.
-fn encode_into(cs: Charset, s: &str, out: &mut Vec<u8>) -> Result<(), ()> {
+/// `s` in `cs`; `Err` for a character the charset cannot hold, unless
+/// `replace`, which writes `?` for it.
+fn encode_into(cs: Charset, s: &str, out: &mut Vec<u8>, replace: bool) -> Result<(), ()> {
+    let byte = |b: Option<u8>| match (b, replace) {
+        (Some(b), _) => Ok(b),
+        (None, true) => Ok(b'?'),
+        (None, false) => Err(()),
+    };
     match cs {
         Charset::Utf8 => out.extend_from_slice(s.as_bytes()),
         Charset::Ascii => {
             for c in s.chars() {
-                out.push(
-                    u8::try_from(u32::from(c))
-                        .ok()
-                        .filter(u8::is_ascii)
-                        .ok_or(())?,
-                );
+                out.push(byte(u8::try_from(u32::from(c)).ok().filter(u8::is_ascii))?);
             }
         }
         Charset::Latin1 => {
             for c in s.chars() {
-                out.push(u8::try_from(u32::from(c)).map_err(|_| ())?);
+                out.push(byte(u8::try_from(u32::from(c)).ok())?);
+            }
+        }
+        Charset::Single(table) => {
+            let high = &SINGLE_BYTE[table].high;
+            for c in s.chars() {
+                let found = if c.is_ascii() {
+                    u8::try_from(u32::from(c)).ok()
+                } else {
+                    u16::try_from(u32::from(c))
+                        .ok()
+                        .and_then(|u| high.iter().position(|h| *h == u && u != UNMAPPED))
+                        .and_then(|at| u8::try_from(at.saturating_add(0x80)).ok())
+                };
+                out.push(byte(found)?);
             }
         }
         Charset::Utf16Be | Charset::Utf16Le | Charset::Utf16 => {
@@ -477,6 +564,19 @@ pub fn decode<O: OffsetSizeTrait>(
     input: BinOperand<'_, O>,
     charset: StrOperand<'_, O>,
 ) -> Result<GenericStringArray<O>, KernelError> {
+    decode_with(input, charset, CharsetOptions::default())
+}
+
+/// [`decode`] under the legacy switches in `opts`.
+///
+/// # Errors
+/// As [`decode`]; `MALFORMED_CHARACTER_CODING` only without
+/// `opts.replace_malformed`.
+pub fn decode_with<O: OffsetSizeTrait>(
+    input: BinOperand<'_, O>,
+    charset: StrOperand<'_, O>,
+    opts: CharsetOptions,
+) -> Result<GenericStringArray<O>, KernelError> {
     let slots: [&dyn Slot; 2] = [&input, &charset];
     let rows = row_count(&slots)?;
     let mut sink = StrSink::<O>::new(rows, 0);
@@ -487,29 +587,51 @@ pub fn decode<O: OffsetSizeTrait>(
             continue;
         }
         let (bytes, name) = (input.at(i), charset.at(i));
-        let cs = charset_of(i, "decode", name)?;
+        let cs = charset_of(i, "decode", name, opts)?;
         scratch.clear();
         // UTF-16/32 expand at most: 2 bytes decode to up to 3 UTF-8 bytes.
         scratch
             .try_reserve(bytes.len().saturating_mul(3).saturating_add(3))
             .map_err(|_| KernelError::out_of_memory(bytes.len().saturating_mul(3)))?;
-        decode_into(cs, bytes, &mut scratch).map_err(|()| malformed(i, "decode", name))?;
+        decode_into(cs, bytes, &mut scratch, opts.replace_malformed)
+            .map_err(|()| malformed(i, "decode", name))?;
         sink.push(&scratch)?;
     }
     Ok(sink.finish())
 }
 
-/// The text of `bytes` in `cs`; `Err` for bytes that are not valid in it.
-fn decode_into(cs: Charset, bytes: &[u8], out: &mut String) -> Result<(), ()> {
+/// The text of `bytes` in `cs`; `Err` for bytes that are not valid in it,
+/// unless `replace`, which writes U+FFFD for each malformed unit (as Java's
+/// replacing decoder does).
+fn decode_into(cs: Charset, bytes: &[u8], out: &mut String, replace: bool) -> Result<(), ()> {
+    const BAD: char = '\u{FFFD}';
     match cs {
+        Charset::Utf8 if replace => out.push_str(&String::from_utf8_lossy(bytes)),
         Charset::Utf8 => out.push_str(std::str::from_utf8(bytes).map_err(|_| ())?),
         Charset::Ascii => {
-            if !bytes.is_ascii() {
-                return Err(());
+            for b in bytes {
+                match (b.is_ascii(), replace) {
+                    (true, _) => out.push(char::from(*b)),
+                    (false, true) => out.push(BAD),
+                    (false, false) => return Err(()),
+                }
             }
-            out.extend(bytes.iter().map(|b| char::from(*b)));
         }
         Charset::Latin1 => out.extend(bytes.iter().map(|b| char::from(*b))),
+        Charset::Single(table) => {
+            let high = &SINGLE_BYTE[table].high;
+            for b in bytes {
+                if b.is_ascii() {
+                    out.push(char::from(*b));
+                } else {
+                    match (high[usize::from(*b & 0x7F)], replace) {
+                        (UNMAPPED, true) => out.push(BAD),
+                        (UNMAPPED, false) => return Err(()),
+                        (code, _) => out.push(char::from_u32(u32::from(code)).ok_or(())?),
+                    }
+                }
+            }
+        }
         Charset::Utf16Be | Charset::Utf16Le | Charset::Utf16 => {
             let (mut little, mut body) = (cs == Charset::Utf16Le, bytes);
             if cs == Charset::Utf16 {
@@ -519,18 +641,37 @@ fn decode_into(cs: Charset, bytes: &[u8], out: &mut String) -> Result<(), ()> {
                     _ => {}
                 }
             }
-            if body.len() % 2 != 0 {
+            if body.len() % 2 != 0 && !replace {
                 return Err(());
             }
-            let units = body.as_chunks::<2>().0.iter().map(|pair| {
+            let mut units = body.as_chunks::<2>().0.iter().map(|pair| {
                 if little {
                     u16::from_le_bytes(*pair)
                 } else {
                     u16::from_be_bytes(*pair)
                 }
             });
-            for c in char::decode_utf16(units) {
-                out.push(c.map_err(|_| ())?);
+            while let Some(unit) = units.next() {
+                match unit {
+                    0xD800..=0xDBFF => {
+                        // A high surrogate needs a low one next; Java's
+                        // replacing decoder drops both units otherwise.
+                        match units.next() {
+                            Some(low @ 0xDC00..=0xDFFF) => {
+                                let pair = char::decode_utf16([unit, low]).next();
+                                out.push(pair.and_then(Result::ok).ok_or(())?);
+                            }
+                            _ if replace => out.push(BAD),
+                            _ => return Err(()),
+                        }
+                    }
+                    0xDC00..=0xDFFF if replace => out.push(BAD),
+                    0xDC00..=0xDFFF => return Err(()),
+                    _ => out.push(char::from_u32(u32::from(unit)).ok_or(())?),
+                }
+            }
+            if body.len() % 2 != 0 {
+                out.push(BAD);
             }
         }
         Charset::Utf32 => {
@@ -540,7 +681,7 @@ fn decode_into(cs: Charset, bytes: &[u8], out: &mut String) -> Result<(), ()> {
                 [0xFF, 0xFE, 0, 0, rest @ ..] => (little, body) = (true, rest),
                 _ => {}
             }
-            if body.len() % 4 != 0 {
+            if body.len() % 4 != 0 && !replace {
                 return Err(());
             }
             for quad in body.as_chunks::<4>().0 {
@@ -549,7 +690,17 @@ fn decode_into(cs: Charset, bytes: &[u8], out: &mut String) -> Result<(), ()> {
                 } else {
                     u32::from_be_bytes(*quad)
                 };
-                out.push(char::from_u32(code).ok_or(())?);
+                match char::from_u32(code) {
+                    Some(c) => out.push(c),
+                    // A surrogate code point survives Java's decoder and
+                    // reaches Spark's UTF-8 conversion as `?`.
+                    None if (0xD800..=0xDFFF).contains(&code) => out.push('?'),
+                    None if replace => out.push(BAD),
+                    None => return Err(()),
+                }
+            }
+            if body.len() % 4 != 0 {
+                out.push(BAD);
             }
         }
     }
