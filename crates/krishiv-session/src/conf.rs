@@ -130,14 +130,16 @@ pub(crate) fn local_zone() -> String {
 /// runs: a non-empty `TZ` decides alone (without a leading `:` or `posix/`)
 /// and is `GMT` when Java does not know it; else the zone `/etc/localtime`
 /// links to. Java compares a non-link `/etc/localtime` with the zoneinfo
-/// files; this reads `/etc/timezone` instead, else `UTC`. Java also asks libc
-/// for the offset of a `TZ` it does not know, so a POSIX `UTC+5` is
-/// `GMT-05:00` in Spark and `GMT` here.
+/// files; this reads `/etc/timezone` instead, else `UTC`. Java asks libc for
+/// the offset of a `TZ` it does not know, which reads POSIX strings
+/// ([`posix_zone_id`]).
 fn local_zone_from(tz: Option<&str>, link: Option<&str>, file: Option<&str>) -> String {
     if let Some(tz) = tz.filter(|tz| !tz.is_empty()) {
         let name = tz.strip_prefix(':').unwrap_or(tz);
         let name = name.strip_prefix("posix/").unwrap_or(name);
-        return java_zone_id(name).unwrap_or_else(|| "GMT".to_owned());
+        return java_zone_id(name)
+            .or_else(|| posix_zone_id(name))
+            .unwrap_or_else(|| "GMT".to_owned());
     }
     link.and_then(|link| link.rsplit_once("zoneinfo/"))
         .map(|(_, zone)| zone)
@@ -161,6 +163,47 @@ fn java_zone_id(name: &str) -> Option<String> {
         return Some(name.to_owned());
     }
     name.starts_with("GMT").then(|| zone_id(name))
+}
+
+/// The id Java gives a POSIX `TZ` string it does not know as a name: `GMT` with
+/// the offset of the string's head, whose sign POSIX writes the other way
+/// round (`UTC+5` is `GMT-05:00`, `CET-1CEST,M3.5.0,M10.5.0/3` is `GMT+01:00`).
+/// Java reads the offset in force now and this one the standard offset, so
+/// they differ during daylight saving.
+fn posix_zone_id(tz: &str) -> Option<String> {
+    let rest = match tz.strip_prefix('<') {
+        Some(quoted) => quoted.split_once('>')?.1,
+        None => {
+            let letters = tz.bytes().take_while(u8::is_ascii_alphabetic).count();
+            if letters < 3 {
+                return None;
+            }
+            &tz[letters..]
+        }
+    };
+    let (behind, rest) = match rest.strip_prefix('-') {
+        Some(rest) => (false, rest),
+        None => (true, rest.strip_prefix('+').unwrap_or(rest)),
+    };
+    let (hours, rest) = leading_number(rest)?;
+    let minutes = match rest.strip_prefix(':') {
+        Some(rest) => leading_number(rest)?.0,
+        None => 0,
+    };
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    if hours == 0 && minutes == 0 {
+        return Some("GMT".to_owned());
+    }
+    let sign = if behind { '-' } else { '+' };
+    Some(format!("GMT{sign}{hours:02}:{minutes:02}"))
+}
+
+/// The number `text` starts with, and what follows it.
+fn leading_number(text: &str) -> Option<(u32, &str)> {
+    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+    Some((text[..digits].parse().ok()?, &text[digits..]))
 }
 
 /// The value of `key` in `config` as text: a registered entry (by its
@@ -244,7 +287,7 @@ impl RuntimeConf {
         // is resolved against the time zone database, which `krishiv-common`
         // has not: the text as given, as Spark's `ZoneId.of` takes it.
         if lookup(key).is_some_and(|e| e.value_type == ValueType::TimeZone)
-            && krishiv_kernels::datetime::resolve_zone(value).is_err()
+            && resolve_zone(value).is_err()
         {
             return Err(InvalidConfValueTimeZone {
                 conf_name: key.to_owned(),
@@ -342,6 +385,12 @@ mod tests {
             ("Mars/Base", "GMT"),
             ("+05:30", "GMT"),
             ("Z", "GMT"),
+            // POSIX strings go to libc.
+            ("UTC+5", "GMT-05:00"),
+            ("CET-1CEST,M3.5.0,M10.5.0/3", "GMT+01:00"),
+            ("EST5:30", "GMT-05:30"),
+            ("<+03>-3", "GMT+03:00"),
+            ("UTC0", "GMT"),
             ("utc", "GMT"),
             ("Asia/kolkata", "GMT"),
             // An empty `TZ` is no `TZ`.

@@ -548,6 +548,7 @@ fn the_default_session_zone_is_the_machines() {
         "key,value\nspark.sql.session.timeZone,Asia/Kolkata\n"
     );
     let o = krishiv_in_zone("Mars/Base", "select current_timezone() as z");
+    assert!(o.status.success(), "{}", err(&o));
     assert_eq!(out(&o), "z\nGMT\n");
 
     // A set zone wins, and `SET TIME ZONE LOCAL` and `RESET` return to the default.
