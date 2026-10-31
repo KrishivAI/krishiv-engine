@@ -388,9 +388,8 @@ uv run krishiv-bench report --suite micro            # re-render the parity tabl
   wall time; DuckDB and Polars expose no per-operator time, so compare them through the `scan_*` cases and the CPU column.
   Output: `$KRISHIV_DATA/results/<ts>_reproduce_micro_sf<millions of rows>.json` and, next to it, the Markdown parity table
   (case -> wall ms per engine, engine / duckdb with CI, krishiv / polars; geomean per family; throughput and CPU; the operator-against-scan table; failures).
-* **Time budget**: the default set is sized for under 30 minutes on the 12-thread server (`--reps 2`, 67 cases, 1e7 fact rows, 3 engines, per-run
-  timeout 300 s). **This is an estimate, not a measurement**: it extrapolates the 1e6-row checksum runs (tens of ms to about 0.5 s per engine and case)
-  by 10x; the default set has not been run. The first scheduled run should confirm it; `--reps 1` or `--queries <families>` trim it.
+* **Time budget**: the default set runs in about 4 minutes on the 12-thread server (`--reps 2`, 67 cases, 1e7 fact rows, 3 engines, per-run
+  timeout 300 s; measured 2026-10-31). The budget is 30 minutes, so there is room for more reps or the `full` set's larger sizes on a schedule.
 * **Known skews**: DuckDB materialises answers in a temporary table (as in the h2o suites), which compresses them, Krishiv and Polars keep them as
   batches; Polars runs its lazy plan with the in-memory engine; Krishiv keeps the `Filter` above a pushed-down scan predicate (pushdown is never exact), so a
   filter's operator time and its scan time are reported separately. Parquet files are zstd, 1M-row row groups, no statistics-based pruning applies
