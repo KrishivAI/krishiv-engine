@@ -530,7 +530,7 @@ fn column(c: &BoundColumn) -> ArgType {
 
 /// The type of a value as typing sees it: `VOID` is an untyped `NULL`
 /// (`data_type: None`) everywhere but in plans and schemas.
-fn arg_type(data_type: DataType, nullable: bool) -> ArgType {
+pub(super) fn arg_type(data_type: DataType, nullable: bool) -> ArgType {
     ArgType {
         data_type: (data_type != DataType::Null).then_some(data_type),
         nullable,
@@ -1998,6 +1998,24 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 2)
+                } else if is_builtin_entry(&entry)
+                    && let Some(default) = regexp_default_index(entry.id.name(), n)
+                {
+                    // `regexp_extract(str, re)` is `regexp_extract(str, re, 1)`,
+                    // `regexp_instr(str, re)` takes index 0 and
+                    // `regexp_replace(str, re, rep)` position 1; Spark names
+                    // the column with the default shown.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Integer(default),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], n + 1)
                 } else if is_builtin_entry(&entry) && entry.id.name() == "split" && n == 2 {
                     // `split(str, pattern)` is `split(str, pattern, -1)`.
                     owned = kids[..n].to_vec();
@@ -2134,6 +2152,16 @@ impl Resolver<'_> {
                 // result is renamed and the names follow the arrays as
                 // string literals, which the executor reads.
                 let mut zip_names: Vec<Arc<Expr>> = Vec::new();
+                // Under `spark.sql.legacy.negativeIndexInArrayInsert`,
+                // `array_insert` carries the switch as a trailing literal.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "array_insert"
+                    && self.ctx.conf.legacy_negative_index_in_array_insert
+                {
+                    zip_names.push(Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(e.origin),
+                    ));
+                }
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "arrays_zip"
                     && let Some(DataType::Array(a)) = &ty.data_type
@@ -5955,7 +5983,7 @@ fn is_deterministic(e: &Expr) -> bool {
 /// `fields` (Spark's `GetStructField` by an unknown name, checked against
 /// Spark 4.2.0 for `s.f`, `(s).f`, nested paths and `Column.getField`): the
 /// missing name, and every field of the struct.
-fn unresolved_field(
+pub(super) fn unresolved_field(
     parts: &[String],
     fields: &krishiv_types::StructType,
     origin: Origin,
@@ -6207,16 +6235,45 @@ pub(super) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String {
 /// once.
 fn outer_names(plan: &crate::LogicalPlan) -> String {
     use crate::walk::{Node, visit_distinct};
-    let mut names: Vec<(AttrId, String)> = Vec::new();
+    fn collect(node: Node<'_>) -> Vec<(AttrId, String)> {
+        let mut names: Vec<(AttrId, String)> = Vec::new();
+        let _ = visit_distinct(node, |n| {
+            if let Node::Expr(e) = n
+                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+                && !names.iter().any(|(id, _)| *id == c.id)
+            {
+                names.push((c.id, c.name.clone()));
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        names
+    }
+    let mut names = collect(Node::Plan(plan));
+    // Spark lists each reference of a union's branches, not once per column.
+    let mut union = None;
     let _ = visit_distinct(Node::Plan(plan), |n| {
-        if let Node::Expr(e) = n
-            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-            && !names.iter().any(|(id, _)| *id == c.id)
+        if let Node::Plan(p) = n
+            && let crate::PlanNode::Union { inputs, .. } = &p.node
         {
-            names.push((c.id, c.name.clone()));
+            union = Some(inputs.clone());
+            return std::ops::ControlFlow::Break(());
         }
         std::ops::ControlFlow::Continue(())
     });
+    if let Some(inputs) = union {
+        // Under a union, once per reference of each branch.
+        names = Vec::new();
+        for input in &inputs {
+            let _ = visit_distinct(Node::Plan(input), |n| {
+                if let Node::Expr(e) = n
+                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+                {
+                    names.push((c.id, c.name.clone()));
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+        }
+    }
     names
         .into_iter()
         .map(|(_, n)| n)
@@ -6752,6 +6809,16 @@ fn call(
         _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
             "current_catalog".to_owned()
         }
+        // `RLike` prints its function name upper case, whichever spelling
+        // (`rlike`, `regexp`, `regexp_like`) the query used.
+        _ if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "rlike" | "regexp" | "regexp_like"
+        ) =>
+        {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{})", name.to_uppercase(), named(k, arg_names))
+        }
         // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
         // two-argument math (`power`, `atan2`, `hypot`) print upper case,
         // as Spark's `UnaryMathExpression` / `BinaryMathExpression` do;
@@ -6780,6 +6847,18 @@ fn named(k: &[&str], arg_names: Option<&[Option<String>]>) -> String {
         )
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The default of the optional trailing integer argument of a regular-expression
+/// function called with `n` arguments: the group index of `regexp_extract` /
+/// `regexp_extract_all` (1) and `regexp_instr` (0), the start position of
+/// `regexp_replace` (1).
+fn regexp_default_index(name: &str, n: usize) -> Option<i32> {
+    match (name, n) {
+        ("regexp_extract" | "regexp_extract_all", 2) | ("regexp_replace", 3) => Some(1),
+        ("regexp_instr", 2) => Some(0),
+        _ => None,
+    }
 }
 
 /// Whether Spark prints `name` upper case: the `UnaryMathExpression` /

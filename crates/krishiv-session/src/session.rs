@@ -541,19 +541,19 @@ impl Session {
             }
             Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
-            Statement::CreateTable(t) => self.exec_create_table(&t, query).await,
-            Statement::CreateTableLike(t) => self.exec_create_table_like(&t, query).await,
+            Statement::CreateTable(t) => Box::pin(self.exec_create_table(&t, query)).await,
+            Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
             Statement::Use(u) => self.exec_use(&u).await,
-            Statement::Show(s) => self.exec_show(&s).await,
-            Statement::Describe(d) => self.exec_describe(&d).await,
+            Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
+            Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
             Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
             Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
-            Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
-            Statement::Insert(i) => self.exec_insert(&i).await,
+            Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
+            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query)).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
@@ -567,7 +567,7 @@ impl Session {
                 }
                 Box::pin(self.exec_script(&c, query, redacted)).await
             }
-            Statement::Analyze(a) => self.exec_analyze(&a).await,
+            Statement::Analyze(a) => Box::pin(self.exec_analyze(&a, query)).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {
@@ -1069,6 +1069,13 @@ impl Session {
             self.state.sql_functions.snapshot(),
             Arc::clone(&self.state.catalog),
             resolution.case_sensitive,
+            Some(crate::sql_functions::ViewSource {
+                parser,
+                next_source: {
+                    let state = Arc::clone(&self.state);
+                    Arc::new(move || SourceId(state.sql_sources.fetch_add(1, Ordering::Relaxed)))
+                },
+            }),
         ));
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1134,27 +1141,35 @@ impl Session {
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
-        let views = self.authorize_reads(&expansion.reads, env).await?;
+        let mut views = self.authorize_reads(&expansion.reads, env).await?;
         if let Some(e) = expansion.deferred {
             return Err(e);
         }
-        let synced = self
-            .check_stored_views(&expansion.stored_reads, env)
-            .await?;
+        // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
+        // future counts.)
+        let synced = Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
         let plan = expansion.plan;
         let plan = Plan::try_new(plan)?;
-        let analyzed = DefaultAnalyzer
-            .analyze(&plan, &env.analysis)
-            .await
-            .map_err(|e| {
-                // An error inside a SQL function's body points into the
-                // statement that defined the function.
-                let own = e
-                    .origin
-                    .sql
-                    .and_then(|(source, _)| env.sql_functions.source_text(source));
-                attach_analysis(e, own.as_ref().or(text))
-            });
+        // The bodies of the functions the plan calls read views the same way:
+        // the policy is asked about them before the analysis' own result (or
+        // a failure inside a view's text) is shown. One boxed future for both
+        // steps: `analyze_in` runs on the deepest stacks, where the size of
+        // its own future counts.
+        let (analyzed, body_views) = Box::pin(async {
+            let analyzed = DefaultAnalyzer.analyze(&plan, &env.analysis).await;
+            (analyzed, self.authorize_body_reads(env).await)
+        })
+        .await;
+        let analyzed = analyzed.map_err(|e| {
+            // An error inside a SQL function's body points into the
+            // statement that defined the function.
+            let own = e
+                .origin
+                .sql
+                .and_then(|(source, _)| env.sql_functions.source_text(source));
+            attach_analysis(e, own.as_ref().or(text))
+        });
+        views.extend(body_views?);
         // Analysis checks every read: its denials are the reads' denials.
         let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
@@ -1175,6 +1190,30 @@ impl Session {
             }
         }
         Ok(analyzed)
+    }
+
+    /// The views the bodies of the functions a query called read, once the
+    /// policy allows them; a failure inside a view's text after that.
+    ///
+    /// Boxed: `analyze_in` runs on the deepest stacks (a script's nested
+    /// statements), where the size of its future counts.
+    fn authorize_body_reads<'a>(
+        &'a self,
+        env: &'a QueryEnv,
+    ) -> futures::future::BoxFuture<'a, Result<Vec<krishiv_plan::analyzer::TableIdent>, KrishivError>>
+    {
+        Box::pin(async move {
+            let (reads, deferred) = env.sql_functions.body_reads();
+            let views = if reads.is_empty() {
+                Vec::new()
+            } else {
+                Box::pin(self.authorize_reads(&reads, env)).await?
+            };
+            match deferred {
+                Some(e) => Err(e),
+                None => Ok(views),
+            }
+        })
     }
 
     /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
@@ -1555,13 +1594,16 @@ impl Session {
     /// replaces). A failed or cancelled write deletes its files and leaves
     /// the directory as it was. The plan carries the write as data; the
     /// commit runs from the plan's result rows (one per file: `path`,
-    /// `size`, `rows`).
+    /// `size`, `rows`). Returns the directories below `path` that hold the
+    /// committed files (`col=value/...` of a partitioned write, in their
+    /// escaped form; empty for an unpartitioned one or when nothing was
+    /// written).
     pub(crate) async fn write_files(
         &self,
         physical: PhysicalPlan,
         env: &QueryEnv,
         target: WriteTarget,
-    ) -> Result<(), KrishivError> {
+    ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
             mode,
@@ -1650,7 +1692,7 @@ impl Session {
             .await?
             .map(|w| w.partitioned(!partitions.is_empty())) else {
                 // `ignore` found the path: nothing is written.
-                return Ok(());
+                return Ok(Vec::new());
             };
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
@@ -1678,14 +1720,27 @@ impl Session {
                 }
                 return Err(denied);
             }
-            write
+            let committed = write
                 .commit(&io, format.as_ref(), schema, &parsed, files)
                 .await?;
             // The engine's own write may have replaced a cached path: entries
             // reading files are dropped, so the next action lists them again.
             // (An external change drops nothing and stays invisible.)
             self.refresh_files();
-            Ok(())
+            let mut dirs = std::collections::BTreeSet::new();
+            for f in &committed {
+                let below: Vec<String> = f
+                    .path
+                    .prefix_match(&at.path)
+                    .map(|parts| parts.map(|p| percent_decoded(p.as_ref())).collect())
+                    .unwrap_or_default();
+                if let Some((_, leaf)) = below.split_last()
+                    && !leaf.is_empty()
+                {
+                    dirs.insert(leaf.join("/"));
+                }
+            }
+            Ok(dirs.into_iter().collect())
         }
         .await;
         // A store error after the anchor is open may be a link swapped into
@@ -2241,6 +2296,30 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// An object-store path part as the file system names it: object_store percent-encodes characters it does
+/// not keep in a part (`%` among them), so `13%253A33` is the directory `13%3A33`.
+fn percent_decoded(part: &str) -> String {
+    let bytes = part.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(Some(h)), Some(Some(l))) = (
+                bytes.get(i + 1).map(|b| hex(*b)),
+                bytes.get(i + 2).map(|b| hex(*b)),
+            )
+        {
+            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]

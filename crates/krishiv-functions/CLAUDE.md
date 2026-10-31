@@ -107,7 +107,7 @@ Paths are relative to this crate.
   schema names `mask(s, X, x, n, NULL)`); the same holds for the start of `locate`/`position`. `elt` raises `INVALID_ARRAY_INDEX` only
   under ANSI; `split_part(.., 0)` raises `INVALID_INDEX_OF_ZERO` for the rows it is evaluated on. `base64` always writes MIME lines
   (Spark's default of `spark.sql.chunkBase64String.enabled`; the switch is not read); `encode`/`decode` take Spark's default charsets
-  (`spark.sql.legacy.javaCharsets` and `...codingErrorAction` are not read) and report unmappable input. `split_part`/`substring_index`
+  (`spark.sql.legacy.javaCharsets` and `...codingErrorAction` are not read yet: the kernels take them as `CharsetOptions`, the plan-codec plumbing is open) and report unmappable input. `split_part`/`substring_index`
   with `Int.MIN` return the algorithm's value where the JVM raises; `initcap`/`mask` classify non-ASCII with the toolchain's Unicode
   data (pinned by `toolchain_unicode_is_pinned`). A string is always valid UTF-8 here, so the validators only fail on `binary` input.
   `format_string`/`printf` (`scalar/format.rs`) is Java's `Formatter` over string, boolean, integral, float/double and (for `%s` only, as in Spark) decimal arguments: no `%h %a %t`; Java's format exceptions are `KRISHIV_INVALID_FORMAT_STRING`. The `decode(expr, search, result, ...)` form is a CASE the analyzer builds (`decode_case`).

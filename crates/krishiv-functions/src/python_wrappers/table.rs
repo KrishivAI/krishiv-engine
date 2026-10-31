@@ -23,6 +23,30 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("time_diff", "TIME has no Python mapping yet (P2-T181)"),
     ("time_trunc", "TIME has no Python mapping yet (P2-T181)"),
     (
+        "explode",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "explode_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "posexplode",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "posexplode_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "inline",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "inline_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
         "timestampadd",
         "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
     ),
@@ -538,6 +562,10 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "regexp_extract",
             "str: ColumnOrName, pattern: str, idx: int",
+        ),
+        Row::new(
+            "regexp_extract_all",
+            "str: ColumnOrName, regexp: ColumnOrName, idx: int | Column = None",
         ),
         Row::new("array_size", "col: ColumnOrName"),
         Row::new("array_append", "col: ColumnOrName, value: Any"),

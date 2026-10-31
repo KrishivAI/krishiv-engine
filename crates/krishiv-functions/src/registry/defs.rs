@@ -335,6 +335,15 @@ fn strings() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
+        &["regexp_extract_all"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ]),
+        super::collection::split_result,
+    ));
+    out.extend(scalar(
         &["regexp_substr"],
         &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
         always_null,
@@ -1730,6 +1739,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(aggregates());
     out.extend(windows());
     out.extend(super::conditional::specs());
+    out.extend(super::generator::specs());
     out.extend(super::json::specs());
     out.extend(super::map::specs());
     out.extend(super::math::specs());
