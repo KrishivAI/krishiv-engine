@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     DatatypeMismatchUnexpectedInputType, UdtfAliasNumberMismatch,
-    UnsupportedGeneratorNestedInExpressions,
+    UnsupportedGeneratorMultiGenerator, UnsupportedGeneratorNestedInExpressions,
 };
 use krishiv_types::DataType;
 
@@ -233,6 +233,23 @@ pub(super) struct ExtractedGenerator {
     name: Option<String>,
 }
 
+/// Whether `name` (as written) is one of the explode-family generators.
+pub(super) fn is_generator_name(name: &str) -> bool {
+    generator_kind(&name.to_ascii_lowercase()).is_some()
+}
+
+impl ExtractedGenerator {
+    /// The select item the generator stood at.
+    pub(super) const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// The id of the column holding the argument.
+    pub(super) const fn input_id(&self) -> crate::AttrId {
+        self.input.id
+    }
+}
+
 fn generator_kind(name: &str) -> Option<(GeneratorKind, bool)> {
     let (base, outer) = match name.strip_suffix("_outer") {
         Some(base) => (base, true),
@@ -256,6 +273,7 @@ impl Resolver<'_> {
         &mut self,
         origin: Origin,
         items: Vec<Bound>,
+        alias: Option<String>,
     ) -> Result<(Vec<Bound>, Option<ExtractedGenerator>), AnalysisError> {
         let zone = self.ctx.conf.session_zone;
         let mut found = None;
@@ -267,10 +285,20 @@ impl Resolver<'_> {
             if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &inner.node
                 && f.kind == crate::FunctionKind::Generator
             {
-                if found.is_some() {
-                    return Err(super::bind::unsupported(
-                        "several generators in one SELECT list",
-                        origin,
+                if let Some(first) = found {
+                    let shown = |i: usize| {
+                        let e = match &items[i].expr.node {
+                            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+                            _ => &items[i].expr,
+                        };
+                        format!("\"{}\"", pretty(e, zone))
+                    };
+                    return Err(AnalysisError::new(
+                        UnsupportedGeneratorMultiGenerator {
+                            num: "2".to_owned(),
+                            generators: format!("{}, {}", shown(first), shown(i)),
+                        },
+                        b.expr.origin,
                     ));
                 }
                 found = Some(i);
@@ -286,12 +314,14 @@ impl Resolver<'_> {
         let Some(index) = found else {
             return Ok((items, None));
         };
-        let (inner, name) = match &items[index].expr.node {
-            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
-                (Arc::clone(expr), Some(output.name.clone()))
-            }
-            _ => (Arc::clone(&items[index].expr), None),
+        // The item's name is the generated one unless the user wrote an
+        // alias (`select_items` names every item): only a written alias
+        // renames the generated columns.
+        let inner = match &items[index].expr.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+            _ => Arc::clone(&items[index].expr),
         };
+        let name = alias;
         let ExprNode::Resolved(ResolvedExpr::Function(call)) = &inner.node else {
             return Err(super::bind::unsupported("a generator", origin));
         };

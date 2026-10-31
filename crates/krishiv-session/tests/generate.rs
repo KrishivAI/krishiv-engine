@@ -374,3 +374,59 @@ fn json_tuple_as_a_table() {
         table(&[&["2"]])
     );
 }
+
+#[test]
+fn generators_beside_group_by_name_their_columns_as_spark_does() {
+    let s = Session::new().unwrap();
+    let t = "(values (1, array('a', 'b'))) as t(k, arr)";
+    // No alias: the generator's own column name.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) from {t} group by arr order by col")
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    // A multi-column generator keeps its names and all its columns.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select k, posexplode(arr) from {t} group by k, arr order by pos")
+        ),
+        table(&[&["1", "0", "a"], &["1", "1", "b"]])
+    );
+    // A written alias renames the column.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) as x from {t} group by arr order by x")
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    let e = error_of(
+        &s,
+        &format!("select explode(arr), explode(arr) from {t} group by arr"),
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedGeneratorMultiGenerator
+    );
+}
+
+#[test]
+fn stack_takes_a_bounded_int_row_count() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "select stack(18446744073709551615, 1)",
+        "select stack(1000000000000, 1)",
+        "select stack(2147483647, 1)",
+        "select stack(2L, 1, 2)",
+        "select stack(0, 1)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+}

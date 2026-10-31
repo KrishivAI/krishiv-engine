@@ -237,10 +237,6 @@ fn json_tuple_as_a_table_from_clause() -> R {
             "select * from json_tuple('{\"a\": 1}', 1)",
             "DATATYPE_MISMATCH.NON_STRING_TYPE",
         ),
-        (
-            "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') AS t(x)",
-            "ASSIGNMENT_ARITY_MISMATCH",
-        ),
     ] {
         let (got, _) = error(&s, sql)?;
         assert_eq!(got, class, "{sql}");

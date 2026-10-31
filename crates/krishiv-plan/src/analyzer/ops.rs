@@ -1488,7 +1488,18 @@ impl Resolver<'_> {
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
         // Spark's `ExtractGenerator`: the generator's argument takes the
         // item's place in the aggregate, the generator runs above it.
-        let (items, generator) = self.extract_generator(p.origin, items)?;
+        // A written alias of the generator (the analyzer names every item,
+        // so the written one is read from the unresolved list).
+        let written = aggregates.iter().find_map(|e| match &e.node {
+            ExprNode::Alias { name, expr }
+                if matches!(&expr.node, ExprNode::Function(f)
+                if super::generate::is_generator_name(&f.name)) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        });
+        let (items, generator) = self.extract_generator(p.origin, items, written)?;
         // `GROUP BY ALL`: a lone unqualified `all` in SQL groups by the select
         // list, unless a column or a select-list alias named `all` takes it
         // (Spark resolves names first). A DataFrame `groupBy("all")` has no
@@ -1505,7 +1516,11 @@ impl Resolver<'_> {
         match generator {
             None => Ok(agg),
             Some(g) => {
-                if agg.out.len() != items.len() {
+                if agg
+                    .out
+                    .get(g.index())
+                    .is_none_or(|a| a.col.id != g.input_id())
+                {
                     return Err(unsupported(
                         "a generator beside lateral aliases or windows in an aggregate",
                         p.origin,

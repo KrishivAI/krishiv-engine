@@ -169,6 +169,9 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
     )
 }
 
+/// The most rows `stack` lowers: its rows become expressions.
+const STACK_MAX_ROWS: usize = 4096;
+
 struct Lowerer {
     source: SourceId,
     depth: usize,
@@ -960,15 +963,21 @@ impl Lowerer {
         let Some((first, values)) = args.split_first().filter(|(_, v)| !v.is_empty()) else {
             return Err(wrong("> 1", args.len()));
         };
+        // The row count is an INT literal (Spark requires an integer
+        // foldable); the rows are built here, so it is bounded.
         let rows = match &first.expr.kind {
-            ExprKind::Literal(Literal::Number { text, .. }) => {
-                text.parse::<usize>().ok().filter(|n| *n > 0)
-            }
+            ExprKind::Literal(Literal::Number {
+                text,
+                kind: crate::ast::NumKind::Int,
+            }) => text
+                .parse::<usize>()
+                .ok()
+                .filter(|n| (1..=STACK_MAX_ROWS).contains(n)),
             _ => None,
         };
         let Some(rows) = rows else {
             return Err(unsupported(
-                "stack with a row count that is no positive integer literal",
+                "stack with a row count that is no INT literal from 1 to 4096",
                 first.span,
             ));
         };
