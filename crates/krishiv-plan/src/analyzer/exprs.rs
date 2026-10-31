@@ -2335,14 +2335,10 @@ impl Resolver<'_> {
                 None => Vec::new(),
                 Some(opts) => match &opts.expr.node {
                     ExprNode::Literal(Literal::Map(pairs)) => pairs.clone(),
-                    // The scalar family does not bind `schema_of_xml`, so a
-                    // retained call could only fail later in planning.
+                    // Spark reads the options only from a `map(...)` call.
                     _ => {
                         return Err(AnalysisError::new(
-                            KrishivUnsupportedFeature {
-                                feature: "schema_of_xml with options that are not a map literal"
-                                    .to_owned(),
-                            },
+                            krishiv_common::error::InvalidOptionsNonMapFunction {},
                             e.origin,
                         ));
                     }

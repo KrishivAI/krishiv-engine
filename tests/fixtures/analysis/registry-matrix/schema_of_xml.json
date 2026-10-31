@@ -17,14 +17,6 @@
       "reason": "SELECT schema_of_xml('', map('excludeAttribute', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: schema_of_xml with option excludeAttribute"
     },
     {
-      "id": "schema_of_xml#1ea7152a8169/ansi_on",
-      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "schema_of_xml#1ea7152a8169/ansi_off",
-      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
       "id": "schema_of_xml#1fff726835a7/ansi_on",
       "reason": "SELECT schema_of_xml(map('a', 1)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -71,14 +63,6 @@
     {
       "id": "schema_of_xml#5cf98736e767/ansi_off",
       "reason": "SELECT schema_of_xml(INTERVAL '1 02:03:04' DAY TO SECOND, map('excludeAttribute', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "schema_of_xml#7d60e4f10a77/ansi_on",
-      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', CAST(NULL AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "schema_of_xml#7d60e4f10a77/ansi_off",
-      "reason": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', CAST(NULL AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
       "id": "schema_of_xml#7f504ef0c560/ansi_on",

@@ -757,7 +757,7 @@ fn from_xml_refuses_complex_map_values_and_schema_of_xml_options() {
     assert!(
         matches!(
             error_of(&s, sql).error_class(),
-            ErrorClass::KrishivUnsupportedFeature | ErrorClass::DatatypeMismatchNonFoldableInput
+            ErrorClass::InvalidOptionsNonMapFunction | ErrorClass::DatatypeMismatchNonFoldableInput
         ),
         "{sql}: {:?}",
         error_of(&s, sql)
