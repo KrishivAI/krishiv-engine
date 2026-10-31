@@ -33,6 +33,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::{Executor, ExecutorConfig, TokioExecutor};
 use krishiv_session::Session;
 use krishiv_sql::ParserOptions;
+use krishiv_sql::ast::{DescribeKind, Statement};
 use krishiv_types::DataType;
 
 use super::cell::{Cell, CellFormat};
@@ -269,6 +270,13 @@ impl Engine for SessionEngine {
             Ok((analyzed, batches))
         })?;
         let format = format?;
+        // `HiveResult.formatDescribeTableOutput`: the rows of DESCRIBE TABLE / COLUMN / QUERY print
+        // each of their three cells left-aligned in 20 characters (`DESCRIBE SCHEMA` is not padded).
+        let padded = matches!(
+            krishiv_sql::parse_statement(sql, &self.options()),
+            Ok(Statement::Describe(d))
+                if matches!(d.kind, DescribeKind::Table { .. } | DescribeKind::Query { .. })
+        );
         let output = &analyzed.output;
         let schema = format!(
             "struct<{}>",
@@ -294,6 +302,11 @@ impl Engine for SessionEngine {
                     .zip(&types)
                     .map(|(col, ty)| arrow_cell(col, row, ty))
                     .collect::<Result<Vec<_>, _>>()?;
+                let cells = if padded && cells.len() == 3 {
+                    cells.into_iter().map(describe_cell).collect()
+                } else {
+                    cells
+                };
                 rows.push(format.render_row(&cells));
             }
         }
@@ -303,6 +316,16 @@ impl Engine for SessionEngine {
             sorted: Some(is_semantically_sorted(analyzed.plan.root())),
         })
     }
+}
+
+/// A DESCRIBE cell as Java's `String.format("%-20s", ...)` prints it, a NULL comment as empty.
+fn describe_cell(cell: Cell) -> Cell {
+    let text = match cell {
+        Cell::Str(s) => s,
+        _ => String::new(),
+    };
+    let width = 20_usize.saturating_sub(text.chars().count());
+    Cell::Str(format!("{text}{}", " ".repeat(width)))
 }
 
 /// The value at `row` of `col`, a column of Spark type `ty`.
@@ -1390,5 +1413,17 @@ mod tests {
             Cell::Binary(b"ab".to_vec())
         );
         Ok(())
+    }
+
+    #[test]
+    fn describe_cells_pad_to_twenty_characters() {
+        // `%-20s`: short text is padded, a NULL comment prints as spaces, long text is kept whole.
+        assert_eq!(
+            describe_cell(Cell::Str("a".to_owned())),
+            Cell::Str(format!("a{}", " ".repeat(19)))
+        );
+        assert_eq!(describe_cell(Cell::Null), Cell::Str(" ".repeat(20)));
+        let long = "x".repeat(25);
+        assert_eq!(describe_cell(Cell::Str(long.clone())), Cell::Str(long));
     }
 }
