@@ -4,12 +4,16 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{Config, Scope, lookup};
-use krishiv_common::error::{CannotModifyStaticConfig, KrishivError};
+use krishiv_common::error::{CannotModifyStaticConfig, InvalidConfValueTimeZone, KrishivError};
 
 /// Prefixes of entries read once, when the session is built (memory pool,
 /// spill directory, I/O scheduler): setting them later would not apply,
 /// so it fails like a static config.
 const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
+
+/// The session time zone, which `set` resolves against the time zone
+/// database (`krishiv-common` checks its syntax only).
+const TIME_ZONE_KEY: &str = "spark.sql.session.timeZone";
 
 /// The configuration of a session, shared by its clones. Queries read an
 /// immutable snapshot ([`Self::snapshot`]).
@@ -139,10 +143,19 @@ impl RuntimeConf {
     /// was built ([`Self::is_modifiable`]); `KRISHIV_UNKNOWN_CONFIG` for an
     /// unknown `krishiv.*` key; `KRISHIV_INVALID_CONFIG_VALUE` for a value
     /// of the wrong type. Unknown keys of other prefixes are kept.
+    /// `INVALID_CONF_VALUE.TIME_ZONE` for a `spark.sql.session.timeZone`
+    /// no zone database entry or offset names.
     pub fn set(&self, key: &str, value: &str) -> Result<(), KrishivError> {
         if !is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
+            }
+            .into());
+        }
+        if key == TIME_ZONE_KEY && krishiv_kernels::datetime::resolve_zone(value.trim()).is_err() {
+            return Err(InvalidConfValueTimeZone {
+                conf_name: key.to_owned(),
+                conf_value: value.to_owned(),
             }
             .into());
         }
