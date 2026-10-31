@@ -46,6 +46,7 @@ use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
 use crate::lexer::{Sym, Token, TokenKind, tokenize, unescape_string, unquote_ident};
 use crate::{MAX_DEPTH, ParserOptions, validate};
+use krishiv_common::sql_path::PathElement as PathEl;
 
 /// Why a rule did not match.
 pub(crate) enum Fail {
@@ -1714,6 +1715,11 @@ impl<'s> Parser<'s> {
         if self.kw_at(0, "TIME") && self.kw_at(1, "ZONE") {
             return self.set_timezone_command(start);
         }
+        // `SET PATH = ...`.
+        if self.kw_at(0, "PATH") && self.sym_at(1, Sym::Eq) {
+            self.pos += 2;
+            return self.set_path_command(start);
+        }
         // A backquoted key.
         if let Some((key, key_span)) = self.quoted_key()? {
             if self.eat_sym(Sym::Eq) {
@@ -2060,6 +2066,54 @@ impl<'s> Parser<'s> {
     /// when it is one backquoted token, which is how Spark lets a value
     /// hold a semicolon. An unterminated quote fails where the quote
     /// is, as in Spark. The cursor ends at the `;` or end of input.
+    /// The elements of `SET PATH =`: `DEFAULT_PATH`, `SYSTEM_PATH`, `PATH`,
+    /// `CURRENT_SCHEMA`, `CURRENT_DATABASE` or a namespace of at least two
+    /// parts.
+    fn set_path_command(&mut self, start: usize) -> PR<Statement> {
+        let mut elements = Vec::new();
+        loop {
+            let one = self.name_part(true)?;
+            let mut parts = vec![one];
+            while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
+                self.bump();
+                parts.push(self.name_part(true)?);
+            }
+            let element = if parts.len() == 1 && !parts[0].quoted {
+                let w = parts[0].value.to_ascii_uppercase();
+                match w.as_str() {
+                    "DEFAULT_PATH" => Some(PathEl::DefaultPath),
+                    "SYSTEM_PATH" => Some(PathEl::SystemPath),
+                    "PATH" => Some(PathEl::Path),
+                    "CURRENT_SCHEMA" => Some(PathEl::CurrentSchema { database: false }),
+                    "CURRENT_DATABASE" => Some(PathEl::CurrentSchema { database: true }),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let element = match element {
+                Some(e) => e,
+                None if parts.len() == 1 => {
+                    return Self::fatal(error::invalid_sql_path_schema_reference(
+                        &parts[0].value,
+                        parts[0].span,
+                    ));
+                }
+                None => PathEl::Schema(parts.into_iter().map(|p| p.value).collect()),
+            };
+            elements.push(element);
+            if !self.eat_sym(Sym::Comma) {
+                break;
+            }
+        }
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::Set(Set {
+            kind: SetKind::Path { elements },
+            span,
+        }))
+    }
+
     fn set_value(&mut self) -> PR<(String, Span)> {
         let from_pos = self.pos;
         let mut end = self.toks.len();

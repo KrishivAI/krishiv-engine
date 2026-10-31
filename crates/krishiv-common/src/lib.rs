@@ -12,4 +12,5 @@ pub mod experimental;
 pub mod redact;
 pub mod secret;
 pub mod sketch;
+pub mod sql_path;
 pub mod stack;

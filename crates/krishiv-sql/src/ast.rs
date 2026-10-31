@@ -303,6 +303,11 @@ pub enum SetKind {
         /// The zone as written.
         zone_span: Span,
     },
+    /// `SET PATH = element, ...`: the session's SQL path.
+    Path {
+        /// The elements, in order.
+        elements: Vec<krishiv_common::sql_path::PathElement>,
+    },
 }
 
 /// `SET TIME ZONE LOCAL` or `SET TIME ZONE '<zone id>'`: the zone to use.
