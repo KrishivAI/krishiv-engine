@@ -205,11 +205,12 @@ fn extremum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
-/// `abs`, `positive`, `negative`: the argument's type (a string or NULL is `double`).
+/// `width_bucket`: a `bigint`, NULL outside its domain, so always nullable.
 fn always_nullable_long(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Long, true))
 }
 
+/// `abs`, `positive`, `negative`: the argument's type (a string or NULL is `double`).
 fn same_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType {
         data_type: Some(c.data_type(0).cloned().unwrap_or(DataType::Double)),

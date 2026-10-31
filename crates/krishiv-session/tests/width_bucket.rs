@@ -48,6 +48,8 @@ fn buckets_follow_spark() {
         ("1.0, double('NaN'), 10, 5", "NULL"),
         ("1.0, 0, double('Infinity'), 5", "NULL"),
         ("double('Infinity'), 0, 10, 5", "6"),
+        ("double('-Infinity'), 0, 10, 5", "0"),
+        ("1.0, 0, double('-Infinity'), 5", "NULL"),
         ("-1, 0, 10, 5", "0"),
         ("10, 0, 10, 5", "6"),
         ("5, 10, 0, 5", "3"),
@@ -81,4 +83,17 @@ fn a_string_that_is_no_number_is_a_cast_error() {
         .and_then(|df| block_on(df.collect()))
         .unwrap_err();
     assert!(e.to_string().contains("CAST_INVALID_INPUT"), "{e}");
+}
+
+#[test]
+fn legacy_mode_and_arity() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert_eq!(column(&s, "SELECT width_bucket('a', 0, 10, 5)"), ["NULL"]);
+    assert_eq!(
+        column(&s, "SELECT width_bucket(5.35, 0.024, 10.06, 5)"),
+        ["3"]
+    );
+    let e = block_on(s.sql("SELECT width_bucket(1, 0, 3)")).unwrap_err();
+    assert!(e.to_string().contains("WRONG_NUM_ARGS"), "{e}");
 }
