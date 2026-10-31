@@ -171,10 +171,8 @@ fn view_errors() {
         class(&s, "CREATE VIEW c (x, X) AS SELECT 1, 2"),
         "COLUMN_ALREADY_EXISTS"
     );
-    assert_eq!(
-        class(&s, "CREATE VIEW sb WITH SCHEMA BINDING AS SELECT 1"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    // Schema binding modes run (`tests/views_schema_binding.rs`).
+    run(&s, "CREATE VIEW sb WITH SCHEMA BINDING AS SELECT 1");
     assert_eq!(
         class(&s, "CREATE OR REPLACE VIEW IF NOT EXISTS z AS SELECT 1"),
         "CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE"

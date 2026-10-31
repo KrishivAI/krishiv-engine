@@ -64,6 +64,7 @@ mod store;
 mod table_commands;
 mod udfs;
 mod variables;
+mod view_schema;
 mod window;
 
 pub use access::{PathPrefixPolicy, StatementInfo};

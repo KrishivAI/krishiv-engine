@@ -120,7 +120,7 @@ fn type_sql(t: &DataType) -> Result<String, KrishivError> {
 
 /// A name as Spark's `quoteIfNeeded` writes it: bare when it is word characters
 /// and not all digits, else in backquotes.
-fn quote_if_needed(name: &str) -> String {
+pub(crate) fn quote_if_needed(name: &str) -> String {
     let plain = !name.is_empty()
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !name.chars().all(|c| c.is_ascii_digit());
@@ -355,7 +355,10 @@ impl Session {
                 self.ordered_frame(
                     &["createtab_stmt"],
                     &[],
-                    vec![vec![s(create_statement(&table)?)]],
+                    vec![vec![s(create_statement(
+                        &table,
+                        crate::view_schema::binding_enabled(&self.state.conf.snapshot()),
+                    )?)]],
                 )
                 .await
             }
@@ -637,18 +640,30 @@ impl Session {
             }
             rows.push(("View Text".to_owned(), view.sql.clone()));
             rows.push(("View Original Text".to_owned(), view.sql.clone()));
-            rows.push(("View Schema Mode".to_owned(), "COMPENSATION".to_owned()));
+            let enabled = crate::view_schema::binding_enabled(&self.state.conf.snapshot());
+            let mode = crate::view_schema::effective_mode(view.schema_mode, enabled);
+            if let Some(mode) = mode {
+                rows.push(("View Schema Mode".to_owned(), mode.as_str().to_owned()));
+            }
             rows.push((
                 "View Catalog and Namespace".to_owned(),
                 format!("{}.{}", crate::catalog::CATALOG, view.namespace),
             ));
+            // `EVOLUTION` keeps no query names: the view's own stand for them.
+            let names: Vec<&str> = if mode == Some(crate::store::ViewSchemaMode::Evolution)
+                || view.query_columns.len() != t.columns.len()
+            {
+                t.columns.iter().map(|c| c.name.as_str()).collect()
+            } else {
+                view.query_columns.iter().map(String::as_str).collect()
+            };
             rows.push((
                 "View Query Output Columns".to_owned(),
                 format!(
                     "[{}]",
-                    t.columns
+                    names
                         .iter()
-                        .map(|c| c.name.as_str())
+                        .map(|n| format!("`{}`", n.replace('`', "``")))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -789,8 +804,9 @@ fn partition_details(t: &CatalogTable, p: &CatalogPartition) -> Vec<(String, Str
     rows
 }
 
-/// `SHOW CREATE TABLE` text of a table or view, in Spark's layout.
-fn create_statement(t: &CatalogTable) -> Result<String, KrishivError> {
+/// `SHOW CREATE TABLE` text of a table or view, in Spark's layout; `binding_enabled` is
+/// `spark.sql.legacy.viewSchemaBindingMode` (a view's `WITH SCHEMA` line).
+fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, KrishivError> {
     let column = |c: &crate::store::StoreColumn| -> Result<String, KrishivError> {
         let mut out = format!("  {} {}", quote_if_needed(&c.name), type_sql(&c.data_type)?);
         if !c.nullable {
@@ -822,7 +838,10 @@ fn create_statement(t: &CatalogTable) -> Result<String, KrishivError> {
         if let Some(c) = &t.comment {
             out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
         }
-        out.push_str("WITH SCHEMA COMPENSATION\nAS ");
+        if let Some(mode) = crate::view_schema::effective_mode(view.schema_mode, binding_enabled) {
+            out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
+        }
+        out.push_str("AS ");
         out.push_str(&view.sql);
         out.push('\n');
         return Ok(out);

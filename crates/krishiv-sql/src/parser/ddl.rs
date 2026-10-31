@@ -19,8 +19,8 @@ use crate::ast::{
     DropPermanentView, FunctionScope, Ident, Insert, InsertClause, ListResource, Merge,
     MergeAction, MergeClause, MergeInsert, MergeMatched, MergeSource, NamespaceKind, PartitionSpec,
     PartitionSpecPart, PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind,
-    Relation, RelationExt, Repair, RepairAction, ResourceType, SchemaBinding, SetExprKind, Show,
-    ShowKind, ShowPattern, Span, Statement, Truncate, Update, UpdateAssignment,
+    Relation, RelationExt, Repair, RepairAction, ResourceType, SchemaBinding, SchemaBindingClause,
+    SetExprKind, Show, ShowKind, ShowPattern, Span, Statement, Truncate, Update, UpdateAssignment,
 };
 use krishiv_common::error::{LegacyErrorTemp0035, LegacyErrorTemp0064, MergeWithoutWhen};
 
@@ -498,7 +498,6 @@ impl<'s> Parser<'s> {
             });
         }
         if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
-            self.pos += 2;
             let binding = self.schema_binding()?;
             return Ok(AlterViewAction::SetSchemaBinding(binding));
         }
@@ -549,21 +548,27 @@ impl<'s> Parser<'s> {
         self.fail()
     }
 
-    /// `WITH SCHEMA ...` on a view: `BINDING`, `EVOLUTION`,
+    /// `WITH SCHEMA ...` on a view, at its `WITH`: `BINDING`, `EVOLUTION`,
     /// `COMPENSATION` or `TYPE EVOLUTION`.
-    fn schema_binding(&mut self) -> PR<SchemaBinding> {
-        if self.eat_kw("BINDING") {
-            Ok(SchemaBinding::Binding)
+    fn schema_binding(&mut self) -> PR<SchemaBindingClause> {
+        let start = self.start();
+        self.pos += 2;
+        let mode = if self.eat_kw("BINDING") {
+            SchemaBinding::Binding
         } else if self.eat_kw("EVOLUTION") {
-            Ok(SchemaBinding::Evolution)
+            SchemaBinding::Evolution
         } else if self.eat_kw("COMPENSATION") {
-            Ok(SchemaBinding::Compensation)
+            SchemaBinding::Compensation
         } else if self.kw_at(0, "TYPE") && self.kw_at(1, "EVOLUTION") {
             self.pos += 2;
-            Ok(SchemaBinding::TypeEvolution)
+            SchemaBinding::TypeEvolution
         } else {
-            self.fail()
-        }
+            return self.fail();
+        };
+        Ok(SchemaBindingClause {
+            mode,
+            span: self.span_from(start),
+        })
     }
 
     // ---- CREATE/DROP VIEW (full grammar) ---------------------------------
@@ -692,7 +697,6 @@ impl<'s> Parser<'s> {
                 view.collation = Some(self.table_name()?);
                 1
             } else if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
-                self.pos += 2;
                 view.schema_binding = Some(self.schema_binding()?);
                 2
             } else if self.kw_at(0, "PARTITIONED") && self.kw_at(1, "ON") {

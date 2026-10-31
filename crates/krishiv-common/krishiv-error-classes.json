@@ -47,6 +47,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_INVALID_FORMAT_STRING" : {
+    "message" : [
+      "The format string or its arguments are invalid: <reason>. Spark raises a Java `java.util.IllegalFormatException` here without an error class."
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_INVALID_PROFILE_DOCUMENT" : {
     "message" : [
       "The <document> document is invalid: <reason>."

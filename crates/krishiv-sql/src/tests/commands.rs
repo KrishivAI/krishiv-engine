@@ -566,6 +566,75 @@ fn create_full_view_errors() {
     );
 }
 
+/// `WITH SCHEMA ...` with `spark.sql.legacy.viewSchemaBindingMode` off: `FEATURE_NOT_ENABLED` at the clause
+/// (golden `view-schema-binding-config`), on `CREATE VIEW` after the query and on `ALTER VIEW`; a temporary view
+/// fails on its own check first, and a view without the clause parses.
+#[test]
+fn schema_binding_needs_the_binding_mode_config() {
+    let off = ParserOptions {
+        view_schema_binding: false,
+        ..ParserOptions::default()
+    };
+    for (sql, fragment) in [
+        (
+            "CREATE OR REPLACE VIEW v WITH SCHEMA BINDING AS SELECT 1",
+            "WITH SCHEMA BINDING",
+        ),
+        (
+            "CREATE VIEW v WITH SCHEMA TYPE EVOLUTION AS SELECT 1",
+            "WITH SCHEMA TYPE EVOLUTION",
+        ),
+        (
+            "CREATE VIEW v COMMENT 'c' WITH SCHEMA COMPENSATION AS SELECT 1",
+            "WITH SCHEMA COMPENSATION",
+        ),
+        (
+            "ALTER VIEW v WITH SCHEMA EVOLUTION",
+            "WITH SCHEMA EVOLUTION",
+        ),
+    ] {
+        let e = parse_statement(sql, &off).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::FeatureNotEnabled,
+            "{sql}"
+        );
+        assert_eq!(e.span.text(sql), fragment, "{sql}");
+        assert_eq!(
+            e.error.message_parameters(),
+            [
+                ("featureName", "VIEW ... WITH SCHEMA ...".to_owned()),
+                (
+                    "configKey",
+                    "spark.sql.legacy.viewSchemaBindingMode".to_owned()
+                ),
+                ("configValue", "true".to_owned()),
+            ]
+        );
+        assert!(
+            parse_statement(sql, &ParserOptions::default()).is_ok(),
+            "{sql}"
+        );
+    }
+    // The query's own errors come first.
+    let e = parse_statement(
+        "CREATE VIEW v WITH SCHEMA BINDING AS SELECT DATE '2020-02-30'",
+        &off,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidTypedLiteral);
+    let e = parse_statement(
+        "CREATE TEMPORARY VIEW v WITH SCHEMA BINDING AS SELECT 1",
+        &off,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::UnsupportedFeatureTemporaryViewWithSchemaBindingMode
+    );
+    assert!(parse_statement("CREATE VIEW v AS SELECT 1", &off).is_ok());
+}
+
 /// Full `DROP VIEW` statements: qualified or computed names.
 #[test]
 fn drop_full_view_statements() {
