@@ -593,6 +593,22 @@ mod tests {
             "NOT SQL AT ALL",
             &mut out
         ));
+        // In agent mode a failure prints one JSON error object on `out`.
+        r.agent = true;
+        assert!(!run_statement(
+            &session,
+            &r,
+            &mut args,
+            6,
+            "NOT SQL AT ALL",
+            &mut out
+        ));
+        let error = String::from_utf8(std::mem::take(&mut out)).expect("utf-8");
+        assert!(
+            error.starts_with('{') && error.contains("\"query_id\":\"q6\""),
+            "{error}"
+        );
+        r.agent = false;
         let mut args = flags(&["--explain-verbose"]);
         assert!(run_statement(
             &session,
@@ -602,5 +618,10 @@ mod tests {
             "SELECT 1 AS a",
             &mut out
         ));
+        let plan = String::from_utf8(std::mem::take(&mut out)).expect("utf-8");
+        assert!(
+            !plan.is_empty() && !plan.contains("-- rows:"),
+            "explain output goes to the writer: {plan}"
+        );
     }
 }

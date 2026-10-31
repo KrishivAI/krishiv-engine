@@ -1382,3 +1382,27 @@ fn doctests_skip_binary_only_packages() {
         Some(vec!["--workspace".to_owned()])
     );
 }
+
+#[test]
+fn a_cli_only_plan_runs_no_doctests() {
+    let ch = Changes::detect(
+        &["crates/krishiv-cli/src/repl.rs".to_owned()],
+        &[pkg("krishiv-cli", &[])],
+    );
+    let steps = make_plan(&ch, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "nextest").action else {
+        panic!("nextest is not run")
+    };
+    assert_eq!(cmds.len(), 1, "only nextest runs: {cmds:?}");
+    assert_eq!(cmds[0].args[0], "nextest");
+    // A library crate keeps its doctest step.
+    let ch = Changes::detect(
+        &["crates/krishiv-session/src/lib.rs".to_owned()],
+        &[pkg("krishiv-session", &[])],
+    );
+    let steps = make_plan(&ch, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "nextest").action else {
+        panic!("nextest is not run")
+    };
+    assert_eq!(cmds.len(), 2);
+}
