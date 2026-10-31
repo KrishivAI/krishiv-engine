@@ -1005,21 +1005,46 @@ fn sql_function_bodies_are_read_through_the_policy() {
     assert_eq!(class(rows(&s, "SELECT ok_fn()")), DENIED);
 }
 
-/// Persisted functions are unsupported: the statements fail without
-/// changing the session.
+/// A stored function (`CREATE FUNCTION` without `TEMPORARY`) is read through
+/// the policy as a temporary one is: creating it probes the body, and a
+/// denied create stores nothing.
 #[test]
-fn persisted_function_statements_change_nothing() {
+fn stored_function_bodies_are_read_through_the_policy() {
+    let policy = Policy::new(no_reads_of_s);
+    let s = session(Arc::<Policy>::clone(&policy));
+    block_on(s.sql("CREATE TABLE s (a INT) USING parquet")).unwrap();
+    block_on(s.sql("CREATE TABLE p (a INT) USING parquet")).unwrap();
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION leak() RETURNS INT RETURN (SELECT max(a) FROM s)"
+        ))),
+        DENIED
+    );
+    // Nothing was stored by the denied statement.
+    assert_eq!(class(rows(&s, "SELECT leak()")), "UNRESOLVED_ROUTINE");
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION ok_stored() RETURNS INT RETURN (SELECT max(a) FROM p)"
+        ))),
+        "OK"
+    );
+    assert_eq!(class(rows(&s, "SELECT ok_stored()")), "OK");
+    policy.deny_everything();
+    assert_eq!(class(rows(&s, "SELECT ok_stored()")), DENIED);
+}
+
+/// A stored function cannot read a temporary table (Spark checks this
+/// before any privilege): the temporary one `t` of the session stays
+/// out of the catalog.
+#[test]
+fn a_stored_function_cannot_read_a_temporary_table() {
     let s = session(Policy::new(allow));
-    for sql in [
-        "CREATE FUNCTION f() RETURNS INT RETURN 1",
-        "DROP FUNCTION f",
-    ] {
-        assert_eq!(
-            class(block_on(s.sql(sql))),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{sql}"
-        );
-    }
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION reads_t() RETURNS INT RETURN (SELECT max(a) FROM t)"
+        ))),
+        "INVALID_TEMP_OBJ_REFERENCE"
+    );
 }
 
 static DENY_VIEWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

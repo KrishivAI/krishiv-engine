@@ -23,7 +23,7 @@ use krishiv_common::error::{
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
     ErrorQueryContext, InvalidDefaultValueSubqueryExpression, KrishivError,
     KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound, RowSubqueryTooManyRows,
-    TableOrViewNotFound, TempTableOrViewAlreadyExists, UnresolvedVariable,
+    SchemaNotFound, TableOrViewNotFound, TempTableOrViewAlreadyExists, UnresolvedVariable,
     UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetVariableUsingSet,
     UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
     UserDefinedFunctionsNotAValidDefaultExpression,
@@ -39,8 +39,8 @@ use krishiv_plan::{
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
     DataTypeSpec, DdlName, DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind,
-    FunctionBodyKind, FunctionReturnsKind, ObjectName, Refresh, RefreshKind, Reset, Set, SetKind,
-    SetVariable, SetVariableKind, Span, TimeZone,
+    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Refresh, RefreshKind, Reset, Set,
+    SetKind, SetVariable, SetVariableKind, Span, TimeZone,
 };
 use krishiv_types::{DataType, DecimalType};
 
@@ -52,7 +52,7 @@ use crate::dataframe::DataFrame;
 use crate::functions::{col, lit, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::{Entry, one_row_project};
-use crate::store::CatalogStore;
+use crate::store::{CatalogStore, StoredFunction};
 use crate::variables::{
     DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
     variable_key,
@@ -805,11 +805,6 @@ impl Session {
         f: &CreateFunction,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
-        if !f.temporary {
-            return Err(unsupported(
-                "persisted functions: CREATE FUNCTION without TEMPORARY",
-            ));
-        }
         if let Some(language) = &f.characteristics.language
             && !language.value.eq_ignore_ascii_case("SQL")
         {
@@ -818,14 +813,29 @@ impl Session {
                 language.value
             )));
         }
-        let [part] = &f.name.parts[..] else {
-            // The parser rejects a qualified temporary function name.
-            return Err(unsupported("qualified function names"));
+        let (namespace, part) = if f.temporary {
+            let [part] = &f.name.parts[..] else {
+                // The parser rejects a qualified temporary function name.
+                return Err(unsupported("qualified function names"));
+            };
+            (None, part)
+        } else {
+            let (namespace, part) = self.stored_function_name(&f.name.parts)?;
+            (Some(namespace), part)
         };
         let name = part.value.to_lowercase();
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let source = self.next_source_id();
-        let entry = self.declare(f, &name, source, case_sensitive, redacted)?;
+        let mut entry = self.declare(f, &name, source, case_sensitive, redacted)?;
+        if let Some(namespace) = &namespace {
+            entry.def = Arc::new(SqlFunction {
+                qualifier: vec![crate::catalog::CATALOG.to_owned(), namespace.clone()],
+                ..(*entry.def).clone()
+            });
+            return self
+                .create_stored_function(f, namespace, part, entry, redacted)
+                .await;
+        }
         // A built-in or a registered UDF of the name is not ours to replace
         // or shadow (Spark: `ROUTINE_ALREADY_EXISTS`, or with `OR REPLACE`
         // `CANNOT_REPLACE_NON_SQL_UDF_WITH_SQL_UDF`).
@@ -870,7 +880,7 @@ impl Session {
             env.analysis.functions = Arc::clone(&candidate) as _;
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
-            let output = self.probe(&entry.def, env, redacted).await?;
+            let output = self.probe(&entry.def, &[], env, redacted).await?;
             let mut entry = entry.clone();
             if entry.def.returns.is_none() {
                 let def = SqlFunction {
@@ -1023,6 +1033,7 @@ impl Session {
         };
         let def = SqlFunction {
             name: name.to_owned(),
+            qualifier: Vec::new(),
             params: out_params,
             returns,
             body: Arc::new(body),
@@ -1042,6 +1053,7 @@ impl Session {
     async fn probe(
         &self,
         def: &SqlFunction,
+        qualifier: &[String],
         env: QueryEnv,
         redacted: &RedactedSql,
     ) -> Result<DataType, KrishivError> {
@@ -1049,7 +1061,10 @@ impl Session {
             .iter()
             .map(|p| PlanExpr::literal(Literal::Null(Some(p.data_type.clone()))))
             .collect();
-        let call = PlanExpr::function(def.name.clone(), args);
+        let mut call = PlanExpr::function(def.name.clone(), args);
+        if let ExprNode::Function(function) = &mut call.node {
+            function.qualifier = qualifier.to_vec();
+        }
         let plan = one_row_project(vec![Arc::new(call)]);
         let df = DataFrame::new(self.clone(), plan);
         let analysis = df.analyzed_in_with_text(env, Some(redacted)).await?;
@@ -1059,6 +1074,114 @@ impl Session {
             .first()
             .map(|c| c.data_type.clone())
             .ok_or_else(|| crate::session::internal("a function call without a result".to_owned()))
+    }
+
+    /// The namespace and name a stored function is named by: `f` (the
+    /// current namespace), `ns.f` or `spark_catalog.ns.f`.
+    ///
+    /// # Errors
+    /// `SCHEMA_NOT_FOUND` for a namespace the catalog lacks;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for another catalog or an
+    /// `IDENTIFIER(...)` name.
+    fn stored_function_name<'a>(
+        &self,
+        parts: &'a [Ident],
+    ) -> Result<(String, &'a Ident), KrishivError> {
+        let (namespace, part) = match parts {
+            [part] => (self.state.catalog.current_namespace(), part),
+            [ns, part] => (ns.value.clone(), part),
+            [catalog, ns, part] if catalog.value.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                (ns.value.clone(), part)
+            }
+            _ => {
+                return Err(unsupported(
+                    "functions of catalogs other than spark_catalog",
+                ));
+            }
+        };
+        let namespace = namespace.to_lowercase();
+        if !self.state.catalog.store.has_namespace(&namespace) {
+            return Err(SchemaNotFound {
+                schema_name: quote(&namespace),
+            }
+            .into());
+        }
+        Ok((namespace, part))
+    }
+
+    /// `CREATE [OR REPLACE] FUNCTION` of a function stored in `namespace`
+    /// of the session's catalog: checked and installed as a temporary one
+    /// is, against the stored functions as they will be.
+    async fn create_stored_function(
+        &self,
+        f: &CreateFunction,
+        namespace: &str,
+        part: &Ident,
+        entry: Entry,
+        redacted: &RedactedSql,
+    ) -> Result<DataFrame, KrishivError> {
+        let store = &self.state.catalog.store;
+        let qualified = [
+            crate::catalog::CATALOG.to_owned(),
+            namespace.to_owned(),
+            part.value.clone(),
+        ];
+        if let Some(temp) = crate::sql_functions::reads_temporary_view(
+            &self.state.catalog,
+            &entry.def.body,
+            self.query_env().analysis.conf.case_sensitive,
+        ) {
+            return Err(krishiv_common::error::InvalidTempObjReference {
+                obj_name: quote_all(&qualified),
+                obj: "function".to_owned(),
+                temp_obj_name: format!("`{temp}`"),
+                temp_obj: "view".to_owned(),
+            }
+            .into());
+        }
+        for _ in 0..MAX_DEFINE_ATTEMPTS {
+            let current = store.functions();
+            if !f.or_replace && current.get(namespace, &entry.def.name).is_some() {
+                return Err(RoutineAlreadyExists {
+                    new_routine_type: "function".to_owned(),
+                    routine_name: quote_all(&qualified),
+                    existing_routine_type: "function".to_owned(),
+                }
+                .into());
+            }
+            let stored = StoredFunction {
+                namespace: namespace.to_owned(),
+                entry: entry.clone(),
+            };
+            let mut env = self.query_env();
+            let candidate = Arc::new(
+                env.sql_functions
+                    .over_stored(Arc::new(current.with(stored))),
+            );
+            env.analysis.functions = Arc::clone(&candidate) as _;
+            env.sql_functions = Arc::clone(&candidate);
+            env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
+            let output = self
+                .probe(&entry.def, &entry.def.qualifier, env, redacted)
+                .await?;
+            let mut entry = entry.clone();
+            if entry.def.returns.is_none() {
+                entry.def = Arc::new(SqlFunction {
+                    returns: Some(output),
+                    ..(*entry.def).clone()
+                });
+            }
+            let stored = StoredFunction {
+                namespace: namespace.to_owned(),
+                entry,
+            };
+            if store.define_function(stored, current.version()) {
+                return self.empty_frame().await;
+            }
+        }
+        Err(crate::session::internal(
+            "the catalog's functions kept changing while CREATE FUNCTION was checked".to_owned(),
+        ))
     }
 
     /// Runs `DROP [TEMPORARY] FUNCTION [IF EXISTS] name`, returning an
@@ -1073,16 +1196,19 @@ impl Session {
         &self,
         f: &DropFunction,
     ) -> Result<DataFrame, KrishivError> {
-        if !f.temporary {
-            return Err(unsupported(
-                "persisted functions: DROP FUNCTION without TEMPORARY",
-            ));
-        }
         // Temporary functions have one-part names: a qualified name is a
         // function that does not exist.
-        let dropped = match &f.name.parts[..] {
-            [part] => self.state.sql_functions.drop_function(&part.value),
-            _ => false,
+        let dropped = if f.temporary {
+            match &f.name.parts[..] {
+                [part] => self.state.sql_functions.drop_function(&part.value),
+                _ => false,
+            }
+        } else {
+            let (namespace, part) = self.stored_function_name(&f.name.parts)?;
+            self.state
+                .catalog
+                .store
+                .drop_function(&namespace, &part.value)
         };
         if !dropped && !f.if_exists {
             let parts: Vec<String> = f.name.parts.iter().map(|p| quote(&p.value)).collect();
@@ -1254,6 +1380,11 @@ fn has_subquery(e: &PlanExpr) -> bool {
 /// A name as Spark quotes it in errors: `` `name` ``.
 fn quote(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
+}
+
+/// Every part of a name as Spark quotes it in errors: `` `a`.`b` ``.
+fn quote_all(parts: &[String]) -> String {
+    parts.iter().map(|p| quote(p)).collect::<Vec<_>>().join(".")
 }
 
 /// Every part of a table name as written; `None` for a dynamic
