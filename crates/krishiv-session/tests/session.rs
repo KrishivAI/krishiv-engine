@@ -785,20 +785,28 @@ fn session_user_and_local_timestamp() {
             "{sql}"
         );
     }
-    // A zone that is not a fixed offset needs the tz database: refused, not
-    // read as UTC.
+    // A region zone reads the bundled database: the wall clock is the
+    // instant shifted by the zone's offset then (-05:00 or -04:00 in New
+    // York).
     let s =
         events_session(Session::builder().config("spark.sql.session.timeZone", "America/New_York"));
-    for sql in [
-        "SELECT localtimestamp() FROM events",
-        "SELECT current_date() FROM events",
-    ] {
-        assert_eq!(
-            sql_error(&s, sql).error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-    }
+    let r = row(
+        &s,
+        "SELECT localtimestamp(), current_timestamp() FROM events LIMIT 1",
+    );
+    let (local, instant): (i64, i64) = (r[0].parse().unwrap(), r[1].parse().unwrap());
+    assert!(
+        [-18_000_000_000, -14_400_000_000].contains(&(local - instant)),
+        "{}",
+        local - instant
+    );
+    block_on(async {
+        s.sql("SELECT current_date() FROM events")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
 }
 
 /// Spark 4.2 folds `CAST(x AS FLOAT/DECIMAL/DOUBLE)` scales of `round`

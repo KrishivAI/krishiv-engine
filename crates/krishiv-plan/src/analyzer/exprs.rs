@@ -2,6 +2,8 @@
 //! Expression binding: names, stars, functions, casts, subqueries, output
 //! names (Spark's `toPrettySQL`) and semantic keys.
 
+use super::SessionZone;
+use krishiv_kernels::datetime::TimeZoneRules;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -16,10 +18,10 @@ use krishiv_common::error::{
     DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidOrderingType,
     DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
-    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
-    ExceptOverlappingColumns, FailedToParseTooComplex, FieldNotFound, InternalError,
-    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
+    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
@@ -27,14 +29,14 @@ use krishiv_common::error::{
     InvalidWithinGroupExpressionMismatchWithDistinctInput,
     InvalidWithinGroupExpressionMismatchWithDistinctInputUnsafeCast,
     InvalidWithinGroupExpressionWithinGroupMissing, InvalidWithinGroupExpressionWrongNumOrderings,
-    KrishivError, KrishivUnsupportedFeature, NamedParametersNotSupported, NestedAggregateFunction,
-    NonFoldableArgument, RequiredParameterNotFound, UnexpectedInputType,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1104, NamedParametersNotSupported,
+    NestedAggregateFunction, NonFoldableArgument, RequiredParameterNotFound, UnexpectedInputType,
     UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithSuggestion,
     WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
-use krishiv_types::{DataType, DecimalType, StructField, StructType};
+use krishiv_types::{ArrayType, DataType, DecimalType, StructField, StructType};
 use twox_hash::XxHash3_128;
 
 use super::analytics::GroupingFn;
@@ -45,7 +47,9 @@ use super::coerce::{self, Arg, BadCast, Mismatch, list_types, ordinal, quoted_ty
 use super::fold;
 use super::resolve::{Attr, Env, RESOLVE_STEP, Rel, Resolver};
 use super::suggest::closest;
-use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
+use super::{
+    AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, InputType, Inputs,
+};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FunctionCall,
     FunctionId, FunctionKind, Literal, LogicalPlan, NullOrdering, Origin, QuantifiedLike,
@@ -214,7 +218,7 @@ fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> 
 
 /// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
 /// with casts stripped as Spark's `toPrettySQL` strips them.
-fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
+fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZone>) -> Bound {
     let mut shown = cond.shown();
     while let ExprNode::Cast { expr, .. } = &shown.node {
         shown = Arc::clone(expr);
@@ -419,7 +423,7 @@ fn bad_cast(
     arg: &Bound,
     to: &DataType,
     mode: CastMode,
-    zone: Option<i32>,
+    zone: Option<SessionZone>,
 ) -> AnalysisError {
     let shown = ExprNode::Cast {
         expr: arg.shown(),
@@ -634,7 +638,7 @@ fn typed_literal(
     }
     // One string cast through the kernels, as a microsecond instant or
     // NTZ wall-clock value.
-    let cast_one = |value: &str, to: &arrow_schema::DataType, zone: &FixedOffset| {
+    let cast_one = |value: &str, to: &arrow_schema::DataType, zone: &dyn TimeZoneRules| {
         use arrow_array::StringArray;
         use arrow_array::cast::AsArray as _;
         use arrow_array::types::TimestampMicrosecondType;
@@ -692,13 +696,12 @@ fn typed_literal(
                 Ok(Literal::Timestamp(micros))
             } else {
                 match conf.session_zone {
-                    Some(off) => {
-                        let micros =
-                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                    Some(zone) => {
+                        let micros = cast_one(value, &ltz_arrow(), &zone).map_err(map_error)?;
                         Ok(Literal::Timestamp(micros))
                     }
                     None => Err(unsupported(
-                        "a timestamp literal in a session time zone other than a fixed offset",
+                        "a timestamp literal in an unresolvable session time zone",
                     )),
                 }
             }
@@ -720,13 +723,12 @@ fn typed_literal(
                 Ok(Literal::Timestamp(micros))
             } else {
                 match conf.session_zone {
-                    Some(off) => {
-                        let micros =
-                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                    Some(zone) => {
+                        let micros = cast_one(value, &ltz_arrow(), &zone).map_err(map_error)?;
                         Ok(Literal::Timestamp(micros))
                     }
                     None => Err(unsupported(
-                        "a timestamp literal in a session time zone other than a fixed offset",
+                        "a timestamp literal in an unresolvable session time zone",
                     )),
                 }
             }
@@ -1129,6 +1131,7 @@ impl Resolver<'_> {
             arg_names.clear();
         }
         let call = FunctionCall {
+            within_group: Vec::new(),
             args,
             arg_names,
             ..f.clone()
@@ -1800,7 +1803,12 @@ impl Resolver<'_> {
                 // lower into the resolved call (see `mode_call` and
                 // `listagg_call`); any other function keeps Spark's
                 // `FUNCTION_WITH_UNSUPPORTED_SYNTAX` error.
-                if !f.within_group.is_empty() && !matches!(entry.id.name(), "mode" | "listagg") {
+                if !f.within_group.is_empty()
+                    && !matches!(
+                        entry.id.name(),
+                        "mode" | "listagg" | "percentile_cont" | "percentile_disc"
+                    )
+                {
                     return Err(AnalysisError::new(
                         InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
                             pretty_name: format!("`{lookup_name}`"),
@@ -1814,6 +1822,18 @@ impl Resolver<'_> {
                 }
                 if entry.id.name() == "listagg" {
                     return self.listagg_call(&entry, e, f, &kids, window_fn);
+                }
+                if matches!(
+                    entry.id.name(),
+                    "percentile"
+                        | "percentile_approx"
+                        | "approx_percentile"
+                        | "median"
+                        | "percentile_cont"
+                        | "percentile_disc"
+                        | "approx_count_distinct"
+                ) {
+                    return self.quantile_call(&entry, e, f, &kids, n, window_fn);
                 }
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
@@ -3119,7 +3139,7 @@ impl Resolver<'_> {
             self.ctx.conf.decimal_precision_loss,
             self.ctx.conf.map_key_dedup_last_win,
             self.ctx.profile,
-            self.ctx.conf.session_zone,
+            self.ctx.conf.session_zone.and_then(SessionZone::fixed),
         );
         fold::constant(
             e,
@@ -5015,6 +5035,707 @@ impl Resolver<'_> {
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }
+
+    /// The ordered-set and quantile aggregates (`percentile`,
+    /// `percentile_approx`, `approx_percentile`, `median`,
+    /// `percentile_cont`, `percentile_disc`, `approx_count_distinct`),
+    /// typed here rather than through the registry: Spark's builders fold
+    /// the percentage, accuracy, frequency and `relativeSD` while typing,
+    /// lower `WITHIN GROUP` to the ordering key, and fill the frequency
+    /// and accuracy defaults. The executor reads the folded literals.
+    ///
+    /// The resolved call keeps the lowered arguments (the value, the cast
+    /// percentage, the frequency or accuracy, the descending flag); the
+    /// shown form keeps the call as written (with `WITHIN GROUP`), which
+    /// names the output and quotes errors, as Spark's `toPrettySQL` does.
+    #[inline(never)]
+    fn quantile_call(
+        &mut self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+        n: usize,
+        window_fn: bool,
+    ) -> Result<Bound, AnalysisError> {
+        use krishiv_functions::registry::{approx_percentile_result, exact_percentile_result};
+        let name = entry.id.name();
+        let origin = e.origin;
+        let zone = self.ctx.conf.session_zone;
+        let wrong_args = |actual: usize| {
+            AnalysisError::new(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: format!("`{name}`"),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: actual.to_string(),
+                    docroot: SPARK_DOC_ROOT.to_owned(),
+                },
+                origin,
+            )
+        };
+        if !entry.arity.accepts(f.args.len()) {
+            return Err(wrong_args(f.args.len()));
+        }
+        let ordered = matches!(name, "percentile_cont" | "percentile_disc");
+        if ordered {
+            if f.within_group.is_empty() {
+                return Err(AnalysisError::new(
+                    InvalidWithinGroupExpressionWithinGroupMissing {
+                        func_name: format!("`{name}`"),
+                    },
+                    origin,
+                ));
+            }
+            if f.distinct {
+                return Err(AnalysisError::new(
+                    InvalidWithinGroupExpressionDistinctUnsupported {
+                        func_name: format!("`{name}`"),
+                    },
+                    origin,
+                ));
+            }
+            if f.within_group.len() != 1 {
+                return Err(AnalysisError::new(
+                    InvalidWithinGroupExpressionWrongNumOrderings {
+                        func_name: format!("`{name}`"),
+                        expected_num: "1".to_owned(),
+                        actual_num: f.within_group.len().to_string(),
+                    },
+                    origin,
+                ));
+            }
+        }
+        // The nesting and window checks see the filter and the ordering key
+        // too (a filter sits between the arguments and the ordering keys).
+        call_checks(entry, e, kids, kids.len())?;
+        let filter = kids.get(n).filter(|_| f.filter.is_some());
+        let wstart = kids.len() - f.within_group.len();
+        // The lowered call's SQL as Spark quotes it in errors: `name(args)`
+        // over the shown arguments (the frequency and accuracy defaults
+        // included, the descending flag excluded).
+        let lowered_sql = |args: &[Arc<Expr>]| {
+            format!(
+                "\"{name}({})\"",
+                args.iter()
+                    .map(|a| pretty(a, zone))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        // The value (or ordering key): Spark's numeric input, which the
+        // approximate path extends to dates and timestamps.
+        let value = if ordered {
+            kids[wstart].clone()
+        } else {
+            kids[0].clone()
+        };
+        let approx = matches!(name, "percentile_approx" | "approx_percentile");
+        let temporal = approx
+            && matches!(
+                value.ty.data_type,
+                Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+            );
+        // `approx_count_distinct` hashes a value of any type as it is: no
+        // numeric requirement and no cast (the executor refuses what it
+        // cannot hash).
+        let hashes_any_type = name == "approx_count_distinct";
+        let child_target: Option<DataType> = if temporal || hashes_any_type {
+            None
+        } else {
+            let given = [value.ty.clone()];
+            let call = CallTypes::new(&given, &[]);
+            let inputs = Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
+            let arg = arg_of(&value);
+            match coerce::inputs(&inputs, &[arg], &call) {
+                Ok(casts) => casts.into_iter().next().flatten(),
+                Err(m) => {
+                    let lowered = Arc::new(
+                        Expr::new(ExprNode::Function(FunctionCall {
+                            name: name.to_owned(),
+                            qualifier: Vec::new(),
+                            args: vec![value.shown()],
+                            arg_names: Vec::new(),
+                            distinct: false,
+                            filter: None,
+                            within_group: Vec::new(),
+                        }))
+                        .with_origin(origin),
+                    );
+                    return Err(self.mismatch(
+                        m,
+                        &lowered,
+                        std::slice::from_ref(&value),
+                        name,
+                        origin,
+                    ));
+                }
+            }
+        };
+        let mut value = value;
+        if child_target.is_some() {
+            value = self.implicit_cast(&value, child_target);
+        }
+        // `median` fixes its percentage at 0.5 and `approx_count_distinct`
+        // takes none: neither reads the percentage argument.
+        let median = name == "median";
+        let appr = name == "approx_count_distinct";
+        // Spark quotes errors over the lowered call, with defaulted
+        // arguments filled in: the frequency, or the accuracy. The
+        // ordered-set calls lower to two arguments.
+        let third_shown: Option<Arc<Expr>> = if ordered || appr {
+            None
+        } else {
+            let default = if approx {
+                Literal::Integer(10000)
+            } else {
+                Literal::Long(1)
+            };
+            Some(if f.args.len() == 3 {
+                kids[2].shown()
+            } else {
+                Arc::new(Expr::new(ExprNode::Literal(default)).with_origin(origin))
+            })
+        };
+        // The percentage: a double or an array of doubles after the implicit
+        // cast, folded here; the analyzer, not the executor, validates it.
+        let pct_index = if ordered { 0 } else { 1 };
+        // The lowered call as Spark quotes percentage errors: with the
+        // defaulted third argument filled in.
+        let pct_sql = |pct: &Bound| match &third_shown {
+            Some(t) => lowered_sql(&[value.shown(), pct.shown(), Arc::clone(t)]),
+            None => lowered_sql(&[value.shown(), pct.shown()]),
+        };
+        let half = || Bound {
+            expr: Arc::new(Expr::new(ExprNode::Literal(Literal::Double(0.5))).with_origin(origin)),
+            ty: arg_type(DataType::Double, false),
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        };
+        let (mut pct, mut array, mut percentages) = (half(), false, vec![0.5]);
+        if !median && !appr {
+            pct = kids[pct_index].clone();
+            let pct_type = pct.ty.data_type.clone();
+            array = matches!(pct_type, Some(DataType::Array(_)));
+            if array {
+                let (element, contains_null) = match &pct_type {
+                    Some(DataType::Array(a)) => (a.element_type().clone(), a.contains_null()),
+                    _ => (DataType::Null, true),
+                };
+                let castable = !contains_null
+                    && matches!(
+                        element,
+                        DataType::Byte
+                            | DataType::Short
+                            | DataType::Integer
+                            | DataType::Long
+                            | DataType::Float
+                            | DataType::Double
+                            | DataType::Decimal(_)
+                            | DataType::Null
+                    )
+                    || (!self.ctx.conf.ansi && element == DataType::String);
+                // (Under ANSI Spark refuses an array of strings, where it casts a
+                // string percentage.)
+                if !castable {
+                    let sql = pct_sql(&pct);
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchUnexpectedInputType {
+                            sql_expr: sql,
+                            param_index: ordinal(1),
+                            required_type: "\"ARRAY<DOUBLE>\"".to_owned(),
+                            input_sql: format!("\"{}\"", pretty(&pct.shown(), zone)),
+                            input_type: quoted_type(pct_type.as_ref()),
+                        },
+                        origin,
+                    ));
+                }
+            } else {
+                let castable = matches!(
+                    pct_type,
+                    None | Some(
+                        DataType::Byte
+                            | DataType::Short
+                            | DataType::Integer
+                            | DataType::Long
+                            | DataType::Float
+                            | DataType::Double
+                            | DataType::Decimal(_)
+                            | DataType::String
+                            | DataType::Null
+                    )
+                );
+                if !castable {
+                    let sql = pct_sql(&pct);
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchUnexpectedInputType {
+                            sql_expr: sql,
+                            param_index: ordinal(1),
+                            required_type: "\"DOUBLE\"".to_owned(),
+                            input_sql: format!("\"{}\"", pretty(&pct.shown(), zone)),
+                            input_type: quoted_type(pct_type.as_ref()),
+                        },
+                        origin,
+                    ));
+                }
+            }
+            let pct_target = if array {
+                DataType::Array(ArrayType::new(DataType::Double, false).into())
+            } else {
+                DataType::Double
+            };
+            let pct = self.implicit_cast(&pct, Some(pct_target));
+            let conf = fold::Conf::new(
+                self.ctx.conf.ansi,
+                self.ctx.conf.decimal_precision_loss,
+                self.ctx.conf.map_key_dedup_last_win,
+                self.ctx.profile,
+                self.ctx.conf.session_zone.and_then(SessionZone::fixed),
+            );
+            // An array percentage folds elementwise: a cast of the whole array
+            // does not fold, so each element of the array call is cast to
+            // double and folded on its own (as Spark converts its array).
+            // Anything else folds as one value.
+            let folded: Vec<Option<f64>> = if array {
+                match array_elements(&pct.expr) {
+                    Some(elements) => {
+                        let mut out = Vec::with_capacity(elements.len());
+                        for el in elements {
+                            let cast = Arc::new(
+                                Expr::new(ExprNode::Cast {
+                                    expr: el,
+                                    to: DataType::Double,
+                                    mode: if self.ctx.conf.ansi {
+                                        crate::CastMode::Ansi
+                                    } else {
+                                        crate::CastMode::Legacy
+                                    },
+                                })
+                                .with_origin(origin),
+                            );
+                            match fold::doubles(
+                                &cast,
+                                conf,
+                                &mut self.folds.borrow_mut(),
+                                self.ctx.functions.as_ref(),
+                            ) {
+                                None => {
+                                    return Err(non_foldable(
+                                        name, &value, &pct, array, zone, origin,
+                                    ));
+                                }
+                                Some(Err(e)) => return Err(AnalysisError::new(e, origin)),
+                                Some(Ok(mut v)) => {
+                                    if v.len() != 1 {
+                                        return Err(non_foldable(
+                                            name, &value, &pct, array, zone, origin,
+                                        ));
+                                    }
+                                    out.append(&mut v);
+                                }
+                            }
+                        }
+                        out
+                    }
+                    None => {
+                        return Err(non_foldable(name, &value, &pct, array, zone, origin));
+                    }
+                }
+            } else {
+                match fold::doubles(
+                    &pct.expr,
+                    conf,
+                    &mut self.folds.borrow_mut(),
+                    self.ctx.functions.as_ref(),
+                ) {
+                    None => {
+                        return Err(non_foldable(name, &value, &pct, array, zone, origin));
+                    }
+                    Some(Err(e)) => return Err(AnalysisError::new(e, origin)),
+                    Some(Ok(v)) => v,
+                }
+            };
+            if folded.iter().any(Option::is_none) {
+                let sql = pct_sql(&pct);
+                return Err(AnalysisError::new(
+                    DatatypeMismatchUnexpectedNull {
+                        expr_name: "percentage".to_owned(),
+                        sql_expr: sql,
+                    },
+                    origin,
+                ));
+            }
+            percentages = folded.into_iter().flatten().collect();
+            if percentages.iter().any(|&v| v < 0.0 || v > 1.0) {
+                let sql = pct_sql(&pct);
+                let current: Vec<String> = percentages
+                    .iter()
+                    .map(|v| format!("{}D", crate::spark_fmt::double(*v)))
+                    .collect();
+                return Err(AnalysisError::new(
+                    DatatypeMismatchValueOutOfRange {
+                        expr_name: "percentage".to_owned(),
+                        value_range: "[0.0, 1.0]".to_owned(),
+                        current_value: current.join(","),
+                        sql_expr: sql,
+                    },
+                    origin,
+                ));
+            }
+        }
+        // The executor reads the folded percentage literals (Spark folds
+        // them while typing too): a `double`, or an `array` of them.
+        let pct_lit = if array {
+            let elements: Vec<Arc<Expr>> = percentages
+                .iter()
+                .map(|v| {
+                    Arc::new(Expr::new(ExprNode::Literal(Literal::Double(*v))).with_origin(origin))
+                })
+                .collect();
+            let FunctionLookup::Found(entry) = self
+                .ctx
+                .functions
+                .lookup(&["array".to_owned()], self.ctx.profile)
+            else {
+                return Err(super::bind::unsupported("the array function", origin));
+            };
+            Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id: entry.id,
+                        kind: FunctionKind::Scalar,
+                        args: elements,
+                        distinct: false,
+                        filter: None,
+                        within_group: Vec::new(),
+                        data_type: DataType::Array(ArrayType::new(DataType::Double, false).into()),
+                        nullable: false,
+                        deterministic: true,
+                    },
+                )))
+                .with_origin(origin),
+            )
+        } else {
+            // An empty array is legal (Spark yields NULL for it); a scalar
+            // percentage always folds to one value (NULL fails above).
+            let v = percentages.first().copied().unwrap_or(f64::NAN);
+            Arc::new(Expr::new(ExprNode::Literal(Literal::Double(v))).with_origin(origin))
+        };
+        // The frequency, accuracy, `relativeSD` and direction, per function.
+        // The resolved call keeps the lowered arguments; the shown form keeps
+        // the call as written (with `WITHIN GROUP`), which names the output.
+        let mut resolved: Vec<Arc<Expr>> = vec![Arc::clone(&value.expr)];
+        let mut shown: Vec<Arc<Expr>> = vec![value.shown()];
+        let data_type: DataType;
+        let mut nullable = true;
+        if ordered {
+            // The percentage (already validated) and the descending flag.
+            // The shown form keeps the call as written: the percentage
+            // argument, then `WITHIN GROUP`.
+            resolved.push(Arc::clone(&pct_lit));
+            shown = vec![kids[0].shown()];
+            let descending = matches!(
+                f.within_group[0].direction,
+                crate::SortDirection::Descending
+            );
+            resolved.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Boolean(descending))).with_origin(origin),
+            ));
+            // `percentile_disc` reads the session's legacy calculation
+            // (`spark.sql.legacy.percentileDiscCalculation`); the executor
+            // takes it as a literal like the descending flag.
+            resolved.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Boolean(
+                    self.ctx.conf.legacy_percentile_disc,
+                )))
+                .with_origin(origin),
+            ));
+            data_type = exact_percentile_result(array);
+        } else if median {
+            data_type = exact_percentile_result(false);
+        } else if appr {
+            // `relativeSD`: a double (or decimal) literal, as Spark's
+            // `validateDoubleLiteral` requires; the default is 0.05. It is
+            // the second SQL argument, not the filter.
+            let rsd = match (f.args.len() == 2).then(|| kids.get(1)).flatten() {
+                None => Bound {
+                    expr: Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Double(0.05))).with_origin(origin),
+                    ),
+                    ty: arg_type(DataType::Double, false),
+                    agg: None,
+                    win: None,
+                    outer: None,
+                    lateral: Vec::new(),
+                    shown: None,
+                },
+                Some(k) => k.clone(),
+            };
+            // The written value as a double (`0.5` is a decimal literal).
+            let written = match &rsd.expr.node {
+                ExprNode::Literal(Literal::Double(d)) => Some(*d),
+                ExprNode::Literal(Literal::Decimal {
+                    unscaled,
+                    data_type,
+                }) => Some(*unscaled as f64 / 10_f64.powi(i32::from(data_type.scale()))),
+                _ => None,
+            };
+            let Some(written) = written else {
+                return Err(AnalysisError::new(LegacyErrorTemp1104 {}, origin));
+            };
+            // Spark's `require(p >= 4)` on the addressing bits
+            // (`p = ceil(2 * log2(1.106 / relativeSD))`) fails the call when
+            // the error is above about 39%.
+            let p = (2.0 * (1.106 / written).ln() / std::f64::consts::LN_2).ceil();
+            if written.is_finite() && written > 0.0 && p < 4.0 {
+                return Err(AnalysisError::new(
+                    FailedFunctionCall {
+                        func_name: "`approx_count_distinct`".to_owned(),
+                    },
+                    origin,
+                ));
+            }
+            // The executor derives the addressing bits and refuses precisions
+            // Spark's `require` refuses.
+            resolved.push(Arc::clone(&rsd.expr));
+            data_type = DataType::Long;
+            nullable = false;
+        } else {
+            // `percentile` and `percentile_approx` share the percentage.
+            resolved.push(Arc::clone(&pct_lit));
+            shown.push(pct.shown());
+            if approx {
+                // The accuracy: the third argument, or 10000 (Spark's
+                // builder default); it must be a foldable integral in
+                // `(0, 2147483647]`. It is the third SQL argument, not the
+                // filter.
+                let accuracy = match (f.args.len() == 3).then(|| kids.get(2)).flatten() {
+                    Some(k) => k.clone(),
+                    None => Bound {
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Integer(10000)))
+                                .with_origin(origin),
+                        ),
+                        ty: arg_type(DataType::Integer, false),
+                        agg: None,
+                        win: None,
+                        outer: None,
+                        lateral: Vec::new(),
+                        shown: None,
+                    },
+                };
+                let accuracy_sql = lowered_sql(&[value.shown(), pct.shown(), accuracy.shown()]);
+                let acc_type = accuracy.ty.data_type.clone();
+                if !matches!(
+                    acc_type,
+                    None | Some(
+                        DataType::Byte | DataType::Short | DataType::Integer | DataType::Long
+                    )
+                ) {
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchUnexpectedInputType {
+                            sql_expr: accuracy_sql,
+                            param_index: ordinal(2),
+                            required_type: "\"INTEGRAL\"".to_owned(),
+                            input_sql: format!("\"{}\"", pretty(&accuracy.shown(), zone)),
+                            input_type: quoted_type(acc_type.as_ref()),
+                        },
+                        origin,
+                    ));
+                }
+                let n = match self.fold(&accuracy.expr, self.ctx.conf.ansi) {
+                    Some(Constant::Integral(n)) => n,
+                    Some(Constant::Null) => {
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchUnexpectedNull {
+                                expr_name: "accuracy".to_owned(),
+                                sql_expr: accuracy_sql,
+                            },
+                            origin,
+                        ));
+                    }
+                    Some(Constant::Error(e)) => return Err(AnalysisError::new(e, origin)),
+                    _ => {
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchNonFoldableInput {
+                                sql_expr: accuracy_sql,
+                                input_name: "`accuracy`".to_owned(),
+                                input_type: quoted_type(acc_type.as_ref()),
+                                input_expr: format!("\"{}\"", pretty(&accuracy.shown(), zone)),
+                            },
+                            origin,
+                        ));
+                    }
+                };
+                if n <= 0 || n > i64::from(i32::MAX) {
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchValueOutOfRange {
+                            expr_name: "accuracy".to_owned(),
+                            value_range: "(0, 2147483647]".to_owned(),
+                            current_value: n.to_string(),
+                            sql_expr: accuracy_sql,
+                        },
+                        origin,
+                    ));
+                }
+                // The executor reads the folded literal.
+                resolved.push(Arc::new(
+                    Expr::new(ExprNode::Literal(Literal::Long(n))).with_origin(origin),
+                ));
+                // Spark names the call with the defaulted accuracy.
+                shown.push(accuracy.shown());
+                let child = value.ty.data_type.clone().unwrap_or(DataType::Null);
+                data_type = approx_percentile_result(&child, array);
+            } else {
+                // The frequency: the third argument, or 1; a per-row weight
+                // which stays an expression (negative values fail per row).
+                // It is the third SQL argument, not the filter.
+                let frequency = match (f.args.len() == 3).then(|| kids.get(2)).flatten() {
+                    Some(k) => k.clone(),
+                    None => Bound {
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Long(1))).with_origin(origin),
+                        ),
+                        ty: arg_type(DataType::Long, false),
+                        agg: None,
+                        win: None,
+                        outer: None,
+                        lateral: Vec::new(),
+                        shown: None,
+                    },
+                };
+                let freq_type = frequency.ty.data_type.clone();
+                if !matches!(
+                    freq_type,
+                    None | Some(
+                        DataType::Byte | DataType::Short | DataType::Integer | DataType::Long
+                    )
+                ) {
+                    let sql = lowered_sql(&[value.shown(), pct.shown(), frequency.shown()]);
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchUnexpectedInputType {
+                            sql_expr: sql,
+                            param_index: ordinal(2),
+                            required_type: "\"INTEGRAL\"".to_owned(),
+                            input_sql: format!("\"{}\"", pretty(&frequency.shown(), zone)),
+                            input_type: quoted_type(freq_type.as_ref()),
+                        },
+                        origin,
+                    ));
+                }
+                resolved.push(Arc::clone(&frequency.expr));
+                // Spark names the call with the defaulted frequency.
+                shown.push(frequency.shown());
+                data_type = exact_percentile_result(array);
+            }
+        }
+        let shown_within: Vec<SortOrder> = f
+            .within_group
+            .iter()
+            .zip(kids[wstart..].iter())
+            .map(|(o, k)| SortOrder {
+                expr: k.shown(),
+                ..o.clone()
+            })
+            .collect();
+        let shown_call = Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: f.name.clone(),
+                qualifier: f.qualifier.clone(),
+                args: shown,
+                arg_names: Vec::new(),
+                distinct: f.distinct,
+                filter: filter.map(Bound::shown),
+                within_group: shown_within,
+            }))
+            .with_origin(origin),
+        );
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: entry.id.clone(),
+                    kind: entry.kind,
+                    args: resolved,
+                    distinct: f.distinct,
+                    filter: filter.map(|b| Arc::clone(&b.expr)),
+                    within_group: Vec::new(),
+                    data_type: data_type.clone(),
+                    nullable,
+                    deterministic: entry.deterministic,
+                },
+            )))
+            .with_origin(origin),
+        );
+        let mut lateral: Vec<AttrId> = Vec::new();
+        for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+            if !lateral.contains(id) {
+                lateral.push(*id);
+            }
+        }
+        Ok(Bound {
+            expr,
+            ty: arg_type(data_type, nullable),
+            agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
+                Some(origin)
+            } else {
+                kids.iter().find_map(|k| k.agg)
+            },
+            win: kids.iter().find_map(|k| k.win),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral,
+            shown: Some(shown_call),
+        })
+    }
+}
+
+/// `DATATYPE_MISMATCH.NON_FOLDABLE_INPUT` for an unfoldable quantile
+/// percentage, quoting the call as Spark's `toPrettySQL` does.
+fn non_foldable(
+    name: &str,
+    value: &Bound,
+    pct: &Bound,
+    array: bool,
+    zone: Option<SessionZone>,
+    origin: Origin,
+) -> AnalysisError {
+    let sql = format!(
+        "\"{name}({})\"",
+        [value.shown(), pct.shown()]
+            .iter()
+            .map(|a| pretty(a, zone))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    AnalysisError::new(
+        DatatypeMismatchNonFoldableInput {
+            sql_expr: sql,
+            input_name: "`percentage`".to_owned(),
+            input_type: if array {
+                "\"ARRAY<DOUBLE>\"".to_owned()
+            } else {
+                "\"DOUBLE\"".to_owned()
+            },
+            input_expr: format!("\"{}\"", pretty(&pct.shown(), zone)),
+        },
+        origin,
+    )
+}
+
+/// The elements of an array percentage: through casts to the `array`
+/// call the analyzer built, `None` for anything else.
+fn array_elements(e: &Arc<Expr>) -> Option<Vec<Arc<Expr>>> {
+    let mut e = e;
+    loop {
+        match &e.node {
+            ExprNode::Cast { expr, .. } => e = expr,
+            ExprNode::Resolved(ResolvedExpr::Function(f)) if f.id.name() == "array" => {
+                return Some(f.args.clone());
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// The attributes carrying `id` below the operator.
@@ -5298,7 +6019,7 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
 /// explicit stack, once per distinct node. Timestamp literals render in
 /// `zone`, the session's resolved zone, through the same cast-to-string
 /// kernels `CAST(ts AS STRING)` uses.
-pub(super) fn pretty(e: &Expr, zone: Option<i32>) -> String {
+pub(super) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String {
     let mut done: HashMap<usize, String> = HashMap::new();
     let mut stack = vec![(e, false)];
     while let Some((x, expanded)) = stack.pop() {
@@ -5353,7 +6074,7 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         .join(", ")
 }
 
-fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
+fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
     match &x.node {
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
             c.name.clone()
@@ -5494,7 +6215,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
                 let orders: Vec<String> = within_group
                     .iter()
                     .zip(rest)
-                    .map(|(o, name)| format!("{name} {}", order_sql(o)))
+                    .map(|(o, key)| within_key(name, o, key))
                     .collect();
                 text = format!("{text} WITHIN GROUP (ORDER BY {})", orders.join(", "));
             }
@@ -5584,7 +6305,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
                         .within_group
                         .iter()
                         .zip(rest)
-                        .map(|(o, name)| format!("{name} {}", order_sql(o)))
+                        .map(|(o, key)| within_key(f.id.name(), o, key))
                         .collect();
                     text = format!("{text} WITHIN GROUP (ORDER BY {})", orders.join(", "));
                 }
@@ -5602,7 +6323,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
 /// `DENSE_RANK()` and `PERCENT_RANK()` upper case, as Spark's `RankLike`
 /// writes them), then the window as `WindowSpecDefinition.sql` writes it.
 /// `k` holds the children's names in [`Expr::for_each_child`] order.
-fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<i32>) -> String {
+fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<SessionZone>) -> String {
     use crate::{FrameBound, FrameUnits, WindowSpecRef};
     let function = match &w.function.node {
         ExprNode::Resolved(ResolvedExpr::Function(f))
@@ -5663,6 +6384,24 @@ fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<i32>) -> String
         parts.push(format!("{units} BETWEEN {lower} AND {upper}"));
     }
     format!("{function} OVER ({})", parts.join(" "))
+}
+
+/// One `WITHIN GROUP` ordering key as Spark names it. `percentile_cont` and
+/// `percentile_disc` print the key and ` DESC` for a descending order (their
+/// own `sql`); the other ordered-set aggregates print the full sort order.
+fn within_key(function: &str, o: &crate::SortOrder, key: &str) -> String {
+    if function.eq_ignore_ascii_case("percentile_cont")
+        || function.eq_ignore_ascii_case("percentile_disc")
+    {
+        let desc = if o.direction == SortDirection::Descending {
+            " DESC"
+        } else {
+            ""
+        };
+        format!("{key}{desc}")
+    } else {
+        format!("{key} {}", order_sql(o))
+    }
 }
 
 /// `ASC NULLS FIRST` and the like (Spark's `SortOrder.sql` after the key).
@@ -5927,7 +6666,7 @@ fn is_upper_math(name: &str) -> bool {
     )
 }
 
-fn pretty_literal(v: &Literal, zone: Option<i32>) -> String {
+fn pretty_literal(v: &Literal, zone: Option<SessionZone>) -> String {
     match v {
         // A URL's credentials never reach a name (ADR 0038).
         Literal::String(s) => krishiv_common::secret::SecretUrl::parse(s)
@@ -5958,10 +6697,9 @@ fn pretty_literal(v: &Literal, zone: Option<i32>) -> String {
         Literal::Date(days) => crate::spark_fmt::date(*days),
         // An instant renders in the session zone (a fixed offset; UTC when
         // unset), as Spark's `toPrettySQL` of a timestamp literal does.
-        Literal::Timestamp(us) => crate::spark_fmt::timestamp(
-            us.saturating_add(i64::from(zone.unwrap_or(0)).saturating_mul(1_000_000)),
-            false,
-        ),
+        Literal::Timestamp(us) => {
+            crate::spark_fmt::timestamp(SessionZone::local_micros(zone, *us), false)
+        }
         Literal::TimestampNtz(us) => crate::spark_fmt::timestamp(*us, true),
         _ => v.to_string(),
     }

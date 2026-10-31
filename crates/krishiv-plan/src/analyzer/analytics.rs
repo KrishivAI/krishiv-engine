@@ -24,6 +24,8 @@
 //! Exact behaviour, Spark 4.2: `tests/spark-golden/v4.2.0` (`group-analytics`,
 //! `grouping_set`, `postgreSQL/groupingsets`).
 
+use super::SessionZone;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -205,7 +207,7 @@ fn bound_of(col: &BoundColumn) -> Bound {
 
 /// Spark's text for an expression in a grouping error: a column carries its
 /// attribute id.
-fn with_id(e: &Expr, zone: Option<i32>) -> String {
+fn with_id(e: &Expr, zone: Option<SessionZone>) -> String {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => format!("{}#{}", c.name, c.id.0),
         _ => pretty(e, zone),

@@ -23,6 +23,7 @@ fn f64s(v: &[Option<f64>]) -> ArrayRef {
 
 /// `by(x, y)` over columns 1 and 2 of `s`.
 fn by(f: &AggregateFunction, s: &SchemaRef) -> AggregateExpr {
+    let name = format!("{f:?}");
     AggregateExpr::by(
         f.clone(),
         (1, 2),
@@ -30,7 +31,7 @@ fn by(f: &AggregateFunction, s: &SchemaRef) -> AggregateExpr {
             s.field(1).data_type().clone(),
             s.field(2).data_type().clone(),
         ),
-        format!("{f:?}"),
+        name,
     )
 }
 
@@ -391,7 +392,7 @@ async fn every_value_and_key_type() {
                     r.sort();
                     r
                 };
-                let sp = spec(&s, vec![0], vec![by(f, &s)]);
+                let sp = spec(&s, vec![0], vec![by(&f.clone(), &s)]);
                 let single = node(scan(&s, vec![batch.clone()]), sp.clone());
                 assert_eq!(run_one(single).await, expected, "{f:?} of {tx} by {ty}");
                 // Two batches through the partial phase.
@@ -735,4 +736,100 @@ fn columns_of_the_wrong_kind_are_internal_errors() {
     let larger = i64s(&[Some(2)]);
     let r = a.update(&[0], &[doubles, larger], &Weights::Const(1));
     assert_eq!(internal(r), ErrorClass::InternalError);
+}
+
+/// The percentile family and `approx_count_distinct` merge their partial
+/// states: two batches through a partial phase, then the final phase, equal
+/// the single phase (group `k`, value `v`, frequency `w`).
+#[tokio::test]
+async fn quantile_aggregates_merge_their_partial_states() {
+    use AggregateFunction as F;
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("v", DataType::Int64),
+        ("w", DataType::Int64),
+    ]);
+    let rows = 600_i64;
+    let col = |f: &dyn Fn(i64) -> Option<i64>| i64s(&(0..rows).map(f).collect::<Vec<_>>());
+    let batch = vec![
+        col(&|i| Some(i % 3)),
+        col(&|i| (i % 17 != 0).then_some(i * 7 % 101)),
+        col(&|i| Some(1 + i % 3)),
+    ];
+    let halves: Vec<Vec<ArrayRef>> = vec![
+        batch.iter().map(|c| c.slice(0, 250)).collect(),
+        batch.iter().map(|c| c.slice(250, 350)).collect(),
+    ];
+    let with = |function: F, args: Vec<usize>| AggregateExpr {
+        function,
+        args,
+        input: AggInput::Raw,
+        arg_type: DataType::Int64,
+        name: "q".to_owned(),
+        mask: None,
+    };
+    let aggs = vec![
+        with(
+            F::Percentile {
+                percentages: vec![0.25, 0.5],
+                array: true,
+                reverse: false,
+            },
+            vec![1, 2],
+        ),
+        with(
+            F::Percentile {
+                percentages: vec![0.9],
+                array: false,
+                reverse: true,
+            },
+            vec![1],
+        ),
+        with(
+            F::PercentileDisc {
+                percentages: vec![0.5],
+                array: false,
+                reverse: false,
+                legacy: false,
+            },
+            vec![1],
+        ),
+        with(
+            F::PercentileApprox {
+                percentages: vec![0.5, 0.9],
+                array: true,
+                accuracy: 100,
+            },
+            vec![1],
+        ),
+        with(F::ApproxCountDistinct { p: 11 }, vec![1]),
+    ];
+    // The columns a Spark 4.2.0 run answers exactly (the approximate
+    // percentile depends on how Spark splits the input): pinned to its rows.
+    let exact_only = [0, 1, 2, 4].map(|i| aggs[i].clone()).to_vec();
+    let pinned = run_one(node(
+        scan(&s, vec![batch.clone()]),
+        spec(&s, vec![0], exact_only),
+    ))
+    .await;
+    let list =
+        |a: &str, b: &str| format!("ListArray [   PrimitiveArray<Float64> [   {a},   {b}, ], ]");
+    assert_eq!(
+        pinned,
+        vec![
+            format!("0|{}|10.0|49.0|101", list("25.0", "49.5")),
+            format!("1|{}|9.699999999999989|49.0|101", list("25.0", "49.5")),
+            format!("2|{}|9.699999999999989|49.0|101", list("24.0", "49.5")),
+        ]
+    );
+    let sp = spec(&s, vec![0], aggs);
+    let single = node(scan(&s, vec![batch.clone()]), sp.clone());
+    let expected = run_one(single).await;
+    assert_eq!(expected.len(), 3, "{expected:?}");
+    let mut first = sp;
+    first.output = AggregateOutput::Partial;
+    let second = second_phase(&first, None);
+    let partial = PartialAggregate::new(first, BypassPolicy::default(), Some(7)).unwrap();
+    let plan = node(PartialNode::new(scan(&s, halves), partial), second);
+    assert_eq!(run_one(plan).await, expected, "two phases");
 }

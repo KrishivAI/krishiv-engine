@@ -565,7 +565,7 @@ impl Zones<'_> {
         }
     }
 
-    fn at(&self, row: usize) -> Option<&dyn TimeZoneRules> {
+    pub(super) fn at(&self, row: usize) -> Option<&dyn TimeZoneRules> {
         match self {
             Self::One(zone) => Some(*zone),
             Self::PerRow(zones) => zones

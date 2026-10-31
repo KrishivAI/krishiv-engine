@@ -41,6 +41,7 @@ use std::sync::{Arc, LazyLock};
 
 pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
+pub use defs::{approx_percentile_result, exact_percentile_result};
 pub(crate) use json::parse_json_schema;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
@@ -169,6 +170,20 @@ pub enum Aggregate {
     TrySum,
     /// `try_avg(x)`: `avg` that gives NULL instead of an overflow error.
     TryAvg,
+    /// `percentile(x, percentage[, frequency])`: the exact percentiles; the
+    /// analyzer folds the percentages into the execution form.
+    Percentile,
+    /// `percentile_approx(x, percentage[, accuracy])` /
+    /// `approx_percentile`: Spark's Greenwald-Khanna summary.
+    PercentileApprox,
+    /// `median(x)`: `percentile(x, 0.5)`.
+    Median,
+    /// `percentile_cont(percentage) WITHIN GROUP (ORDER BY x)`.
+    PercentileCont,
+    /// `percentile_disc(percentage) WITHIN GROUP (ORDER BY x)`.
+    PercentileDisc,
+    /// `approx_count_distinct(x[, relativeSD])`: HyperLogLog++.
+    ApproxCountDistinct,
 }
 
 /// A built-in function.
@@ -241,6 +256,36 @@ pub fn builtins() -> &'static Registry {
     &BUILTINS
 }
 
+/// Whether `name` is one Spark's grammar owns (`TIMESTAMPADD` and `TIMESTAMPDIFF`): it has
+/// a definition but no row in Spark's function catalog, and the lowering
+/// reaches it through the keyword-unit forms. A call spelled as an ordinary
+/// function (`timestampadd(col, 1, ts)`) also resolves here, where Spark says
+/// `UNRESOLVED_ROUTINE`: a known divergence.
+#[must_use]
+pub fn is_grammar_only(name: &str) -> bool {
+    grammar_row(name).is_some()
+}
+
+/// The catalog row of a name Spark's grammar owns: `TIMESTAMPADD` and
+/// `TIMESTAMPDIFF` (and the unit forms of `DATEADD`/`DATEDIFF` the lowering
+/// renames to them) are parsed into expressions, not registered in Spark.
+/// Three arguments, as the grammar takes.
+fn grammar_row(name: &str) -> Option<SparkFunction> {
+    let name = match name {
+        "timestampadd" => "timestampadd",
+        "timestampdiff" => "timestampdiff",
+        _ => return None,
+    };
+    Some(SparkFunction {
+        name,
+        registry: "function",
+        since: SparkProfile::V3_5,
+        deterministic: Some(true),
+        kind: Some(FunctionKind::Scalar),
+        arity: Arity::new([false, false, false, true, false, false, false], "3"),
+    })
+}
+
 impl Registry {
     fn build() -> Self {
         let (rows, _) = catalog::load();
@@ -249,7 +294,8 @@ impl Registry {
         let mut defs = HashMap::new();
         let mut unlisted = Vec::new();
         for (id, spec) in (0_u32..).zip(defs::specs()) {
-            let Some(row) = spark.get(spec.name) else {
+            let grammar = grammar_row(spec.name);
+            let Some(row) = spark.get(spec.name).or(grammar.as_ref()) else {
                 unlisted.push(spec.name);
                 continue;
             };

@@ -33,12 +33,17 @@
 //! a v3-compiled extension on an old CPU faults too, so the wheels check the CPU
 //! in pure Python (`python/krishiv/_cpu.py`) before the extension is imported.
 //!
-//! Limitation: the check cannot run before the program starts. Code that runs
-//! first (the Rust runtime start-up and the dynamic loader) was not necessarily built
-//! for the baseline, and the compiler may use a higher level anywhere in the
-//! binary, including in code that runs before `main`. In practice nothing
-//! before `main` is hot or vectorised, so the check is reliable on the CPUs it
-//! targets, but it is best-effort rather than a guarantee.
+//! Code also runs before `main`: ELF constructors, and the Rust runtime
+//! start-up, all compiled for the build's level. So the binaries that have
+//! constructors run the `cpuid` half first of all ([`check_cpuid_or_exit`], from
+//! `.preinit_array`, see `krishiv_alloc`). It allocates nothing, because
+//! constructors must set allocator options before the first allocation; the OS
+//! half reads a file, so it waits for `main`.
+//!
+//! Limitation: the dynamic loader and libc run before that and were built by
+//! whoever built the system, and a binary without `krishiv_alloc` still checks
+//! only in `main`. An arm64 build also checks only in `main`: it has to read
+//! `/proc/cpuinfo` to know anything.
 
 use std::io::Write;
 
@@ -136,15 +141,21 @@ fn x86_regs() -> (u32, u32, u32) {
 /// The passing path is three masked compares on `cpuid` results (see the module docs).
 #[cfg(target_arch = "x86_64")]
 pub fn is_supported() -> bool {
+    // The OS side runs only once `cpuid` has passed. Code that reads and parses a file is
+    // compiled for the build's CPU level, so it may only run on a CPU that has it.
+    cpuid_supported() && x86_os_supported()
+}
+
+/// Whether `cpuid` reports every feature this build was compiled to assume: three
+/// masked compares, nothing allocated.
+#[cfg(target_arch = "x86_64")]
+fn cpuid_supported() -> bool {
     // A static, read at run time: a compat build's all-zero masks are not a constant condition.
     static REQUIRED: [u32; 3] = [x86_required(0), x86_required(1), x86_required(2)];
     let (leaf1, leaf7, ext) = x86_regs();
-    let cpu_ok = leaf1 & REQUIRED[0] == REQUIRED[0]
+    leaf1 & REQUIRED[0] == REQUIRED[0]
         && leaf7 & REQUIRED[1] == REQUIRED[1]
-        && ext & REQUIRED[2] == REQUIRED[2];
-    // The OS side runs only once `cpuid` has passed. Code that reads and parses a file is
-    // compiled for the build's CPU level, so it may only run on a CPU that has it.
-    cpu_ok && x86_os_supported()
+        && ext & REQUIRED[2] == REQUIRED[2]
 }
 
 /// Whether the OS has enabled the state the required features need.
@@ -328,6 +339,16 @@ pub fn check_or_exit() {
     }
 }
 
+/// For a constructor that runs before anything else in the binary: as
+/// [`check_or_exit`], for what `cpuid` reports only. It allocates nothing unless it
+/// exits, so `main` still has to call [`check_or_exit`] for the OS side.
+#[cfg(target_arch = "x86_64")]
+pub fn check_cpuid_or_exit() {
+    if !cpuid_supported() {
+        fail();
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn fail() -> ! {
@@ -494,6 +515,8 @@ mod tests {
     fn check_or_exit_returns_on_a_supported_cpu() {
         // The test machine runs its own build, so this must not exit the test process.
         check_or_exit();
+        #[cfg(target_arch = "x86_64")]
+        check_cpuid_or_exit();
     }
 
     /// The machine running the tests built them, so it must pass its own check.

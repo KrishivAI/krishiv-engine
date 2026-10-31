@@ -204,6 +204,21 @@ pub(crate) struct EvalEnv {
 }
 
 impl EvalEnv {
+    /// The session zone's rules: the fixed offset, else the region the
+    /// plan's `zone_name` names in the bundled database.
+    ///
+    /// # Errors
+    /// `INVALID_TIMEZONE` when the name is no zone id (the config validator
+    /// checks only the syntax of `spark.sql.session.timeZone`).
+    pub(crate) fn zone_rules(&self) -> Result<krishiv_kernels::datetime::ZoneRef> {
+        use krishiv_kernels::datetime::{ZoneRef, resolve_zone};
+        match (self.zone, &self.zone_name) {
+            (Some(off), _) => Ok(ZoneRef::Fixed(krishiv_kernels::cast::FixedOffset(off))),
+            (None, Some(name)) => Ok(resolve_zone(name)?),
+            (None, None) => Ok(ZoneRef::Fixed(krishiv_kernels::cast::FixedOffset(0))),
+        }
+    }
+
     pub(crate) fn new(config: &Config, user: Arc<str>) -> Self {
         let ansi = config
             .get(&ANSI_ENABLED)

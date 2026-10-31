@@ -95,6 +95,7 @@ mod unpivot;
 mod variables;
 mod windows;
 
+use krishiv_kernels::datetime::{TimeZoneRules, ZoneRef, resolve_zone};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
@@ -120,6 +121,102 @@ pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, variable_name
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
 pub use krishiv_functions::signature::SparkProfile;
+
+/// The session time zone, resolved once per analysis: a fixed offset, or a
+/// region of the bundled time-zone database. `Copy` so the conf stays
+/// `Copy`; regions are interned by lower-cased id (the database matches ids
+/// case-insensitively), and only ids it resolves are kept, so the interner
+/// holds at most one entry per zone id the database knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionZone {
+    /// A fixed offset in seconds east of UTC.
+    Fixed(i32),
+    /// A region id, interned.
+    Region(&'static RegionZone),
+}
+
+/// An interned region zone; equal when the ids are.
+#[derive(Debug)]
+pub struct RegionZone {
+    id: String,
+    zone: ZoneRef,
+}
+
+impl PartialEq for RegionZone {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for RegionZone {}
+
+impl std::hash::Hash for RegionZone {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl SessionZone {
+    /// The zone `text` names; `None` when it is not a zone id.
+    #[must_use]
+    pub fn resolve(text: &str) -> Option<Self> {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static REGIONS: OnceLock<Mutex<HashMap<String, &'static RegionZone>>> = OnceLock::new();
+        match resolve_zone(text).ok()? {
+            ZoneRef::Fixed(fixed) => Some(Self::Fixed(fixed.0)),
+            zone @ ZoneRef::Named(_) => {
+                let mut regions = REGIONS
+                    .get_or_init(Mutex::default)
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let interned = regions.entry(text.to_ascii_lowercase()).or_insert_with(|| {
+                    Box::leak(Box::new(RegionZone {
+                        id: text.to_ascii_lowercase(),
+                        zone,
+                    }))
+                });
+                Some(Self::Region(interned))
+            }
+        }
+    }
+}
+
+impl SessionZone {
+    /// The offset in seconds when the zone is a fixed one (the constant
+    /// folder has no tz database, so it reads no region zone).
+    #[must_use]
+    pub fn fixed(self) -> Option<i32> {
+        match self {
+            Self::Fixed(off) => Some(off),
+            Self::Region(_) => None,
+        }
+    }
+
+    /// `us` (microseconds since the epoch) shifted to wall-clock time in
+    /// `zone`; UTC when there is none.
+    #[must_use]
+    pub fn local_micros(zone: Option<Self>, us: i64) -> i64 {
+        let off = zone.map_or(0, |z| z.offset_at_utc(us.div_euclid(1_000_000)));
+        us.saturating_add(i64::from(off).saturating_mul(1_000_000))
+    }
+}
+
+impl TimeZoneRules for SessionZone {
+    fn offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        match self {
+            Self::Fixed(off) => *off,
+            Self::Region(r) => r.zone.offset_at_utc(utc_seconds),
+        }
+    }
+
+    fn offset_for_local(&self, local_seconds: i64) -> i32 {
+        match self {
+            Self::Fixed(off) => *off,
+            Self::Region(r) => r.zone.offset_for_local(local_seconds),
+        }
+    }
+}
 
 /// How nested `WITH` definitions with the same name resolve
 /// (`spark.sql.legacy.ctePrecedencePolicy`).
@@ -188,15 +285,17 @@ pub struct ResolutionConf {
     pub map_key_dedup_last_win: bool,
     /// `spark.sql.runSQLOnFiles`: `` format.`path` `` reads files.
     pub run_sql_on_files: bool,
+    /// `spark.sql.legacy.percentileDiscCalculation`: `percentile_disc`
+    /// returns the continuous lower bound instead of the discrete value.
+    pub legacy_percentile_disc: bool,
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: plain `TIMESTAMP '...'`
     /// without a zone is a `TIMESTAMP_NTZ`.
     pub timestamp_ntz: bool,
-    /// `spark.sql.session.timeZone` as a fixed offset in seconds east of
-    /// UTC (`UTC` is `Some(0)`); `None` for a region id or a malformed
-    /// zone, which need the time-zone database. Unset is `Some(0)`, the
-    /// default the cast path uses, so the default session resolves
-    /// timestamp literals.
-    pub session_zone: Option<i32>,
+    /// `spark.sql.session.timeZone` resolved against the bundled time-zone
+    /// database (a fixed offset or a region id); `None` for a malformed or
+    /// unknown zone. Unset is `UTC`, the default the cast path uses, so the
+    /// default session resolves timestamp literals.
+    pub session_zone: Option<SessionZone>,
     /// `spark.sql.legacy.ctePrecedencePolicy`.
     pub cte_precedence: CtePrecedencePolicy,
     /// `spark.sql.legacy.allowParameterlessCount`: `count()` counts no
@@ -229,8 +328,9 @@ impl Default for ResolutionConf {
             decimal_precision_loss: true,
             map_key_dedup_last_win: false,
             run_sql_on_files: true,
+            legacy_percentile_disc: false,
             timestamp_ntz: false,
-            session_zone: Some(0),
+            session_zone: Some(SessionZone::Fixed(0)),
             cte_precedence: CtePrecedencePolicy::default(),
             allow_parameterless_count: false,
             allow_star_with_single_table_identifier_in_count: false,
@@ -242,7 +342,7 @@ impl Default for ResolutionConf {
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 16] = [
+    pub const KEYS: [&'static str; 17] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -251,6 +351,7 @@ impl ResolutionConf {
         "spark.sql.lateralColumnAlias.enableImplicitResolution",
         "spark.sql.decimalOperations.allowPrecisionLoss",
         "spark.sql.runSQLOnFiles",
+        "spark.sql.legacy.percentileDiscCalculation",
         "spark.sql.mapKeyDedupPolicy",
         "spark.sql.timestampType",
         "spark.sql.session.timeZone",
@@ -274,9 +375,10 @@ impl ResolutionConf {
             d.lateral_column_alias,
             d.decimal_precision_loss,
             d.run_sql_on_files,
+            d.legacy_percentile_disc,
         ];
-        let mut v = [false; 8];
-        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS[..8].iter()).zip(defaults) {
+        let mut v = [false; 9];
+        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS[..9].iter()).zip(defaults) {
             *slot = conf(key).map_or(default, |s| s.trim().eq_ignore_ascii_case("true"));
         }
         let on = |key: &str| conf(key).is_some_and(|s| s.trim().eq_ignore_ascii_case("true"));
@@ -289,24 +391,25 @@ impl ResolutionConf {
             lateral_column_alias: v[5],
             decimal_precision_loss: v[6],
             run_sql_on_files: v[7],
-            map_key_dedup_last_win: conf(Self::KEYS[8])
+            legacy_percentile_disc: v[8],
+            map_key_dedup_last_win: conf(Self::KEYS[9])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("LAST_WIN")),
-            timestamp_ntz: conf(Self::KEYS[9])
+            timestamp_ntz: conf(Self::KEYS[10])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
-            session_zone: match conf(Self::KEYS[10]) {
-                None => Some(0),
-                Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
+            session_zone: match conf(Self::KEYS[11]) {
+                None => Some(SessionZone::Fixed(0)),
+                Some(s) => SessionZone::resolve(s),
             },
-            cte_precedence: conf(Self::KEYS[11])
+            cte_precedence: conf(Self::KEYS[12])
                 .and_then(CtePrecedencePolicy::from_value)
                 .unwrap_or_default(),
-            allow_parameterless_count: on(Self::KEYS[12]),
-            allow_star_with_single_table_identifier_in_count: on(Self::KEYS[13]),
-            udf_parameter_shadows_function: conf(Self::KEYS[14])
+            allow_parameterless_count: on(Self::KEYS[13]),
+            allow_star_with_single_table_identifier_in_count: on(Self::KEYS[14]),
+            udf_parameter_shadows_function: conf(Self::KEYS[15])
                 .map_or(d.udf_parameter_shadows_function, |s| {
                     s.trim().eq_ignore_ascii_case("true")
                 }),
-            legacy_time_parser: conf(Self::KEYS[15])
+            legacy_time_parser: conf(Self::KEYS[16])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
         }
     }
@@ -415,14 +518,18 @@ impl ContextFingerprint {
                 CtePrecedencePolicy::Exception => 2,
             },
         );
-        // The session zone: `None` (a region id) is one input.
-        num(
-            &mut b,
-            match c.session_zone {
-                Some(v) => u64::from(u32::from_ne_bytes(v.to_ne_bytes())),
-                None => 0x8000_0000,
-            },
-        );
+        // The session zone: its id (or offset) is one input.
+        match c.session_zone {
+            Some(SessionZone::Fixed(v)) => {
+                num(&mut b, 1);
+                num(&mut b, u64::from(u32::from_ne_bytes(v.to_ne_bytes())));
+            }
+            Some(SessionZone::Region(r)) => {
+                num(&mut b, 2);
+                text(&mut b, &r.id);
+            }
+            None => num(&mut b, 0),
+        }
         num(&mut b, self.current.len() as u64);
         self.current.iter().for_each(|p| text(&mut b, p));
         num(&mut b, self.catalogs);

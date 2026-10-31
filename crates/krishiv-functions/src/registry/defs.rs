@@ -421,6 +421,76 @@ fn date_trunc_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![exact(DataType::String), instant_input(c, 1)]
 }
 
+fn timestampadd_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![
+        exact(DataType::String),
+        exact(DataType::Long),
+        instant_input(c, 2),
+    ]
+}
+
+fn timestampdiff_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![
+        exact(DataType::String),
+        instant_input(c, 1),
+        instant_input(c, 2),
+    ]
+}
+
+/// `timestampadd` keeps a `TIMESTAMP_NTZ` and makes every other input
+/// (a date included) a `TIMESTAMP`.
+fn timestampadd_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.data_type(2) == Some(&DataType::TimestampNtz) {
+        timestamp_ntz_result(c)
+    } else {
+        timestamp_result(c)
+    }
+}
+
+/// The seconds of `make_timestamp`: `DECIMAL(16,6)`.
+fn seconds_input() -> InputType {
+    exact(DataType::Decimal(
+        DecimalType::try_new(16, 6).unwrap_or(DecimalType::USER_DEFAULT),
+    ))
+}
+
+fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 5];
+    inputs.push(seconds_input());
+    if c.args().len() == 7 {
+        inputs.push(exact(DataType::String));
+    }
+    inputs
+}
+
+fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 5];
+    inputs.push(seconds_input());
+    inputs
+}
+
+/// A malformed field is NULL with ANSI off and always for the `try_`
+/// forms, so the result may be null then whatever the arguments.
+fn make_timestamp_result(c: &CallTypes<'_>, ty: DataType, try_form: bool) -> ArgType {
+    ArgType::new(ty, try_form || !c.ansi() || c.any_nullable())
+}
+
+fn make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::Timestamp, false))
+}
+
+fn try_make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::Timestamp, true))
+}
+
+fn make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::TimestampNtz, false))
+}
+
+fn try_make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(make_timestamp_result(c, DataType::TimestampNtz, true))
+}
+
 fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![
         instant_input(c, 0),
@@ -722,6 +792,38 @@ fn datetime() -> Vec<Spec> {
         &["date_trunc"],
         &Inputs::Built(InputBuilder(date_trunc_inputs)),
         always_null_timestamp,
+    ));
+    out.extend(scalar(
+        &["timestampadd"],
+        &Inputs::Built(InputBuilder(timestampadd_inputs)),
+        timestampadd_result,
+    ));
+    out.extend(scalar(
+        &["timestampdiff"],
+        &Inputs::Built(InputBuilder(timestampdiff_inputs)),
+        long,
+    ));
+    let make = Inputs::Built(InputBuilder(make_timestamp_inputs));
+    let make_ntz = Inputs::Built(InputBuilder(make_timestamp_ntz_inputs));
+    out.extend(scalar(
+        &["make_timestamp", "make_timestamp_ltz"],
+        &make,
+        make_timestamp_ltz,
+    ));
+    out.extend(scalar(
+        &["try_make_timestamp", "try_make_timestamp_ltz"],
+        &make,
+        try_make_timestamp_ltz,
+    ));
+    out.extend(scalar(
+        &["make_timestamp_ntz"],
+        &make_ntz,
+        make_timestamp_ntz,
+    ));
+    out.extend(scalar(
+        &["try_make_timestamp_ntz"],
+        &make_ntz,
+        try_make_timestamp_ntz,
     ));
     out.extend(scalar(
         &["months_between"],
@@ -1180,6 +1282,73 @@ fn try_avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     avg(c)
 }
 
+/// Spark's `PercentileBase.dataType` over the types this engine
+/// represents: `double`, or `array<double>` for an array percentage.
+/// (Spark keeps an ANSI interval child as an interval; this engine has
+/// no interval type, so an interval never reaches typing.)
+pub fn exact_percentile_result(array: bool) -> DataType {
+    if array {
+        DataType::Array(ArrayType::new(DataType::Double, false).into())
+    } else {
+        DataType::Double
+    }
+}
+
+/// Spark's `ApproximatePercentile.dataType`: the child's type, or an
+/// array of it for an array percentage.
+pub fn approx_percentile_result(child: &DataType, array: bool) -> DataType {
+    if array {
+        DataType::Array(ArrayType::new(child.clone(), false).into())
+    } else {
+        child.clone()
+    }
+}
+
+/// Whether the percentage argument at `i` selects an array of
+/// percentiles (Spark's `returnPercentileArray`).
+fn array_percentage(c: &CallTypes<'_>, i: usize) -> bool {
+    matches!(c.data_type(i), Some(DataType::Array(_)))
+}
+
+/// `percentile`, `percentile_cont`, `percentile_disc` and `median` (which
+/// is `percentile(child, 0.5)`): [`exact_percentile_result`].
+fn percentile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        exact_percentile_result(array_percentage(c, 1)),
+        true,
+    ))
+}
+
+/// Spark's `Median`: `percentile(child, 0.5)`.
+fn median(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Double, true))
+}
+
+/// Spark's `ApproximatePercentile.dataType`: the child's type, or an
+/// array of it for an array percentage.
+fn percentile_approx(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let child = c.data_type(0).cloned().unwrap_or(DataType::Null);
+    Ok(ArgType::new(
+        approx_percentile_result(&child, array_percentage(c, 1)),
+        true,
+    ))
+}
+
+/// Spark's `PercentileCont` / `PercentileDisc` result over the user
+/// form (the percentage is the only argument): `double`, or
+/// `array<double>` for an array percentage.
+fn percentile_ordered(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        exact_percentile_result(array_percentage(c, 0)),
+        true,
+    ))
+}
+
+/// `approx_count_distinct`: `bigint`, never NULL (an empty group is 0).
+fn approx_count_distinct(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, false))
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
@@ -1278,6 +1447,42 @@ fn aggregates() -> Vec<Spec> {
         // an overflow error, ANSI on or off.
         aggregate("try_sum", numeric(), try_sum, Aggregate::TrySum),
         aggregate("try_avg", numeric(), try_avg, Aggregate::TryAvg),
+        // The ordered-set and quantile aggregates: the analyzer checks the
+        // percentage, accuracy and frequency itself (they must be foldable
+        // and in range, and `WITHIN GROUP` lowers to the ordering key), so
+        // no implicit casts are declared here.
+        aggregate("percentile", Inputs::Any, percentile, Aggregate::Percentile),
+        aggregate(
+            "percentile_approx",
+            Inputs::Any,
+            percentile_approx,
+            Aggregate::PercentileApprox,
+        ),
+        aggregate(
+            "approx_percentile",
+            Inputs::Any,
+            percentile_approx,
+            Aggregate::PercentileApprox,
+        ),
+        aggregate("median", Inputs::Any, median, Aggregate::Median),
+        aggregate(
+            "percentile_cont",
+            Inputs::Any,
+            percentile_ordered,
+            Aggregate::PercentileCont,
+        ),
+        aggregate(
+            "percentile_disc",
+            Inputs::Any,
+            percentile_ordered,
+            Aggregate::PercentileDisc,
+        ),
+        aggregate(
+            "approx_count_distinct",
+            Inputs::Any,
+            approx_count_distinct,
+            Aggregate::ApproxCountDistinct,
+        ),
     ]
 }
 

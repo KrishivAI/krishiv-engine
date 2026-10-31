@@ -17,7 +17,7 @@ use std::sync::Arc;
 use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisError, AnalyzedPlan, Analyzer as _, DefaultAnalyzer, MemoryCatalog, QueryContext,
-    ResolutionConf, TableColumn,
+    ResolutionConf, SessionZone, TableColumn,
 };
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, Literal, LogicalPlan,
@@ -884,7 +884,7 @@ fn typed_timestamp_literals_resolve_like_spark() {
     let analyze_with = |sql: &str, timestamp_ntz: bool, zone: Option<i32>| {
         let conf = ResolutionConf {
             timestamp_ntz,
-            session_zone: zone,
+            session_zone: zone.map(SessionZone::Fixed),
             ..ResolutionConf::default()
         };
         let plan = parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).map_err(|e| {

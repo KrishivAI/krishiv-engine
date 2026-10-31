@@ -22,7 +22,8 @@ use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
     AccessDecision, AccessPolicy, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
     BoxFuture, DefaultAnalyzer, MemoryCatalog, PolicyVersion, Principal, Privilege, QueryContext,
-    ResolutionConf, RowColumnPolicy, Securable, SparkProfile, SqlFrontend, TableColumn,
+    ResolutionConf, RowColumnPolicy, Securable, SessionZone, SparkProfile, SqlFrontend,
+    TableColumn,
 };
 use crate::walk::{Node, visit_distinct};
 use crate::{
@@ -552,13 +553,13 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
             "SELECT count(a) FILTER (WHERE b = 'x') FROM t",
             default,
             t().project(vec![Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "count".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
                 args: vec![Arc::new(c("a"))],
                 distinct: false,
                 filter: Some(Arc::new(eq(c("b"), s("x")))),
-                within_group: Vec::new(),
             }))]),
         ),
         ("SELECT * FROM t JOIN u USING (z)", default, using(&["z"])),
@@ -669,13 +670,13 @@ fn shared_expressions_stay_linear() {
     let doubled = || {
         (0..30).fold(Arc::new(c("a")), |e, _| {
             Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "+".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
                 args: vec![Arc::clone(&e), e],
                 distinct: false,
                 filter: None,
-                within_group: Vec::new(),
             })))
         })
     };
@@ -1450,19 +1451,23 @@ fn resolution_reads_only_its_configs() {
         ResolutionConf::default()
     );
     // The timestamp type and session zone flow through `from_conf`: unset
-    // is UTC, fixed offsets resolve, regions and malformed zones are `None`.
+    // is UTC, fixed offsets and regions resolve, unknown zones are `None`.
     let ntz =
         ResolutionConf::from_conf(|k| (k == "spark.sql.timestampType").then_some("TIMESTAMP_NTZ"));
     assert!(ntz.timestamp_ntz);
-    assert_eq!(ntz.session_zone, Some(0));
+    assert_eq!(ntz.session_zone, Some(SessionZone::Fixed(0)));
     let plus =
         ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("+05:30"));
-    assert_eq!(plus.session_zone, Some(19_800));
+    assert_eq!(plus.session_zone, Some(SessionZone::Fixed(19_800)));
     assert!(!plus.timestamp_ntz);
     let region = ResolutionConf::from_conf(|k| {
         (k == "spark.sql.session.timeZone").then_some("America/Los_Angeles")
     });
-    assert_eq!(region.session_zone, None);
+    assert!(matches!(region.session_zone, Some(SessionZone::Region(_))));
+    assert_eq!(
+        region.session_zone,
+        SessionZone::resolve("America/Los_Angeles")
+    );
     let bad =
         ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("Mars/Base"));
     assert_eq!(bad.session_zone, None);
@@ -1975,13 +1980,13 @@ fn shared_subexpressions_in_rewrites() {
     let twice = |name: &str| {
         let x = Arc::new(c(name));
         Expr::new(ExprNode::Function(crate::FunctionCall {
+            within_group: Vec::new(),
             name: "+".to_owned(),
             qualifier: Vec::new(),
             arg_names: Vec::new(),
             args: vec![Arc::clone(&x), x],
             distinct: false,
             filter: None,
-            within_group: Vec::new(),
         }))
     };
     let lateral =
@@ -2365,16 +2370,16 @@ fn typed_literals_resolve_with_the_session_zone() {
         }
     };
     let utc = ResolutionConf {
-        session_zone: Some(0),
+        session_zone: Some(SessionZone::Fixed(0)),
         ..ResolutionConf::default()
     };
     let plus = ResolutionConf {
-        session_zone: Some(19_800),
+        session_zone: Some(SessionZone::Fixed(19_800)),
         ..ResolutionConf::default()
     };
     let ntz_conf = ResolutionConf {
         timestamp_ntz: true,
-        session_zone: Some(0),
+        session_zone: Some(SessionZone::Fixed(0)),
         ..ResolutionConf::default()
     };
     let region = ResolutionConf {
@@ -2442,7 +2447,7 @@ fn typed_literals_resolve_with_the_session_zone() {
             "{value}"
         );
     }
-    // A region session serves explicit zones but not wall-clock time.
+    // An unresolvable session zone serves explicit zones but not wall-clock time.
     project(
         TypedLiteralKind::Timestamp,
         "2024-01-01 10:00:00+05:30",
@@ -2473,6 +2478,29 @@ fn typed_literals_resolve_with_the_session_zone() {
         expr.node,
         ExprNode::Literal(Literal::Timestamp(1_704_132_000_000_000))
     ));
+    // A region session zone reads wall-clock text through the database,
+    // with the zone's offset at that instant: January is UTC-08:00, July
+    // UTC-07:00 (daylight saving).
+    let la = ResolutionConf {
+        session_zone: SessionZone::resolve("America/Los_Angeles"),
+        ..ResolutionConf::default()
+    };
+    for (text, micros) in [
+        ("2024-01-01 10:00:00", 1_704_132_000_000_000_i64),
+        ("2024-07-01 10:00:00", 1_719_853_200_000_000_i64),
+    ] {
+        let a = project(TypedLiteralKind::Timestamp, text, la).unwrap();
+        let crate::PlanNode::Project { exprs, .. } = &a.plan.root().node else {
+            panic!("a literal projects");
+        };
+        let ExprNode::Resolved(crate::ResolvedExpr::Alias { expr, .. }) = &exprs[0].node else {
+            panic!("a literal projects as an alias");
+        };
+        assert!(
+            matches!(expr.node, ExprNode::Literal(Literal::Timestamp(v)) if v == micros),
+            "{text}"
+        );
+    }
 }
 
 /// A conditional with `FILTER` names the filter once: the shown call takes
@@ -2481,13 +2509,13 @@ fn typed_literals_resolve_with_the_session_zone() {
 fn conditional_with_filter_names_the_filter_once() {
     let ctx = ctx();
     let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        within_group: Vec::new(),
         name: "nvl".to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),
         args: vec![Arc::new(c("a")), Arc::new(int(1))],
         distinct: false,
         filter: Some(Arc::new(eq(c("b"), s("x")))),
-        within_group: Vec::new(),
     }));
     let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
     assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
@@ -3420,7 +3448,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 16);
+    assert_eq!(ResolutionConf::KEYS.len(), 17);
 }
 
 /// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`, or 0 with

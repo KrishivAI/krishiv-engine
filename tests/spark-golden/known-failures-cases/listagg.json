@@ -1,8 +1,7 @@
 {
   "cases": {
     "query-features": [
-      30,
-      50
+      30
     ]
   },
   "file": "listagg",
