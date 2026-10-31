@@ -3,9 +3,10 @@
 
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::common::{build_session, key_value, read_input, split_statements};
+use crate::deadline::Deadline;
 use crate::format::{OutputMode, render_mode};
 use clap::{Args, ValueEnum};
 use krishiv::DataFrame;
@@ -110,10 +111,10 @@ pub(crate) struct SqlArgs {
     /// reports `stopped (row cap)` with a `≥ N` lower bound.
     #[arg(long)]
     pub(crate) max_rows: Option<usize>,
-    /// Wall-clock budget per statement in seconds (agent mode): checked
-    /// between result batches; when spent, the query is dropped and the
-    /// table reports `stopped (time cap)` with the rows read so far. A
-    /// single batch that never arrives is not interrupted.
+    /// Wall-clock budget per statement in seconds (agent mode), counted from
+    /// the statement's start: when spent, the query is dropped and the table
+    /// reports `stopped (time cap)` with the rows read so far, even if the
+    /// next batch never arrives. Planning is not interrupted.
     #[arg(long, value_name = "SECS", value_parser = positive_seconds)]
     max_seconds: Option<f64>,
     /// Session configuration entry; repeatable.
@@ -419,7 +420,28 @@ fn print_agent_result(
     let mut batches = Vec::new();
     let mut seen = 0usize;
     let mut stop = None;
-    while let Some(next) = futures::executor::block_on(stream.next()) {
+    // A batch that never arrives is abandoned at the budget (counted from the statement's start).
+    let mut deadline = args.max_seconds.map(|budget| {
+        Deadline::at(
+            stmt.start
+                .checked_add(Duration::from_secs_f64(budget))
+                .unwrap_or_else(Instant::now),
+        )
+    });
+    loop {
+        let next = match deadline.as_mut() {
+            Some(d) => match d.next_item(&mut stream) {
+                Some(next) => next,
+                None => {
+                    stop = Some(krishiv::agent::AgentStop::TimeCap);
+                    break;
+                }
+            },
+            None => futures::executor::block_on(stream.next()),
+        };
+        let Some(next) = next else {
+            break;
+        };
         let batch = next.map_err(|e| fail(out, &e))?;
         seen = seen.saturating_add(batch.num_rows());
         batches.push(batch);
