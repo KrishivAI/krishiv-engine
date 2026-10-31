@@ -145,3 +145,17 @@ fn bare_routines_tables_and_views_follow_the_path_in_order() {
         "TABLE_OR_VIEW_NOT_FOUND"
     );
 }
+
+#[test]
+fn canonical_conf_keys_drive_the_path() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.sql.path.enabled", "true").unwrap();
+    s.conf()
+        .set(
+            "krishiv.sql.defaultPath",
+            "spark_catalog.default, system.builtin",
+        )
+        .unwrap();
+    run(&s, "SET PATH = SYSTEM_PATH");
+    assert!(!first(&s, "SELECT current_path()").is_empty());
+}
