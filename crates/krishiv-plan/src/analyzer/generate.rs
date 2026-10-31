@@ -11,19 +11,25 @@
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DatatypeMismatchUnexpectedInputType, UdtfAliasNumberMismatch,
-    UnsupportedGeneratorMultiGenerator, UnsupportedGeneratorNestedInExpressions,
+    DatatypeMismatchStackColumnDiffTypes, DatatypeMismatchUnexpectedInputType,
+    UdtfAliasNumberMismatch, UnsupportedGeneratorMultiGenerator,
+    UnsupportedGeneratorNestedInExpressions,
 };
 use krishiv_types::DataType;
 
 use super::AnalysisError;
+use super::bind::unsupported;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, pretty};
+use super::exprs::{Bound, Cx, pretty};
 use super::ops::col_expr;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use crate::{
-    BoundColumn, Expr, ExprNode, GeneratorKind, LogicalPlan, Origin, PlanNode, ResolvedExpr,
+    BoundColumn, Expr, ExprNode, GeneratorKind, Literal, LogicalPlan, Origin, PlanNode,
+    ResolvedExpr,
 };
+
+/// The most rows `stack` generates: its rows become expressions.
+const STACK_MAX_ROWS: usize = 4096;
 
 /// The generated columns' names and types for an argument of type `ty`, or
 /// `None` when the generator does not take the type.
@@ -98,6 +104,7 @@ impl Resolver<'_> {
         let c = self.child(input, env)?;
         let rels = [&c];
         let cx = Self::cx(&c.out, &rels, env, "Generate");
+        let arg = &self.stack_rows(arg, &cx)?;
         let b = self.bind(arg, &cx)?;
         if super::ops::has_generator(&b.expr) {
             return Err(AnalysisError::new(
@@ -164,6 +171,99 @@ impl Resolver<'_> {
             qualifier: None,
         };
         Ok(self.make(origin, node, out, &[&below]))
+    }
+
+    /// `stack(n, e1, ..., ek)` as the array of `n` structs (`col0`, `col1`,
+    /// ... the fields; a short last row is padded with NULL) `inline`
+    /// generates its rows from, after Spark's `Stack` checks: the count is
+    /// an INT literal and every column holds one type (NULLs aside). Any
+    /// other argument is returned as it is.
+    fn stack_rows(&mut self, arg: &Arc<Expr>, cx: &Cx<'_>) -> Result<Arc<Expr>, AnalysisError> {
+        let ExprNode::Function(f) = &arg.node else {
+            return Ok(Arc::clone(arg));
+        };
+        if f.unqualified() != Some("stack") || f.args.len() < 2 {
+            return Ok(Arc::clone(arg));
+        }
+        let origin = arg.origin;
+        let bound = f
+            .args
+            .iter()
+            .map(|a| self.bind(a, cx))
+            .collect::<Result<Vec<_>, _>>()?;
+        let shown = format!(
+            "\"stack({})\"",
+            bound
+                .iter()
+                .map(|b| pretty(&b.expr, self.ctx.conf.session_zone))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let count = &bound[0];
+        if count.ty.data_type != Some(DataType::Integer) {
+            let input = pretty(&count.expr, self.ctx.conf.session_zone);
+            return Err(AnalysisError::new(
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: shown,
+                    param_index: "first".to_owned(),
+                    required_type: "\"INT\"".to_owned(),
+                    input_sql: format!("\"{input}\""),
+                    input_type: quoted_type(count.ty.data_type.as_ref()),
+                },
+                origin,
+            ));
+        }
+        let rows = match &f.args[0].node {
+            ExprNode::Literal(Literal::Integer(n)) => usize::try_from(*n)
+                .ok()
+                .filter(|n| (1..=STACK_MAX_ROWS).contains(n)),
+            _ => None,
+        };
+        let Some(rows) = rows else {
+            return Err(unsupported(
+                "stack with a row count that is no INT literal from 1 to 4096",
+                origin,
+            ));
+        };
+        let values = &bound[1..];
+        let width = values.len().div_ceil(rows);
+        for col in 0..width {
+            let mut previous: Option<(usize, &DataType)> = None;
+            for (i, b) in values.iter().enumerate().skip(col).step_by(width) {
+                let Some(ty) = b.ty.data_type.as_ref().filter(|t| **t != DataType::Null) else {
+                    continue;
+                };
+                if let Some((left, left_ty)) = previous.filter(|(_, t)| *t != ty) {
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchStackColumnDiffTypes {
+                            sql_expr: shown,
+                            column_index: col.to_string(),
+                            left_type: quoted_type(Some(left_ty)),
+                            left_param_index: (left + 1).to_string(),
+                            right_type: quoted_type(Some(ty)),
+                            right_param_index: (i + 1).to_string(),
+                        },
+                        origin,
+                    ));
+                }
+                previous = Some((i, ty));
+            }
+        }
+        let structs = (0..rows)
+            .map(|row| {
+                let fields = (0..width).flat_map(|col| {
+                    let value = match f.args.get(1 + row * width + col) {
+                        Some(v) => (**v).clone(),
+                        None => Expr::literal(Literal::Null(None)),
+                    };
+                    [Expr::literal(Literal::String(format!("col{col}"))), value]
+                });
+                Expr::function("named_struct", fields.collect()).with_origin(origin)
+            })
+            .collect();
+        Ok(Arc::new(
+            Expr::function("array", structs).with_origin(origin),
+        ))
     }
 
     fn generated_columns(

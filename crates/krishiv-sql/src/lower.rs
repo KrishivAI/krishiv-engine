@@ -169,9 +169,6 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
     )
 }
 
-/// The most rows `stack` lowers: its rows become expressions.
-const STACK_MAX_ROWS: usize = 4096;
-
 struct Lowerer {
     source: SourceId,
     depth: usize,
@@ -963,51 +960,15 @@ impl Lowerer {
             };
             return self.arg(&arg.expr);
         }
-        let Some((first, values)) = args.split_first().filter(|(_, v)| !v.is_empty()) else {
+        if args.len() < 2 {
             return Err(wrong("> 1", args.len()));
-        };
-        // The row count is an INT literal (Spark requires an integer
-        // foldable); the rows are built here, so it is bounded.
-        let rows = match &first.expr.kind {
-            ExprKind::Literal(Literal::Number {
-                text,
-                kind: crate::ast::NumKind::Int,
-            }) => text
-                .parse::<usize>()
-                .ok()
-                .filter(|n| (1..=STACK_MAX_ROWS).contains(n)),
-            _ => None,
-        };
-        let Some(rows) = rows else {
-            return Err(unsupported(
-                "stack with a row count that is no INT literal from 1 to 4096",
-                first.span,
-            ));
-        };
-        let width = values.len().div_ceil(rows);
-        let lowered = values
+        }
+        // The analyzer types the call and generates the rows from it.
+        let call_args = args
             .iter()
             .map(|a| self.arg(&a.expr))
             .collect::<R<Vec<_>>>()?;
-        let mut structs = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let mut fields = Vec::with_capacity(2 * width);
-            for col in 0..width {
-                let name = self.ex(
-                    ExprNode::Literal(krishiv_plan::Literal::String(format!("col{col}"))),
-                    span,
-                );
-                fields.push(arc(name));
-                fields.push(match lowered.get(row * width + col) {
-                    Some(v) => Arc::clone(v),
-                    None => {
-                        arc(self.ex(ExprNode::Literal(krishiv_plan::Literal::Null(None)), span))
-                    }
-                });
-            }
-            structs.push(arc(self.call("named_struct", fields, span)));
-        }
-        Ok(arc(self.call("array", structs, span)))
+        Ok(arc(self.call("stack", call_args, span)))
     }
 
     /// `generator(arg)` over `plan` (a [`PlanNode::Generate`]) and the

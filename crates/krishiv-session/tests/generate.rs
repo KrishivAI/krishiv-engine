@@ -416,19 +416,45 @@ fn generators_beside_group_by_name_their_columns_as_spark_does() {
 #[test]
 fn stack_takes_a_bounded_int_row_count() {
     let s = Session::new().unwrap();
-    for sql in [
-        "select stack(18446744073709551615, 1)",
-        "select stack(1000000000000, 1)",
-        "select stack(2147483647, 1)",
-        "select stack(2L, 1, 2)",
-        "select stack(0, 1)",
-    ] {
+    for sql in ["select stack(2147483647, 1)", "select stack(0, 1)"] {
         assert_eq!(
             error_of(&s, sql).error_class(),
             ErrorClass::KrishivUnsupportedFeature,
             "{sql}"
         );
     }
+}
+
+#[test]
+fn stack_checks_its_count_and_column_types() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        error_of(&s, "select stack(2L, 1, 2)").error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert_eq!(
+        error_of(&s, "select * from stack(2, 1, '1.1', 'a', 2, 2.2, 'b')").error_class(),
+        ErrorClass::DatatypeMismatchStackColumnDiffTypes
+    );
+    // A count that is no INT is a type error, as in Spark.
+    for sql in [
+        "select stack(18446744073709551615, 1)",
+        "select stack(1000000000000, 1)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{sql}"
+        );
+    }
+    // NULLs take any column type.
+    assert_eq!(
+        rows(
+            &s,
+            "select a, cast(b as string), c from stack(2, 1, 1.1, null, 2, null, 'b') t(a, b, c)"
+        ),
+        table(&[&["1", "1.1", "NULL"], &["2", "NULL", "b"]])
+    );
 }
 
 #[test]

@@ -323,6 +323,11 @@ fn check_function(
     f: &crate::FunctionCall,
     origin: Origin,
 ) -> Result<(), AnalysisError> {
+    // A generator's `stack` argument is rewritten by Resolve; anywhere else
+    // Resolve still refuses the call.
+    if f.qualifier.is_empty() && f.name.eq_ignore_ascii_case("stack") {
+        return Ok(());
+    }
     // `builtin.f` / `system.builtin.f` (case-insensitively) resolve to the
     // builtin function; `session.f` / `system.session.f` reach a session
     // UDF only; any other qualifier is an unresolved routine.
