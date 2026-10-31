@@ -1156,3 +1156,81 @@ fn contains_sql_functions_may_not_read_data() {
         "UNRESOLVED_ROUTINE"
     );
 }
+
+#[test]
+fn function_bodies_read_permanent_views() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE VIEW v2(c1, c2) AS VALUES (0, 2), (0, 3), (1, 5)",
+    );
+    // sql-udf.sql.out, foo3_1d..f: a scalar subquery over a view, correlated
+    // with a parameter; the view is read where the function is called.
+    ok(
+        &s,
+        "CREATE FUNCTION sum_c2(x INT) RETURNS INT RETURN (SELECT SUM(c2) FROM v2 WHERE c1 = x)",
+    );
+    ok(
+        &s,
+        "CREATE FUNCTION sum_c2_0() RETURNS INT RETURN sum_c2(0)",
+    );
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tmp_sum() RETURNS INT RETURN SELECT SUM(c2) FROM v2",
+    );
+    ok(
+        &s,
+        "CREATE FUNCTION rows_of(x INT) RETURNS TABLE (a INT) RETURN SELECT c2 FROM v2 WHERE c1 = x",
+    );
+    assert_eq!(ok(&s, "SELECT sum_c2(0), sum_c2(1)"), ["5\t5"]);
+    assert_eq!(ok(&s, "SELECT sum_c2_0()"), ["5"]);
+    assert_eq!(ok(&s, "SELECT tmp_sum()"), ["10"]);
+    assert_eq!(ok(&s, "SELECT * FROM rows_of(0) ORDER BY a"), ["2", "3"]);
+    // A stored function reads its own namespace, not the caller's.
+    ok(&s, "CREATE DATABASE other");
+    ok(&s, "CREATE VIEW other.v2(c1, c2) AS VALUES (0, 100)");
+    ok(&s, "USE other");
+    assert_eq!(ok(&s, "SELECT default.sum_c2(0)"), ["5"]);
+    // A view that is not there is not found when the function is called.
+    ok(&s, "USE default");
+    ok(&s, "DROP VIEW v2");
+    let (class, _) = class_and_params(&fails(&s, "SELECT sum_c2(0)"));
+    assert_eq!(class, "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+#[test]
+fn a_struct_parameter_has_fields() {
+    let s = session();
+    // sql-udf.sql.out, foo3_1x.
+    ok(
+        &s,
+        "CREATE FUNCTION sum_fields(x STRUCT<a: INT, b: INT>) RETURNS INT RETURN x.a + x.b",
+    );
+    assert_eq!(
+        ok(&s, "SELECT sum_fields(named_struct('a', 1, 'b', 2))"),
+        ["3"]
+    );
+    ok(
+        &s,
+        "CREATE FUNCTION deep(x STRUCT<a: STRUCT<c: INT>>) RETURNS INT RETURN deep.x.a.c",
+    );
+    assert_eq!(
+        ok(&s, "SELECT deep(named_struct('a', named_struct('c', 7)))"),
+        ["7"]
+    );
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION in_subquery(x STRUCT<a: INT>) RETURNS INT RETURN (SELECT x.a + max(id) FROM people)",
+    );
+    assert_eq!(ok(&s, "SELECT in_subquery(named_struct('a', 10))"), ["13"]);
+    let (class, _) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION bad_field(x STRUCT<a: INT>) RETURNS INT RETURN x.nope",
+    ));
+    assert_eq!(class, "FIELD_NOT_FOUND");
+    let (class, _) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION bad_base(x INT) RETURNS INT RETURN x.a",
+    ));
+    assert_eq!(class, "INVALID_EXTRACT_BASE_FIELD_TYPE");
+}

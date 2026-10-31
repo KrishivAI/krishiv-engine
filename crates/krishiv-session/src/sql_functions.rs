@@ -18,8 +18,9 @@ use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{FunctionLookup, FunctionRegistry, SparkProfile, SqlFunction};
 use krishiv_plan::{Expr, LogicalPlan, PlanNode, SourceId};
 
-use crate::catalog::{SessionCatalog, expand_temp_views};
+use crate::catalog::{ReadCandidate, SessionCatalog, StoredViews, expand_views_in};
 use crate::store::{CatalogStore, StoredFunctions};
+use krishiv_common::error::KrishivError;
 
 /// A defined function and the statement that defined it.
 #[derive(Clone)]
@@ -123,7 +124,22 @@ pub(crate) struct QueryFunctions {
     /// the query, and the namespace a bare name resolves in.
     stored: Arc<StoredFunctions>,
     namespace: String,
+    /// What reading a permanent view in a body needs; `None` for a registry
+    /// that inlines temporary views only.
+    views: Option<ViewSource>,
     expanded: Mutex<HashMap<String, Arc<SqlFunction>>>,
+    /// The catalog-store lookups the bodies expanded so far made, and the
+    /// first failure inside a stored view's text (see
+    /// [`crate::catalog::Expansion`]).
+    reads: Mutex<(Vec<ReadCandidate>, Option<KrishivError>)>,
+}
+
+/// How a body's permanent views are read: the parser options of the query
+/// and the source ids of the views' lowered text.
+#[derive(Clone)]
+pub(crate) struct ViewSource {
+    pub(crate) parser: krishiv_sql::ParserOptions,
+    pub(crate) next_source: Arc<dyn Fn() -> SourceId + Send + Sync>,
 }
 
 impl QueryFunctions {
@@ -132,6 +148,7 @@ impl QueryFunctions {
         map: Arc<FunctionMap>,
         catalog: Arc<SessionCatalog>,
         case_sensitive: bool,
+        views: Option<ViewSource>,
     ) -> Self {
         let stored = catalog.store.functions();
         let namespace = fold(&catalog.current_namespace(), case_sensitive);
@@ -142,7 +159,9 @@ impl QueryFunctions {
             case_sensitive,
             stored,
             namespace,
+            views,
             expanded: Mutex::new(HashMap::new()),
+            reads: Mutex::new((Vec::new(), None)),
         }
     }
 
@@ -163,7 +182,16 @@ impl QueryFunctions {
             map,
             Arc::clone(&self.catalog),
             self.case_sensitive,
+            self.views.clone(),
         )
+    }
+
+    /// The catalog-store lookups the bodies expanded so far made, in order,
+    /// and the first failure inside a stored view's text. A query asks the
+    /// policy about the reads before it raises the failure.
+    pub(crate) fn body_reads(&self) -> (Vec<ReadCandidate>, Option<KrishivError>) {
+        let reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
+        (reads.0.clone(), reads.1.clone())
     }
 
     /// The text a function's body spans index, for the source `id`.
@@ -176,27 +204,60 @@ impl QueryFunctions {
             .map(|e| e.text.clone())
     }
 
-    /// `def` with the temporary views its body reads inlined.
+    /// `def` with the views its body reads inlined: the temporary ones for
+    /// a temporary function, and the permanent ones of its namespace for a
+    /// stored one (which sees no temporary view: it could not have been
+    /// created reading one).
     fn expanded(&self, def: &Arc<SqlFunction>) -> Arc<SqlFunction> {
         let mut cache = self.expanded.lock().unwrap_or_else(PoisonError::into_inner);
         let key = cache_key(def);
         if let Some(hit) = cache.get(&key) {
             return Arc::clone(hit);
         }
-        // A stored function reads the catalog, not the caller's temporary
-        // views (it could not have been created reading one).
-        if !def.qualifier.is_empty() {
+        let stored_in = def.qualifier.get(1).cloned();
+        if stored_in.is_some() && self.views.is_none() {
             cache.insert(key, Arc::clone(def));
             return Arc::clone(def);
         }
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
+        let next_source = |views: &ViewSource| (views.next_source)();
+        let expansion = match &self.views {
+            Some(views) => {
+                let stored = StoredViews {
+                    parser: views.parser,
+                    next_source: &|| next_source(views),
+                    namespace: stored_in
+                        .clone()
+                        .unwrap_or_else(|| self.catalog.current_namespace()),
+                };
+                expand_views_in(
+                    &self.catalog,
+                    &wrapper,
+                    self.case_sensitive,
+                    Some(&stored),
+                    stored_in,
+                )
+            }
+            None => expand_views_in(&self.catalog, &wrapper, self.case_sensitive, None, None),
+        };
         // A body no view expansion can read (a snapshot name, a cycle)
         // stays as written: the analyzer then reports the table missing.
-        let body = match expand_temp_views(&self.catalog, &wrapper, self.case_sensitive) {
-            Ok(plan) => match &plan.node {
-                PlanNode::Project { exprs, .. } => exprs.first().cloned(),
-                _ => None,
-            },
+        let body = match expansion {
+            Ok(expansion) => {
+                let mut seen = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
+                for read in expansion.reads {
+                    if !seen.0.contains(&read) {
+                        seen.0.push(read);
+                    }
+                }
+                if let Some(e) = expansion.deferred {
+                    seen.1.get_or_insert(e);
+                }
+                match &expansion.plan.node {
+                    PlanNode::Project { exprs, .. } => exprs.first().cloned(),
+                    _ => None,
+                }
+            }
             Err(_) => None,
         };
         let out = match body {
@@ -331,6 +392,7 @@ mod tests {
             functions.snapshot(),
             Arc::new(SessionCatalog::default()),
             false,
+            None,
         )
     }
 

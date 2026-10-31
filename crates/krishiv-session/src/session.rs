@@ -1069,6 +1069,13 @@ impl Session {
             self.state.sql_functions.snapshot(),
             Arc::clone(&self.state.catalog),
             resolution.case_sensitive,
+            Some(crate::sql_functions::ViewSource {
+                parser,
+                next_source: {
+                    let state = Arc::clone(&self.state);
+                    Arc::new(move || SourceId(state.sql_sources.fetch_add(1, Ordering::Relaxed)))
+                },
+            }),
         ));
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1133,7 +1140,7 @@ impl Session {
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
-        let views = self.authorize_reads(&expansion.reads, env).await?;
+        let mut views = self.authorize_reads(&expansion.reads, env).await?;
         if let Some(e) = expansion.deferred {
             return Err(e);
         }
@@ -1151,6 +1158,10 @@ impl Session {
                     .and_then(|(source, _)| env.sql_functions.source_text(source));
                 attach_analysis(e, own.as_ref().or(text))
             });
+        // The bodies of the functions the plan calls read views the same way:
+        // the policy is asked about them before the analysis' own result (or
+        // a failure inside a view's text) is shown.
+        views.extend(self.authorize_body_reads(env).await?);
         // Analysis checks every read: its denials are the reads' denials.
         let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
         for view in views {
@@ -1166,6 +1177,30 @@ impl Session {
             }
         }
         Ok(analyzed)
+    }
+
+    /// The views the bodies of the functions a query called read, once the
+    /// policy allows them; a failure inside a view's text after that.
+    ///
+    /// Boxed: `analyze_in` runs on the deepest stacks (a script's nested
+    /// statements), where the size of its future counts.
+    fn authorize_body_reads<'a>(
+        &'a self,
+        env: &'a QueryEnv,
+    ) -> futures::future::BoxFuture<'a, Result<Vec<krishiv_plan::analyzer::TableIdent>, KrishivError>>
+    {
+        Box::pin(async move {
+            let (reads, deferred) = env.sql_functions.body_reads();
+            let views = if reads.is_empty() {
+                Vec::new()
+            } else {
+                self.authorize_reads(&reads, env).await?
+            };
+            match deferred {
+                Some(e) => Err(e),
+                None => Ok(views),
+            }
+        })
     }
 
     /// The physical plan of `analyzed`, once the files it scans are

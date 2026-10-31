@@ -1033,6 +1033,32 @@ fn stored_function_bodies_are_read_through_the_policy() {
     assert_eq!(class(rows(&s, "SELECT ok_stored()")), DENIED);
 }
 
+/// A function body that reads a permanent view is read through the policy
+/// (the view and its securables) when the function is called, whatever the
+/// function was allowed to be created over.
+#[test]
+fn a_function_body_reading_a_view_is_read_through_the_policy() {
+    let policy = Policy::new(no_reads_of_s);
+    let s = session(Arc::<Policy>::clone(&policy));
+    block_on(s.sql("CREATE VIEW pv AS SELECT 1 AS a")).unwrap();
+    block_on(s.sql("CREATE VIEW s AS SELECT 2 AS a")).unwrap();
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION via_s() RETURNS INT RETURN (SELECT max(a) FROM s)"
+        ))),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE FUNCTION via_pv() RETURNS INT RETURN (SELECT max(a) FROM pv)"
+        ))),
+        "OK"
+    );
+    assert_eq!(class(rows(&s, "SELECT via_pv()")), "OK");
+    policy.deny_everything();
+    assert_eq!(class(rows(&s, "SELECT via_pv()")), DENIED);
+}
+
 fn only_function_privileges(securable: &Securable, p: Privilege) -> AccessDecision {
     if matches!(
         (securable, p),
