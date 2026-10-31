@@ -242,6 +242,7 @@ impl Engine for SessionEngine {
         }
         // A config Krishiv rejects fails the run's reset: the session's answer.
         let session = builder.build().map_err(|e| engine_error(&e))?;
+        super::test_udfs::register(&session, &setup.udfs)?;
         let tables = setup
             .load_fixtures(&fixtures_dir())
             .map_err(|e| harness_error(e.to_string()))?;

@@ -2,9 +2,7 @@
   "cases": {
     "depends-on-command": [
       2,
-      3,
-      4,
-      5
+      4
     ]
   },
   "file": "udf/udf-natural-join",

@@ -2,11 +2,7 @@
   "cases": {
     "depends-on-command": [
       1,
-      2,
-      3
-    ],
-    "test-udfs": [
-      4
+      2
     ]
   },
   "file": "udf/udf-having",

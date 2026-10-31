@@ -2,13 +2,7 @@
   "cases": {
     "depends-on-command": [
       2,
-      3,
-      8
-    ],
-    "test-udfs": [
-      4,
-      9,
-      10
+      3
     ]
   },
   "file": "udf/udf-union",
