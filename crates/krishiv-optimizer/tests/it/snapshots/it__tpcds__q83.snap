@@ -4,8 +4,8 @@ expression: optimized.root().to_string()
 ---
 Limit 100
 +- Sort [item_id#395 ASC NULLS FIRST, sr_item_qty#396 ASC NULLS FIRST], true
-   +- Project [item_id#395, sr_item_qty#396, ((((CAST(sr_item_qty#396 AS DECIMAL(20,0)) * 1.0000) / cse_0#4294967296) / 3.0000) * 100) AS sr_dev#401, cr_item_qty#398, ((((CAST(cr_item_qty#398 AS DECIMAL(20,0)) * 1.0000) / cse_0#4294967296) / 3.0000) * 100) AS cr_dev#402, wr_item_qty#400, ((((CAST(wr_item_qty#400 AS DECIMAL(20,0)) * 1.0000) / cse_0#4294967296) / 3.0000) * 100) AS wr_dev#403, (cse_0#4294967296 / 3.0) AS average#404]
-      +- Project [item_id#395, sr_item_qty#396, wr_item_qty#400, cr_item_qty#398, CAST(((sr_item_qty#396 + cr_item_qty#398) + wr_item_qty#400) AS DECIMAL(20,0)) AS cse_0#4294967296]
+   +- Project [item_id#395, sr_item_qty#396, ((((CAST(sr_item_qty#396 AS DECIMAL(20,0)) * 1.0000) / krishiv_cse_0#4294967296) / 3.0000) * 100) AS sr_dev#401, cr_item_qty#398, ((((CAST(cr_item_qty#398 AS DECIMAL(20,0)) * 1.0000) / krishiv_cse_0#4294967296) / 3.0000) * 100) AS cr_dev#402, wr_item_qty#400, ((((CAST(wr_item_qty#400 AS DECIMAL(20,0)) * 1.0000) / krishiv_cse_0#4294967296) / 3.0000) * 100) AS wr_dev#403, (krishiv_cse_0#4294967296 / 3.0) AS average#404]
+      +- Project [item_id#395, sr_item_qty#396, wr_item_qty#400, cr_item_qty#398, CAST(((sr_item_qty#396 + cr_item_qty#398) + wr_item_qty#400) AS DECIMAL(20,0)) AS krishiv_cse_0#4294967296]
          +- Join Inner, (item_id#395 == item_id#397)
             :- Project [item_id#395, sr_item_qty#396, wr_item_qty#400]
             :  +- Join Inner, (item_id#395 == item_id#399)

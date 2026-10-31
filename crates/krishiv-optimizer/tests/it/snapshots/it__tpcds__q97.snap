@@ -3,8 +3,8 @@ source: crates/krishiv-optimizer/tests/it/tpcds.rs
 expression: optimized.root().to_string()
 ---
 Limit 100
-+- Aggregate [], [sum(CASE WHEN (cse_0#4294967296 and isnull(customer_sk#119)) THEN 1 ELSE 0 END) AS store_only#121, sum(CASE WHEN (isnull(customer_sk#117) and isnotnull(customer_sk#119)) THEN 1 ELSE 0 END) AS catalog_only#122, sum(CASE WHEN (cse_0#4294967296 and isnotnull(customer_sk#119)) THEN 1 ELSE 0 END) AS store_and_catalog#123]
-   +- Project [customer_sk#117, customer_sk#119, isnotnull(customer_sk#117) AS cse_0#4294967296]
++- Aggregate [], [sum(CASE WHEN (krishiv_cse_0#4294967296 and isnull(customer_sk#119)) THEN 1 ELSE 0 END) AS store_only#121, sum(CASE WHEN (isnull(customer_sk#117) and isnotnull(customer_sk#119)) THEN 1 ELSE 0 END) AS catalog_only#122, sum(CASE WHEN (krishiv_cse_0#4294967296 and isnotnull(customer_sk#119)) THEN 1 ELSE 0 END) AS store_and_catalog#123]
+   +- Project [customer_sk#117, customer_sk#119, isnotnull(customer_sk#117) AS krishiv_cse_0#4294967296]
       +- Join FullOuter, ((customer_sk#117 == customer_sk#119) and (item_sk#118 == item_sk#120))
          :- Project [customer_sk#175 AS customer_sk#117, item_sk#176 AS item_sk#118]
          :  +- Shift +124

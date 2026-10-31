@@ -8,8 +8,8 @@ Aggregate [], [count(1) AS count(1)#12, sum(ws_quantity#2) AS sum(ws_quantity)#1
       :- Project [wr_item_sk#5, wr_order_number#6, wr_fee#8, ca_state#10, ca_country#11]
       :  +- Join Inner, (ca_address_sk#9 == wr_refunded_addr_sk#7)
       :     :- Scan spark_catalog.default.web_returns [wr_item_sk#5, wr_order_number#6, wr_refunded_addr_sk#7, wr_fee#8]
-      :     +- Filter (((cse_0#4294967296 and (ca_state#10 IN ('IN', 'OH', 'NJ'))) or (cse_0#4294967296 and (ca_state#10 IN ('WI', 'CT', 'KY')))) or (cse_0#4294967296 and (ca_state#10 IN ('LA', 'IA', 'AR'))))
-      :        +- Project [ca_address_sk#9, ca_state#10, ca_country#11, (ca_country#11 == 'United States') AS cse_0#4294967296]
+      :     +- Filter (((krishiv_cse_0#4294967296 and (ca_state#10 IN ('IN', 'OH', 'NJ'))) or (krishiv_cse_0#4294967296 and (ca_state#10 IN ('WI', 'CT', 'KY')))) or (krishiv_cse_0#4294967296 and (ca_state#10 IN ('LA', 'IA', 'AR'))))
+      :        +- Project [ca_address_sk#9, ca_state#10, ca_country#11, (ca_country#11 == 'United States') AS krishiv_cse_0#4294967296]
       :           +- Scan spark_catalog.default.customer_address [ca_address_sk#9, ca_state#10, ca_country#11]
       +- Project [ws_item_sk#0, ws_order_number#1, ws_quantity#2, ws_net_profit#4]
          +- Filter (((ws_sales_price#3 >= 50.00) and (ws_sales_price#3 <= 200.00)) and ((((ws_net_profit#4 >= 100.00) and (ws_net_profit#4 <= 200.00)) or ((ws_net_profit#4 >= 150.00) and (ws_net_profit#4 <= 300.00))) or ((ws_net_profit#4 >= 50.00) and (ws_net_profit#4 <= 250.00))))
