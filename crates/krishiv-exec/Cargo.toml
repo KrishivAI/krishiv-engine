@@ -94,6 +94,10 @@ name = "aggregate"
 harness = false
 
 [[bench]]
+name = "scan"
+harness = false
+
+[[bench]]
 name = "sort"
 harness = false
 

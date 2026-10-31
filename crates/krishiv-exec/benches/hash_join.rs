@@ -9,6 +9,10 @@
 //!   producer's overhead (design P2-T163 targets at most 5%).
 //! - `hash_join/probe_1m_rows`: build 64 Ki keys, probe 1 M rows of which
 //!   half match (inner join, build columns decoded).
+//! - `hash_join/probe_string_keys_1m_rows`: the same join on 12-byte `Utf8`
+//!   keys.
+//! - `hash_join/probe_zipf_1m_rows`: the same on `Int64` keys where the probe
+//!   side is Zipf-skewed (exponent 1: a few build keys take most probes).
 //! - `hash_join/grace_spill_256k_rows`: 256 Ki ⋈ 256 Ki rows under a 4 MiB
 //!   budget: partitions spill, are reloaded and joined (the spill path).
 //! - `…_row_layout`: the same joins with `krishiv.exec.join.rowLayout` on
@@ -26,7 +30,7 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow_array::{Int64Array, RecordBatch};
+use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
@@ -60,6 +64,40 @@ fn data(rows: i64, stride: i64) -> Vec<Batch> {
         .collect()
 }
 
+fn string_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Utf8, false),
+        Field::new("v", DataType::Int64, false),
+    ]))
+}
+
+/// `rows` rows with key `key-<key(i)>` (12 bytes), in 4,096-row batches.
+fn string_data(rows: i64, key: impl Fn(i64) -> i64) -> Vec<Batch> {
+    let step = i64::try_from(DEFAULT_BATCH_SIZE).expect("batch size");
+    (0..rows)
+        .step_by(DEFAULT_BATCH_SIZE)
+        .map(|start| {
+            let end = (start + step).min(rows);
+            let k =
+                StringArray::from_iter_values((start..end).map(|i| format!("key-{:08}", key(i))));
+            let v = Int64Array::from_iter_values(start..end);
+            let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v)];
+            Batch::new(RecordBatch::try_new(string_schema(), cols).expect("batch"))
+        })
+        .collect()
+}
+
+/// A Zipf(1) draw over `0..n` for row `i`: the inverse CDF `n^u - 1` of a
+/// deterministic uniform `u`, so key 0 takes about `1/ln n` of the rows.
+fn zipf(i: i64, n: i64) -> i64 {
+    let x = i.cast_unsigned().wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11;
+    let u = x as f64 / (1u64 << 53) as f64;
+    // `u < 1`, so the draw is below `n`; the cast truncates toward 0 on purpose.
+    #[expect(clippy::cast_possible_truncation, reason = "a rank below n")]
+    let rank = ((n as f64).powf(u) - 1.0) as i64;
+    rank.min(n - 1)
+}
+
 fn plan(build: &[Batch], probe: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
     plan_with(build, probe, spill, false)
 }
@@ -70,10 +108,11 @@ fn plan_with(
     spill: Option<SpillScope>,
     runtime_filter: bool,
 ) -> Arc<dyn ExecNode> {
+    let schema = build[0].data().schema();
     let spec = JoinSpec {
         join_type: JoinType::Inner,
-        probe_schema: schema(),
-        build_schema: schema(),
+        probe_schema: Arc::clone(&schema),
+        build_schema: Arc::clone(&schema),
         probe_keys: vec![0],
         build_keys: vec![0],
         null_safe: vec![false],
@@ -81,8 +120,9 @@ fn plan_with(
         single_match: false,
         spill,
     };
-    let scan =
-        |b: &[Batch]| -> Arc<dyn ExecNode> { Arc::new(Scan(Batches::new(schema(), b.to_vec()))) };
+    let scan = |b: &[Batch]| -> Arc<dyn ExecNode> {
+        Arc::new(Scan(Batches::new(Arc::clone(&schema), b.to_vec())))
+    };
     let mut join = HashJoin::try_new(spec).expect("join");
     if runtime_filter {
         let filter = krishiv_io::RuntimeFilter::new(
@@ -166,6 +206,24 @@ fn bench(c: &mut Criterion) {
     let (big, one) = (data(1 << 20, 1), data(1, 1));
     let (small, probe) = (data(1 << 16, 2), data(1 << 20, 1));
     let side = data(1 << 18, 1);
+    // Build 64 Ki unique keys; the probe keys are `2 * key` (half match) in
+    // the string case, and Zipf-drawn build keys in the skewed one.
+    let small_str = string_data(1 << 16, |i| i * 2);
+    let probe_str = string_data(1 << 20, |i| i);
+    let zipf_build = data(1 << 16, 1);
+    let zipf_probe = {
+        let step = DEFAULT_BATCH_SIZE as i64;
+        (0..1i64 << 20)
+            .step_by(DEFAULT_BATCH_SIZE)
+            .map(|start| {
+                let end = (start + step).min(1 << 20);
+                let k = Int64Array::from_iter_values((start..end).map(|i| zipf(i, 1 << 16)));
+                let v = Int64Array::from_iter_values(start..end);
+                let b = RecordBatch::try_new(schema(), vec![Arc::new(k), Arc::new(v)]);
+                Batch::new(b.expect("batch"))
+            })
+            .collect::<Vec<_>>()
+    };
     for (suffix, rows) in [("", false), ("_row_layout", true)] {
         g.throughput(Throughput::Elements(1 << 20));
         g.bench_function(format!("build_1m_rows{suffix}"), |b| {
@@ -185,6 +243,28 @@ fn bench(c: &mut Criterion) {
                     &runner,
                     &caller,
                     plan(&small, &probe, None),
+                    None,
+                    rows,
+                ))
+            });
+        });
+        g.bench_function(format!("probe_string_keys_1m_rows{suffix}"), |b| {
+            b.iter(|| {
+                black_box(run(
+                    &runner,
+                    &caller,
+                    plan(&small_str, &probe_str, None),
+                    None,
+                    rows,
+                ))
+            });
+        });
+        g.bench_function(format!("probe_zipf_1m_rows{suffix}"), |b| {
+            b.iter(|| {
+                black_box(run(
+                    &runner,
+                    &caller,
+                    plan(&zipf_build, &zipf_probe, None),
                     None,
                     rows,
                 ))
