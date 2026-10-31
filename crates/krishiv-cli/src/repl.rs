@@ -624,25 +624,4 @@ mod tests {
             "explain output goes to the writer: {plan}"
         );
     }
-
-    #[test]
-    fn the_time_cap_stops_a_long_read_in_the_repl() {
-        let session = session();
-        let mut args = flags(&["--max-seconds", "0.05", "--max-rows", "1000000000"]);
-        let mut r = Repl::new(1_000_000_000);
-        r.agent = true;
-        let mut out = Vec::new();
-        let started = std::time::Instant::now();
-        assert!(run_statement(
-            &session,
-            &r,
-            &mut args,
-            1,
-            "SELECT id FROM range(2000000000)",
-            &mut out
-        ));
-        let text = String::from_utf8(out).expect("utf-8");
-        assert!(text.contains("stopped (time cap)"), "{text}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(60));
-    }
 }

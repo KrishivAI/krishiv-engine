@@ -4,7 +4,7 @@
 
 use std::sync::mpsc;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::channel::oneshot;
 use futures::future::{Either, select};
@@ -18,7 +18,15 @@ pub(crate) struct Deadline {
 }
 
 impl Deadline {
-    /// A deadline at `at` (already past: fires at once).
+    /// A deadline `budget_s` seconds after `start`; `None` when the budget is too large to be a point in time
+    /// (no cap).
+    pub(crate) fn after(start: Instant, budget_s: f64) -> Option<Self> {
+        let budget = Duration::try_from_secs_f64(budget_s).ok()?;
+        Some(Self::at(start.checked_add(budget)?))
+    }
+
+    /// A deadline at `at` (already past: fires at once). If the timer thread cannot be started the deadline
+    /// never fires, and only the between-batches check applies.
     pub(crate) fn at(at: Instant) -> Self {
         let (tx, fired) = oneshot::channel();
         let (cancel, cancelled) = mpsc::channel::<()>();
@@ -76,6 +84,13 @@ mod tests {
         assert_eq!(deadline.next_item(&mut items), Some(Some(1)));
         assert_eq!(deadline.next_item(&mut items), Some(Some(2)));
         assert_eq!(deadline.next_item(&mut items), Some(None));
+    }
+
+    #[test]
+    fn a_budget_too_large_for_a_point_in_time_means_no_deadline() {
+        assert!(Deadline::after(Instant::now(), 1e30).is_none());
+        assert!(Deadline::after(Instant::now(), f64::MAX).is_none());
+        assert!(Deadline::after(Instant::now(), 60.0).is_some());
     }
 
     #[test]
