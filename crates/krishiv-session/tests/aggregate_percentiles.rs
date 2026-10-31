@@ -3,9 +3,8 @@
 //! `depends-on-command` in the golden baseline, since the file creates the
 //! view first): the same data registered through the Rust API, asserting
 //! the golden's rows and error class for each statement this change
-//! covers. Window and interval statements are not covered (the
-//! engine refuses window percentile aggregates, and has no
-//! interval type).
+//! covers. Interval statements are not covered (the engine has no
+//! interval type); the window tests are below.
 #![forbid(unsafe_code)]
 
 use std::path::Path;
@@ -223,6 +222,52 @@ fn quantile_failures_carry_sparks_classes() -> R {
         err.error_class().name(),
         "NEGATIVE_VALUES_IN_FREQUENCY_EXPRESSION"
     );
+    Ok(())
+}
+
+/// `median` and the percentiles run over a whole partition; an ordered or
+/// framed window is refused with Spark's class and the aggregate's text.
+#[test]
+fn percentile_windows_take_only_the_whole_partition() -> R {
+    let s = Session::new()?;
+    let data = "(VALUES ('a', 10), ('a', 20), ('a', 40), ('b', 5)) AS t(k, v)";
+    let whole = shown(
+        &s,
+        &format!(
+            "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) OVER (PARTITION BY k) \
+             FROM {data} ORDER BY k, v"
+        ),
+    )?;
+    assert_eq!(whole, ["20", "20", "20", "5"]);
+    let median = shown(
+        &s,
+        &format!("SELECT median(v) OVER (PARTITION BY k) FROM {data} ORDER BY k, v"),
+    )?;
+    assert_eq!(median, ["20", "20", "20", "5"]);
+    for (over, text) in [
+        (
+            "percentile_disc(0.25) WITHIN GROUP (ORDER BY v DESC) OVER (PARTITION BY k ORDER BY v)",
+            "\"percentile_disc(v, 0.25)\"",
+        ),
+        (
+            "median(v) OVER (PARTITION BY k ORDER BY v)",
+            "\"median(v)\"",
+        ),
+        (
+            "percentile_cont(0.5) WITHIN GROUP (ORDER BY v) OVER (PARTITION BY k ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING)",
+            "\"percentile_cont(v, 0.5)\"",
+        ),
+    ] {
+        let sql = format!("SELECT {over} FROM {data}");
+        let err = block_on(s.sql(&sql)).expect_err(&sql);
+        assert_eq!(
+            err.error_class().name(),
+            "INVALID_WINDOW_SPEC_FOR_AGGREGATION_FUNC",
+            "{sql}"
+        );
+        let params = err.message_parameters();
+        assert_eq!(params.first().map(|(_, v)| v.as_str()), Some(text), "{sql}");
+    }
     Ok(())
 }
 

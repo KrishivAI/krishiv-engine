@@ -302,9 +302,7 @@ impl Planner<'_> {
         }
         if matches!(
             lowered.function,
-            AggregateFunction::Percentile { .. }
-                | AggregateFunction::PercentileApprox { .. }
-                | AggregateFunction::PercentileDisc { .. }
+            AggregateFunction::PercentileApprox { .. }
                 | AggregateFunction::ApproxCountDistinct { .. }
         ) {
             return Err(unsupported(&format!("the window aggregate {name}")));
