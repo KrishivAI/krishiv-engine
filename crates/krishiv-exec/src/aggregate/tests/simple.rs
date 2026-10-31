@@ -737,3 +737,81 @@ fn columns_of_the_wrong_kind_are_internal_errors() {
     let r = a.update(&[0], &[doubles, larger], &Weights::Const(1));
     assert_eq!(internal(r), ErrorClass::InternalError);
 }
+
+/// The percentile family and `approx_count_distinct` merge their partial
+/// states: two batches through a partial phase, then the final phase, equal
+/// the single phase (group `k`, value `v`, frequency `w`).
+#[tokio::test]
+async fn quantile_aggregates_merge_their_partial_states() {
+    use AggregateFunction as F;
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("v", DataType::Int64),
+        ("w", DataType::Int64),
+    ]);
+    let rows = 600_i64;
+    let col = |f: &dyn Fn(i64) -> Option<i64>| i64s(&(0..rows).map(f).collect::<Vec<_>>());
+    let batch = vec![
+        col(&|i| Some(i % 3)),
+        col(&|i| (i % 17 != 0).then_some(i * 7 % 101)),
+        col(&|i| Some(1 + i % 3)),
+    ];
+    let halves: Vec<Vec<ArrayRef>> = vec![
+        batch.iter().map(|c| c.slice(0, 250)).collect(),
+        batch.iter().map(|c| c.slice(250, 350)).collect(),
+    ];
+    let with = |function: F, args: Vec<usize>| AggregateExpr {
+        function,
+        args,
+        input: AggInput::Raw,
+        arg_type: DataType::Int64,
+        name: "q".to_owned(),
+        mask: None,
+    };
+    let aggs = vec![
+        with(
+            F::Percentile {
+                percentages: vec![0.25, 0.5],
+                array: true,
+                reverse: false,
+            },
+            vec![1, 2],
+        ),
+        with(
+            F::Percentile {
+                percentages: vec![0.9],
+                array: false,
+                reverse: true,
+            },
+            vec![1],
+        ),
+        with(
+            F::PercentileDisc {
+                percentages: vec![0.5],
+                array: false,
+                reverse: false,
+                legacy: false,
+            },
+            vec![1],
+        ),
+        with(
+            F::PercentileApprox {
+                percentages: vec![0.5, 0.9],
+                array: true,
+                accuracy: 100,
+            },
+            vec![1],
+        ),
+        with(F::ApproxCountDistinct { p: 10 }, vec![1]),
+    ];
+    let sp = spec(&s, vec![0], aggs);
+    let single = node(scan(&s, vec![batch.clone()]), sp.clone());
+    let expected = run_one(single).await;
+    assert_eq!(expected.len(), 3, "{expected:?}");
+    let mut first = sp;
+    first.output = AggregateOutput::Partial;
+    let second = second_phase(&first, None);
+    let partial = PartialAggregate::new(first, BypassPolicy::default(), Some(7)).unwrap();
+    let plan = node(PartialNode::new(scan(&s, halves), partial), second);
+    assert_eq!(run_one(plan).await, expected, "two phases");
+}
