@@ -52,6 +52,8 @@ type R<T> = Result<T, AnalysisError>;
 /// A subquery's input with its correlation lifted out: the plan, the keys it
 /// groups by, and the outer expressions they match.
 type Lifted = (Arc<LogicalPlan>, Vec<Arc<Expr>>, Vec<Arc<Expr>>);
+/// The inner and the outer sides of the correlated equalities, pairwise.
+type Keys = (Vec<Arc<Expr>>, Vec<Arc<Expr>>);
 
 /// Rewrites the subqueries of `root`; `next_id` is one past every
 /// attribute id in use and is kept so.
@@ -1350,10 +1352,7 @@ impl Rewriter {
             aggregates,
         } = &plan.node
         else {
-            return Err(unsupported(
-                "correlated scalar subqueries without an aggregate",
-                plan.origin,
-            ));
+            return self.scalar_single(base, plan);
         };
         let [item] = &aggregates[..] else {
             return Err(unsupported(
@@ -1412,32 +1411,7 @@ impl Rewriter {
             );
         }
         let (inner, corr) = self.pull(input, true)?;
-        // Each correlated predicate is `inner = outer`: a grouping key.
-        let mut inner_keys = Vec::new();
-        let mut outer_keys = Vec::new();
-        for c in &corr {
-            let pair = match &c.node {
-                ExprNode::Resolved(ResolvedExpr::Function(f))
-                    if f.id == FunctionId::Builtin(Builtin::Eq) && f.args.len() == 2 =>
-                {
-                    let (a, b) = (&f.args[0], &f.args[1]);
-                    match (has_outer(Node::Expr(a)), has_outer(Node::Expr(b))) {
-                        (false, true) if inner_columns(b).is_empty() => Some((a, b)),
-                        (true, false) if inner_columns(a).is_empty() => Some((b, a)),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            let Some((i, o)) = pair else {
-                return Err(unsupported(
-                    "correlated scalar subqueries whose correlation is not an equality",
-                    plan.origin,
-                ));
-            };
-            inner_keys.push(Arc::clone(i));
-            outer_keys.push(Arc::clone(o));
-        }
+        let (inner_keys, outer_keys) = equality_keys(&corr, plan.origin)?;
         // Each grouping expression is a constant or a correlated key, so
         // there is at most one group per outer row.
         let determined = |k: &Arc<Expr>| match &k.node {
@@ -1561,6 +1535,65 @@ impl Rewriter {
             }
         };
         Ok((node(join, Origin::UNKNOWN), read))
+    }
+
+    /// A correlated scalar subquery without an aggregate, as a `Single`
+    /// join of `base` with the subquery (its correlation lifted out) on the
+    /// correlated equalities: a left row matching more than one row fails
+    /// with `SCALAR_SUBQUERY_TOO_MANY_ROWS`, none reads NULL.
+    fn scalar_single(
+        &mut self,
+        base: Arc<LogicalPlan>,
+        plan: &Arc<LogicalPlan>,
+    ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        let out = output(plan)?;
+        let [value] = &out[..] else {
+            return Err(unsupported(
+                "a correlated scalar subquery of this shape",
+                plan.origin,
+            ));
+        };
+        let value = value.clone();
+        let (inner, corr) = self.pull(plan, true)?;
+        let (inner_keys, outer_keys) = equality_keys(&corr, plan.origin)?;
+        if inner_keys.is_empty() {
+            return Err(unsupported(
+                "a correlated scalar subquery of this shape",
+                plan.origin,
+            ));
+        }
+        let mut key_cols = Vec::new();
+        for k in &inner_keys {
+            let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node else {
+                return Err(unsupported("a correlation key of this form", k.origin));
+            };
+            key_cols.push(c.clone());
+        }
+        let (right, renumber) = self.disjoint(&base, inner)?;
+        let cond = outer_keys
+            .iter()
+            .zip(&key_cols)
+            .map(|(o, k)| {
+                let k = renumber.inner(&col_expr(k, Origin::UNKNOWN));
+                boolean(Builtin::Eq, vec![renumber.inner(o), k])
+            })
+            .collect();
+        let join = PlanNode::Join {
+            left: base,
+            right,
+            kind: JoinKind::Single,
+            condition: and_all(cond).map_or(JoinCondition::None, JoinCondition::On),
+        };
+        // NULL where no row matched (an outer join's right side).
+        let value = BoundColumn {
+            id: renumber.id(value.id),
+            nullable: true,
+            ..value
+        };
+        Ok((
+            node(join, Origin::UNKNOWN),
+            col_expr(&value, Origin::UNKNOWN),
+        ))
     }
 
     /// The input of a correlated scalar aggregate that is a `UNION ALL`
@@ -1936,4 +1969,35 @@ fn integer_on_no_rows(e: &Arc<Expr>) -> Option<Option<i64>> {
         }
         _ => None,
     }
+}
+
+/// Each correlated predicate is `inner = outer`: the inner and the outer
+/// sides, pairwise.
+fn equality_keys(corr: &[Arc<Expr>], origin: Origin) -> R<Keys> {
+    let mut inner_keys = Vec::new();
+    let mut outer_keys = Vec::new();
+    for c in corr {
+        let pair = match &c.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.id == FunctionId::Builtin(Builtin::Eq) && f.args.len() == 2 =>
+            {
+                let (a, b) = (&f.args[0], &f.args[1]);
+                match (has_outer(Node::Expr(a)), has_outer(Node::Expr(b))) {
+                    (false, true) if inner_columns(b).is_empty() => Some((a, b)),
+                    (true, false) if inner_columns(a).is_empty() => Some((b, a)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some((i, o)) = pair else {
+            return Err(unsupported(
+                "correlated scalar subqueries whose correlation is not an equality",
+                origin,
+            ));
+        };
+        inner_keys.push(Arc::clone(i));
+        outer_keys.push(Arc::clone(o));
+    }
+    Ok((inner_keys, outer_keys))
 }

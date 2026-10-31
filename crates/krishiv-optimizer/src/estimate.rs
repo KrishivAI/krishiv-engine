@@ -447,7 +447,7 @@ impl<'a> Estimator<'a> {
             cross * sel
         };
         let rows = match kind {
-            JoinKind::LeftOuter => inner.max(l.rows),
+            JoinKind::LeftOuter | JoinKind::Single => inner.max(l.rows),
             JoinKind::RightOuter => inner.max(r.rows),
             JoinKind::FullOuter => inner.max(l.rows).max(r.rows),
             JoinKind::LeftSemi => inner.min(l.rows),
@@ -529,7 +529,7 @@ impl<'a> Estimator<'a> {
         let (left_only, right_only) = ((l.rows - inner).max(0.0), (r.rows - inner).max(0.0));
         let (ml, mr) = (matched(l, r, true), matched(r, l, false));
         let cols: HashMap<AttrId, AttrStats> = match kind {
-            JoinKind::LeftOuter => side(l, ml, false, 0.0)
+            JoinKind::LeftOuter | JoinKind::Single => side(l, ml, false, 0.0)
                 .into_iter()
                 .chain(side(r, mr, true, left_only))
                 .collect(),

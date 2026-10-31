@@ -115,6 +115,7 @@ fn value(a: &dyn Array, row: usize) -> String {
     match a.data_type() {
         ArrowType::Int32 => a.as_primitive::<Int32Type>().value(row).to_string(),
         ArrowType::Int64 => a.as_primitive::<Int64Type>().value(row).to_string(),
+        ArrowType::Utf8View => a.as_string_view().value(row).to_owned(),
         ArrowType::Float64 => format!("{:?}", a.as_primitive::<Float64Type>().value(row)),
         other => panic!("unexpected column type {other}"),
     }
@@ -201,4 +202,23 @@ fn unread_groups_raise_no_errors() {
     let query = "SELECT a FROM t WHERE b = 'x' AND c < (SELECT sum(w.v) FROM w WHERE w.k = t.a)";
     assert!(restricted(&s, query));
     assert_eq!(rows(&s, query), ["1"]);
+}
+
+/// A correlated scalar subquery without an aggregate is a single-match
+/// join: NULL without a match, the row with one, and
+/// `SCALAR_SUBQUERY_TOO_MANY_ROWS` with several (Spark's `Single` join).
+#[test]
+fn a_scalar_subquery_without_an_aggregate_matches_at_most_one_row() {
+    let s = session();
+    let query = "SELECT a, (SELECT d FROM u WHERE u.a = t.a AND u.a > 1) FROM t WHERE b = 'x'";
+    assert_eq!(
+        rows(&s, query),
+        ["1,NULL", "1,NULL", "2,x", "3,NULL", "5,NULL", "NULL,NULL"]
+    );
+    let many = "SELECT a, (SELECT d FROM u WHERE u.a = t.a) FROM t WHERE b = 'x'";
+    let err = block_on(block_on(s.sql(many)).unwrap().collect()).unwrap_err();
+    assert!(
+        err.to_string().contains("SCALAR_SUBQUERY_TOO_MANY_ROWS"),
+        "{err}"
+    );
 }
