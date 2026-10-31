@@ -1264,3 +1264,17 @@ fn a_stored_body_resolves_its_bare_names_in_its_own_namespace() {
     );
     assert_eq!(ok(&s, "SELECT abs_f(-4)"), ["5"]);
 }
+
+#[test]
+fn a_table_function_takes_named_arguments() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE FUNCTION two(x INT, y INT DEFAULT 5) RETURNS TABLE (a INT, b INT) RETURN SELECT x, y",
+    );
+    assert_eq!(ok(&s, "SELECT * FROM two(x => 1)"), ["1\t5"]);
+    assert_eq!(ok(&s, "SELECT * FROM two(y => 2, x => 1)"), ["1\t2"]);
+    assert_eq!(ok(&s, "SELECT * FROM two(1, y => 3)"), ["1\t3"]);
+    // A built-in table function takes none.
+    fails(&s, "SELECT * FROM range(end => 3)");
+}

@@ -44,6 +44,7 @@ pub(super) const NAMES: &[&str] = &[
     "current_database",
     "current_schema",
     "current_catalog",
+    "current_path",
     "input_file_name",
     "input_file_block_start",
     "input_file_block_length",
@@ -148,7 +149,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
     }
     // `typeof` never reaches execution: the analyzer rewrites it to a
     // string literal, so a call that arrives here is an analyzer bug.
-    if listed == "typeof" {
+    if listed == "typeof" || listed == "current_path" {
         return Some((
             listed,
             Err(unsupported(
