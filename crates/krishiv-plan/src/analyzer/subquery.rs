@@ -1319,12 +1319,6 @@ impl Rewriter {
                 plan.origin,
             ));
         };
-        if !keys.is_empty() {
-            return Err(unsupported(
-                "correlated scalar subqueries with GROUP BY",
-                plan.origin,
-            ));
-        }
         // Spark rejects outer references in the value
         // (`AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES`, or an outer
         // aggregate's `CORRELATED_REFERENCE`); the join could not bind them.
@@ -1334,13 +1328,25 @@ impl Rewriter {
                 item.origin,
             ));
         }
-        let empty = on_no_rows(expr).ok_or_else(|| {
-            unsupported(
-                "a correlated scalar subquery whose value over no rows is not NULL or a count",
-                plan.origin,
-            )
-        })?;
+        // Grouped, the subquery has no row for an outer row without matches:
+        // its value is NULL, whatever the expression (a bare `count` too).
+        let empty = if keys.is_empty() {
+            on_no_rows(expr).ok_or_else(|| {
+                unsupported(
+                    "a correlated scalar subquery whose value over no rows is not NULL or a count",
+                    plan.origin,
+                )
+            })?
+        } else {
+            None
+        };
         if let Some(union) = under_union(input) {
+            if !keys.is_empty() {
+                return Err(unsupported(
+                    "correlated scalar subqueries with GROUP BY",
+                    plan.origin,
+                ));
+            }
             let (inner, inner_keys, outer_keys) = self.domain_union(&base, input, union)?;
             return self.scalar_join(
                 base,
@@ -1379,6 +1385,21 @@ impl Rewriter {
             };
             inner_keys.push(Arc::clone(i));
             outer_keys.push(Arc::clone(o));
+        }
+        // Each grouping expression is a constant or a correlated key, so
+        // there is at most one group per outer row.
+        let determined = |k: &Arc<Expr>| match &k.node {
+            ExprNode::Literal(_) => true,
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => inner_keys.iter().any(
+                |i| matches!(&i.node, ExprNode::Resolved(ResolvedExpr::Column(o)) if o.id == c.id),
+            ),
+            _ => false,
+        };
+        if !keys.iter().all(determined) {
+            return Err(unsupported(
+                "correlated scalar subqueries with GROUP BY",
+                plan.origin,
+            ));
         }
         self.scalar_join(
             base,
