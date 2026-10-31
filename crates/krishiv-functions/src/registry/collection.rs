@@ -53,6 +53,15 @@ pub(super) fn split_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     ))
 }
 
+/// `regexp_extract_all`: Spark's `ArrayType(subject.dataType)`, so unlike
+/// `split` the items are nullable; the result is nullable when an argument is.
+pub(super) fn extract_all_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(DataType::String, true).into()),
+        c.any_nullable(),
+    ))
+}
+
 /// A collection signature: `Scalar` kind and execution (the analyzer
 /// coerces to `split`'s inputs; `map` and `size` take none).
 fn spec(

@@ -158,7 +158,7 @@ fn width_bucket(value: f64, min: f64, max: f64, buckets: i64) -> Option<i64> {
     }
     let (lower, upper) = (min.min(max), min.max(max));
     // `as i64` saturates like the JVM's `toLong`.
-    let scaled = |num: f64| (buckets as f64 * num / (upper - lower)) as i64 + 1;
+    let scaled = |num: f64| ((buckets as f64 * num / (upper - lower)) as i64).wrapping_add(1);
     Some(if min < max {
         if value < lower {
             0

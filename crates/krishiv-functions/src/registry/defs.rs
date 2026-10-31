@@ -320,7 +320,7 @@ fn strings() -> Vec<Spec> {
             exact(DataType::String),
             exact(DataType::Integer),
         ]),
-        super::collection::split_result,
+        super::collection::extract_all_result,
     ));
     out.extend(scalar(
         &["regexp_substr"],
