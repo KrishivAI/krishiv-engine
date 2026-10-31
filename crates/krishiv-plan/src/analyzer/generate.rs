@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     DatatypeMismatchStackColumnDiffTypes, DatatypeMismatchUnexpectedInputType,
-    UdtfAliasNumberMismatch, UnsupportedGeneratorMultiGenerator,
+    UdtfAliasNumberMismatch, UnresolvedColumnWithoutSuggestion, UnsupportedGeneratorMultiGenerator,
     UnsupportedGeneratorNestedInExpressions,
 };
 use krishiv_types::DataType;
@@ -414,6 +414,22 @@ impl Resolver<'_> {
         let Some(index) = found else {
             return Ok((items, None));
         };
+        // The generated columns are no lateral alias: another item reading
+        // the generator's alias is unresolved, as in Spark.
+        if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &items[index].expr.node
+            && let Some(user) = items
+                .iter()
+                .enumerate()
+                .find(|(i, b)| *i != index && b.lateral.contains(&output.id))
+                .map(|(_, b)| b)
+        {
+            return Err(AnalysisError::new(
+                UnresolvedColumnWithoutSuggestion {
+                    object_name: super::catalog::quoted(std::slice::from_ref(&output.name)),
+                },
+                user.expr.origin,
+            ));
+        }
         // The item's name is the generated one unless the user wrote an
         // alias (`select_items` names every item): only a written alias
         // renames the generated columns.

@@ -552,3 +552,74 @@ fn inline_null_structs_split_mid_row_stay_null() {
         table(&[&["1", "a"], &["NULL", "NULL"], &["3", "c"]]),
     );
 }
+
+#[test]
+fn several_generators_in_one_select_make_a_cross_product() {
+    let s = Session::new().unwrap();
+    let mut got = rows(&s, "select explode(array(1, 2, 3)), explode(array(10, 20))");
+    got.sort();
+    assert_eq!(
+        got,
+        table(&[
+            &["1", "10"],
+            &["1", "20"],
+            &["2", "10"],
+            &["2", "20"],
+            &["3", "10"],
+            &["3", "20"],
+        ])
+    );
+}
+
+#[test]
+fn a_generator_beside_an_aggregate_without_group_by_runs_above_it() {
+    let s = Session::new().unwrap();
+    let mut got = rows(
+        &s,
+        "select explode(collect_list(cast(id as int))) as val from range(3)",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["0"], &["1"], &["2"]]));
+    let mut got = rows(
+        &s,
+        "select explode(collect_list(cast(id as int))) as val, cast(count(*) as int) as cnt from range(3)",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["0", "3"], &["1", "3"], &["2", "3"]]));
+    let e = error_of(
+        &s,
+        "select explode(array(1, 2)), explode(array(3, 4)), count(*)",
+    );
+    assert!(
+        e.to_string()
+            .contains("UNSUPPORTED_GENERATOR.MULTI_GENERATOR"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_generator_reads_a_lateral_alias_beside_an_aggregate() {
+    let s = Session::new().unwrap();
+    let mut got = rows(
+        &s,
+        "select col, cast(n as int) from (select array(1, 2, 3) as arr, explode(arr) as col, count(*) as n)",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["1", "1"], &["2", "1"], &["3", "1"]]));
+}
+
+#[test]
+fn a_generators_output_is_no_lateral_alias_beside_an_aggregate() {
+    let s = Session::new().unwrap();
+    for q in [
+        "select explode(array(1, 2, 3)) as col, col + 1 as col2, count(*)",
+        "select array(1, 2, 3) as arr, explode(arr) as col, count(*), col + 1 as col2",
+    ] {
+        let e = error_of(&s, q);
+        assert!(
+            e.to_string()
+                .contains("UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"),
+            "{q}: {e}"
+        );
+    }
+}

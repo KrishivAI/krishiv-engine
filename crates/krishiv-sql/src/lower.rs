@@ -932,6 +932,21 @@ impl Lowerer {
         ))
     }
 
+    /// Whether `e` calls a built-in aggregate function outside a window
+    /// (so a select list holding it aggregates even without `GROUP BY`).
+    fn has_aggregate_call(e: &Expr) -> bool {
+        if let ExprKind::Function(f) = &e.kind
+            && f.over.is_none()
+            && let [name] = &f.name.parts[..]
+            && krishiv_plan::analyzer::BuiltinFunctions::is_aggregate(&name.value)
+        {
+            return true;
+        }
+        let mut found = false;
+        e.for_each_child(&mut |c| found = found || Self::has_aggregate_call(c));
+        found
+    }
+
     /// The one argument a generator call reads: the argument of `explode`,
     /// `posexplode` and `inline`, or for `stack(n, e1, ..., ek)` the array
     /// of `n` structs `inline` generates the rows from (`col0`, `col1`, ...
@@ -1028,11 +1043,22 @@ impl Lowerer {
             );
         }
         let mut items = Vec::new();
+        // A select list with an aggregate call is an aggregate even without
+        // `GROUP BY`: its generators run above it, in the analyzer.
+        let aggregates = s
+            .projection
+            .iter()
+            .any(|i| Self::has_aggregate_call(&i.expr));
+        let has_generator = s
+            .projection
+            .iter()
+            .any(|i| Self::generator_of(&i.expr).is_some());
         for (index, item) in s.projection.iter().enumerate() {
             // With GROUP BY or HAVING the analyzer extracts the generator
             // from the aggregate (Spark's `ExtractGenerator`).
             if s.group_by.is_none()
                 && s.having.is_none()
+                && !(aggregates && has_generator)
                 && Self::generator_of(&item.expr).is_some()
             {
                 let taken =
@@ -1044,7 +1070,7 @@ impl Lowerer {
             }
             items.push(self.select_item(item)?);
         }
-        if s.group_by.is_none() && s.having.is_none() {
+        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
             plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),

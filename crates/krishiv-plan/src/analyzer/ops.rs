@@ -2490,10 +2490,20 @@ impl Resolver<'_> {
         global: bool,
     ) -> Result<(), AnalysisError> {
         let mut seen = HashSet::new();
+        // A lateral alias is an item of the list itself, checked there.
+        let aliases: HashSet<AttrId> = items
+            .iter()
+            .flat_map(|b| b.lateral.iter().copied())
+            .collect();
         for b in items {
             let mut stack = vec![Arc::clone(&b.expr)];
             while let Some(x) = stack.pop() {
                 if !seen.insert(super::bind::addr(&*x)) || keys.contains(&semantic_key(&x, memo)) {
+                    continue;
+                }
+                if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
+                    && aliases.contains(&c.id)
+                {
                     continue;
                 }
                 match &x.node {
