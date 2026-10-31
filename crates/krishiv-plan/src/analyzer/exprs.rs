@@ -2006,6 +2006,16 @@ impl Resolver<'_> {
                 // conditional (`session.nvl`, `system.session.nvl`, ...) runs
                 // the UDF, while a bare `nvl` runs the built-in (which wins
                 // the search path).
+                // `decode(expr, search, result, ...)` is a CASE; the two-argument
+                // form is the charset decoder and stays a function.
+                if is_builtin_entry(&entry)
+                    && lookup_name.eq_ignore_ascii_case("decode")
+                    && n >= 3
+                    && kids.len() == n
+                    && !f.distinct
+                {
+                    return self.decode_case(e, kids);
+                }
                 if is_builtin_entry(&entry)
                     && let Some(which) = Conditional::of(lookup_name)
                 {
@@ -3763,6 +3773,32 @@ impl Resolver<'_> {
             }
         }
         Ok(())
+    }
+
+    /// `decode(expr, search1, result1, ..., [default])` (Oracle style): a
+    /// `CASE` over null-safe equality, so a NULL `expr` matches a NULL
+    /// search. A trailing unpaired argument is the default; without one the
+    /// result is NULL. The column is named by the call as written.
+    fn decode_case(&mut self, e: &Arc<Expr>, kids: &[Bound]) -> Result<Bound, AnalysisError> {
+        let origin = e.origin;
+        let mut parts = Vec::with_capacity(kids.len());
+        for pair in kids[1..].chunks(2) {
+            if let [search, result] = pair {
+                let cond = self.operator_call(
+                    Builtin::EqNullSafe,
+                    origin,
+                    &[kids[0].clone(), search.clone()],
+                )?;
+                parts.push(cond);
+                parts.push(result.clone());
+            } else {
+                parts.extend(pair.iter().cloned());
+            }
+        }
+        let mut b = self.operator_call(Builtin::When, origin, &parts)?;
+        b.carry_markers(kids);
+        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        Ok(b)
     }
 
     /// A conditional function rewritten during analysis (Spark's

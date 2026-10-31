@@ -119,6 +119,7 @@ __all__ = [
     "first_value",
     "floor",
     "format_number",
+    "format_string",
     "from_json",
     "from_unixtime",
     "from_utc_timestamp",
@@ -204,6 +205,7 @@ __all__ = [
     "position",
     "positive",
     "pow",
+    "printf",
     "quarter",
     "quote",
     "radians",
@@ -795,6 +797,11 @@ def format_number(col: ColumnOrName, d: int) -> Column:
     return _call("format_number", _named(col, "col"), _lit(d, "d"))
 
 
+def format_string(format: str, *cols: ColumnOrName) -> Column:
+    """Calls the registry function ``format_string``."""
+    return _call("format_string", _lit(format, "format"), *_cols(cols))
+
+
 def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``from_json``."""
     return _call("from_json", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
@@ -1235,6 +1242,11 @@ def positive(col: ColumnOrName) -> Column:
 def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column:
     """Calls the registry function ``power``."""
     return _call("power", _num_or_col(col1, "col1"), _num_or_col(col2, "col2"))
+
+
+def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column:
+    """Calls the registry function ``printf``."""
+    return _call("printf", _named(format, "format"), *_cols(cols))
 
 
 def quarter(col: ColumnOrName) -> Column:
