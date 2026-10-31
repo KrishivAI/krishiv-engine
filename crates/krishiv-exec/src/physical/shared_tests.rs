@@ -171,8 +171,8 @@ fn filtered_scan(id: u64) -> PhysNode {
 #[test]
 fn instantiation_declares_a_shared_plans_filters_and_refuses_its_reads() {
     let values = Arc::new(LocalValues::new());
-    let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
-        .with_values(Arc::clone(&values) as Arc<dyn crate::values::ValueService>);
+    let worker =
+        WorkerContext::new(Arc::new(MemoryTables::new())).with_values(Arc::clone(&values) as _);
     let p = plan(read(1))
         .with_shared(vec![shared(1, filtered_scan(7))])
         .unwrap();

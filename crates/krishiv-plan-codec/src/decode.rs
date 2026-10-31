@@ -232,9 +232,13 @@ pub fn from_message(
 }
 
 fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
+    let explain_nodes = m
+        .shared
+        .iter()
+        .fold(m.explain.len(), |n, s| n.saturating_add(s.explain.len()));
     for (what, n, max) in [
         ("nodes", m.nodes.len(), limits.max_nodes),
-        ("explain nodes", m.explain.len(), limits.max_nodes),
+        ("explain nodes", explain_nodes, limits.max_nodes),
         ("expressions", m.exprs.len(), limits.max_exprs),
     ] {
         if n > max {

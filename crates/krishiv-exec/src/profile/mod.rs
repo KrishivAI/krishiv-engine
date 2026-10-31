@@ -33,7 +33,8 @@ pub const PROFILE_VERSION: u64 = 1;
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileNode {
-    /// The node's pre-order index in the physical plan, which operators
+    /// The node's pre-order index over the physical plan's
+    /// [`roots`](crate::physical::PhysicalPlan::roots), which operators
     /// name ([`OperatorEntry::node`](crate::OperatorEntry::node)). `None`
     /// for a node `EXPLAIN` adds that is not a plan node (a subquery's
     /// heading) or one that could not be matched.

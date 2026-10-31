@@ -570,6 +570,29 @@ fn a_corrupt_shared_plan_is_refused() {
     let mut m = plan.clone();
     m.shared[0].root = u32::MAX;
     assert!(decode(&m.encode_to_vec()).is_err());
+    // A shared plan's printable tree.
+    let mut m = plan.clone();
+    m.shared[0].explain_root = u32::MAX;
+    assert!(matches!(
+        decode(&m.encode_to_vec()).unwrap_err(),
+        CodecError::Corrupt(_)
+    ));
+    let mut m = plan.clone();
+    m.shared[0].explain.clear();
+    assert!(matches!(
+        decode(&m.encode_to_vec()).unwrap_err(),
+        CodecError::Corrupt(_)
+    ));
+    // Its tree counts against the limit on explain nodes.
+    let few = Limits {
+        max_nodes: plan.nodes.len().max(plan.explain.len()),
+        ..Limits::default()
+    };
+    let bytes = plan.encode_to_vec();
+    assert!(matches!(
+        decode_with(&bytes, &few, &ReaderFeatures::all()).unwrap_err(),
+        CodecError::Limit(e) if e.contains("explain nodes")
+    ));
     // A read with no shared plan listed.
     let mut m = plan;
     m.shared.clear();
