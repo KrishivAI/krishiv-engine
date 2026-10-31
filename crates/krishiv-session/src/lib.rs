@@ -60,6 +60,7 @@ mod profile;
 mod scripting;
 mod session;
 mod sql_functions;
+mod sql_path;
 mod store;
 mod table_commands;
 mod udfs;
