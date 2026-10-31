@@ -2089,7 +2089,9 @@ impl Resolver<'_> {
                         .enumerate()
                         .map(|(i, k)| match &k.expr.node {
                             ExprNode::Resolved(
-                                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c),
+                                ResolvedExpr::Column(c)
+                                | ResolvedExpr::OuterColumn(c)
+                                | ResolvedExpr::LambdaVar(c),
                             ) => c.name.clone(),
                             ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {

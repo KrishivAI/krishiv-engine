@@ -87,7 +87,9 @@ fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
 fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
     match to {
         ArrowType::List(f) if array.data_type() != to => {
-            let list = array.as_list::<i32>();
+            let list = array
+                .as_list_opt::<i32>()
+                .ok_or_else(|| internal("a relabelled list is not a list"))?;
             Ok(Arc::new(
                 ListArray::try_new(
                     Arc::clone(f),
@@ -99,7 +101,9 @@ fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
             ))
         }
         ArrowType::Struct(fields) if array.data_type() != to => {
-            let s = array.as_struct();
+            let s = array
+                .as_struct_opt()
+                .ok_or_else(|| internal("a relabelled struct is not a struct"))?;
             let columns = s
                 .columns()
                 .iter()

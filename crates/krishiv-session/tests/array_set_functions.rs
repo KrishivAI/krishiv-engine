@@ -487,3 +487,32 @@ fn rows_over_columns() {
         ["[{1, x}, {2, NULL}]", "NULL"]
     );
 }
+
+/// A lambda variable names its field as a column does, and string columns
+/// meet string literals (Spark 4.2.0).
+#[test]
+fn lambda_variables_and_string_columns() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT transform(array(array(1,2)), x -> arrays_zip(x, x))")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert!(
+        format!("{:?}", schema.field(0).data_type()).contains("\"x\""),
+        "{schema:?}"
+    );
+    assert_eq!(
+        run(
+            &s,
+            "SELECT array_union(a, array('x')) FROM VALUES (array('y','x','y')) t(a)"
+        )
+        .unwrap(),
+        ["[y, x]"]
+    );
+    assert_eq!(
+        run(
+            &s,
+            "SELECT array_contains(a, 'x') FROM VALUES (array('y','x')), (array('y')) t(a)"
+        )
+        .unwrap(),
+        ["true", "false"]
+    );
+}

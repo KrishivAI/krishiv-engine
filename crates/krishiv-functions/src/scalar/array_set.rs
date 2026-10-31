@@ -20,7 +20,7 @@ use arrow_array::{
     Array, ArrayRef, BooleanArray, ListArray, StructArray, UInt32Array, new_null_array,
 };
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow_schema::{DataType, Field, Fields};
+use arrow_schema::{DataType, Field, Fields, TimeUnit};
 use arrow_select::concat::concat;
 use arrow_select::take::take;
 use krishiv_common::error::KrishivError;
@@ -45,7 +45,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
     let listed = listed(NAMES, name)?;
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let binding = match (listed, types.as_slice()) {
-        ("array_contains", [DataType::List(f), _]) if kh::supports_key(f.data_type()) => {
+        ("array_contains", [DataType::List(f), _]) if orders(f.data_type()) => {
             Ok(Binding::new(DataType::Boolean, contains))
         }
         ("array_distinct", [t @ DataType::List(f)]) if orders(f.data_type()) => {
@@ -82,7 +82,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
 
 /// Whether the kernel orders elements of type `t`.
 fn orders(t: &DataType) -> bool {
-    *t == DataType::Null || kh::supports_key(t)
+    matches!(t, DataType::Null | DataType::Time64(TimeUnit::Nanosecond)) || kh::supports_key(t)
 }
 
 /// Whether `t` holds a float somewhere.
@@ -142,6 +142,15 @@ fn kernel(e: impl std::fmt::Display) -> KrishivError {
     internal(e.to_string())
 }
 
+/// Whether `a[i]` equals `b[j]` (both non-null) as Spark compares them.
+fn same_value(a: &dyn Array, i: usize, b: &dyn Array, j: usize) -> Result<bool, KrishivError> {
+    if a.data_type() == b.data_type() {
+        Ok(cmp_rows(a, i, b, j).map_err(kernel)? == Ordering::Equal)
+    } else {
+        kh::keys_equal(a, i, b, j).map_err(kernel)
+    }
+}
+
 /// `array_contains(arr, value)`.
 fn contains(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
     let c = x.column(0)?;
@@ -161,7 +170,7 @@ fn contains(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
         for i in start..start + len {
             if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
                 saw_null = true;
-            } else if kh::keys_equal(values.as_ref(), i, value.as_ref(), row).map_err(kernel)? {
+            } else if same_value(values.as_ref(), i, value.as_ref(), row)? {
                 hit = true;
                 break;
             }
@@ -303,12 +312,14 @@ fn sort(x: &Inputs<'_>, field: &Arc<Field>) -> Result<ArrayRef, KrishivError> {
 /// all of them (fields named `0`, `1`, ...).
 fn zip_binding(args: &[BindArg], types: &[DataType]) -> Option<Binding> {
     let is_array = |t: &DataType| matches!(t, DataType::List(_));
-    let names: Vec<String> = if types.len().is_multiple_of(2)
-        && !types.is_empty()
-        && types[..types.len() / 2].iter().all(is_array)
-    {
-        let mut names = Vec::new();
-        for a in &args[args.len() / 2..] {
+    let all_arrays = |ts: &[DataType]| ts.iter().all(is_array);
+    let literal_names = || -> Option<Vec<String>> {
+        let half = args.len() / 2;
+        if args.is_empty() || !args.len().is_multiple_of(2) || !all_arrays(&types[..half]) {
+            return None;
+        }
+        let mut names = Vec::with_capacity(half);
+        for a in &args[half..] {
             let BindArg::Literal(l) = a else { return None };
             let s = to_utf8(l.as_ref()).ok()?;
             if s.is_null(0) {
@@ -316,11 +327,12 @@ fn zip_binding(args: &[BindArg], types: &[DataType]) -> Option<Binding> {
             }
             names.push(s.value(0).to_owned());
         }
-        names
-    } else if types.iter().all(is_array) {
-        (0..types.len()).map(|i| i.to_string()).collect()
-    } else {
-        return None;
+        Some(names)
+    };
+    let names: Vec<String> = match literal_names() {
+        Some(names) => names,
+        None if all_arrays(types) => (0..types.len()).map(|i| i.to_string()).collect(),
+        None => return None,
     };
     let mut fields = Vec::with_capacity(names.len());
     for (name, t) in names.iter().zip(types) {
@@ -396,4 +408,37 @@ fn zip(x: &Inputs<'_>, fields: &Fields, element: &Arc<Field>) -> Result<ArrayRef
         )
         .map_err(kernel)?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(t: DataType) -> BindArg {
+        BindArg::from(DataType::List(Arc::new(Field::new("element", t, true))))
+    }
+
+    /// A call without the analyzer's name literals names its fields by
+    /// position.
+    #[test]
+    fn arrays_zip_without_names_uses_positions() {
+        let args = [list(DataType::Int32), list(DataType::Int32)];
+        let (_, binding) = bind("arrays_zip", &args, &BindOptions::new()).unwrap();
+        let ty = binding.unwrap().return_type;
+        let DataType::List(f) = ty else {
+            panic!("{ty}")
+        };
+        let DataType::Struct(fields) = f.data_type() else {
+            panic!("{f:?}")
+        };
+        let names: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, ["0", "1"]);
+    }
+
+    /// Time of day orders (as `cmp_rows` does) and a map does not.
+    #[test]
+    fn time_orders_and_maps_do_not() {
+        assert!(orders(&DataType::Time64(TimeUnit::Nanosecond)));
+        assert!(!orders(&DataType::Duration(TimeUnit::Second)));
+    }
 }
