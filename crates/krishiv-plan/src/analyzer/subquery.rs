@@ -328,7 +328,6 @@ fn null_literal(e: &Expr) -> bool {
     }
 }
 
-/// Whether `e` is an integer literal above zero.
 /// `inner_column = outer_expression`, either way round.
 fn is_outer_equality(e: &Arc<Expr>) -> bool {
     let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
@@ -346,6 +345,7 @@ fn is_outer_equality(e: &Arc<Expr>) -> bool {
     plain(&f.args[0], &f.args[1]) || plain(&f.args[1], &f.args[0])
 }
 
+/// Whether `e` is an integer literal above zero.
 fn positive_literal(e: &Expr) -> bool {
     match &e.node {
         ExprNode::Literal(v) => match v {
