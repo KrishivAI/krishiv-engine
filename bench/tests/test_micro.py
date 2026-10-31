@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from krishiv_bench import cli, micro, reproduce
@@ -62,9 +63,26 @@ def test_case_ranges_cover_the_required_axes():
     assert {"sort_int", "sort_str", "topn_k100_int", "decimal_global", "str_eq", "str_like_contains"} <= set(cs)
 
 
-def test_topn_compares_rows_and_everything_else_a_checksum():
+def test_ordered_answers_compare_rows_where_they_are_small_and_the_rest_a_checksum():
     for c in micro.cases(md.SIZES["quick"]):
+        assert (c.check is None) == (c.family in ("topn", "sort")), c.id
+    for c in micro.cases(md.SIZES["default"]):
         assert (c.check is None) == (c.family == "topn"), c.id
+
+
+def test_a_checksum_sees_values_swapped_between_rows():
+    con = duckdb.connect()
+    exprs = (micro._int("g"), micro._int("s"), micro._assoc("g", "s"))
+    right = con.execute(micro.check_sql("SELECT * FROM (VALUES (1, 10), (2, 20)) t(g, s)", exprs)).fetchone()
+    swapped = con.execute(micro.check_sql("SELECT * FROM (VALUES (1, 20), (2, 10)) t(g, s)", exprs)).fetchone()
+    assert right[:3] == swapped[:3]
+    assert right != swapped
+
+
+def test_every_group_by_and_sort_checksum_ties_keys_to_values():
+    for c in micro.cases(md.SIZES["default"]):
+        if c.family in ("groupby", "sort") or (c.family == "decimal" and c.id != "decimal_global"):
+            assert any("AS DOUBLE) * CAST" in e for e in c.check or ()), c.id
 
 
 def test_check_sql_wraps_the_question():
@@ -87,7 +105,7 @@ def test_every_case_and_checksum_runs_on_generated_data(kd: Path):
                 assert len(rows) == 1, q.id
                 assert rows[0][0] > 0, f"{q.id}: empty answer"
             else:
-                assert len(rows) in (100, 1000), q.id
+                assert len(rows) in (100, 1000, TINY.rows), q.id
             n, secs = eng.timed_run(q)
             assert n > 0
             assert secs >= 0
@@ -108,7 +126,7 @@ def test_checksum_row_counts_follow_the_shape_of_each_case(kd: Path):
         assert n_rows("groupby_str_multi_g2e4") == 20_000
         assert n_rows("groupby_2key_g1e2") == 10_000
         assert n_rows("filter_rows_pm100") == TINY.rows // 10
-        assert n_rows("sort_int") == TINY.rows
+        assert len(eng.run(check_query(qs["sort_int"]))) == TINY.rows  # quick compares a sort's rows in order
         assert n_rows("join_int_b1e3_m100") == 1  # the join's own result is aggregated
         assert eng.run(check_query(qs["join_int_b1e3_m100"]))[0][1] == TINY.rows  # every probe row matches once
         assert eng.run(check_query(qs["join_int_b1e3_m10"]))[0][1] < TINY.rows // 5
@@ -147,7 +165,8 @@ def test_every_twin_is_documented_and_the_existing_ones_exist():
             group, _, name = twin.partition("/")
             src = (benches / f"{group}.rs").read_text()
             assert f'benchmark_group("{group}")' in src, f"{c.id}: no bench group {group}"
-            assert name.split("_")[0] in src, f"{c.id}: no bench like {twin}"
+            stem = name.split("_")[0] + "_"
+            assert stem in src, f"{c.id}: no bench like {twin}"
 
 
 # ---------------------------------------------------------------- derived numbers
@@ -161,9 +180,16 @@ def test_operator_seconds_separate_the_operator_from_the_scan():
         ]
     }
     s = micro.operator_seconds(profile, ("HashAggregate", "PartialAggregate"))
-    assert s == {"operator": pytest.approx(0.25), "scan": pytest.approx(0.4), "total": pytest.approx(0.75)}
+    assert s == {
+        "operator": pytest.approx(0.25),
+        "scan": pytest.approx(0.4),
+        "total": pytest.approx(0.75),
+        "blocked": pytest.approx(0.0),
+    }
+    profile["operators"][0]["blocked_io_seconds"] = 1.5
+    assert micro.operator_seconds(profile, ("Sort",))["blocked"] == pytest.approx(1.5)
     assert micro.operator_seconds(profile, ("Sort",))["operator"] == 0
-    assert micro.operator_seconds({}, ("Sort",)) == {"operator": None, "scan": None, "total": None}
+    assert micro.operator_seconds({}, ("Sort",)) == {"operator": None, "scan": None, "total": None, "blocked": None}
     assert micro.operator_seconds(None, ("Sort",))["total"] is None
 
 
@@ -226,7 +252,7 @@ def test_render_shows_parity_throughput_cpu_operator_time_and_failures():
     md_text = micro.render(rec)
     assert "| join_a | 450.0 | 200.0 | 100.0 | 2.25x (" in md_text  # wall ms, then ratios to duckdb
     assert "| join_a | 1,000,000 | 2.2 | 5.0 | 10.0 | 3.00 | 1.50 | - |" in md_text
-    assert "| join_a | HashJoinProbe | 1.500 | 0.500 | 2.000 | 75% | 450.0 | t |" in md_text
+    assert "| join_a | HashJoinProbe | 1.500 | 0.500 | 2.000 | 75% | 0.000 | 1.00 | 450.0 | t |" in md_text
     assert "`join_b` **polars**: checksum [1] != reference [2]" in md_text
     assert "| join_b | 1,000.0 | 1,000.0 | MISMATCH |" in md_text
     assert "| join | 2 |" in md_text  # the family row
@@ -398,3 +424,7 @@ def test_result_lookup_without_results_says_what_to_run(tmp_path: Path, monkeypa
     monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
     with pytest.raises(SystemExit, match="krishiv-bench micro"):
         micro.latest_result()
+
+
+def test_a_ratio_over_a_zero_median_is_none():
+    assert micro._ratio({"samples_s": [1.0]}, {"samples_s": [0.0]}) is None

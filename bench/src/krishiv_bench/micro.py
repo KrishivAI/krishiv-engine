@@ -88,6 +88,16 @@ def _decimal(col: str) -> str:
     return f"SUM(CAST({col} AS DECIMAL(38,2)))"
 
 
+def _assoc(a: str, b: str) -> str:
+    """Sees which value sits beside which: the two columns' own sums do not change if rows swap values."""
+    return f"SUM(CAST({a} AS DOUBLE) * CAST({b} AS DOUBLE))"
+
+
+def _text_number(col: str) -> str:
+    """The number in an ``id%010d`` key."""
+    return f"CAST(SUBSTRING({col}, 3, 10) AS BIGINT)"
+
+
 def check_sql(sql: str, exprs: Iterable[str]) -> str:
     """The checksum query of a case: the answer's row count and one aggregate per answer column."""
     body = sql.strip().rstrip(";").strip()
@@ -200,6 +210,11 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
     gi = col_gi(p.groups[0])
     sort = ("Sort",)
     topn = ("TopN",)
+
+    def sorted_check(*exprs: str) -> tuple[str, ...] | None:
+        # A checksum sees content, not order. The quick set is small enough to compare the rows in order.
+        return None if p.name == "quick" else exprs
+
     return [
         _case(
             p,
@@ -208,7 +223,7 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
             "SELECT u, v1 FROM fact ORDER BY u",
             sort,
             "sort/in_memory_1m_rows/int",
-            (_int("u"), _int("v1")),
+            sorted_check(_int("u"), _int("v1"), _assoc("u", "v1")),
         ),
         _case(
             p,
@@ -217,7 +232,7 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
             "SELECT s, id FROM fact ORDER BY s, id",
             sort,
             "sort/in_memory_1m_rows/string",
-            ("SUM(LENGTH(s))", _int("id")),
+            sorted_check("SUM(LENGTH(s))", _int("id"), _assoc("LENGTH(s)", "id")),
         ),
         _case(
             p,
@@ -226,7 +241,7 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
             f"SELECT {gi} AS g, u FROM fact ORDER BY {gi}, u",
             sort,
             "stub: sort/in_memory_1m_rows/two_int_keys",
-            (_int("g"), _int("u")),
+            sorted_check(_int("g"), _int("u"), _assoc("g", "u")),
         ),
         _case(
             p,
@@ -261,7 +276,10 @@ def _sort_cases(p: MicroSizes) -> list[Case]:
 def _groupby_cases(p: MicroSizes) -> list[Case]:
     out = []
     for c in p.groups:
-        for kind, key, key_check in (("int", col_gi(c), _int), ("str", col_gs(c), _text_key)):
+        for kind, key, key_check, number in (
+            ("int", col_gi(c), _int, "g"),
+            ("str", col_gs(c), _text_key, _text_number("g")),
+        ):
             sum_twin = _agg_twin(c) if kind == "int" else "stub: aggregate/grouped_sum_string_keys"
             by = f"FROM fact GROUP BY {key}"
             out.append(
@@ -272,7 +290,7 @@ def _groupby_cases(p: MicroSizes) -> list[Case]:
                     f"SELECT {key} AS g, SUM(v1) AS s {by}",
                     AGG_OPS,
                     sum_twin,
-                    (key_check("g"), _int("s")),
+                    (key_check("g"), _int("s"), _assoc(number, "s")),
                     groups=c,
                     key=kind,
                     shape="sum",
@@ -286,7 +304,7 @@ def _groupby_cases(p: MicroSizes) -> list[Case]:
                     f"SELECT {key} AS g, SUM(v1) AS s, AVG(v3) AS a, COUNT(*) AS n {by}",
                     AGG_OPS,
                     "stub: aggregate/grouped_multi_agg",
-                    (key_check("g"), _int("s"), _float("a"), _int("n")),
+                    (key_check("g"), _int("s"), _float("a"), _int("n"), _assoc(number, "s"), _assoc(number, "n")),
                     groups=c,
                     key=kind,
                     shape="sum, avg, count",
@@ -302,7 +320,7 @@ def _groupby_cases(p: MicroSizes) -> list[Case]:
                 f"SELECT {col_gi(c)} AS g1, {col_gj(c)} AS g2, SUM(v1) AS s FROM fact GROUP BY {keys}",
                 AGG_OPS,
                 "stub: aggregate/grouped_sum_two_keys",
-                (_int("g1"), _int("g2"), _int("s")),
+                (_int("g1"), _int("g2"), _int("s"), _assoc("g1", "s"), _assoc("g2", "s")),
                 groups=c * c,
                 key="int, int",
                 shape="sum",
@@ -335,7 +353,7 @@ def _decimal_cases(p: MicroSizes) -> list[Case]:
                 sql,
                 AGG_OPS,
                 twin,
-                (_int("g"), _decimal("s"), _float("a")),
+                (_int("g"), _decimal("s"), _float("a"), _assoc("g", "s")),
                 groups=c,
             )
         )
@@ -438,19 +456,21 @@ def _case_json(c: Case) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- derived numbers
 def operator_seconds(profile: dict | None, ops: Iterable[str]) -> dict[str, float | None]:
-    """Compute seconds of Krishiv's operators in a ``PROFILE`` reply: the case's operators, the scan, everything.
+    """Compute and blocked seconds of Krishiv's operators in a ``PROFILE`` reply: the case's operators, the scan, all.
 
     Seconds are summed over the query's drivers (CPU time of the operator, not wall time). ``None`` when the run has
     no per-operator metrics.
     """
     operators = (profile or {}).get("operators")
     if not operators:
-        return {"operator": None, "scan": None, "total": None}
+        return {"operator": None, "scan": None, "total": None, "blocked": None}
     want, scan = set(ops), set(SCAN_OPERATORS)
     return {
         "operator": sum(o["compute_seconds"] for o in operators if o["name"] in want),
         "scan": sum(o["compute_seconds"] for o in operators if o["name"] in scan),
         "total": sum(o["compute_seconds"] for o in operators),
+        # Compute seconds alone miss work an operator does while marked blocked (reading back or merging its output).
+        "blocked": sum(o.get("blocked_io_seconds", 0.0) for o in operators),
     }
 
 
@@ -462,9 +482,10 @@ def _ratio(a: dict, b: dict) -> tuple[float, tuple[float, float]] | None:
     """Median ratio of two engines' samples with its bootstrap CI, when both have samples."""
     if "samples_s" not in a or "samples_s" not in b:
         return None
-    return statistics.median(a["samples_s"]) / statistics.median(b["samples_s"]), bootstrap_ci(
-        a["samples_s"], b["samples_s"]
-    )
+    below = statistics.median(b["samples_s"])
+    if below <= 0:
+        return None
+    return statistics.median(a["samples_s"]) / below, bootstrap_ci(a["samples_s"], b["samples_s"])
 
 
 # ---------------------------------------------------------------- report
@@ -546,19 +567,25 @@ def render(record: dict, engines: list[str] | None = None) -> str:
         )
     lines += [
         "",
-        "## Krishiv: the operator against the scan (`PROFILE`; compute seconds summed over drivers)",
+        "## Krishiv: the operator against the scan (`PROFILE`; seconds summed over drivers)",
         "",
-        "| case | operators | operator CPU s | scan CPU s | all operators CPU s | operator share | wall ms | twin |",
-        "|---|---|---:|---:|---:|---:|---:|---|",
+        "`blocked s` is all operators' `blocked_io` seconds. `CPU outside s` is the process's CPU seconds less all "
+        "operators' compute seconds: a large value means the operator columns do not explain the case.",
+        "",
+        "| case | operators | operator CPU s | scan CPU s | all operators CPU s | operator share | blocked s "
+        "| CPU outside s | wall ms | twin |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for cid, d in cs.items():
         k = _engine(record, cid, "krishiv")
         sec = operator_seconds(k.get("profile"), d["operators"])
         if sec["operator"] is None or not sec["total"]:
             continue
+        cpu = k.get("cpu_seconds_median")
+        outside = f"{max(cpu - sec['total'], 0.0):.2f}" if cpu is not None else "-"
         lines.append(
             f"| {cid} | {', '.join(d['operators'])} | {sec['operator']:.3f} | {sec['scan']:.3f} | {sec['total']:.3f} "
-            f"| {sec['operator'] / sec['total']:.0%} | {_ms(k)} | {d['twin']} |"
+            f"| {sec['operator'] / sec['total']:.0%} | {sec['blocked']:.3f} | {outside} | {_ms(k)} | {d['twin']} |"
         )
     lines += ["", "## Correctness", ""]
     bad = [

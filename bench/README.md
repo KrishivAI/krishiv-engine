@@ -381,11 +381,12 @@ uv run krishiv-bench report --suite micro            # re-render the parity tabl
   once, untimed (the answer's row count and one sum per column; `topn` compares the rows in order) and must equal DuckDB's, otherwise the case is
   `mismatch`/`error`/`timeout` for that engine and never timed (the command exits non-zero). Then `--reps` (default 2) blocks of A B C C B A:
   4 samples per engine, median, bootstrap 95 % CI of every ratio to DuckDB. Bench lock, load recording, the "indicative" mark and thread pins are
-  `reproduce`'s (12 threads, 32 GiB). A full `sort` is checked for content (a checksum cannot observe the order of a sorted subquery); `topn` checks the order.
+  `reproduce`'s (12 threads, 32 GiB). At the quick size a full `sort` compares the rows in order, as `topn` always does; at larger sizes **a sort's order is not checked**, only its content and which value sits beside which (a checksum cannot observe the order of a sorted subquery). Checksums include products of key and value columns, so swapped group results fail.
 * **What is reported**: per case and engine the wall time, throughput (million input rows per second), **CPU seconds** (user + system of the engine's
   whole process tree, from `/proc`, per timed run; median) and peak RSS; for Krishiv one `PROFILE` run per case whose **operator compute seconds**
   (the case's operators, `FileScan`, all) separate the operator from the scan. Those seconds are summed over drivers, so they are CPU time, not
   wall time; DuckDB and Polars expose no per-operator time, so compare them through the `scan_*` cases and the CPU column.
+  Compute seconds miss work done while marked blocked, so the table also shows all operators' `blocked_io` seconds and the process CPU outside any operator; when those are large, the operator columns do not explain the case.
   Output: `$KRISHIV_DATA/results/<ts>_reproduce_micro_sf<millions of rows>.json` and, next to it, the Markdown parity table
   (case -> wall ms per engine, engine / duckdb with CI, krishiv / polars; geomean per family; throughput and CPU; the operator-against-scan table; failures).
 * **Time budget**: the default set runs in about 4 minutes on the 12-thread server (`--reps 2`, 67 cases, 1e7 fact rows, 3 engines, per-run
@@ -396,8 +397,8 @@ uv run krishiv-bench report --suite micro            # re-render the parity tabl
   (`u` is a permutation).
 
 ### Criterion twins (PR gate, T118)
-Each case names the criterion bench of `krishiv-exec` that measures the same operator alone, in `result.micro.cases.<id>.twin`. The three that matter
-most already exist, so none were added: hash join probe `hash_join/probe_1m_rows` (build `hash_join/build_1m_rows`), hash aggregation
+Each case names the criterion bench of `krishiv-exec` that measures the same operator alone, in `result.micro.cases.<id>.twin`. **Only 21 of the 67 default cases have an
+existing twin**; the other 46 name one of the 13 stubs below, marked `stub:` in the result. The existing ones: hash join probe `hash_join/probe_1m_rows` (build `hash_join/build_1m_rows`), hash aggregation
 `aggregate/grouped_sum_64_keys` and `aggregate/grouped_sum_262144_keys`, sort `sort/in_memory_1m_rows/int`.
 
 | Existing twin | Cases |
