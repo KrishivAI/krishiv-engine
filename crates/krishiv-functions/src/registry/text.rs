@@ -101,12 +101,23 @@ fn decode_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 
 fn decode_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if c.args().len() != 2 {
+        // The analyzer rewrites the CASE form before typing the call.
         return Err(KrishivUnsupportedFeature {
             feature: "decode with search and result arguments".to_owned(),
         }
         .into());
     }
     string(c)
+}
+
+/// `format_string(format, args...)`: the arguments are not coerced.
+fn format_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+    vec![exact(DataType::String), InputType::Any]
+}
+
+/// NULL only when the format is.
+fn format_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::String, nullable_of(c, 0)))
 }
 
 /// A function call as Spark's errors quote it: `name(arg, ...)`.
@@ -270,6 +281,11 @@ pub(super) fn specs() -> Vec<Spec> {
         &["decode"],
         &Inputs::Built(InputBuilder(decode_inputs)),
         decode_result,
+    ));
+    out.extend(scalar(
+        &["format_string", "printf"],
+        &Inputs::Built(InputBuilder(format_inputs)),
+        format_result,
     ));
     out.extend(scalar(
         &["to_binary"],

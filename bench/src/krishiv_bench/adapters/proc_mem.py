@@ -90,6 +90,15 @@ def descendants(root: int) -> list[int]:
     return out
 
 
+def tree_cpu_seconds(root: int) -> float:
+    """User + system CPU seconds consumed so far by ``root`` and its live descendants (an exited one is not counted)."""
+    total = 0.0
+    for pid in descendants(root):
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
+            total += LocalProc(str(pid)).read()[2]
+    return total
+
+
 class TreeProc:
     """Peak RSS of a process and all its descendants over a window (``start`` .. ``stop``).
 

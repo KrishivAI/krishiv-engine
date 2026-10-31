@@ -4,7 +4,7 @@ Python (uv) harness that runs query suites against engine adapters and records J
 Datasets and results live **outside the repo** in `$KRISHIV_DATA` (default `~/krishiv-data`):
 
 ```
-$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/   memcap/v1/<rows>/
+$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/   memcap/v1/<rows>/   micro/v1/<size>/
 $KRISHIV_DATA/manifests/*.sha256   (sha256sum -c compatible, relative paths)
 $KRISHIV_DATA/results/*.json       report_<suite>_sf<N>.md
 ```
@@ -351,6 +351,71 @@ uv run krishiv-bench run --engine duckdb --suite dsb --sf 1 --dataset dsb@v1
 * `relation_count_distribution` in the manifest is the number of base-table references per query (a repeated table counts each time).
 * Scope: `run` supports the suite; `reproduce`, `abba` and `ab` do not yet. Full scale on the benchmark server: `uv run krishiv-datasets dsb --sf 10` (the
   conversion is single-threaded and `dsdgen` is single-process: about 3.5 min per unit on a laptop).
+## Operator microbenchmarks (`micro`, P2-T168)
+Krishiv, DuckDB and Polars run the **same single-operator query over the same Parquet files**, so a slow operator can be told from a
+slow plan: if Krishiv's operator time (below) is in line with the others but its wall time is not, the plan is at fault.
+```bash
+uv run krishiv-datasets micro --size quick           # 1e6 fact rows, 70 MB, about 2 s -> $KRISHIV_DATA/micro/v1/quick/
+uv run krishiv-datasets micro --size default         # 1e7 rows (builds 1e3-1e7, groups 1e2-1e7)
+uv run krishiv-datasets micro-verify "$KRISHIV_DATA/micro/v1/quick"   # recompute the checksums against MANIFEST.json
+uv run krishiv-bench micro --quick                   # CI smoke: all cases at the quick size
+uv run krishiv-bench micro                           # default size set; --size full reaches 1e8 (hours, tens of GB: on request only)
+uv run krishiv-bench micro --queries join,sort,groupby_int_sum_g1e6 --engines krishiv,duckdb --reps 3
+uv run krishiv-bench report --suite micro            # re-render the parity table of the newest result
+```
+* **Data** (`micro_data.py`): one `fact` table (unique permutation `u`, int/float/`decimal(15,2)`/text payloads, a group key per group count
+  as int64 and as text, probe keys per build size and match rate as int64 and as text, Zipf probe keys) plus one `build_<n>` table per
+  join build size, in `$KRISHIV_DATA/micro/<version>/<size>/`. Shapes are exact, not sampled: a key with `c` groups has `c` groups of
+  `rows/c` rows, a filter on `u` keeps exactly the rows asked for, build keys are unique; the match rate and the Zipf skew are drawn.
+  Seeded (`--seed`, default 168), per-chunk RNG streams, `MANIFEST.json` with parameters, library versions, per-column content digests, file
+  hashes and one dataset digest (copied into the result); a dataset directory is never overwritten (`--micro-version` names a new one).
+  Size sets: `quick` (CI smoke), `default` (sized for the time budget below) and `full` (the 1e8 ends of the ranges).
+* **Cases** (51 quick, 67 default, 75 full): `scan` (the read-only floor), `filter` (0.1 %-90 % kept, materialised; 1 % and 50 % as count and sum),
+  `string` (equality, range compare, LIKE prefix / suffix / contains / rare literal), `sort` (int, text, two int keys; full answer), `topn`
+  (k = 100 int, 1000 float, 100 text), `groupby` (int and text keys, `sum(v1)` and `sum, avg, count`, 1e2-1e7 groups, plus two int keys), `decimal`
+  (`sum`/`avg` of `decimal(15,2)`: global, 1e2 and 1e3 or 1e4 groups) and `join` (inner, int and text keys, build 1e3-1e7, match 100/50/10 %, Zipf
+  skew alpha 0.8 and 1.2). Joins and filters return a count and a sum so the operator dominates; group-bys and sorts return their whole answer,
+  materialised inside the engine like the h2o suites (DuckDB `CREATE TEMP TABLE AS`, Krishiv `collect`, Polars `collect`). One SQL text for all
+  engines; case ids are in `result.micro.cases` with their parameters and SQL.
+* **Method**: `reproduce`'s interleaved `ours` method with the checksum comparison of the h2o suites. Per case every engine runs a checksum query
+  once, untimed (the answer's row count and one sum per column; `topn` compares the rows in order) and must equal DuckDB's, otherwise the case is
+  `mismatch`/`error`/`timeout` for that engine and never timed (the command exits non-zero). Then `--reps` (default 2) blocks of A B C C B A:
+  4 samples per engine, median, bootstrap 95 % CI of every ratio to DuckDB. Bench lock, load recording, the "indicative" mark and thread pins are
+  `reproduce`'s (12 threads, 32 GiB). At the quick size a full `sort` compares the rows in order, as `topn` always does; at larger sizes **a sort's order is not checked**, only its content and which value sits beside which (a checksum cannot observe the order of a sorted subquery). Checksums include products of key and value columns, so swapped group results fail.
+* **What is reported**: per case and engine the wall time, throughput (million input rows per second), **CPU seconds** (user + system of the engine's
+  whole process tree, from `/proc`, per timed run; median) and peak RSS; for Krishiv one `PROFILE` run per case whose **operator compute seconds**
+  (the case's operators, `FileScan`, all) separate the operator from the scan. Those seconds are summed over drivers, so they are CPU time, not
+  wall time; DuckDB and Polars expose no per-operator time, so compare them through the `scan_*` cases and the CPU column.
+  Compute seconds miss work done while marked blocked, so the table also shows all operators' `blocked_io` seconds and the process CPU outside any operator; when those are large, the operator columns do not explain the case.
+  Output: `$KRISHIV_DATA/results/<ts>_reproduce_micro_sf<millions of rows>.json` and, next to it, the Markdown parity table
+  (case -> wall ms per engine, engine / duckdb with CI, krishiv / polars; geomean per family; throughput and CPU; the operator-against-scan table; failures).
+* **Time budget**: the default set runs in about 4 minutes on the 12-thread server (`--reps 2`, 67 cases, 1e7 fact rows, 3 engines, per-run
+  timeout 300 s; measured 2026-10-31). The budget is 30 minutes, so there is room for more reps or the `full` set's larger sizes on a schedule.
+* **Known skews**: DuckDB materialises answers in a temporary table (as in the h2o suites), which compresses them, Krishiv and Polars keep them as
+  batches; Polars runs its lazy plan with the in-memory engine; Krishiv keeps the `Filter` above a pushed-down scan predicate (pushdown is never exact), so a
+  filter's operator time and its scan time are reported separately. Parquet files are zstd, 1M-row row groups, no statistics-based pruning applies
+  (`u` is a permutation).
+
+### Criterion twins (PR gate, T118)
+Each case names the criterion bench of `krishiv-exec` that measures the same operator alone, in `result.micro.cases.<id>.twin`. **Only 21 of the 67 default cases have an
+existing twin**; the other 46 name one of the 13 stubs below, marked `stub:` in the result. The existing ones: hash join probe `hash_join/probe_1m_rows` (build `hash_join/build_1m_rows`), hash aggregation
+`aggregate/grouped_sum_64_keys` and `aggregate/grouped_sum_262144_keys`, sort `sort/in_memory_1m_rows/int`.
+
+| Existing twin | Cases |
+|---|---|
+| `hash_join/probe_1m_rows` | int-key joins with build 1e3 and 1e5 |
+| `hash_join/build_1m_rows` | int-key joins with build 1e7 and 1e8 |
+| `aggregate/grouped_sum_64_keys` | `groupby_int_sum_g1e2`, `g1e3` |
+| `aggregate/grouped_sum_262144_keys` | `groupby_int_sum_g1e4` and larger |
+| `aggregate/decimal_sum_1_keys`, `aggregate/decimal_sum_64_keys`, `aggregate/decimal_sum_262144_keys` | `decimal_global`, `decimal_g1e2`, `decimal_g1e3` / `g1e4` (the closest key count) |
+| `sort/in_memory_1m_rows/int`, `sort/in_memory_1m_rows/string`, `sort/topn_k100_1m_rows` | `sort_int`, `sort_str`, `topn_k100_int` |
+| `operators/filter_1m_rows/50_percent` | `filter_rows_pm500` |
+
+Remaining (stubs, not implemented): `hash_join/probe_string_keys_1m_rows`, `hash_join/probe_zipf_1m_rows`, `aggregate/grouped_sum_string_keys`,
+`aggregate/grouped_multi_agg`, `aggregate/grouped_sum_two_keys`, `sort/in_memory_1m_rows/two_int_keys`, `sort/topn_k1000_float_1m_rows`,
+`sort/topn_k100_string_1m_rows`, `operators/filter_1m_rows/selectivity`, `operators/filter_count_1m_rows/selectivity`,
+`operators/filter_string_1m_rows/predicate`, `scan/parquet_int_1m_rows`, `scan/parquet_string_1m_rows`.
+The harness test checks that every twin a case names is listed here and that the existing ones are still in the bench sources.
 
 ## Reference engines, two methods (`reproduce`, P2-T156)
 ```bash

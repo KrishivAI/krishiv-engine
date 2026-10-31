@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import io
+import json
 import os
 import sys
 from pathlib import Path
 
-from . import h2o
+from . import h2o, micro, micro_data
 from .adapters import ENGINES
 from .paths import data_root
 from .report import write_report
@@ -47,6 +49,40 @@ def _set_runner(path: str | None) -> None:
     """Makes ``--runner`` win everywhere the adapter resolves the binary (worker processes inherit the env)."""
     if path:
         os.environ["KRISHIV_BENCH_RUNNER"] = path
+
+
+def _run_micro(ap: argparse.ArgumentParser, a: argparse.Namespace) -> None:
+    """``micro``: ``reproduce``'s interleaved method over the dataset of a size set, then the parity table."""
+    from .reproduce import run_reproduce
+
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)  # progress shows while a long run goes on, also into a file
+    size = "quick" if a.quick else a.size
+    name = micro.dataset_name(size, a.micro_version)
+    only = a.queries.split(",") if a.queries else None
+    try:
+        extra = micro.record_extra(data_root() / name, only)
+    except SystemExit as e:
+        ap.error(str(e))
+    f = run_reproduce(
+        micro.SUITE,
+        micro_data.SIZES[size].rows / 1e6,  # the result file name's "sf": millions of fact rows
+        name,
+        a.engines.split(","),
+        ("ours",),
+        a.reps,
+        only,
+        a.threads,
+        a.memory_gb,
+        a.timeout,
+        profile=True,
+        record_extra=extra,
+    )
+    report = micro.write_report([f])
+    print(f"parity report: {report}")
+    failed = micro.failed_cases(json.loads(f.read_text()))
+    if failed:
+        sys.exit(f"{len(failed)} case/engine pair(s) failed the checksum comparison, errored or timed out: see {f}")
 
 
 H2O_SUITES = list(h2o.SUITES)
@@ -196,6 +232,20 @@ def main(argv=None) -> None:
     )
     rf.add_argument("--reps", type=int, default=5, help="timed repetitions per scope (after one validation pass)")
     rf.add_argument("--timeout", type=float, default=1800, help="per-engine timeout seconds (0 = none)")
+    mc = sub.add_parser(
+        "micro",
+        help="operator microbenchmarks: Krishiv, DuckDB and Polars on the same single-operator queries (P2-T168)",
+    )
+    mc.add_argument("--size", choices=list(micro_data.SIZES), default="default", help="data size set")
+    mc.add_argument("--quick", action="store_true", help="the CI smoke size set (same as --size quick)")
+    mc.add_argument("--micro-version", default=micro_data.GENERATOR_VERSION, help="generator version directory")
+    mc.add_argument("--engines", default=",".join(micro.DEFAULT_ENGINES), help="comma list; must include duckdb")
+    mc.add_argument("--queries", help=f"comma list of case ids or families ({', '.join(micro.FAMILIES)})")
+    mc.add_argument("--reps", type=int, default=2, help="interleaved blocks per case (2 samples per engine each)")
+    mc.add_argument("--threads", type=int, default=12)
+    mc.add_argument("--memory-gb", type=int, default=32)
+    mc.add_argument("--timeout", type=float, default=300, help="per-run timeout seconds")
+    mc.add_argument("--runner", help=RUNNER_HELP)
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     add_h2o_args(rp)
@@ -301,6 +351,9 @@ def main(argv=None) -> None:
             run_timeout=a.run_timeout,
             spark_remote=a.spark_remote,
         )
+        return
+    if a.cmd == "micro":
+        _run_micro(ap, a)
         return
     if a.cmd in ("reproduce", "ab") and h2o.is_h2o(a.suite):
         _, a.dataset, a.sf = h2o_target(ap, a)
@@ -457,6 +510,8 @@ def main(argv=None) -> None:
             a.dataset,
         )
         print(f"result: {f}")
+    elif a.suite == "micro":
+        print(f"report: {micro.write_report(a.files or None)}")
     elif a.suite == "memcap":
         from .memcap import write_memcap_report
 
