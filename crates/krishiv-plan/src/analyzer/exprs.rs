@@ -1564,6 +1564,20 @@ impl Resolver<'_> {
                 // `session.f` / `system.session.f` reach a session UDF only;
                 // any other qualifier is an unresolved routine.
                 // Grouping functions are never qualified.
+                // A function stored in a namespace of the session's catalog,
+                // named by its qualifier (`default.f`, `spark_catalog.default.f`).
+                if !f.qualifier.is_empty()
+                    && !super::bind::is_session_qualifier(&f.qualifier)
+                    && !super::bind::is_builtin_qualifier(&f.qualifier)
+                {
+                    let mut named = f.qualifier.clone();
+                    named.push(f.name.clone());
+                    if let FunctionLookup::Sql(def) =
+                        self.ctx.functions.lookup(&named, self.ctx.profile)
+                    {
+                        return self.sql_call(&def, e, f, kids);
+                    }
+                }
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
                 let session_qualified = super::bind::is_session_qualifier(&f.qualifier);
                 let lookup_name = builtin.as_deref().unwrap_or(&f.name);
