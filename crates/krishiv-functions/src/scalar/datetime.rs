@@ -23,7 +23,9 @@ use arrow_array::{
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_kernels::OverflowMode;
-use krishiv_kernels::cast::{CastMode, CastOptions, cast, time_diff, time_trunc};
+use krishiv_kernels::cast::{
+    CastMode, CastOptions, cast, make_time, time_diff, time_from_units, time_to_units, time_trunc,
+};
 use krishiv_kernels::datetime::{
     DatePart, ParsePolicy, ZoneRef, Zones, convert_timezone, current_date, date_add,
     date_add_months, date_diff, date_sub, day_name, extract_date, extract_timestamp,
@@ -88,6 +90,13 @@ pub(super) const NAMES: &[&str] = &[
     "make_date",
     "time_trunc",
     "time_diff",
+    "make_time",
+    "time_from_seconds",
+    "time_from_millis",
+    "time_from_micros",
+    "time_to_seconds",
+    "time_to_millis",
+    "time_to_micros",
     "from_utc_timestamp",
     "to_utc_timestamp",
     "convert_timezone",
@@ -847,6 +856,72 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             );
             Ok(Arc::new(time_diff(&x.strings(0)?, &start, &end)?) as ArrayRef)
         }),
+        (
+            "make_time",
+            [
+                DataType::Int32,
+                DataType::Int32,
+                DataType::Decimal128(16, 6),
+            ],
+        ) => Binding::new(DataType::Time64(TimeUnit::Nanosecond), |x: &Inputs<'_>| {
+            let (h, m, s) = (
+                x.array::<Int32Type>(0)?,
+                x.array::<Int32Type>(1)?,
+                x.array::<Decimal128Type>(2)?,
+            );
+            Ok(Arc::new(make_time(&h, &m, &s)?) as ArrayRef)
+        }),
+        ("time_from_seconds", [DataType::Decimal128(14, 6)]) => {
+            Binding::new(DataType::Time64(TimeUnit::Nanosecond), |x: &Inputs<'_>| {
+                let v = x.array::<Decimal128Type>(0)?;
+                Ok(Arc::new(time_from_units(v.iter(), 1_000)?) as ArrayRef)
+            })
+        }
+        ("time_from_millis" | "time_from_micros", [DataType::Int64]) => {
+            let per = if name == "time_from_millis" {
+                1_000_000
+            } else {
+                1_000
+            };
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    let v = x.array::<Int64Type>(0)?;
+                    Ok(
+                        Arc::new(time_from_units(v.iter().map(|o| o.map(i128::from)), per)?)
+                            as ArrayRef,
+                    )
+                },
+            )
+        }
+        (
+            "time_to_seconds" | "time_to_millis" | "time_to_micros",
+            [DataType::Time64(TimeUnit::Nanosecond)],
+        ) => {
+            let seconds = name == "time_to_seconds";
+            let per = if name == "time_to_millis" {
+                1_000_000
+            } else {
+                1_000
+            };
+            let result = if seconds {
+                DataType::Decimal128(14, 6)
+            } else {
+                DataType::Int64
+            };
+            Binding::new(result, move |x: &Inputs<'_>| {
+                let out = time_to_units(&x.array::<Time64NanosecondType>(0)?, per);
+                Ok(if seconds {
+                    Arc::new(
+                        out.unary::<_, Decimal128Type>(i128::from)
+                            .with_precision_and_scale(14, 6)
+                            .map_err(|e| internal(e.to_string()))?,
+                    ) as ArrayRef
+                } else {
+                    Arc::new(out) as ArrayRef
+                })
+            })
+        }
         ("date_trunc", [s, t]) if is_string(s) && is_timestamp(t) => {
             let ntz = *t == ntz_type();
             let ansi = opts.ansi;
