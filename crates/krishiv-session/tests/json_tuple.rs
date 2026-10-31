@@ -2,12 +2,8 @@
 //! `json_tuple` end to end: the Spark 4.2.0 golden statements
 //! (`tests/spark-golden/v4.2.0/results/json-functions.sql.out` and
 //! `generators.sql.out`), the view-backed statement over data registered
-//! through the Rust API, and the out-of-scope `FROM` forms.
-//!
-//! The `SELECT * FROM json_tuple(...)` forms stay
-//! `KRISHIV_UNSUPPORTED_FEATURE`: the engine has no table-valued-function
-//! machinery (every `FROM` function is rejected at lowering), so the
-//! correlated `LATERAL json_tuple(...)` forms cannot run either.
+//! through the Rust API, and the `FROM json_tuple(...)` forms. The
+//! correlated `LATERAL json_tuple(...)` forms are not supported.
 #![cfg(test)]
 #![forbid(unsafe_code)]
 
@@ -197,30 +193,53 @@ fn rows_evaluate_per_row() -> R {
     Ok(())
 }
 
-/// The `FROM json_tuple(...)` forms (constant and erroneous arguments, and
-/// the column-aliased table alias) stay `KRISHIV_UNSUPPORTED_FEATURE`:
-/// the engine has no table-valued-function machinery.
+/// `FROM json_tuple(...)`: the select list over one row; columns `c0`, `c1`
+/// ..., renamed by a table alias, and Spark's argument errors.
 #[test]
-fn table_valued_from_forms_stay_unsupported() -> R {
+fn json_tuple_as_a_table_from_clause() -> R {
     let s = session()?;
-    for sql in [
-        "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b')",
-        "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'c')",
-        "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'a')",
-        "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') AS t(x, y)",
-        "select * from json_tuple('{\"a\": bad, \"b\": string}', 'a', 'b')",
-        "select * from json_tuple()",
-        "select * from json_tuple('{\"a\": 1}')",
-        "select * from json_tuple('{\"a\": 1}', 1)",
-        "select * from json_tuple('{\"a\": 1}', null)",
-        "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') AS t(x)",
+    for (sql, names, row) in [
+        (
+            "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b')",
+            ["c0", "c1"],
+            "1|2",
+        ),
+        (
+            "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'c')",
+            ["c0", "c1"],
+            "1|NULL",
+        ),
+        (
+            "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') AS t(x, y)",
+            ["x", "y"],
+            "1|2",
+        ),
+        (
+            "select * from json_tuple('{\"a\": bad, \"b\": string}', 'a', 'b')",
+            ["c0", "c1"],
+            "NULL|NULL",
+        ),
     ] {
-        let (class, params) = error(&s, sql)?;
-        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
-        assert!(
-            param(&params, "feature").is_some_and(|f| f.contains("table-valued functions")),
-            "{sql}: {params:?}"
-        );
+        let (got, rows) = query(&s, sql)?;
+        assert_eq!(got, names, "{sql}");
+        assert_eq!(rows, [row], "{sql}");
+    }
+    for (sql, class) in [
+        (
+            "select * from json_tuple()",
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+        ),
+        (
+            "select * from json_tuple('{\"a\": 1}')",
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+        ),
+        (
+            "select * from json_tuple('{\"a\": 1}', 1)",
+            "DATATYPE_MISMATCH.NON_STRING_TYPE",
+        ),
+    ] {
+        let (got, _) = error(&s, sql)?;
+        assert_eq!(got, class, "{sql}");
     }
     Ok(())
 }
