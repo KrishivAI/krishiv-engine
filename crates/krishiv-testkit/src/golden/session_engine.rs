@@ -62,6 +62,17 @@ pub struct SessionEngine {
     /// later entry for a key overrides an earlier one).
     base: Vec<(String, String)>,
     conf: Vec<(String, String)>,
+    /// The current session's warehouse directory (created by the engine, one per session, removed when the
+    /// next session starts or the engine drops), and its text for masking.
+    warehouse: Option<std::path::PathBuf>,
+    warehouse_text: String,
+    sessions: u64,
+}
+
+impl Drop for SessionEngine {
+    fn drop(&mut self) {
+        self.remove_warehouse();
+    }
 }
 
 impl std::fmt::Debug for SessionEngine {
@@ -114,6 +125,9 @@ impl SessionEngine {
             session: None,
             base: Vec::new(),
             conf: Vec::new(),
+            warehouse: None,
+            warehouse_text: String::new(),
+            sessions: 0,
         })
     }
 
@@ -122,6 +136,15 @@ impl SessionEngine {
     pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
+    }
+
+    /// Removes the warehouse directory the engine created for the current session.
+    fn remove_warehouse(&mut self) {
+        if let Some(dir) = self.warehouse.take() {
+            // Best effort: a leftover directory is the temp directory's to clean.
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        self.warehouse_text.clear();
     }
 
     fn conf_value(&self, key: &str) -> Option<&str> {
@@ -229,15 +252,37 @@ impl Engine for SessionEngine {
         "krishiv-session"
     }
 
+    fn warehouse_dir(&self) -> &str {
+        &self.warehouse_text
+    }
+
     fn reset(&mut self, setup: &SessionSetup) -> Result<(), EngineError> {
         self.session = None;
+        self.remove_warehouse();
+        // A fresh warehouse per session, known to the harness so that rows mask it as Spark's
+        // `replaceNotIncludedMsg` masks its own.
+        self.sessions += 1;
+        let warehouse = std::env::temp_dir().join(format!(
+            "krishiv-golden-warehouse-{}-{}",
+            std::process::id(),
+            self.sessions
+        ));
+        let _ = std::fs::remove_dir_all(&warehouse);
+        std::fs::create_dir_all(&warehouse)
+            .map_err(|e| harness_error(format!("warehouse {}: {e}", warehouse.display())))?;
+        self.warehouse_text = warehouse.display().to_string();
+        self.warehouse = Some(warehouse);
         let mut builder = Session::builder()
             .executor(Arc::clone(&self.executor))
             .config("krishiv.memory.limit", SESSION_MEMORY_LIMIT)
             // Group and unordered-`LIMIT` row order is the same on every run, so a
             // statement's verdict does not change from run to run.
-            .config("krishiv.exec.seed", "1");
+            .config("krishiv.exec.seed", "1")
+            .config("spark.sql.warehouse.dir", self.warehouse_text.clone());
         for (k, v) in &setup.configs {
+            if k == "spark.sql.warehouse.dir" {
+                v.clone_into(&mut self.warehouse_text);
+            }
             builder = builder.config(k.clone(), v.clone());
         }
         // A config Krishiv rejects fails the run's reset: the session's answer.
