@@ -23,10 +23,8 @@
       17
     ],
     "sql-commands": [
-      4,
       18,
-      22,
-      27
+      22
     ]
   },
   "file": "explain-aqe",

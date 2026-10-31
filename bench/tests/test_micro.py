@@ -160,9 +160,9 @@ def test_every_twin_is_documented_and_the_existing_ones_exist():
     benches = bench_root().parent / "crates" / "krishiv-exec" / "benches"
     for sizes in md.SIZES.values():
         for c in micro.cases(sizes):
-            twin = c.twin.removeprefix("stub: ")
+            twin = c.twin
             assert f"`{twin}`" in readme, f"{c.id}: twin {twin} missing from the README"
-            if c.twin.startswith("stub: ") or not benches.is_dir():  # not a checkout of the whole repository
+            if not benches.is_dir():  # not a checkout of the whole repository
                 continue
             group, _, name = twin.partition("/")
             src = (benches / f"{group}.rs").read_text()
@@ -171,7 +171,7 @@ def test_every_twin_is_documented_and_the_existing_ones_exist():
             literal = name
             if name.startswith("decimal_"):
                 literal = "decimal_{name}_{keys}_keys"
-            elif name.startswith("grouped_sum_"):
+            elif name.startswith("grouped_sum_") and name.endswith("_keys") and name[12:-5].isdigit():
                 literal = "grouped_sum_{keys}_keys"
             assert literal in src, f"{c.id}: no bench like {twin}"
 

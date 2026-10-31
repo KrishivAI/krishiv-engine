@@ -530,7 +530,7 @@ fn column(c: &BoundColumn) -> ArgType {
 
 /// The type of a value as typing sees it: `VOID` is an untyped `NULL`
 /// (`data_type: None`) everywhere but in plans and schemas.
-fn arg_type(data_type: DataType, nullable: bool) -> ArgType {
+pub(super) fn arg_type(data_type: DataType, nullable: bool) -> ArgType {
     ArgType {
         data_type: (data_type != DataType::Null).then_some(data_type),
         nullable,
@@ -5950,7 +5950,7 @@ fn is_deterministic(e: &Expr) -> bool {
 /// `fields` (Spark's `GetStructField` by an unknown name, checked against
 /// Spark 4.2.0 for `s.f`, `(s).f`, nested paths and `Column.getField`): the
 /// missing name, and every field of the struct.
-fn unresolved_field(
+pub(super) fn unresolved_field(
     parts: &[String],
     fields: &krishiv_types::StructType,
     origin: Origin,

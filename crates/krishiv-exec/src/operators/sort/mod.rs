@@ -49,6 +49,11 @@
 //!   consumer of its own until read ([`crate::output_spill`]): a spill
 //!   writes the rest of the merge as one run and the source reads on from
 //!   it.
+//! - An unbucketed in-memory result of many batches is merged on several
+//!   blocking tasks when the memory allows: sampled splitters cut it into one
+//!   part per thread, each part is sorted on its own, and the output is
+//!   gathered a few batches at a time. The order is the loser tree's, which
+//!   runs otherwise. A spill waits for the sorts to finish.
 //! - Batches a merge moved past stay referenced until its output batch is
 //!   built: in-flight bytes, like every operator's output.
 

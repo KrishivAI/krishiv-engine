@@ -254,6 +254,19 @@ fn the_spark_probe_rows_match() {
             format!("SELECT ck FROM c GROUP BY ck HAVING {es} OR ck = 3"),
             vec!["1", "2", "3"],
         ),
+        // A join condition: the existence join sits under the side it reads.
+        (
+            "SELECT c.ck FROM c JOIN w ON c.ck = w.wk AND (EXISTS (SELECT 1 FROM s WHERE \
+             s.sk = c.ck) OR w.v = 2)"
+                .to_owned(),
+            vec!["2"],
+        ),
+        (
+            "SELECT c.ck, w.wk FROM c LEFT JOIN w ON c.ck = w.wk AND EXISTS (SELECT 1 FROM s \
+             WHERE s.sk = c.ck)"
+                .to_owned(),
+            vec!["1|NULL", "2|2", "3|NULL", "4|NULL", "NULL|NULL"],
+        ),
     ];
     for (sql, want) in cases {
         let mut want: Vec<String> = want.into_iter().map(str::to_owned).collect();
@@ -270,9 +283,9 @@ fn shapes_that_need_unnesting_stay_refused() {
         "SELECT ck FROM c WHERE EXISTS (SELECT max(v) FROM s WHERE s.sk = c.ck) OR g = 'zz'",
         "SELECT ck FROM c WHERE EXISTS (SELECT sk FROM s WHERE s.sk = c.ck GROUP BY sk \
          HAVING count(*) > 1) OR g = 'c'",
-        // A join condition.
-        "SELECT c.ck FROM c JOIN w ON c.ck = w.wk AND (EXISTS (SELECT 1 FROM s WHERE s.sk = c.ck) \
-         OR w.v = 2)",
+        // A join condition that reads both sides.
+        "SELECT c.ck FROM c JOIN w ON c.ck = w.wk AND EXISTS (SELECT 1 FROM s WHERE s.sk = c.ck \
+         AND s.v = w.v)",
     ] {
         let sql = format!("{PROBE}{body}");
         let plan =
