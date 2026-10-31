@@ -203,7 +203,7 @@ fn insert_into_a_view_and_other_wrong_targets() {
     run(&s, "CREATE TABLE t (a INT)");
     assert_eq!(
         class(&s, "INSERT INTO t PARTITION (a = 1) VALUES (1)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "PARTITIONS_NOT_FOUND"
     );
 }
 
@@ -622,11 +622,13 @@ fn provider_names_and_defaults() {
         class(&s, "CREATE TABLE e (a INT) USING parquet LOCATION ''"),
         "INVALID_EMPTY_LOCATION"
     );
+    // A bucketed table is created, but the engine writes no bucketed files.
+    run(
+        &s,
+        "CREATE TABLE b (a INT) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS",
+    );
     assert_eq!(
-        class(
-            &s,
-            "CREATE TABLE b (a INT) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS"
-        ),
+        class(&s, "INSERT INTO b VALUES (1)"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert_eq!(
@@ -813,7 +815,7 @@ fn analyze_validates_and_resource_commands_are_refused() {
     );
     assert_eq!(
         class(&s, "ANALYZE TABLE t PARTITION (a = 1) COMPUTE STATISTICS"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "PARTITIONS_NOT_FOUND"
     );
     for sql in ["ADD JAR '/tmp/x.jar'", "LIST FILES", "ADD FILE '/tmp/f'"] {
         assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");

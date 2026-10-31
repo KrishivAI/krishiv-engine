@@ -244,7 +244,7 @@ fn alter_table() {
     );
     assert_eq!(
         class(&s, "ALTER TABLE t DROP COLUMNS (b)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "UNSUPPORTED_FEATURE.TABLE_OPERATION"
     );
     run(&s, "CREATE VIEW v AS SELECT 1 AS x");
     assert_eq!(

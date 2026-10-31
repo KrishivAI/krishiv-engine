@@ -38,10 +38,10 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
-    AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, ColumnName,
-    CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, DdlName, DropBehavior,
-    DropNamespace, DropPermanentView, DropTable, Insert, InsertClause, Query, TableElement,
-    TableOption, Truncate, Use,
+    AlterColumnAction, AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze,
+    AnalyzeColumns, ChangeColumnAction, ColumnName, CreateNamespace, CreatePermanentView,
+    CreateTable, CreateTableLike, DdlName, DropBehavior, DropNamespace, DropPermanentView,
+    DropTable, Insert, InsertClause, Query, TableElement, TableOption, Truncate, Use,
 };
 use krishiv_types::DataType;
 
@@ -50,7 +50,7 @@ use crate::functions::{col, expr, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::store::{
     CatalogStore, CatalogTable, CreateMode, DEFAULT_NAMESPACE, DropNamespaceError, NamespaceMeta,
-    StoreColumn, ViewDef, managed_location,
+    StoreColumn, TableLayout, ViewDef, managed_location,
 };
 
 /// The file formats a table can have.
@@ -504,6 +504,7 @@ impl Session {
                 namespace: self.state.catalog.current_namespace(),
                 query_columns,
             }),
+            layout: TableLayout::default(),
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -680,15 +681,72 @@ impl Session {
                         }
                         .into());
                     }
-                    changed.columns.push(StoreColumn {
-                        name: ident.value.clone(),
-                        data_type: def.data_type.to_data_type()?,
-                        // Existing files have no such column: it reads as NULL.
-                        nullable: true,
-                        default: None,
-                        comment: def.comment.clone(),
-                    });
+                    // Spark alters the data schema: new columns go before the partition columns.
+                    let at = changed.data_columns().count();
+                    changed.columns.insert(
+                        at,
+                        StoreColumn {
+                            name: ident.value.clone(),
+                            data_type: def.data_type.to_data_type()?,
+                            // Existing files have no such column: it reads as NULL.
+                            nullable: true,
+                            default: None,
+                            comment: def.comment.clone(),
+                        },
+                    );
                 }
+            }
+            AlterTableAction::ChangeColumn {
+                name: column,
+                action,
+                ..
+            } => {
+                let change = match action {
+                    ChangeColumnAction::Type(t) => ColumnChange::Type(t.to_data_type()?),
+                    ChangeColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    ChangeColumnAction::First | ChangeColumnAction::After(_) => {
+                        ColumnChange::Position
+                    }
+                    ChangeColumnAction::SetNotNull | ChangeColumnAction::DropNotNull => {
+                        ColumnChange::Nullability
+                    }
+                    _ => return Err(unsupported("this CHANGE COLUMN")),
+                };
+                self.change_column(&mut changed, column, change, &env)?;
+            }
+            AlterTableAction::AlterColumn {
+                name: column,
+                action,
+                ..
+            } => {
+                let change = match action {
+                    AlterColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    AlterColumnAction::SetNotNull | AlterColumnAction::DropNotNull => {
+                        ColumnChange::Nullability
+                    }
+                    AlterColumnAction::DropDefault => ColumnChange::DropDefault,
+                    _ => return Err(unsupported("ALTER COLUMN ... SET DEFAULT")),
+                };
+                self.change_column(&mut changed, column, change, &env)?;
+            }
+            AlterTableAction::RenameColumn { from, .. } => {
+                resolve_column(&changed, from, &env)?;
+                return Err(table_operation(&name, "RENAME COLUMN"));
+            }
+            AlterTableAction::DropColumns(columns) => {
+                for c in columns {
+                    resolve_column(&changed, c, &env)?;
+                }
+                return Err(table_operation(&name, "DROP COLUMN"));
+            }
+            AlterTableAction::AddPartition {
+                if_not_exists,
+                parts,
+                ..
+            } => {
+                changed = self
+                    .add_partitions(&table, parts, *if_not_exists, original)
+                    .await?;
             }
             AlterTableAction::SetTblProperties(props) => {
                 changed.properties.extend(options_of(props, original));
@@ -696,6 +754,10 @@ impl Session {
             AlterTableAction::UnsetTblProperties { keys, .. } => {
                 for key in options_of(keys, original).keys() {
                     changed.properties.remove(key);
+                    // Spark keeps the table comment as the `comment` property.
+                    if key == "comment" {
+                        changed.comment = None;
+                    }
                 }
             }
             AlterTableAction::RenameTo { name: to, .. } => {
@@ -707,6 +769,68 @@ impl Session {
             return Err(concurrent_change(&name));
         }
         self.empty_frame().await
+    }
+
+    /// `ALTER TABLE ... CHANGE | ALTER COLUMN` on a file-source table (`ResolveSessionCatalog` and
+    /// `AlterTableChangeColumnCommand`): only the comment changes, and the default can be dropped; the type
+    /// must stay the same, positions and nullability are refused, and partition columns cannot change.
+    fn change_column(
+        &self,
+        table: &mut CatalogTable,
+        column: &ColumnName,
+        change: ColumnChange,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let at = resolve_column(table, column, env)?;
+        let name = TableName {
+            namespace: table.namespace.clone(),
+            name: table.name.clone(),
+            written: String::new(),
+            bare: false,
+        };
+        match change {
+            ColumnChange::Position => {
+                return Err(table_operation(&name, "ALTER COLUMN ... FIRST | AFTER"));
+            }
+            ColumnChange::Nullability => {
+                return Err(table_operation(&name, "ALTER COLUMN ... SET NOT NULL"));
+            }
+            _ => {}
+        }
+        let written = match column {
+            ColumnName::Ident(i) => i.value.clone(),
+            _ => table.columns[at].name.clone(),
+        };
+        if table
+            .layout
+            .partition_columns
+            .contains(&table.columns[at].name)
+        {
+            return Err(krishiv_common::error::CannotAlterPartitionColumn {
+                table_name: name.quoted(),
+                column_name: format!("`{}`", written.replace('`', "``")),
+            }
+            .into());
+        }
+        let current = &mut table.columns[at];
+        match change {
+            ColumnChange::Type(t) if t != current.data_type => {
+                let sql = |t: &DataType| format!("\"{}\"", t.sql());
+                let id = format!("`{}`", current.name.replace('`', "``"));
+                return Err(krishiv_common::error::NotSupportedChangeColumn {
+                    table: name.quoted(),
+                    origin_name: id.clone(),
+                    origin_type: sql(&current.data_type),
+                    new_name: id,
+                    new_type: sql(&t),
+                }
+                .into());
+            }
+            ColumnChange::Comment(c) => current.comment = Some(c),
+            ColumnChange::DropDefault => current.default = None,
+            _ => {}
+        }
+        Ok(())
     }
 
     /// `ALTER TABLE old RENAME TO new`: a managed table's directory moves first, then the metadata; a failure in
@@ -746,6 +870,12 @@ impl Session {
             let warehouse = self.warehouse_dir()?;
             renamed.location = managed_location(&warehouse, &to.namespace, &to.name);
             renamed.root = warehouse;
+            // Partitions inside the table's directory move with it.
+            for p in &mut renamed.layout.partitions {
+                if let Ok(rest) = p.location.strip_prefix(&table.location) {
+                    p.location = renamed.location.join(rest);
+                }
+            }
             // Authorized before any file moves: the source must be deletable and the target creatable.
             self.deletable_dir(table).await?;
             self.authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
@@ -795,11 +925,14 @@ impl Session {
             }
             .into());
         }
-        if !t.partitioned_by.is_empty() {
-            return Err(unsupported("partitioned tables"));
+        if t.skew.is_some() || !t.cluster_by.is_empty() {
+            return Err(unsupported("skewed or clustered tables"));
         }
-        if t.bucket.is_some() || t.skew.is_some() || !t.cluster_by.is_empty() {
-            return Err(unsupported("bucketed, skewed or clustered tables"));
+        let (partition_names, typed_partitions) = partition_fields(&t.partitioned_by)?;
+        if t.as_query.is_some() && !typed_partitions.is_empty() {
+            return Err(unsupported(
+                "partition column types in CREATE TABLE ... AS SELECT",
+            ));
         }
         let provider = self.provider_of(t.using.as_ref().map(|u| {
             u.parts
@@ -879,14 +1012,48 @@ impl Session {
             created_ms: now_ms(),
             root: warehouse.clone(),
             view: None,
+            layout: TableLayout::default(),
+        };
+        let layout = LayoutRequest {
+            partition_by: &partition_names,
+            bucket: t.bucket.as_ref(),
         };
         match &t.as_query {
-            Some(query) => self.create_table_as(table, query, mode).await?,
+            Some(query) => self.create_table_as(table, query, mode, &layout).await?,
             None => {
                 table.columns = self.columns_of(t, original)?;
+                for c in &typed_partitions {
+                    let ColumnName::Ident(ident) = &c.name else {
+                        return Err(unsupported("IDENTIFIER() column names"));
+                    };
+                    if table
+                        .columns
+                        .iter()
+                        .any(|t| t.name.eq_ignore_ascii_case(&ident.value))
+                    {
+                        return Err(krishiv_common::error::ColumnAlreadyExists {
+                            column_name: format!("`{}`", ident.value.to_lowercase()),
+                        }
+                        .into());
+                    }
+                    table.columns.push(StoreColumn {
+                        name: ident.value.clone(),
+                        data_type: c.data_type.to_data_type()?,
+                        nullable: true,
+                        default: None,
+                        comment: c.comment.clone(),
+                    });
+                }
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
+                table.layout = crate::partitions::table_layout(
+                    &name,
+                    &mut table.columns,
+                    layout.partition_by,
+                    layout.bucket,
+                    env.analysis.conf.case_sensitive,
+                )?;
                 self.add_table(table, mode, false).await?;
             }
         }
@@ -1091,10 +1258,11 @@ impl Session {
         table: CatalogTable,
         query: &Query,
         mode: CreateMode,
+        layout: &LayoutRequest<'_>,
     ) -> Result<(), KrishivError> {
         let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        self.create_table_from(table, &df, mode).await
+        self.create_table_from(table, &df, mode, layout).await
     }
 
     /// Writes `df` to the location of the new `table` (whose columns are
@@ -1105,7 +1273,9 @@ impl Session {
         mut table: CatalogTable,
         df: &DataFrame,
         mode: CreateMode,
+        layout: &LayoutRequest<'_>,
     ) -> Result<(), KrishivError> {
+        let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
         table.columns = analysis
             .analyzed
@@ -1119,6 +1289,19 @@ impl Session {
                 comment: None,
             })
             .collect();
+        let name = TableName {
+            namespace: table.namespace.clone(),
+            name: table.name.clone(),
+            written: String::new(),
+            bare: false,
+        };
+        table.layout = crate::partitions::table_layout(
+            &name,
+            &mut table.columns,
+            layout.partition_by,
+            layout.bucket,
+            env.analysis.conf.case_sensitive,
+        )?;
         if table.managed && table.location.exists() {
             return Err(LocationAlreadyExists {
                 identifier: quoted(&table.namespace, &table.name),
@@ -1126,9 +1309,21 @@ impl Session {
             }
             .into());
         }
+        // The partition columns go last, in the table's order.
+        let df = if table.is_partitioned() {
+            df.select(table.columns.iter().map(|c| col(&c.name)))
+        } else {
+            df.clone()
+        };
         // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        self.write_table_rows(&table, df, "errorifexists").await?;
-        self.add_table(table, mode, true).await
+        self.write_table_rows(&table, &df, "errorifexists").await?;
+        let partitioned = table.is_partitioned();
+        self.add_table(table, mode, true).await?;
+        if partitioned {
+            // `RepairTableCommand`: the partitions written, with their file statistics.
+            self.sync_partitions(&name, true);
+        }
+        Ok(())
     }
 
     /// `CREATE TABLE target LIKE source`.
@@ -1150,12 +1345,18 @@ impl Session {
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
         let source = self.table_name(&t.source, &env)?;
+        // Spark's `CreateTableLikeCommand` copies the partition columns and the bucket specification.
+        let mut layout = TableLayout::default();
         let (columns, source_provider) = if let Some(s) = self
             .state
             .catalog
             .store
             .table(&source.namespace, &source.name)
         {
+            layout
+                .partition_columns
+                .clone_from(&s.layout.partition_columns);
+            layout.bucket.clone_from(&s.layout.bucket);
             (s.columns.clone(), s.provider.clone())
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
@@ -1216,6 +1417,7 @@ impl Session {
             created_ms: now_ms(),
             root: warehouse.clone(),
             view: None,
+            layout,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -1291,12 +1493,21 @@ impl Session {
     /// The table (and the listed columns) must exist, as in Spark. The engine
     /// keeps no table statistics, so nothing is computed or stored: the
     /// command only validates its target.
-    pub(crate) async fn exec_analyze(&self, a: &Analyze) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn exec_analyze(
+        &self,
+        a: &Analyze,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&a.table, &env)?;
         let table = self.table_for_write(&name, "ANALYZE TABLE", &env)?;
-        if a.partition.is_some() {
-            return Err(unsupported("ANALYZE TABLE ... PARTITION"));
+        if let Some(spec) = &a.partition {
+            if !matches!(a.columns, AnalyzeColumns::All) {
+                return Err(unsupported("ANALYZE TABLE ... PARTITION ... FOR COLUMNS"));
+            }
+            self.analyze_partitions(&name, &table, spec, a.noscan, original)
+                .await?;
+            return self.empty_frame().await;
         }
         let case_sensitive = env.analysis.conf.case_sensitive;
         let same = |x: &str, y: &str| {
@@ -1460,26 +1671,36 @@ impl Session {
     }
 
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`.
-    pub(crate) async fn exec_insert(&self, i: &Insert) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn exec_insert(
+        &self,
+        i: &Insert,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         if i.source.is_some() || i.clauses.len() != 1 {
             return Err(unsupported("multi-table INSERT"));
         }
         for clause in &i.clauses {
-            self.insert_clause(clause).await?;
+            self.insert_clause(clause, original).await?;
         }
         self.empty_frame().await
     }
 
-    async fn insert_clause(&self, c: &InsertClause) -> Result<(), KrishivError> {
+    async fn insert_clause(&self, c: &InsertClause, original: &str) -> Result<(), KrishivError> {
         let env = self.query_env();
-        if c.partition.is_some() {
-            return Err(unsupported("INSERT ... PARTITION"));
-        }
         if c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some() {
             return Err(unsupported("INSERT ... REPLACE"));
         }
         let name = self.table_name(&c.name, &env)?;
         let table = self.table_for_write(&name, "INSERT", &env)?;
+        let statics = match &c.partition {
+            None => Vec::new(),
+            Some(spec) => {
+                if c.overwrite || c.if_not_exists {
+                    return Err(unsupported("INSERT OVERWRITE ... PARTITION"));
+                }
+                self.insert_partition_values(&table, spec, original).await?
+            }
+        };
         // Spark resolves a scalar subquery in the rows of `INSERT ... VALUES` (an unknown column is
         // the error then) and refuses it afterwards (a plain `VALUES` table reports the cell it
         // cannot evaluate instead).
@@ -1512,8 +1733,18 @@ impl Session {
                 _ => Err(unsupported("IDENTIFIER() column names")),
             })
             .collect::<Result<_, _>>()?;
-        self.insert_rows(&name, &table, &source, &listed, c.by_name, c.overwrite)
-            .await
+        self.insert_rows(
+            &name,
+            &table,
+            &source,
+            &InsertTarget {
+                listed: &listed,
+                by_name: c.by_name,
+                overwrite: c.overwrite,
+                statics: &statics,
+            },
+        )
+        .await
     }
 
     /// Inserts the rows of `source` into `table` (`INSERT INTO|OVERWRITE`,
@@ -1524,10 +1755,14 @@ impl Session {
         name: &TableName,
         table: &Arc<CatalogTable>,
         source: &DataFrame,
-        listed: &[String],
-        by_name: bool,
-        overwrite: bool,
+        target: &InsertTarget<'_>,
     ) -> Result<(), KrishivError> {
+        let InsertTarget {
+            listed,
+            by_name,
+            overwrite,
+            statics,
+        } = *target;
         let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
         if overwrite
@@ -1553,8 +1788,17 @@ impl Session {
                 nullable: c.nullable,
             })
             .collect();
+        // The query provides every column but the static partition columns.
+        let assigned: CatalogTable = if statics.is_empty() {
+            (**table).clone()
+        } else {
+            let mut t = (**table).clone();
+            t.columns
+                .retain(|c| !statics.iter().any(|(k, _)| *k == c.name));
+            t
+        };
         let assignment = assign(
-            table,
+            &assigned,
             listed,
             by_name,
             &output,
@@ -1565,7 +1809,20 @@ impl Session {
             .collect();
         let base = source.to_df(renamed.iter());
         let mut select = Vec::with_capacity(table.columns.len());
-        for (column, from) in table.columns.iter().zip(&assignment) {
+        let mut assigned_columns = assigned.columns.iter().zip(&assignment);
+        for column in &table.columns {
+            if let Some((_, value)) = statics.iter().find(|(k, _)| *k == column.name) {
+                let value = if value == krishiv_io::partition::DEFAULT_PARTITION {
+                    lit_null().cast(column.data_type.clone())
+                } else {
+                    crate::functions::lit(value.as_str()).cast_ansi(column.data_type.clone())
+                };
+                select.push(value.alias(&column.name));
+                continue;
+            }
+            let Some((column, from)) = assigned_columns.next() else {
+                return Err(internal("an INSERT lost a column".to_owned()));
+            };
             let value = match from {
                 Source::Position(i) => {
                     let value = col(&renamed[*i]);
@@ -1589,7 +1846,11 @@ impl Session {
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
         self.forget_cached(name);
-        written.map_err(|e| overflow_in_table_insert(e, table, &output, &assignment))
+        if table.is_partitioned() {
+            // The partitions written (`AlterTableAddPartitionCommand` after an insert).
+            self.sync_partitions(name, false);
+        }
+        written.map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment))
     }
 
     /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`
@@ -1614,7 +1875,13 @@ impl Session {
             // existing table's layout rules.
             V2Mode::Append => {
                 let table = self.table_for_write(&name, "INSERT", &env)?;
-                return self.insert_rows(&name, &table, df, &[], false, false).await;
+                let target = InsertTarget {
+                    listed: &[],
+                    by_name: false,
+                    overwrite: false,
+                    statics: &[],
+                };
+                return self.insert_rows(&name, &table, df, &target).await;
             }
             V2Mode::Replace | V2Mode::CreateOrReplace => {
                 return Err(UnsupportedFeatureTableOperation {
@@ -1671,24 +1938,138 @@ impl Session {
             created_ms: now_ms(),
             root: warehouse,
             view: None,
+            layout: TableLayout::default(),
         };
-        self.create_table_from(table, df, CreateMode::ErrorIfExists)
+        let layout = LayoutRequest {
+            partition_by: &[],
+            bucket: None,
+        };
+        self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout)
             .await
     }
 
-    /// Writes `df` to the files of `table` with the writer's save `mode`.
+    /// Writes `df` to the files of `table` with the writer's save `mode`, in partition directories when the
+    /// table is partitioned. Bucketed files are not written: a bucketed table refuses the write.
     async fn write_table_rows(
         &self,
         table: &CatalogTable,
         df: &DataFrame,
         mode: &str,
     ) -> Result<(), KrishivError> {
+        if table.layout.bucket.is_some() {
+            return Err(unsupported("writes to bucketed tables"));
+        }
         let mut writer = df.write().format(&table.provider).mode(mode);
+        if table.is_partitioned() {
+            writer = writer.partition_by(&table.layout.partition_columns);
+        }
         for (k, v) in &table.options {
             writer = writer.option(k, v);
         }
         writer.save(&table.location.display().to_string()).await
     }
+}
+
+/// What an `ALTER TABLE ... CHANGE | ALTER COLUMN` asks for.
+enum ColumnChange {
+    Type(DataType),
+    Comment(String),
+    Position,
+    Nullability,
+    DropDefault,
+}
+
+/// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for `operation` on the table `name`.
+fn table_operation(name: &TableName, operation: &str) -> KrishivError {
+    UnsupportedFeatureTableOperation {
+        table_name: name.quoted(),
+        operation: operation.to_owned(),
+    }
+    .into()
+}
+
+/// The index of the column `column` names in `table` (Spark's `ResolveAlterTableCommands`): an unknown one is
+/// `UNRESOLVED_COLUMN.WITH_SUGGESTION` listing the table's columns.
+fn resolve_column(
+    table: &CatalogTable,
+    column: &ColumnName,
+    env: &QueryEnv,
+) -> Result<usize, KrishivError> {
+    let ColumnName::Ident(ident) = column else {
+        return Err(unsupported("IDENTIFIER() column names"));
+    };
+    let case_sensitive = env.analysis.conf.case_sensitive;
+    table
+        .columns
+        .iter()
+        .position(|c| {
+            if case_sensitive {
+                c.name == ident.value
+            } else {
+                c.name.eq_ignore_ascii_case(&ident.value)
+            }
+        })
+        .ok_or_else(|| {
+            UnresolvedColumnWithSuggestion {
+                object_name: format!("`{}`", ident.value.replace('`', "``")),
+                proposal: table
+                    .columns
+                    .iter()
+                    .map(|c| format!("`{}`", c.name.replace('`', "``")))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }
+            .into()
+        })
+}
+
+/// Where an insert's rows go: the listed columns (empty: all, by position, or by name with `by_name`), and
+/// the static partition values of `PARTITION (...)`.
+#[derive(Clone, Copy)]
+struct InsertTarget<'a> {
+    listed: &'a [String],
+    by_name: bool,
+    overwrite: bool,
+    statics: &'a [(String, String)],
+}
+
+/// The `PARTITIONED BY` column names and `CLUSTERED BY` of a new table.
+struct LayoutRequest<'a> {
+    partition_by: &'a [String],
+    bucket: Option<&'a krishiv_sql::ast::BucketSpec>,
+}
+
+/// The `PARTITIONED BY` elements as column names and typed columns (Spark refuses a mix of both).
+fn partition_fields(
+    fields: &[krishiv_sql::ast::PartitionField],
+) -> Result<(Vec<String>, Vec<&krishiv_sql::ast::PartitionColumn>), KrishivError> {
+    use krishiv_sql::ast::PartitionFieldKind;
+    let mut names = Vec::new();
+    let mut typed = Vec::new();
+    for f in fields {
+        match &f.kind {
+            PartitionFieldKind::Column(c) => {
+                let ColumnName::Ident(ident) = &c.name else {
+                    return Err(unsupported("IDENTIFIER() column names"));
+                };
+                names.push(ident.value.clone());
+                typed.push(c);
+            }
+            PartitionFieldKind::Transform(t) => match (&t.name, t.args.is_empty()) {
+                (DdlName::Parts(n), true) if n.parts.len() == 1 => {
+                    names.push(n.parts[0].value.clone());
+                }
+                _ => return Err(unsupported("partition transforms")),
+            },
+            _ => return Err(unsupported("this PARTITIONED BY element")),
+        }
+    }
+    if !typed.is_empty() && typed.len() != names.len() {
+        return Err(unsupported(
+            "PARTITIONED BY mixing partition columns and expressions",
+        ));
+    }
+    Ok((names, typed))
 }
 
 /// What [`Session::exec_write_v2`] writes: the table name as written and
@@ -1969,7 +2350,7 @@ fn literal_text(fragment: &str) -> String {
     f.to_owned()
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))

@@ -55,6 +55,7 @@ pub mod functions;
 mod identifier_clause;
 mod introspection;
 mod locals;
+mod partitions;
 mod profile;
 mod scripting;
 mod session;

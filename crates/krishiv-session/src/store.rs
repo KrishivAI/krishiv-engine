@@ -80,6 +80,73 @@ pub(crate) struct CatalogTable {
     pub(crate) root: PathBuf,
     /// Set for a view: it has no provider, location or files.
     pub(crate) view: Option<ViewDef>,
+    /// Partitioning, bucketing and the partitions the catalog tracks.
+    pub(crate) layout: TableLayout,
+}
+
+impl CatalogTable {
+    /// Whether the table has partition columns.
+    pub(crate) fn is_partitioned(&self) -> bool {
+        !self.layout.partition_columns.is_empty()
+    }
+
+    /// The columns that are not partition columns (the files' columns), in table order.
+    pub(crate) fn data_columns(&self) -> impl Iterator<Item = &StoreColumn> {
+        self.columns
+            .iter()
+            .filter(|c| !self.layout.partition_columns.contains(&c.name))
+    }
+
+    /// The partition columns in partition order.
+    pub(crate) fn partition_schema(&self) -> Vec<&StoreColumn> {
+        self.layout
+            .partition_columns
+            .iter()
+            .filter_map(|p| self.columns.iter().find(|c| &c.name == p))
+            .collect()
+    }
+}
+
+/// How a table's files are laid out (Spark's `partitionColumnNames`, `bucketSpec` and, for a partitioned
+/// table, the partitions its catalog tracks: `tracksPartitionsInCatalog`). The partition columns are the last
+/// columns of the table, in this order.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct TableLayout {
+    /// The partition columns, as the table's columns spell them, in `PARTITIONED BY` order.
+    pub(crate) partition_columns: Vec<String>,
+    /// `CLUSTERED BY ... [SORTED BY ...] INTO n BUCKETS`.
+    pub(crate) bucket: Option<BucketMeta>,
+    /// The partitions, in the order they were added.
+    pub(crate) partitions: Vec<CatalogPartition>,
+}
+
+/// A table's bucket specification, column names as the table spells them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BucketMeta {
+    pub(crate) num_buckets: u64,
+    pub(crate) columns: Vec<String>,
+    pub(crate) sort_columns: Vec<String>,
+}
+
+/// A partition of a partitioned table (Spark's `CatalogTablePartition`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CatalogPartition {
+    /// `(column, value)` in partition-column order; values are Spark's partition value strings.
+    pub(crate) spec: Vec<(String, String)>,
+    /// The partition's directory.
+    pub(crate) location: PathBuf,
+    /// `Partition Parameters` (file statistics a recovery gathered).
+    pub(crate) parameters: BTreeMap<String, String>,
+    pub(crate) created_ms: i64,
+    /// `ANALYZE TABLE ... PARTITION` statistics: size in bytes and, unless `NOSCAN`, the row count.
+    pub(crate) stats: Option<PartitionStats>,
+}
+
+/// Statistics of a partition (Spark's `CatalogStatistics` without column statistics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PartitionStats {
+    pub(crate) size_in_bytes: i128,
+    pub(crate) row_count: Option<u64>,
 }
 
 /// A namespace's metadata.
@@ -487,6 +554,7 @@ mod tests {
             created_ms: 0,
             root: PathBuf::new(),
             view: None,
+            layout: TableLayout::default(),
         }
     }
 

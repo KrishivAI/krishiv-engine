@@ -1348,6 +1348,7 @@ impl Session {
     pub(crate) async fn exec_show(
         &self,
         s: &krishiv_sql::ast::Show,
+        original: &str,
     ) -> Result<DataFrame, KrishivError> {
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
@@ -1360,7 +1361,7 @@ impl Session {
                 )
                 .await
             }
-            _ => self.exec_show_catalog(s).await,
+            _ => self.exec_show_catalog(s, original).await,
         }
     }
 

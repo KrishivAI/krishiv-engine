@@ -2081,8 +2081,7 @@ impl DataFrameWriter {
 /// `replace` and `create_or_replace` fail as `REPLACE TABLE AS SELECT` does
 /// on file-source tables; `overwrite` and `overwrite_partitions` fail with
 /// `KRISHIV_UNSUPPORTED_FEATURE` naming `INSERT OVERWRITE`; `partitioned_by`
-/// and `cluster_by` fail at the write with what the command reports for
-/// partitioned tables.
+/// and `cluster_by` fail at the write with `KRISHIV_UNSUPPORTED_FEATURE`.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct DataFrameWriterV2 {
@@ -2157,10 +2156,10 @@ impl DataFrameWriterV2 {
     }
 
     /// Partition the table by `cols` (each call replaces the columns of
-    /// the one before, so an empty call clears them). The engine runs no
-    /// partitioned tables yet: any column fails the write with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`, as `CREATE TABLE ... PARTITIONED BY`
-    /// does.
+    /// the one before, so an empty call clears them). The builder does not
+    /// create partitioned tables yet: any column fails the write with
+    /// `KRISHIV_UNSUPPORTED_FEATURE` (`CREATE TABLE ... PARTITIONED BY ...
+    /// AS SELECT` creates one).
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;

@@ -541,19 +541,19 @@ impl Session {
             }
             Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
-            Statement::CreateTable(t) => self.exec_create_table(&t, query).await,
-            Statement::CreateTableLike(t) => self.exec_create_table_like(&t, query).await,
+            Statement::CreateTable(t) => Box::pin(self.exec_create_table(&t, query)).await,
+            Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
             Statement::Use(u) => self.exec_use(&u).await,
-            Statement::Show(s) => self.exec_show(&s).await,
-            Statement::Describe(d) => self.exec_describe(&d).await,
+            Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
+            Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
             Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
             Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
-            Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
-            Statement::Insert(i) => self.exec_insert(&i).await,
+            Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
+            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query)).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
@@ -567,7 +567,7 @@ impl Session {
                 }
                 Box::pin(self.exec_script(&c, query, redacted)).await
             }
-            Statement::Analyze(a) => self.exec_analyze(&a).await,
+            Statement::Analyze(a) => Box::pin(self.exec_analyze(&a, query)).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {

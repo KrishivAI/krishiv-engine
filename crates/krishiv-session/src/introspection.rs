@@ -10,15 +10,13 @@ use krishiv_common::error::{
     ExpectPermanentViewNotTemp, KrishivError, KrishivUnsupportedFeature, SchemaNotFound,
     ShowColumnsWithConflictNamespace, UnresolvedColumnWithSuggestion,
 };
-use krishiv_sql::ast::{
-    DdlName, Describe, DescribeKind, DescribeMode, Show, ShowKind, ShowPattern,
-};
+use krishiv_sql::ast::{DdlName, Describe, DescribeKind, Show, ShowKind, ShowPattern};
 use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
 use crate::functions::{col, lit};
 use crate::session::Session;
-use crate::store::{CatalogStore, CatalogTable, NamespaceMeta};
+use crate::store::{CatalogPartition, CatalogStore, CatalogTable, NamespaceMeta};
 use crate::table_commands::TableName;
 
 type Cell = Option<String>;
@@ -139,7 +137,7 @@ fn sql_literal(v: &str) -> String {
 
 impl Session {
     /// A frame of `columns` (string columns, except the names in `booleans`) with `rows`, in row order.
-    async fn ordered_frame(
+    pub(crate) async fn ordered_frame(
         &self,
         columns: &[&str],
         booleans: &[&str],
@@ -221,7 +219,11 @@ impl Session {
     }
 
     /// `SHOW ...` other than `SHOW CURRENT NAMESPACE`.
-    pub(crate) async fn exec_show_catalog(&self, show: &Show) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn exec_show_catalog(
+        &self,
+        show: &Show,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         let store = &self.state.catalog.store;
         match &show.kind {
             ShowKind::Tables {
@@ -357,6 +359,21 @@ impl Session {
                 )
                 .await
             }
+            ShowKind::Partitions {
+                name, partition, ..
+            } => {
+                let env = self.query_env();
+                let name = self.table_name(name, &env)?;
+                if self.temp_entry_of(&name, &env) {
+                    return Err(unsupported("SHOW PARTITIONS on a temporary view"));
+                }
+                let table = self.stored_relation(&name)?;
+                if table.view.is_some() {
+                    return Err(unsupported("SHOW PARTITIONS on a view"));
+                }
+                self.show_partitions(&table, partition.as_ref(), original)
+                    .await
+            }
             _ => Err(unsupported("this SHOW command")),
         }
     }
@@ -412,7 +429,11 @@ impl Session {
     }
 
     /// `DESCRIBE ...`.
-    pub(crate) async fn exec_describe(&self, d: &Describe) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn exec_describe(
+        &self,
+        d: &Describe,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         match &d.kind {
             DescribeKind::Table {
@@ -423,14 +444,19 @@ impl Session {
                 as_json,
                 ..
             } => {
-                if partition.is_some() {
-                    return Err(unsupported("DESCRIBE ... PARTITION"));
-                }
                 if *as_json {
                     return Err(unsupported("DESCRIBE ... AS JSON"));
                 }
                 let name = self.table_name(table, &env)?;
                 let columns = self.columns_of_relation(&name).await?;
+                let temp = self.temp_entry_of(&name, &env);
+                let described = match partition {
+                    Some(spec) => Some(
+                        self.described_partition(&name, temp, spec, original)
+                            .await?,
+                    ),
+                    None => None,
+                };
                 if !column.is_empty() {
                     if mode.is_some() {
                         // Spark adds statistics rows; the engine keeps none.
@@ -448,11 +474,33 @@ impl Session {
                         ]
                     })
                     .collect();
-                if matches!(mode, Some(DescribeMode::Formatted)) {
-                    return Err(unsupported("DESCRIBE FORMATTED"));
-                }
                 // A temporary view has no stored form: only its columns.
-                if mode.is_some() && !self.temp_entry_of(&name, &env) {
+                let stored = if temp {
+                    None
+                } else {
+                    Some(self.stored_relation(&name)?)
+                };
+                if let Some(t) = stored.as_ref().filter(|t| t.is_partitioned()) {
+                    rows.push(vec![s("# Partition Information"), s(""), s("")]);
+                    rows.push(vec![s("# col_name"), s("data_type"), s("comment")]);
+                    rows.extend(t.partition_schema().into_iter().map(|c| {
+                        vec![
+                            s(&c.name),
+                            s(c.data_type.catalog_string()),
+                            s(c.comment.clone().unwrap_or_default()),
+                        ]
+                    }));
+                }
+                if let (Some(t), Some(p)) = (stored.as_ref(), described.as_ref()) {
+                    if mode.is_some() {
+                        self.require_current_profile("DESCRIBE EXTENDED")?;
+                        rows.extend(
+                            partition_details(t, p)
+                                .into_iter()
+                                .map(|(k, v)| vec![s(k), s(v), s("")]),
+                        );
+                    }
+                } else if mode.is_some() && stored.is_some() {
                     rows.push(vec![s(""), s(""), s("")]);
                     rows.push(vec![s("# Detailed Table Information"), s(""), s("")]);
                     let info = self.detailed_information(&name)?;
@@ -611,6 +659,7 @@ impl Session {
                 if t.managed { "MANAGED" } else { "EXTERNAL" }.to_owned(),
             ));
             rows.push(("Provider".to_owned(), t.provider.clone()));
+            rows.extend(bucket_rows(&t));
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));
             }
@@ -629,13 +678,115 @@ impl Session {
             ));
         }
         if t.view.is_none() {
-            rows.push((
-                "Location".to_owned(),
-                format!("file:{}", t.location.display()),
-            ));
+            rows.extend(storage_rows(&t, &t.location));
+            if t.is_partitioned() {
+                rows.push(("Partition Provider".to_owned(), "Catalog".to_owned()));
+            }
         }
         Ok(rows)
     }
+}
+
+/// `Num Buckets`, `Bucket Columns` and `Sort Columns` of a bucketed table (`BucketSpec.toLinkedHashMap`).
+fn bucket_rows(t: &CatalogTable) -> Vec<(String, String)> {
+    let Some(b) = &t.layout.bucket else {
+        return Vec::new();
+    };
+    let list = |names: &[String]| {
+        format!(
+            "[{}]",
+            names
+                .iter()
+                .map(|n| format!("`{}`", n.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    vec![
+        ("Num Buckets".to_owned(), b.num_buckets.to_string()),
+        ("Bucket Columns".to_owned(), list(&b.columns)),
+        ("Sort Columns".to_owned(), list(&b.sort_columns)),
+    ]
+}
+
+/// The table's options as Spark shows them: the `header` the engine adds to CSV tables is not one of them.
+fn storage_options(t: &CatalogTable) -> std::collections::BTreeMap<String, String> {
+    t.options
+        .iter()
+        .filter(|(k, v)| !(t.provider == "csv" && k.as_str() == "header" && v.as_str() == "true"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// `Location` and `Storage Properties` (`CatalogStorageFormat.toLinkedHashMap`) at `location`.
+fn storage_rows(t: &CatalogTable, location: &std::path::Path) -> Vec<(String, String)> {
+    let mut rows = vec![(
+        "Location".to_owned(),
+        format!("file:{}", location.display()),
+    )];
+    let options = storage_options(t);
+    if !options.is_empty() {
+        rows.push((
+            "Storage Properties".to_owned(),
+            format!(
+                "[{}]",
+                options
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", redact(k, v)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    rows
+}
+
+/// The rows `DESCRIBE EXTENDED ... PARTITION` adds (`describeFormattedDetailedPartitionInfo`).
+fn partition_details(t: &CatalogTable, p: &CatalogPartition) -> Vec<(String, String)> {
+    let mut rows = vec![
+        (String::new(), String::new()),
+        ("# Detailed Partition Information".to_owned(), String::new()),
+        ("Database".to_owned(), t.namespace.clone()),
+        ("Table".to_owned(), t.name.clone()),
+        (
+            "Partition Values".to_owned(),
+            format!(
+                "[{}]",
+                p.spec
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ),
+    ];
+    rows.extend(storage_rows(t, &p.location));
+    if !p.parameters.is_empty() {
+        rows.push((
+            "Partition Parameters".to_owned(),
+            format!(
+                "[{}]",
+                p.parameters
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", redact(k, v)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    rows.push(("Created Time".to_owned(), created_time(p.created_ms)));
+    rows.push(("Last Access".to_owned(), "UNKNOWN".to_owned()));
+    if let Some(stats) = p.stats {
+        rows.push((
+            "Partition Statistics".to_owned(),
+            crate::partitions::stats_text(stats),
+        ));
+    }
+    rows.push((String::new(), String::new()));
+    rows.push(("# Storage Information".to_owned(), String::new()));
+    rows.extend(bucket_rows(t));
+    rows.extend(storage_rows(t, &t.location));
+    rows
 }
 
 /// `SHOW CREATE TABLE` text of a table or view, in Spark's layout.
@@ -683,21 +834,37 @@ fn create_statement(t: &CatalogTable) -> Result<String, KrishivError> {
         .collect::<Result<Vec<_>, _>>()?
         .join(",\n");
     let mut out = format!("CREATE TABLE {name} (\n{cols})\nUSING {}\n", t.provider);
+    let partitioning = |out: &mut String| {
+        if t.is_partitioned() {
+            out.push_str(&format!(
+                "PARTITIONED BY ({})\n",
+                t.layout
+                    .partition_columns
+                    .iter()
+                    .map(|c| quote_if_needed(c))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(b) = &t.layout.bucket {
+            out.push_str(&format!("CLUSTERED BY ({})\n", b.columns.join(", ")));
+            if !b.sort_columns.is_empty() {
+                out.push_str(&format!("SORTED BY ({})\n", b.sort_columns.join(", ")));
+            }
+            out.push_str(&format!("INTO {} BUCKETS\n", b.num_buckets));
+        }
+    };
     let pairs = |m: &std::collections::BTreeMap<String, String>| {
         m.iter()
             .map(|(k, v)| format!("  {} = {}", sql_literal(k), sql_literal(redact(k, v))))
             .collect::<Vec<_>>()
             .join(",\n")
     };
-    let options: std::collections::BTreeMap<String, String> = t
-        .options
-        .iter()
-        .filter(|(k, v)| !(t.provider == "csv" && k.as_str() == "header" && v.as_str() == "true"))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let options = storage_options(t);
     if !options.is_empty() {
         out.push_str(&format!("OPTIONS (\n{})\n", pairs(&options)));
     }
+    partitioning(&mut out);
     if let Some(c) = &t.comment {
         out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
     }
