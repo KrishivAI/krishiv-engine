@@ -313,6 +313,21 @@ fn null_literal(e: &Expr) -> bool {
     }
 }
 
+/// Whether `e` is an integer literal above zero.
+fn positive_literal(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Literal(v) => match v {
+            Literal::Byte(n) => *n > 0,
+            Literal::Short(n) => *n > 0,
+            Literal::Integer(n) => *n > 0,
+            Literal::Long(n) => *n > 0,
+            _ => false,
+        },
+        ExprNode::Cast { expr, .. } => positive_literal(expr),
+        _ => false,
+    }
+}
+
 /// Whether `p` is one row of expressions over no relation: `SELECT 1`,
 /// `VALUES (1)`, through aliases and projections.
 fn one_row_literals(p: &LogicalPlan) -> bool {
@@ -1019,6 +1034,13 @@ impl Rewriter {
                 } else {
                     self.pull(input, false)
                 }
+            }
+            // EXISTS asks only whether a row exists: a positive LIMIT keeps
+            // that answer (an OFFSET or `LIMIT 0` would not).
+            PlanNode::Limit { input, limit }
+                if !keep && positive_literal(limit) && !has_outer(Node::Expr(limit)) =>
+            {
+                self.pull(input, false)
             }
             _ => Err(unsupported(
                 "outer references below a join, aggregate, limit or set operation",
