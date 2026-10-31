@@ -469,6 +469,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "struct_field"
             | "lambda_functions"
             | "map_key_dedup_policy"
+            | "legacy_charset_switches"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
