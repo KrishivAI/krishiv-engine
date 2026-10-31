@@ -251,6 +251,18 @@ fn sql_function_roots(
     while next < roots.len() {
         let mut defs = Vec::new();
         let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
+            if let Node::Plan(p) = node
+                && let PlanNode::TableFunction { name, .. } = &p.node
+                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
+                    &name
+                        .split(crate::TABLE_FUNCTION_NAME_SEP)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>(),
+                    ctx.profile,
+                )
+            {
+                defs.push(def);
+            }
             if let Node::Expr(e) = node
                 && let ExprNode::Function(f) = &e.node
                 && is_registry_call(&f.name)

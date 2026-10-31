@@ -312,6 +312,7 @@ mod tests {
             def: Arc::new(SqlFunction {
                 name: name.to_owned(),
                 qualifier: Vec::new(),
+                returns_table: None,
                 params: Vec::new(),
                 returns: None,
                 body: Arc::new(Expr::literal(Literal::Integer(value))),
