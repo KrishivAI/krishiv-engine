@@ -646,6 +646,20 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.source(s);
             }
             PlanNode::OneRowRelation => self.u8(15),
+            PlanNode::PartialAggregate {
+                keys,
+                aggregates,
+                states,
+                ..
+            } => {
+                self.u8(30);
+                self.exprs(keys);
+                self.exprs(aggregates);
+                self.len(states.len());
+                for c in states {
+                    self.bound(c);
+                }
+            }
             PlanNode::Sql { query, args } => {
                 self.u8(2);
                 self.str(query);
@@ -1208,6 +1222,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(14);
                 self.str(name);
                 self.expr(base);
+            }
+            ExprNode::Resolved(ResolvedExpr::StateInput { columns, raw_type }) => {
+                self.u8(30);
+                self.data_type(raw_type);
+                self.exprs(columns);
             }
             ExprNode::Resolved(ResolvedExpr::Field {
                 base,

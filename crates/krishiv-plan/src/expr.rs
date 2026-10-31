@@ -484,6 +484,17 @@ pub enum ResolvedExpr {
         /// The attribute it produces.
         output: BoundColumn,
     },
+    /// The only argument of an aggregate call that merges the states of a
+    /// [`PlanNode::PartialAggregate`](crate::PlanNode) instead of reading
+    /// raw values. It is not a value: only the aggregate planned around it
+    /// reads it.
+    StateInput {
+        /// The state columns of the call, in order.
+        columns: Vec<Arc<Expr>>,
+        /// The type of the raw argument the states were built from: their
+        /// types and the result derive from it.
+        raw_type: DataType,
+    },
 }
 
 impl Expr {
@@ -621,6 +632,9 @@ impl Expr {
                 }
                 within_group.iter().for_each(|o| f(&o.expr));
             }
+            ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
+                columns.iter().for_each(&mut *f);
+            }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
@@ -678,6 +692,9 @@ impl Expr {
                     f(filter);
                 }
                 within_group.iter_mut().for_each(|o| f(&mut o.expr));
+            }
+            ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
+                columns.iter_mut().for_each(&mut *f);
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }

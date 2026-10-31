@@ -460,6 +460,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "partial_aggregate"
             | "shared_subplan"
             | "rust_udf"
             | "nested_types"

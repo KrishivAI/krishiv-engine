@@ -456,6 +456,11 @@ impl Encoder {
                 self.debug(data_type);
                 self.flag(*nullable);
             }
+            ResolvedExpr::StateInput { columns, raw_type } => {
+                self.tag("rstate");
+                self.exprs(columns, bias);
+                self.debug(raw_type);
+            }
             ResolvedExpr::Alias { expr, output } => {
                 self.tag("ralias");
                 self.expr(expr, bias);
@@ -582,6 +587,20 @@ impl Encoder {
             PlanNode::Filter { input, predicate } => {
                 self.tag("Filter");
                 self.expr(predicate, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::PartialAggregate {
+                input,
+                keys,
+                aggregates,
+                states,
+            } => {
+                self.tag("PartialAggregate");
+                self.exprs(keys, bias);
+                self.exprs(aggregates, bias);
+                for c in states {
+                    self.bound(c, bias);
+                }
                 self.plan(input, bias);
             }
             PlanNode::Aggregate {

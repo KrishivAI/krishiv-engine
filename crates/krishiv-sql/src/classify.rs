@@ -20,8 +20,8 @@ use krishiv_plan::analyzer::Privilege;
 
 use crate::ast::{
     AlterNamespaceAction, AlterTableAction, AlterViewAction, CacheKind, Compound, DdlName,
-    DescribeKind, ExplainMode, HandlerBody, MergeSource, Query, RefreshKind, ScriptStatement,
-    SetVariableKind, ShowKind, Statement,
+    DescribeKind, ExplainMode, HandlerBody, MergeSource, ObjectName, Query, RefreshKind,
+    ScriptStatement, SetVariableKind, ShowKind, Statement,
 };
 
 /// What kind of effect a statement has.
@@ -133,8 +133,8 @@ pub fn classify(statement: &Statement) -> StatementClass {
                 StatementClass::Ddl
             }
         }
-        // A temporary function is the session's own; a persisted one is
-        // shared catalog state (the session refuses it as unsupported).
+        // A temporary function is the session's own; a stored one is
+        // shared catalog state.
         Statement::CreateFunction(f) => {
             if f.temporary {
                 StatementClass::Session
@@ -310,6 +310,10 @@ pub enum TargetObject<'a> {
     /// The catalog (or parent namespace) holding the namespace the name
     /// names.
     ParentOfNamespace(&'a DdlName),
+    /// The function the name names (stored in a namespace of the catalog).
+    Function(&'a ObjectName),
+    /// The namespace holding the function the name names.
+    ParentOfFunction(&'a ObjectName),
     /// The current namespace.
     CurrentNamespace,
     /// The current catalog.
@@ -379,11 +383,20 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         | Statement::ExecuteImmediate(_)
         | Statement::CreateView(_)
         | Statement::DropView(_)
-        // Functions have no securable yet: a persisted one is refused by
-        // the session before it changes anything.
-        | Statement::CreateFunction(_)
-        | Statement::DropFunction(_)
         | Statement::ListResource(_) => Vec::new(),
+        // A temporary function is the session's own; a stored one is catalog
+        // state: creating it needs `CREATE` on its namespace (replacing it
+        // also `DROP` on it), dropping it `DROP` on it.
+        Statement::CreateFunction(f) if f.temporary => Vec::new(),
+        Statement::CreateFunction(f) => {
+            let mut out = vec![t(O::ParentOfFunction(&f.name), Create)];
+            if f.or_replace {
+                out.push(t(O::Function(&f.name), Drop));
+            }
+            out
+        }
+        Statement::DropFunction(f) if f.temporary => Vec::new(),
+        Statement::DropFunction(f) => vec![t(O::Function(&f.name), Drop)],
         Statement::Explain(e) => match e.mode {
             ExplainMode::Analyze => statement_targets(&e.statement),
             ExplainMode::Simple

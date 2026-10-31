@@ -21,6 +21,7 @@ mod group_limit;
 mod hints;
 mod listing;
 mod orientation;
+mod partial_aggregate;
 mod physical;
 mod plan_stats;
 mod runtime_filters;

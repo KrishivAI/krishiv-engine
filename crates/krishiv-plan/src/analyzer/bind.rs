@@ -261,8 +261,12 @@ fn sql_function_roots(
                         parts
                     } else if f.qualifier.is_empty() {
                         vec![f.name.clone()]
-                    } else {
+                    } else if is_builtin_qualifier(&f.qualifier) {
                         return ControlFlow::Continue(());
+                    } else {
+                        let mut parts = f.qualifier.clone();
+                        parts.push(f.name.clone());
+                        parts
                     },
                     ctx.profile,
                 )
@@ -273,7 +277,7 @@ fn sql_function_roots(
         });
         next += 1;
         for def in defs {
-            if !known.insert(def.name.clone()) {
+            if !known.insert(def.routine_name()) {
                 continue;
             }
             if known.len() > crate::MAX_DEPTH {
@@ -310,6 +314,21 @@ fn check_function(
     // `builtin.f` / `system.builtin.f` (case-insensitively) resolve to the
     // builtin function; `session.f` / `system.session.f` reach a session
     // UDF only; any other qualifier is an unresolved routine.
+    // A function stored in a namespace of the session's catalog is named by
+    // its qualifier.
+    if !f.qualifier.is_empty()
+        && !is_session_qualifier(&f.qualifier)
+        && !is_builtin_qualifier(&f.qualifier)
+    {
+        let mut named = f.qualifier.clone();
+        named.push(f.name.clone());
+        if matches!(
+            ctx.functions.lookup(&named, ctx.profile),
+            FunctionLookup::Sql(_)
+        ) {
+            return Ok(());
+        }
+    }
     let (parts, builtin) = qualified_parts(f, &search_path(ctx), origin)?;
     // A session-qualified call resolves through the full parts (UDFs only).
     if is_session_qualifier(&f.qualifier) {
