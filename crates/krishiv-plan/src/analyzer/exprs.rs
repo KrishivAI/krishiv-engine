@@ -6192,16 +6192,45 @@ pub(super) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String {
 /// once.
 fn outer_names(plan: &crate::LogicalPlan) -> String {
     use crate::walk::{Node, visit_distinct};
-    let mut names: Vec<(AttrId, String)> = Vec::new();
+    fn collect(node: Node<'_>) -> Vec<(AttrId, String)> {
+        let mut names: Vec<(AttrId, String)> = Vec::new();
+        let _ = visit_distinct(node, |n| {
+            if let Node::Expr(e) = n
+                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+                && !names.iter().any(|(id, _)| *id == c.id)
+            {
+                names.push((c.id, c.name.clone()));
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        names
+    }
+    let mut names = collect(Node::Plan(plan));
+    // Spark lists each reference of a union's branches, not once per column.
+    let mut union = None;
     let _ = visit_distinct(Node::Plan(plan), |n| {
-        if let Node::Expr(e) = n
-            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-            && !names.iter().any(|(id, _)| *id == c.id)
+        if let Node::Plan(p) = n
+            && let crate::PlanNode::Union { inputs, .. } = &p.node
         {
-            names.push((c.id, c.name.clone()));
+            union = Some(inputs.clone());
+            return std::ops::ControlFlow::Break(());
         }
         std::ops::ControlFlow::Continue(())
     });
+    if let Some(inputs) = union {
+        // Under a union, once per reference of each branch.
+        names = Vec::new();
+        for input in &inputs {
+            let _ = visit_distinct(Node::Plan(input), |n| {
+                if let Node::Expr(e) = n
+                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+                {
+                    names.push((c.id, c.name.clone()));
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+        }
+    }
     names
         .into_iter()
         .map(|(_, n)| n)
