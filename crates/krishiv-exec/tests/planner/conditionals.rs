@@ -311,14 +311,9 @@ fn conditional_functions_legacy() {
     );
     // [14, 16]: the `NULL` cast result never equals zero.
     assert_eq!(rows(&cx, "SELECT nullifzero('abc')"), ["abc"]);
-    // A boolean against a number stays unsupported at run time, as before:
-    // the kernels have no boolean-numeric cast.
-    fails(
-        &cx,
-        "SELECT nullif(true, 1)",
-        ErrorClass::KrishivUnsupportedFeature,
-        Some("0A000"),
-    );
+    // A boolean against a number compares as 1/0 without ANSI (Spark 4.2.0
+    // oracle: `nullif(true, 1)` is NULL).
+    assert_eq!(rows(&cx, "SELECT nullif(true, 1)"), ["NULL"]);
     // [15].
     assert_eq!(
         rows(
