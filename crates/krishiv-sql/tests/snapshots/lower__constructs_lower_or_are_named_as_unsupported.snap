@@ -61,7 +61,7 @@ SELECT /*+ BROADCAST(t), MERGE(u) */ /*+ COALESCE(2) */ DISTINCT a FROM t, u
 SELECT a FROM t UNION ALL SELECT b FROM u UNION SELECT c FROM v
   => Distinct | +- Union |    :- Union |    :  :- Project [a] |    :  :  +- Read t |    :  +- Project [b] |    :     +- Read u |    +- Project [c] |       +- Read v | 
 SELECT x[0] FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature subscripts is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..11
+  => Project [__subscript(x, 0)] | +- Read t | 
 SELECT (a).b.c FROM t
   => Project [a.b.c] | +- Read t | 
 SELECT f(a).b FROM t

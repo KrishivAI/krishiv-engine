@@ -2108,7 +2108,10 @@ impl Lowerer {
             ExprKind::Parameter(_) | ExprKind::NamedParameter(_) => {
                 return Err(unsupported("parameter markers", sp));
             }
-            ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
+            ExprKind::Subscript(base, index) => {
+                let args = vec![self.arg(base)?, self.arg(index)?];
+                self.call("__subscript", args, sp)
+            }
             ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
             ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
