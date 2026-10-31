@@ -1144,6 +1144,7 @@ fn contains_sql_functions_may_not_read_data() {
         "CREATE FUNCTION g4(x INT) RETURNS INT CONTAINS SQL RETURN f_infer(x)",
         "CREATE FUNCTION g5(x INT) RETURNS TABLE (a INT) CONTAINS SQL RETURN SELECT * FROM f_reads_t(x)",
         "CREATE FUNCTION g6(x INT) RETURNS TABLE (a INT) CONTAINS SQL RETURN SELECT id FROM pt",
+        "CREATE FUNCTION g8(x INT) RETURNS INT CONTAINS SQL RETURN (SELECT max(a) FROM (WITH pt AS (SELECT 1 AS a) SELECT a FROM pt)) + (SELECT max(id) FROM pt)",
         "CREATE TEMPORARY FUNCTION g7(x INT) RETURNS INT CONTAINS SQL RETURN f_reads(x)",
     ] {
         let (class, params) = class_and_params(&fails(&s, sql));

@@ -339,6 +339,54 @@ pub(crate) fn reads_temporary_view(
     )
 }
 
+/// Whether a function body reads a relation: a table, a view or a file
+/// (not `range`, `VALUES` or a `WITH` name in scope where it is read).
+pub(crate) fn reads_relation(body: &Arc<Expr>, case_sensitive: bool) -> bool {
+    use krishiv_plan::{ExprNode, ReadSource};
+    fn plan(p: &Arc<LogicalPlan>, cs: bool, scope: &mut Vec<String>) -> bool {
+        if let PlanNode::Read(source) = &p.node {
+            let shadowed = matches!(source, ReadSource::Table { name, .. }
+            if matches!(name.as_slice(), [n] if scope.iter().any(|c| {
+                c == n || !cs && c.eq_ignore_ascii_case(n)
+            })));
+            if !shadowed {
+                return true;
+            }
+        }
+        if let PlanNode::WithCte { input, ctes } = &p.node {
+            let outer = scope.len();
+            for cte in ctes.iter() {
+                if plan(&cte.plan, cs, scope) {
+                    return true;
+                }
+                scope.push(cte.name.clone());
+            }
+            let found = plan(input, cs, scope);
+            scope.truncate(outer);
+            return found;
+        }
+        let mut children = Vec::new();
+        p.for_each_child(&mut |c| children.push(Arc::clone(c)));
+        if children.iter().any(|c| plan(c, cs, scope)) {
+            return true;
+        }
+        let mut exprs = Vec::new();
+        p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+        exprs.iter().any(|e| expr(e, cs, scope))
+    }
+    fn expr(e: &Arc<Expr>, cs: bool, scope: &mut Vec<String>) -> bool {
+        if let ExprNode::Subquery { plan: p, .. } = &e.node
+            && plan(p, cs, scope)
+        {
+            return true;
+        }
+        let mut children = Vec::new();
+        e.for_each_child(&mut |c| children.push(Arc::clone(c)));
+        children.iter().any(|c| expr(c, cs, scope))
+    }
+    expr(body, case_sensitive, &mut Vec::new())
+}
+
 /// A namespace name as the session compares them.
 fn fold(namespace: &str, case_sensitive: bool) -> String {
     if case_sensitive {

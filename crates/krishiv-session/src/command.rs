@@ -34,8 +34,7 @@ use krishiv_common::error::{
 use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{FunctionLookup, SqlFunction, SqlParam, TableColumn, variable_name};
 use krishiv_plan::{
-    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, ReadSource, SourceId,
-    SubqueryKind,
+    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
 };
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
@@ -1222,9 +1221,6 @@ impl Session {
                 FunctionLookup::Sql(d) if d.reads_data
             )
         };
-        // Names a `WITH` of the body defines: reads of them are not reads
-        // of a relation.
-        let mut ctes: HashSet<String> = HashSet::new();
         let mut stack: Vec<&PlanExpr> = std::iter::once(&*def.body)
             .chain(def.params.iter().filter_map(|p| p.default.as_deref()))
             .collect();
@@ -1240,20 +1236,14 @@ impl Session {
             if let ExprNode::Subquery { plan, .. } = &e.node {
                 plans.push(plan);
                 while let Some(p) = plans.pop() {
-                    match &p.node {
-                        PlanNode::WithCte { ctes: defined, .. } => {
-                            ctes.extend(defined.iter().map(|c| c.name.to_lowercase()));
+                    if let PlanNode::TableFunction { name, .. } = &p.node {
+                        let parts: Vec<String> = name
+                            .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
+                            .map(str::to_owned)
+                            .collect();
+                        if reads_calls(&parts) {
+                            return true;
                         }
-                        PlanNode::TableFunction { name, .. } => {
-                            let parts: Vec<String> = name
-                                .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
-                                .map(str::to_owned)
-                                .collect();
-                            if reads_calls(&parts) {
-                                return true;
-                            }
-                        }
-                        _ => {}
                     }
                     p.for_each_expr(&mut |x| stack.push(x));
                     p.for_each_child(&mut |c| plans.push(c));
@@ -1261,25 +1251,10 @@ impl Session {
             }
             e.for_each_child(&mut |c| stack.push(c));
         }
-        // The relations: a second walk, once the `WITH` names are known.
-        let mut reads = false;
-        let mut stack: Vec<&PlanExpr> = vec![&*def.body];
-        while let Some(e) = stack.pop() {
-            if let ExprNode::Subquery { plan, .. } = &e.node {
-                let mut plans = vec![plan];
-                while let Some(p) = plans.pop() {
-                    if let PlanNode::Read(source) = &p.node {
-                        let shadowed = matches!(source, ReadSource::Table { name, .. }
-                            if matches!(name.as_slice(), [n] if ctes.contains(&n.to_lowercase())));
-                        reads |= !shadowed;
-                    }
-                    p.for_each_expr(&mut |x| stack.push(x));
-                    p.for_each_child(&mut |c| plans.push(c));
-                }
-            }
-            e.for_each_child(&mut |c| stack.push(c));
-        }
-        reads
+        crate::sql_functions::reads_relation(
+            &def.body,
+            self.query_env().analysis.conf.case_sensitive,
+        )
     }
 
     /// `CREATE [OR REPLACE] FUNCTION` of a function stored in `namespace`
