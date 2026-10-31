@@ -2110,6 +2110,16 @@ impl Resolver<'_> {
                 // result is renamed and the names follow the arrays as
                 // string literals, which the executor reads.
                 let mut zip_names: Vec<Arc<Expr>> = Vec::new();
+                // Under `spark.sql.legacy.negativeIndexInArrayInsert`,
+                // `array_insert` carries the switch as a trailing literal.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "array_insert"
+                    && self.ctx.conf.legacy_negative_index_in_array_insert
+                {
+                    zip_names.push(Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(e.origin),
+                    ));
+                }
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "arrays_zip"
                     && let Some(DataType::Array(a)) = &ty.data_type
