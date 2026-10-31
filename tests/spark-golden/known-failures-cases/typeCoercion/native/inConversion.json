@@ -2,11 +2,7 @@
   "cases": {
     "cast-matrix": [
       94,
-      116,
-      118,
-      238,
-      260,
-      262
+      118
     ]
   },
   "file": "typeCoercion/native/inConversion",
