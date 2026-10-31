@@ -254,8 +254,8 @@ impl OperatorRole {
 pub struct OperatorEntry {
     /// The operator's name.
     pub name: Cow<'static, str>,
-    /// The physical plan node it implements (the node's pre-order index in
-    /// [`PhysicalPlan::root`](crate::physical::PhysicalPlan::root)); `None`
+    /// The physical plan node it implements (the node's pre-order index
+    /// over [`PhysicalPlan::roots`](crate::physical::PhysicalPlan::roots)); `None`
     /// for the query's result sink and graphs built without a plan.
     pub node: Option<u32>,
     /// Its role.

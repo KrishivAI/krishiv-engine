@@ -195,8 +195,8 @@ fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
 }
 
 /// The deepest plan a document may hold: the IR's limit, doubled for the
-/// headings `EXPLAIN` adds (a subquery's).
-const MAX_PLAN_DEPTH: usize = 2 * krishiv_plan::MAX_DEPTH;
+/// headings `EXPLAIN` adds (a subquery's), and the two above a shared plan.
+const MAX_PLAN_DEPTH: usize = 2 * krishiv_plan::MAX_DEPTH + 2;
 
 /// Reads [`plan_json`]'s list: node 0 is the root, every other node is
 /// the input of exactly one node listed before it.
