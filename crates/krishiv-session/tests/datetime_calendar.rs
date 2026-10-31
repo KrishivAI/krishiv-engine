@@ -290,7 +290,7 @@ fn matrix_cells_match_spark() {
     // `unsupported` (or any new skip) changes these counts and fails here
     // instead of passing silently.
     assert_eq!(tally.not_run, expected_not_run(), "{report}");
-    assert_eq!(tally.normalized_cast_invalid_input, 108, "{report}");
+    assert_eq!(tally.normalized_cast_invalid_input, 109, "{report}");
     assert_eq!(tally.normalized_months_between, 52, "{report}");
 }
 
@@ -307,7 +307,6 @@ fn expected_not_run() -> BTreeMap<String, usize> {
         ("cast of invalid UTF-8 bytes to a string".to_owned(), 27),
         ("no recorded rows".to_owned(), 62),
         ("session conf override".to_owned(), 4),
-        ("unsupported: CAST from STRING to BOOLEAN".to_owned(), 4),
         ("unsupported: INTERVAL literals".to_owned(), 144),
     ])
 }

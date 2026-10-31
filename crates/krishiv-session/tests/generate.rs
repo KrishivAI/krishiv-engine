@@ -297,3 +297,136 @@ fn a_generator_that_is_not_a_select_item_is_refused_as_spark_does() {
         assert_eq!(error_of(&s, sql).error_class().name(), class, "{sql}");
     }
 }
+
+#[test]
+fn a_generator_beside_group_by_runs_above_the_aggregate() {
+    let s = Session::new().unwrap();
+    // The argument is a grouping key under `GROUP BY ALL`.
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(arr) as package from (values (array('a', 'b'))) as t(arr) \
+             group by all order by package"
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    // An ordinal counts the generator's argument.
+    assert_eq!(
+        rows(
+            &s,
+            "select id, explode(arr) from (values (42, array('a', 'b', 'c'))) as t(id, arr) \
+             group by id, 2 order by 2"
+        ),
+        table(&[&["42", "a"], &["42", "b"], &["42", "c"]])
+    );
+    // HAVING reads the generated column.
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(packages) as package from (values (array('a', 'b'))) as t(packages) \
+             group by all having package in ('a')"
+        ),
+        table(&[&["a"]])
+    );
+}
+
+#[test]
+fn stack_generates_rows_of_columns() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(&s, "select stack(2, 1, 2, 3)"),
+        table(&[&["1", "2"], &["3", "NULL"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select * from stack(2, 1, 'a', 2, 'b') t(n, c) order by n"
+        ),
+        table(&[&["1", "a"], &["2", "b"]])
+    );
+    // The columns are named `col0`, `col1`, ...
+    assert_eq!(
+        rows(
+            &s,
+            "select col1 from stack(2, 1, 'a', 2, 'b') order by col1"
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    let e = error_of(&s, "select stack()");
+    assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+}
+
+#[test]
+fn json_tuple_as_a_table() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'c')"
+        ),
+        table(&[&["1", "NULL"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select y from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') as t(x, y)"
+        ),
+        table(&[&["2"]])
+    );
+}
+
+#[test]
+fn generators_beside_group_by_name_their_columns_as_spark_does() {
+    let s = Session::new().unwrap();
+    let t = "(values (1, array('a', 'b'))) as t(k, arr)";
+    // No alias: the generator's own column name.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) from {t} group by arr order by col")
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    // A multi-column generator keeps its names and all its columns.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select k, posexplode(arr) from {t} group by k, arr order by pos")
+        ),
+        table(&[&["1", "0", "a"], &["1", "1", "b"]])
+    );
+    // A written alias renames the column.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) as x from {t} group by arr order by x")
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    let e = error_of(
+        &s,
+        &format!("select explode(arr), explode(arr) from {t} group by arr"),
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedGeneratorMultiGenerator
+    );
+}
+
+#[test]
+fn stack_takes_a_bounded_int_row_count() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "select stack(18446744073709551615, 1)",
+        "select stack(1000000000000, 1)",
+        "select stack(2147483647, 1)",
+        "select stack(2L, 1, 2)",
+        "select stack(0, 1)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+}
