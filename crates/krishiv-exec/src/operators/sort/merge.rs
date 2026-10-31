@@ -7,6 +7,7 @@
 //! `(key row, run index)` (one comparison per level and output row), so rows that compare equal come out in run order:
 //! the merge is stable when runs are numbered in input order.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -496,18 +497,35 @@ pub(super) struct GatherJob {
 impl GatherJob {
     /// The output batch, reading only the sources it uses.
     pub(super) fn run(&self) -> Result<Batch> {
-        let mut slot = vec![u32::MAX; self.sources.len()];
-        let mut used: Vec<&Batch> = Vec::new();
-        let mut indices = Vec::with_capacity(self.range.len());
-        for &(s, r) in &self.order[self.range.clone()] {
-            let at = &mut slot[s as usize];
-            if *at == u32::MAX {
-                *at = u32::try_from(used.len())
-                    .map_err(|_| internal("too many merge sources".to_owned()))?;
-                used.push(&self.sources[s as usize]);
-            }
-            indices.push((*at as usize, r as usize));
+        thread_local! {
+            /// A source's place among the sources of this job, `usize::MAX`
+            /// when it has none. Kept between jobs, and cleared by the job
+            /// that wrote it, so that a job costs what it reads and not one
+            /// entry per buffered batch.
+            static SLOT: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
         }
+        let rows = &self.order[self.range.clone()];
+        let (used, indices) = SLOT.with_borrow_mut(|slot| {
+            if slot.len() < self.sources.len() {
+                slot.resize(self.sources.len(), usize::MAX);
+            }
+            let mut touched: Vec<usize> = Vec::new();
+            let mut used: Vec<&Batch> = Vec::new();
+            let mut indices = Vec::with_capacity(rows.len());
+            for &(s, r) in rows {
+                let source = s as usize;
+                if slot[source] == usize::MAX {
+                    slot[source] = used.len();
+                    touched.push(source);
+                    used.push(&self.sources[source]);
+                }
+                indices.push((slot[source], r as usize));
+            }
+            for source in touched {
+                slot[source] = usize::MAX;
+            }
+            (used, indices)
+        });
         interleave_batches(&self.schema, &used, &indices)
     }
 }
