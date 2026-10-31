@@ -15,6 +15,8 @@ pub(crate) struct Deadline {
     fired: oneshot::Receiver<()>,
     /// Dropping it wakes the timer thread, which then exits without firing.
     _cancel: mpsc::Sender<()>,
+    /// The timer could not be started (its sender was dropped unsent): reads are plain.
+    unarmed: bool,
 }
 
 impl Deadline {
@@ -45,17 +47,27 @@ impl Deadline {
         Self {
             fired,
             _cancel: cancel,
+            unarmed: false,
         }
     }
 
-    /// The next item of `stream`; `None` when the deadline passed first (the read is abandoned).
+    /// The next item of `stream`; `None` when the deadline passed first (the read is abandoned). A deadline whose
+    /// timer never started reads without a cap.
     pub(crate) fn next_item<S: Stream + Unpin>(
         &mut self,
         stream: &mut S,
     ) -> Option<Option<S::Item>> {
+        if self.unarmed {
+            return Some(futures::executor::block_on(stream.next()));
+        }
         match futures::executor::block_on(select(stream.next(), &mut self.fired)) {
             Either::Left((item, _)) => Some(item),
-            Either::Right(_) => None,
+            Either::Right((Ok(()), _)) => None,
+            Either::Right((Err(oneshot::Canceled), _)) => {
+                // The timer thread never ran (its sender was dropped without firing): not a timeout.
+                self.unarmed = true;
+                Some(futures::executor::block_on(stream.next()))
+            }
         }
     }
 }
@@ -83,6 +95,21 @@ mod tests {
         let mut items = stream::iter([1_u8, 2]);
         assert_eq!(deadline.next_item(&mut items), Some(Some(1)));
         assert_eq!(deadline.next_item(&mut items), Some(Some(2)));
+        assert_eq!(deadline.next_item(&mut items), Some(None));
+    }
+
+    #[test]
+    fn a_timer_that_never_started_is_not_a_timeout() {
+        let (tx, fired) = oneshot::channel();
+        drop(tx);
+        let (cancel, _kept) = mpsc::channel::<()>();
+        let mut deadline = Deadline {
+            fired,
+            _cancel: cancel,
+            unarmed: false,
+        };
+        let mut items = stream::iter([7_u8]);
+        assert_eq!(deadline.next_item(&mut items), Some(Some(7)));
         assert_eq!(deadline.next_item(&mut items), Some(None));
     }
 
