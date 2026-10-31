@@ -18,7 +18,7 @@
 
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
-    InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax,
+    InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
     InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
@@ -191,6 +191,16 @@ pub(crate) fn invalid_statement(operation: &str, span: Span) -> ParseError {
 /// or `SET key = value` with a plain key.
 pub(crate) fn invalid_set_syntax(span: Span) -> ParseError {
     at(InvalidSetSyntax {}, span)
+}
+
+/// `INVALID_SQL_PATH_SCHEMA_REFERENCE`: a `SET PATH` schema with one part.
+pub(crate) fn invalid_sql_path_schema_reference(qualified_name: &str, span: Span) -> ParseError {
+    at(
+        InvalidSqlPathSchemaReference {
+            qualified_name: qualified_name.to_owned(),
+        },
+        span,
+    )
 }
 
 /// `INVALID_RESET_COMMAND_FORMAT`: a `RESET` that is not `RESET` or
