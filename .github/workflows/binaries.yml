@@ -9,13 +9,17 @@ name: Binaries
 # binary (krishiv_common::cpu). Nothing is
 # published here.
 #
-# Runs when this file changes, by hand, and from other workflows.
+# Runs when this file or the start-up CPU check changes, by hand, and from other
+# workflows.
 on:
   workflow_call:
   workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/binaries.yml
+      - crates/krishiv-alloc/**
+      - crates/krishiv-common/src/cpu.rs
+      - crates/krishiv-cli/src/main.rs
 
 permissions:
   contents: read
