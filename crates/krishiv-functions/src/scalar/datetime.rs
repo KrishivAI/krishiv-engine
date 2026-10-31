@@ -167,7 +167,8 @@ fn timestamp_seconds_input(t: &DataType) -> bool {
         )
 }
 
-/// Argument 0 cast to `to` (a widening of an integral or a float).
+/// Argument 0 cast to `to`; only for lossless widenings (an integral to
+/// `BIGINT`, a float to `DOUBLE`).
 fn widen<T: arrow_array::ArrowPrimitiveType>(
     x: &Inputs<'_>,
     to: &DataType,
@@ -735,7 +736,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         }
         ("date_from_unix_date", [DataType::Int32]) => {
             Binding::new(DataType::Date32, |x: &Inputs<'_>| {
-                Ok(Arc::new(date_from_unix_date(&x.array::<Int32Type>(0)?)?) as ArrayRef)
+                Ok(Arc::new(date_from_unix_date(&x.array::<Int32Type>(0)?)) as ArrayRef)
             })
         }
         ("unix_date", [DataType::Date32]) => Binding::new(DataType::Int32, |x: &Inputs<'_>| {

@@ -37,6 +37,11 @@ fn error_of(s: &Session, expr: &str) -> krishiv_common::error::KrishivError {
 #[test]
 fn timestamp_seconds_reads_integers_decimals_and_floats() {
     let s = session();
+    // Nothing implicit: a string is not a number.
+    assert_eq!(
+        error_of(&s, "timestamp_seconds('5')").error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
     for (expr, want) in [
         ("timestamp_seconds(1230219000)", Some("2008-12-25 07:30:00")),
         (
@@ -182,22 +187,14 @@ fn date_from_unix_date_counts_days() {
     ] {
         assert_eq!(one(&s, expr).as_deref(), want, "{expr}");
     }
-    for expr in [
-        "date_from_unix_date(1000000000)",
-        "date_from_unix_date(-1000000000)",
-    ] {
-        assert_eq!(
-            error_of(&s, expr).error_class(),
-            ErrorClass::DatetimeOverflow,
-            "{expr}"
-        );
-    }
-    // The limits themselves are valid (the string form of such a year is the
-    // cast kernel's business, so read the day count back).
-    for days in ["999999999", "-999999999"] {
+    // Every int is a day: nothing is out of range.
+    for days in ["2147483647", "-2147483648", "1000000000"] {
         assert_eq!(
             one(&s, &format!("unix_date(date_from_unix_date({days}))")).as_deref(),
             Some(days)
         );
     }
+    // With ANSI off the cast to int is lenient, as in Spark.
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert_eq!(one(&s, "date_from_unix_date('x')"), None);
 }

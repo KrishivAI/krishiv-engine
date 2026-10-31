@@ -1150,8 +1150,11 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
         (_, InputType::Any)
         | (Some(DataType::Map(_)), InputType::Map)
         | (Some(DataType::Array(_)), InputType::Array) => Some(from.cloned()),
-        (Some(t), InputType::Numeric { .. }) if is_numeric(t) => Some(Some(t.clone())),
-        (None | Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
+        (Some(t), InputType::Numeric { .. } | InputType::StrictNumeric) if is_numeric(t) => {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::Numeric { .. } | InputType::StrictNumeric)
+        | (Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
         // A type of the collection stays; another takes the first member
         // it may be cast to (Spark's `TypeCollection`), except that a number
         // is not narrowed or widened into one (`date_add(d, 1L)` and

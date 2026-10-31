@@ -15,10 +15,6 @@ use arrow_buffer::NullBuffer;
 
 use crate::error::{KernelError, with_capacity};
 
-/// The largest day count `LocalDate.ofEpochDay` takes in Spark's range
-/// check (`days=...; must have magnitude <= 999999999`).
-const MAX_EPOCH_DAYS: i32 = 999_999_999;
-
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// `timestamp_millis` and `timestamp_micros`: `values * per` microseconds,
@@ -163,7 +159,7 @@ fn decimal_micros(unscaled: i128, scale: i32) -> Option<i64> {
 pub fn unix_time(values: &TimestampMicrosecondArray, per: i64) -> Result<Int64Array, KernelError> {
     let mut out = with_capacity::<i64>(values.len())?;
     for row in 0..values.len() {
-        out.push(if values.is_null(row) || per == 0 {
+        out.push(if values.is_null(row) {
             0
         } else {
             values.value(row).div_euclid(per)
@@ -172,19 +168,10 @@ pub fn unix_time(values: &TimestampMicrosecondArray, per: i64) -> Result<Int64Ar
     Ok(Int64Array::new(out.into(), values.nulls().cloned()))
 }
 
-/// `date_from_unix_date`: days since the epoch as a `DATE`.
-///
-/// # Errors
-/// `DATETIME_OVERFLOW` for a day count past Java's `LocalDate` range
-/// (magnitude over 999,999,999).
-pub fn date_from_unix_date(days: &Int32Array) -> Result<Date32Array, KernelError> {
-    for row in 0..days.len() {
-        if !days.is_null(row) && days.value(row).unsigned_abs() > MAX_EPOCH_DAYS.unsigned_abs() {
-            return Err(KernelError::datetime_overflow(row, "date_from_unix_date"));
-        }
-    }
-    Ok(Date32Array::new(
-        days.values().clone(),
-        days.nulls().cloned(),
-    ))
+/// `date_from_unix_date`: days since the epoch as a `DATE`. Every `int` is a
+/// day Spark's `DATE` carries (`unix_date(date_from_unix_date(2147483647))`
+/// is 2147483647), so there is nothing to check.
+#[must_use]
+pub fn date_from_unix_date(days: &Int32Array) -> Date32Array {
+    Date32Array::new(days.values().clone(), days.nulls().cloned())
 }

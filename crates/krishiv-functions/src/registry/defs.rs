@@ -708,7 +708,7 @@ fn datetime() -> Vec<Spec> {
     // decimal is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`).
     out.extend(scalar(
         &["timestamp_seconds"],
-        &Inputs::Expects(vec![InputType::Numeric { intervals: false }]),
+        &Inputs::Expects(vec![InputType::StrictNumeric]),
         timestamp_seconds_result,
     ));
     out.extend(scalar(

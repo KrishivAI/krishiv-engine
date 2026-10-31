@@ -96,23 +96,14 @@ fn unix_time_rounds_toward_negative_infinity() {
     );
     assert_eq!(unix_time(&t, 1_000).unwrap().value(0), -1);
     assert_eq!(unix_time(&t, 1).unwrap().value(0), -1);
-    // A zero unit cannot happen from the registry; it must not divide.
-    assert_eq!(unix_time(&t, 0).unwrap().value(0), 0);
 }
 
 #[test]
-fn unix_dates_stay_within_javas_local_date_range() {
-    let days = Int32Array::from(vec![Some(999_999_999), Some(-999_999_999), None, Some(0)]);
-    let out = date_from_unix_date(&days).unwrap();
+fn unix_dates_pass_every_int_through() {
+    let days = Int32Array::from(vec![Some(i32::MAX), Some(i32::MIN), None, Some(0)]);
+    let out = date_from_unix_date(&days);
     assert_eq!(
-        (out.value(0), out.value(1), out.is_null(2)),
-        (999_999_999, -999_999_999, true)
+        out.iter().collect::<Vec<_>>(),
+        [Some(i32::MAX), Some(i32::MIN), None, Some(0)]
     );
-    for bad in [1_000_000_000, -1_000_000_000, i32::MIN, i32::MAX] {
-        let err = date_from_unix_date(&Int32Array::from(vec![Some(0), Some(bad)])).unwrap_err();
-        assert_eq!(
-            (err.error_class(), err.row()),
-            (ErrorClass::DatetimeOverflow, Some(1))
-        );
-    }
 }
