@@ -21,6 +21,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>>", "operator"),
     ("if", "no PySpark function"),
     (
+        "__subscript",
+        "the lowering of `base[index]`; PySpark: `Column.getItem`",
+    ),
+    (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",
     ),

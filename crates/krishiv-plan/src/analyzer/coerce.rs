@@ -903,7 +903,7 @@ pub(super) fn inputs(
         }
         Inputs::Leading(types) => {
             let n = types.len().min(args.len());
-            let mut casts = declared(types, &args[..n])?;
+            let mut casts = declared(types, &args[..n], call.ansi())?;
             casts.extend(common_casts(&args[n..], &args[n..], Rules::of(call))?);
             Ok(casts)
         }
@@ -949,7 +949,7 @@ pub(super) fn inputs(
         .map(|t| t.casts),
         _ => match inputs.expected(call) {
             Some(types) => {
-                let casts = declared(&types, args)?;
+                let casts = declared(&types, args, call.ansi())?;
                 legacy_string_counts(&types, args, call)?;
                 Ok(casts)
             }
@@ -1169,11 +1169,15 @@ fn hidden_zero() -> Arg<'static> {
 
 /// The casts for arguments with declared input types (the last type
 /// repeats for further arguments).
-fn declared(types: &[InputType], args: &[Arg<'_>]) -> Result<Vec<Option<DataType>>, Mismatch> {
+fn declared(
+    types: &[InputType],
+    args: &[Arg<'_>],
+    ansi: bool,
+) -> Result<Vec<Option<DataType>>, Mismatch> {
     let mut casts = Vec::new();
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
-        let to = implicit(a.ty, want).ok_or_else(|| Mismatch::Unexpected {
+        let to = implicit(a.ty, want, ansi).ok_or_else(|| Mismatch::Unexpected {
             arg: i,
             param: i,
             ty: a.ty.cloned(),
@@ -1185,7 +1189,7 @@ fn declared(types: &[InputType], args: &[Arg<'_>]) -> Result<Vec<Option<DataType
 }
 
 /// The type an argument of type `from` takes for `want`, if it may.
-fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType>> {
+fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Option<DataType>> {
     use DataType as T;
     match (from, want) {
         (_, InputType::Any)
@@ -1205,7 +1209,7 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
             if from.is_some_and(is_numeric) && is_numeric(t) {
                 return None;
             }
-            implicit(from, &InputType::Exact(t.clone()))
+            implicit(from, &InputType::Exact(t.clone()), ansi)
         }),
         // A member of the strict collection stays, as does an untyped
         // `NULL` (which becomes the first member); anything else is
@@ -1222,11 +1226,12 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
             nested_cast(f, t, CastMode::Ansi).then(|| Some(t.clone()))
         }
         (Some(f), InputType::Exact(t)) => {
+            // A string becomes a BOOLEAN parameter only under ANSI
+            // (`months_between(a, b, 'abc')` is a `CAST_INVALID_INPUT` there and a
+            // `DATATYPE_MISMATCH` without); `AND`, `OR`, `NOT` and `IF` cast it themselves.
             let from_string = is_numeric(t)
-                || matches!(
-                    t,
-                    T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary
-                );
+                || matches!(t, T::Date | T::Timestamp | T::TimestampNtz | T::Binary)
+                || (ansi && *t == T::Boolean);
             // Only an atomic type becomes a string implicitly.
             let ok = f == t
                 || (is_numeric(f) && is_numeric(t))
@@ -1502,6 +1507,21 @@ mod tests {
 
     use super::super::catalog::ArgType;
     use super::*;
+
+    /// `implicit` under ANSI, where a string may reach a BOOLEAN parameter.
+    fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType>> {
+        super::implicit(from, want, true)
+    }
+
+    #[test]
+    fn a_string_reaches_a_boolean_parameter_only_under_ansi() {
+        let want = InputType::Exact(T::Boolean);
+        assert_eq!(
+            super::implicit(Some(&T::String), &want, true),
+            Some(Some(T::Boolean))
+        );
+        assert_eq!(super::implicit(Some(&T::String), &want, false), None);
+    }
 
     /// ANSI implicit casts of function arguments (`AnsiTypeCoercion
     /// .implicitCast`), as Spark 4.2 inserts them, e.g. `date_add('2020-01-01',

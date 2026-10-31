@@ -68,6 +68,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_kernels::KernelCtx;
 use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
 use krishiv_kernels::map::DedupPolicy;
+use krishiv_kernels::string::CharsetOptions;
 
 pub use args::Arg;
 use args::{Inputs, broadcast, internal, unsupported};
@@ -151,6 +152,10 @@ pub struct BindOptions {
     /// `spark.sql.mapKeyDedupPolicy`: how the map functions resolve
     /// duplicate keys.
     pub map_key_dedup_policy: DedupPolicy,
+    /// `spark.sql.legacy.javaCharsets` and
+    /// `spark.sql.legacy.codingErrorAction`: what `encode` and `decode`
+    /// accept and do with what they cannot map.
+    pub charsets: CharsetOptions,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
     /// Counts the unseeded random binds of one plan instantiation, in
@@ -174,6 +179,10 @@ impl BindOptions {
             query_start_micros: 0,
             decimal_precision_loss: true,
             map_key_dedup_policy: DedupPolicy::Exception,
+            charsets: CharsetOptions {
+                java_charsets: false,
+                replace_malformed: false,
+            },
             user: Arc::from("unknown"),
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
@@ -226,6 +235,13 @@ impl BindOptions {
     #[must_use]
     pub const fn with_map_key_dedup_policy(mut self, policy: DedupPolicy) -> Self {
         self.map_key_dedup_policy = policy;
+        self
+    }
+
+    /// With these `encode`/`decode` switches.
+    #[must_use]
+    pub const fn with_charset_options(mut self, charsets: CharsetOptions) -> Self {
+        self.charsets = charsets;
         self
     }
 

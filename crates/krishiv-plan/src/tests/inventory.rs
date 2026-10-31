@@ -38,6 +38,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::CteRef(_) => "PlanNode::CteRef",
         PlanNode::Shift { .. } => "PlanNode::Shift",
         PlanNode::Hint { .. } => "PlanNode::Hint",
+        PlanNode::PipeOperator { .. } => "PlanNode::PipeOperator",
         PlanNode::JoinHint { .. } => "PlanNode::JoinHint",
         PlanNode::Union { .. } => "PlanNode::Union",
         PlanNode::Distinct { .. } => "PlanNode::Distinct",

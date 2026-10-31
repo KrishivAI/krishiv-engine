@@ -601,6 +601,22 @@ pub fn cast(
         }};
     }
     match (from, to) {
+        // Spark: a number is `true` unless it is zero; NaN is not zero.
+        (f, DataType::Boolean) if is_numeric(f) && *f != DataType::Boolean => {
+            let nums = nums.ok_or_else(unsupported)?;
+            let mut out = arrow_array::builder::BooleanBuilder::with_capacity(input.len());
+            for i in 0..input.len() {
+                if input.is_null(i) {
+                    out.append_null();
+                } else {
+                    out.append_value(match nums.get(i) {
+                        Num::Int(x) | Num::Dec(x, _) => x != 0,
+                        Num::Float(x, _) => x != 0.0,
+                    });
+                }
+            }
+            Ok(Arc::new(out.finish()))
+        }
         (f, DataType::Int8) if is_numeric(f) => numeric_to_int!(Int8Type),
         (f, DataType::Int16) if is_numeric(f) => numeric_to_int!(Int16Type),
         (f, DataType::Int32) if is_numeric(f) => numeric_to_int!(Int32Type),
@@ -935,6 +951,21 @@ fn from_string<O: OffsetSizeTrait>(
                 }
             })?;
             decimal_out(out, p, sc)
+        }
+        DataType::Boolean => {
+            let mut out = arrow_array::builder::BooleanBuilder::with_capacity(s.len());
+            for i in 0..s.len() {
+                if s.is_null(i) {
+                    out.append_null();
+                } else if let Some(b) = text::parse_boolean(s.value(i).as_bytes()) {
+                    out.append_value(b);
+                } else {
+                    // Only the error or a NULL is possible: the legacy value is NULL.
+                    fail::<bool>(mode, None, || invalid(i))?;
+                    out.append_null();
+                }
+            }
+            Ok(Arc::new(out.finish()))
         }
         DataType::Date32 => {
             let out =

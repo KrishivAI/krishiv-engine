@@ -5,8 +5,7 @@
     ],
     "test-udfs": [
       14,
-      26,
-      42
+      26
     ]
   },
   "file": "udf/udf-group-by",

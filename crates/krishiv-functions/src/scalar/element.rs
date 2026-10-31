@@ -15,14 +15,22 @@ use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, Int32Array, UInt32Array};
 use arrow_schema::DataType;
 use arrow_select::take::take;
-use krishiv_common::error::{InvalidArrayIndexInElementAt, InvalidIndexOfZero, KrishivError};
+use krishiv_common::error::{
+    InvalidArrayIndex, InvalidArrayIndexInElementAt, InvalidIndexOfZero, KrishivError,
+};
 use krishiv_kernels::map as kh;
 
 use super::args::{Inputs, internal};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
-pub(super) const NAMES: &[&str] = &["array_size", "element_at", "get", "try_element_at"];
+pub(super) const NAMES: &[&str] = &[
+    "__subscript",
+    "array_size",
+    "element_at",
+    "get",
+    "try_element_at",
+];
 
 /// Binds the element-access function `name` to `args`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
@@ -39,6 +47,21 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 by_index(x, Access::Get, ansi)
             }))
         }
+        ("__subscript", [DataType::List(f), DataType::Int32]) => {
+            let ty = f.data_type().clone();
+            Ok(Binding::new(ty, move |x: &Inputs<'_>| {
+                by_index(x, Access::Subscript, ansi)
+            }))
+        }
+        ("element_at" | "try_element_at" | "__subscript", [DataType::Map(entries, _), k]) => {
+            match entries.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 && fields[0].data_type() == k => {
+                    let ty = fields[1].data_type().clone();
+                    Ok(Binding::new(ty, by_key))
+                }
+                _ => Err(bad_types(listed, args)),
+            }
+        }
         ("element_at" | "try_element_at", [DataType::List(f), DataType::Int32]) => {
             let access = if listed == "try_element_at" {
                 Access::Try
@@ -49,15 +72,6 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             Ok(Binding::new(ty, move |x: &Inputs<'_>| {
                 by_index(x, access, ansi)
             }))
-        }
-        ("element_at" | "try_element_at", [DataType::Map(entries, _), k]) => {
-            match entries.data_type() {
-                DataType::Struct(fields) if fields.len() == 2 && fields[0].data_type() == k => {
-                    let ty = fields[1].data_type().clone();
-                    Ok(Binding::new(ty, by_key))
-                }
-                _ => Err(bad_types(listed, args)),
-            }
         }
         _ => Err(bad_types(listed, args)),
     };
@@ -84,6 +98,8 @@ fn array_size(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
 enum Access {
     /// `get`: from 0, NULL out of range.
     Get,
+    /// `array[i]`: as `get`, but an error out of range with ANSI on.
+    Subscript,
     /// `element_at`: from 1 or -1, an error out of range with ANSI on.
     ElementAt,
     /// `try_element_at`: as `element_at`, NULL out of range.
@@ -106,12 +122,19 @@ fn by_index(x: &Inputs<'_>, access: Access, ansi: bool) -> Result<ArrayRef, Kris
         }
         let (i, len) = (i64::from(idx.value(row)), i64::from(list.value_length(row)));
         let pos = match access {
-            Access::Get => i,
+            Access::Get | Access::Subscript => i,
             _ if i == 0 => return Err(InvalidIndexOfZero {}.into()),
             _ if i > 0 => i - 1,
             _ => len + i,
         };
         if pos < 0 || pos >= len {
+            if access == Access::Subscript && ansi {
+                return Err(InvalidArrayIndex {
+                    index_value: i.to_string(),
+                    array_size: len.to_string(),
+                }
+                .into());
+            }
             if access == Access::ElementAt && ansi {
                 return Err(InvalidArrayIndexInElementAt {
                     index_value: i.to_string(),

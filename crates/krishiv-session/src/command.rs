@@ -64,32 +64,6 @@ const UNDEFINED: &str = "<undefined>";
 /// The configuration key `SET TIME ZONE` sets and shows, as in Spark.
 const TIME_ZONE_KEY: &str = "spark.sql.session.timeZone";
 
-/// The system's time zone name, for `SET TIME ZONE LOCAL`: the `TZ`
-/// environment variable when it names a valid zone, else the target of
-/// `/etc/localtime` under the system zone directory, else `UTC`.
-fn system_zone_name() -> String {
-    if let Some(tz) = std::env::var_os("TZ")
-        && let Some(tz) = tz.to_str()
-        && !tz.is_empty()
-        && krishiv_common::config::lookup(TIME_ZONE_KEY)
-            .is_some_and(|entry| entry.parse(TIME_ZONE_KEY, tz).is_ok())
-    {
-        return tz.to_owned();
-    }
-    if let Ok(target) = std::fs::read_link("/etc/localtime")
-        && let Some(target) = target.to_str()
-        && let Some(zone) = target
-            .split_once("/zoneinfo/")
-            .map(|(_, zone)| zone)
-            .filter(|zone| !zone.is_empty() && !zone.contains("/../"))
-        && krishiv_common::config::lookup(TIME_ZONE_KEY)
-            .is_some_and(|entry| entry.parse(TIME_ZONE_KEY, zone).is_ok())
-    {
-        return zone.to_owned();
-    }
-    "UTC".to_owned()
-}
-
 impl Session {
     /// Runs `SET`, `SET -v`, `SET key` or `SET key = value` as Spark's
     /// `spark.sql` does: setting a key goes through the session
@@ -128,13 +102,14 @@ impl Session {
                 // Every registered entry with its meaning and version (the
                 // frame sorts by key). Unregistered keys are not listed, as
                 // in Spark.
-                let config = self.state.conf.snapshot();
                 let rows: Vec<Vec<Option<String>>> = REGISTRY
                     .iter()
                     .map(|entry| {
-                        let value = config
-                            .get(entry)
-                            .map_or_else(|| UNDEFINED.to_owned(), std::string::ToString::to_string);
+                        let value = self
+                            .state
+                            .conf
+                            .value(entry.key)
+                            .unwrap_or_else(|| UNDEFINED.to_owned());
                         vec![
                             Some(entry.key.to_owned()),
                             Some(value),
@@ -147,8 +122,11 @@ impl Session {
                     .await
             }
             SetKind::Show { key, .. } => {
-                let config = self.state.conf.snapshot();
-                let value = crate::conf::get(&config, key).unwrap_or_else(|| UNDEFINED.to_owned());
+                let value = self
+                    .state
+                    .conf
+                    .value(key)
+                    .unwrap_or_else(|| UNDEFINED.to_owned());
                 self.string_frame(
                     &["key", "value"],
                     vec![vec![Some(key.clone()), Some(value)]],
@@ -192,7 +170,7 @@ impl Session {
                 // `SET TIME ZONE` sets the session time zone and shows it,
                 // as in Spark.
                 let value = match zone {
-                    TimeZone::Local => system_zone_name(),
+                    TimeZone::Local => self.state.conf.local_zone().to_owned(),
                     TimeZone::Named(zone) => zone.clone(),
                     _ => {
                         return Err(crate::session::internal(

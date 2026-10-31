@@ -1018,7 +1018,7 @@ impl Session {
         // Before any analysis loads a table: a fill is refused if an
         // invalidation ran after this point (it may hold the replaced rows).
         let cache_generation = self.state.cache.generation();
-        let (config, conf_version) = self.state.conf.versioned_snapshot();
+        let (config, conf_version) = self.state.conf.query_snapshot();
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
