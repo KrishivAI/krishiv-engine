@@ -42,7 +42,7 @@ use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op, filter_op, project_op,
+    SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op, filter_op, project_op,
     replicate_op, scan_filter, sort_op, top_n_op,
 };
 use crate::values::{LocalValues, ValueService};
@@ -71,7 +71,14 @@ impl PhysicalPlanner for DefaultPlanner {
             let mut planner = Planner::new(cx, root);
             let planned = planner.plan(root)?;
             let mut planned = select(planned, &output, "Project")?;
-            attach_runtime_filters(&mut planner.scan_filters, [&mut planned.node]);
+            let mut shared = std::mem::take(&mut planner.shared);
+            attach_runtime_filters(
+                &mut planner.scan_filters,
+                shared
+                    .iter_mut()
+                    .map(|s| &mut s.plan)
+                    .chain(std::iter::once(&mut planned.node)),
+            );
             Ok::<_, KrishivError>(
                 PhysicalPlan::new(
                     planned.node,
@@ -79,6 +86,7 @@ impl PhysicalPlanner for DefaultPlanner {
                     planned.explain,
                     planner.env.to_plan(),
                 )
+                .with_shared(shared)?
                 .with_warnings(planner.warnings),
             )
         };
@@ -100,6 +108,19 @@ fn attach_runtime_filters<'a>(
             s.runtime_filters = f;
         }
         stack.extend(n.children_mut());
+    }
+}
+
+/// Whether `n` produces its rows in an order a reader must keep: a sort or top-N, possibly under row-wise
+/// projections and filters.
+fn ends_in_sort(n: &PhysNode) -> bool {
+    let mut n = n;
+    loop {
+        match n {
+            PhysNode::Sort { .. } | PhysNode::TopN { .. } => return true,
+            PhysNode::Project { input, .. } | PhysNode::Filter { input, .. } => n = input,
+            _ => return false,
+        }
     }
 }
 
@@ -178,6 +199,10 @@ pub(crate) struct Planner<'a> {
     pub(crate) warnings: Vec<String>,
     /// `WITH` definitions in scope, by their output attributes.
     ctes: HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
+    /// The shared plans so far (inner first) and the number of each definition's, by its output attributes.
+    shared: Vec<SharedPlan>,
+    shared_ids: HashMap<Vec<AttrId>, SharedId>,
+    shared_schemas: HashMap<SharedId, SchemaRef>,
     /// The join hints a join read, by address.
     pub(crate) consumed_hints: HashSet<usize>,
     next_id: u64,
@@ -211,6 +236,9 @@ impl<'a> Planner<'a> {
             env,
             warnings: Vec::new(),
             ctes: HashMap::new(),
+            shared: Vec::new(),
+            shared_ids: HashMap::new(),
+            shared_schemas: HashMap::new(),
             consumed_hints: HashSet::new(),
             next_id,
             rf: Settings::new(&cx.config),
@@ -352,36 +380,26 @@ impl<'a> Planner<'a> {
                 self.plan(input)
             }
             PlanNode::CteRef(r) => {
-                let def = self
-                    .ctes
-                    .get(&r.source)
-                    .cloned()
-                    .ok_or_else(|| internal(&format!("CTE {} is not in scope", r.name)))?;
-                let planned = self.plan(&def)?;
-                // Exactly the definition's columns, under this reference's
-                // attributes.
-                let source: Vec<BoundColumn> = r
-                    .source
-                    .iter()
-                    .zip(&r.output)
-                    .map(|(s, o)| BoundColumn {
-                        id: *s,
-                        ..o.clone()
-                    })
-                    .collect();
-                let mut planned = select(planned, &source, "CteRef")?;
-                planned.layout = r.output.iter().map(|c| c.id).collect();
-                planned.placement = std::mem::take(&mut planned.placement).map_attrs(|a| {
-                    r.source
-                        .iter()
-                        .position(|s| *s == a)
-                        .and_then(|i| r.output.get(i))
-                        .map(|o| o.id)
-                });
-                // Each reference is planned anew: its scans are its own.
-                planned.sites = renamed(&planned.sites, &r.source, &planned.layout);
-                planned.explain.detail = format!("{} [{}]", r.name, columns(&r.output));
-                Ok(planned)
+                // A reference that survived InlineCTE reads the definition's rows, computed once per query
+                // (design P2-T198): the same rows and values for every reader.
+                let (id, schema) = self.shared_plan(&r.source, &r.name)?;
+                let layout: Vec<AttrId> = r.output.iter().map(|c| c.id).collect();
+                let explain = ExplainNode::leaf(
+                    "SharedRead",
+                    &format!("#{} {} [{}]", id.0, r.name, columns(&r.output)),
+                );
+                // No runtime filter reaches a shared plan: it is computed once for every reader.
+                Ok(Planned {
+                    node: PhysNode::SharedRead {
+                        id,
+                        layout: layout.clone(),
+                    },
+                    schema,
+                    layout,
+                    explain,
+                    sites: Vec::new(),
+                    placement: Placement::Unknown,
+                })
             }
             PlanNode::Limit { input, limit } => {
                 let n = limit_value(limit)?;
@@ -449,6 +467,45 @@ impl<'a> Planner<'a> {
                 )))
             }
         }
+    }
+
+    /// The number and schema of the shared plan of the definition whose output attributes are `source`,
+    /// planned on first use (so inner shared plans come first).
+    fn shared_plan(&mut self, source: &[AttrId], name: &str) -> Result<(SharedId, SchemaRef)> {
+        if let Some(&id) = self.shared_ids.get(source) {
+            let schema = self
+                .shared
+                .iter()
+                .find(|s| s.id == id)
+                .and_then(|s| self.shared_schemas.get(&s.id))
+                .cloned()
+                .ok_or_else(|| internal("a shared plan without a schema"))?;
+            return Ok((id, schema));
+        }
+        let def = self
+            .ctes
+            .get(source)
+            .cloned()
+            .ok_or_else(|| internal(&format!("CTE {name} is not in scope")))?;
+        let output = def
+            .resolved_output()
+            .ok_or_else(|| internal("a CTE without output"))?;
+        let planned = self.plan(&def)?;
+        // Exactly the definition's columns, in its order.
+        let planned = select(planned, &output, "CteRef")?;
+        let ordered = ends_in_sort(&planned.node);
+        let id = SharedId(u64::try_from(self.shared.len()).map_err(|_| internal("too many shared plans"))?);
+        let schema = Arc::clone(&planned.schema);
+        self.shared.push(SharedPlan {
+            id,
+            plan: planned.node,
+            explain: planned.explain,
+            deterministic: krishiv_optimizer::plan_is_deterministic(&def),
+            ordered,
+        });
+        self.shared_ids.insert(source.to_vec(), id);
+        self.shared_schemas.insert(id, Arc::clone(&schema));
+        Ok((id, schema))
     }
 
     /// `input` without its first `skip` rows, then its first `n`

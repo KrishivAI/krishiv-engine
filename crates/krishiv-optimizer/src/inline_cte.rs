@@ -8,11 +8,11 @@
 //! [`PlanNode::CteRef`], kept for P2-T198 (a CTE computed once and shared).
 //! Spark 4.2 inlines it too, with one shared seed per nondeterministic call
 //! (`WITH t AS (SELECT rand() r FROM range(3)) SELECT count(*) FROM t a JOIN
-//! t b ON a.r = b.r` is 3); the physical planner plans each reference as its
-//! own copy, drawing its own values, so Krishiv returns 0 there today: a
-//! known divergence that P2-T198 closes. For every other definition the
-//! physical planner already planned one copy per reference, so inlining
-//! changes what the rules can do, not how often the definition runs.
+//! t b ON a.r = b.r` is 3); the physical planner computes the kept
+//! reference's body once per query and every reference reads it
+//! (a `SharedRead`), so Krishiv returns 3 as well. A definition
+//! that holds an outer reference is inlined whatever its determinism, as
+//! Spark's `shouldInline` does.
 //!
 //! Determinism is that of the definition's own expressions, before its own
 //! references are inlined: a deterministic definition that reads a
@@ -35,7 +35,7 @@ use krishiv_plan::{
 };
 
 use crate::dag;
-use crate::expr::is_deterministic;
+use crate::expr::{has_outer_reference, is_deterministic};
 use crate::restrict::{MAX_ID, max_id, subquery_plans};
 
 /// `root` with its CTE references inlined where Spark inlines them.
@@ -49,7 +49,11 @@ pub(crate) fn inline(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, Krishiv
     survey(&root, &mut defs, &mut refs);
     let inline: HashSet<Vec<AttrId>> = defs
         .iter()
-        .filter(|(key, def)| refs.get(*key).copied().unwrap_or(0) <= 1 || deterministic(def))
+        .filter(|(key, def)| {
+            // Spark's `shouldInline`: a definition holding an outer reference cannot be computed once per
+            // query, so it is inlined however it is read.
+            refs.get(*key).copied().unwrap_or(0) <= 1 || deterministic(def) || has_outer(def)
+        })
         .map(|(key, _)| key.clone())
         .collect();
     if inline.is_empty() {
@@ -129,9 +133,27 @@ fn occurrences(
     out
 }
 
+/// Whether an expression of `plan` (subquery plans included) holds an outer reference.
+fn has_outer(plan: &Arc<LogicalPlan>) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![Arc::clone(plan)];
+    let mut found = false;
+    while let Some(p) = stack.pop() {
+        if found {
+            break;
+        }
+        if !seen.insert(Arc::as_ptr(&p)) {
+            continue;
+        }
+        p.for_each_expr(&mut |e| found |= has_outer_reference(e));
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    found
+}
+
 /// Whether every expression of `plan` (subquery plans included) is
 /// deterministic.
-fn deterministic(plan: &Arc<LogicalPlan>) -> bool {
+pub(crate) fn deterministic(plan: &Arc<LogicalPlan>) -> bool {
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(plan)];
     let mut ok = true;
