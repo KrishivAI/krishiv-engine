@@ -1609,7 +1609,19 @@ impl Lowerer {
                     "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
                     _ => None,
                 };
-                if let (Some(kind), 1) = (kind, name.parts.len()) {
+                if name.parts.len() == 1 && lname == "json_tuple" {
+                    // `FROM json_tuple(json, k1, ...)` is the select list
+                    // `SELECT json_tuple(json, k1, ...)` over one row.
+                    let one_row = self.node(PlanNode::OneRowRelation, tf.span);
+                    let call = arc(self.call("json_tuple", lowered, tf.span));
+                    self.node(
+                        PlanNode::Project {
+                            input: arc(one_row),
+                            exprs: vec![call],
+                        },
+                        tf.span,
+                    )
+                } else if let (Some(kind), 1) = (kind, name.parts.len()) {
                     let arg = &self.generator_arg(&name.parts[0], args, tf.span)?;
                     let one_row = self.node(PlanNode::OneRowRelation, tf.span);
                     self.node(

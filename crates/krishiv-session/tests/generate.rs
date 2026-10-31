@@ -355,3 +355,22 @@ fn stack_generates_rows_of_columns() {
     let e = error_of(&s, "select stack()");
     assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
 }
+
+#[test]
+fn json_tuple_as_a_table() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'c')"
+        ),
+        table(&[&["1", "NULL"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select y from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') as t(x, y)"
+        ),
+        table(&[&["2"]])
+    );
+}
