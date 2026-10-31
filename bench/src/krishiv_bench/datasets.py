@@ -326,6 +326,7 @@ def main(argv=None) -> None:
     p.add_argument("--threads", type=int, default=1, help="DuckDB threads for the Parquet conversion (1: byte-stable)")
     p.add_argument("--no-oracle", action="store_true", help="skip the DuckDB answers")
     p = sub.add_parser("dsb-verify", help="recompute a generated DSB dataset's checksums against its MANIFEST.json")
+    p.add_argument("directory", type=Path)
     from .micro_data import GENERATOR_VERSION as MICRO_VERSION
     from .micro_data import SEED as MICRO_SEED
     from .micro_data import SIZES as MICRO_SIZES
