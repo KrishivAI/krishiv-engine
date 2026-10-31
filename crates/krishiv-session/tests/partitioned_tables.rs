@@ -708,3 +708,324 @@ fn rename_like_and_comment() {
             .any(|r| r.starts_with("Comment"))
     );
 }
+
+/// `partitionVal: identifier (EQ constant)? | identifier EQ DEFAULT` (SqlBaseParser.g4, v4.2.0): a value is a
+/// literal, a negative number, a typed literal, NULL or a parameter marker; anything else is a syntax error.
+#[test]
+fn partition_values_are_constants() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p INT, q STRING) USING parquet PARTITIONED BY (p, q)",
+    );
+    for (sql, near) in [
+        ("ALTER TABLE t ADD PARTITION (p = 1 + 1, q = 'x')", "'+'"),
+        (
+            "ALTER TABLE t ADD PARTITION (p = rand(), q = 'x')",
+            "'rand'",
+        ),
+        (
+            "ALTER TABLE t ADD PARTITION (p = 1, q = current_date())",
+            "'current_date'",
+        ),
+        (
+            "ALTER TABLE t ADD PARTITION (p = (SELECT 1), q = 'x')",
+            "'('",
+        ),
+        ("DESC t PARTITION (p = a, q = 'x')", "'a'"),
+        (
+            "INSERT INTO t PARTITION (p = 1, q = 'a' || 'b') VALUES (1)",
+            "'||'",
+        ),
+    ] {
+        let e = err(&s, sql);
+        assert_eq!(e.error_class().name(), "PARSE_SYNTAX_ERROR", "{sql}");
+        assert!(
+            e.to_string().contains(&format!("near {near}")),
+            "{sql}: {e}"
+        );
+    }
+    // Constants of every kind.
+    run(
+        &s,
+        "ALTER TABLE t ADD PARTITION (p = -1, q = DATE'2020-01-02')",
+    );
+    run(&s, "ALTER TABLE t ADD PARTITION (p = 2, q = NULL)");
+    run(&s, "ALTER TABLE t ADD PARTITION (p = 3, q = true)");
+    assert_eq!(
+        rows(&s, "SHOW PARTITIONS t"),
+        [
+            "p=-1/q=2020-01-02",
+            "p=2/q=__HIVE_DEFAULT_PARTITION__",
+            "p=3/q=true"
+        ]
+    );
+}
+
+#[test]
+fn add_partition_locations() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    let elsewhere = dir.path().join("elsewhere");
+    run(
+        &s,
+        &format!(
+            "ALTER TABLE t ADD PARTITION (p = 'x') LOCATION '{}'",
+            elsewhere.display()
+        ),
+    );
+    assert!(elsewhere.is_dir());
+    let other = dir.path().join("other");
+    run(
+        &s,
+        &format!(
+            "ALTER TABLE t ADD PARTITION (p = 'y') LOCATION 'file:{}'",
+            other.display()
+        ),
+    );
+    assert!(other.is_dir());
+    let location = |spec: &str| {
+        rows(&s, &format!("DESC EXTENDED t PARTITION ({spec})"))
+            .into_iter()
+            .find(|r| r.starts_with("Location"))
+            .unwrap()
+    };
+    assert_eq!(
+        location("p = 'x'"),
+        format!("Location\tfile:{}", elsewhere.display())
+    );
+    assert_eq!(
+        location("p = 'y'"),
+        format!("Location\tfile:{}", other.display())
+    );
+    // A relative location is refused, and nothing of the command is left behind.
+    assert_eq!(
+        class(
+            &s,
+            "ALTER TABLE t ADD PARTITION (p = 'z') PARTITION (p = 'w') LOCATION 'rel'"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(!dir.path().join("t/p=z").exists());
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y"]);
+}
+
+/// Denies `CREATE` on any path with `outside` in it.
+struct NoOutside;
+
+impl krishiv_session::AccessPolicy for NoOutside {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a krishiv_session::Principal,
+        securable: &'a krishiv_session::Securable,
+        privilege: krishiv_session::Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<krishiv_session::AccessDecision, KrishivError>>
+    {
+        let denied = privilege == krishiv_session::Privilege::Create
+            && matches!(securable, krishiv_session::Securable::Path(p)
+                if p.as_plain().is_some_and(|t| t.contains("outside")));
+        Box::pin(std::future::ready(Ok(if denied {
+            krishiv_session::AccessDecision::Deny {
+                reason: "outside".to_owned(),
+            }
+        } else {
+            krishiv_session::AccessDecision::Allow
+        })))
+    }
+}
+
+#[test]
+fn add_partition_outside_the_policy_is_denied() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let warehouse = dir.path().join("wh");
+    std::fs::create_dir_all(&warehouse).unwrap();
+    let s = Session::builder()
+        .access_policy(Arc::new(NoOutside))
+        .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .build()
+        .unwrap();
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    let outside = dir.path().join("outside");
+    assert_eq!(
+        class(
+            &s,
+            &format!(
+                "ALTER TABLE t ADD PARTITION (p = 'x') LOCATION '{}'",
+                outside.display()
+            )
+        ),
+        "KRISHIV_INSUFFICIENT_PERMISSIONS"
+    );
+    assert!(!outside.exists());
+    assert!(rows(&s, "SHOW PARTITIONS t").is_empty());
+}
+
+#[test]
+fn partition_values_are_escaped_and_filtered() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING, q INT) USING parquet PARTITIONED BY (p, q)",
+    );
+    run(
+        &s,
+        "INSERT INTO t PARTITION (p = 'a/b=c%d', q = 1) VALUES (1)",
+    );
+    run(&s, "INSERT INTO t PARTITION (p = 'x', q = 2) VALUES (2)");
+    run(&s, "INSERT INTO t PARTITION (p = NULL, q = 3) VALUES (3)");
+    // Dynamic partition values come from the query.
+    run(&s, "INSERT INTO t PARTITION (p = 'x', q) VALUES (4, 5)");
+    assert!(dir.path().join("t/p=a%2Fb%3Dc%25d/q=1").is_dir());
+    assert!(
+        dir.path()
+            .join("t/p=__HIVE_DEFAULT_PARTITION__/q=3")
+            .is_dir()
+    );
+    assert_eq!(
+        rows(&s, "SHOW PARTITIONS t"),
+        [
+            "p=__HIVE_DEFAULT_PARTITION__/q=3",
+            "p=a%2Fb%3Dc%25d/q=1",
+            "p=x/q=2",
+            "p=x/q=5"
+        ]
+    );
+    assert_eq!(
+        rows(&s, "SHOW PARTITIONS t PARTITION (p = 'x')"),
+        ["p=x/q=2", "p=x/q=5"]
+    );
+    assert_eq!(
+        rows(&s, "DESC EXTENDED t PARTITION (p = 'a/b=c%d', q = 1)")
+            .into_iter()
+            .find(|r| r.starts_with("Partition Values"))
+            .unwrap(),
+        "Partition Values\t[p=a/b=c%d, q=1]"
+    );
+    assert_eq!(
+        class(
+            &s,
+            "INSERT OVERWRITE t PARTITION (p = 'x', q = 2) VALUES (1)"
+        ),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    // A failed insert registers nothing.
+    assert!(
+        err(&s, "INSERT INTO t PARTITION (p = 'y', q = 9) SELECT 1 / 0")
+            .error_class()
+            .name()
+            != ""
+    );
+    assert!(
+        !rows(&s, "SHOW PARTITIONS t")
+            .iter()
+            .any(|r| r.contains("q=9"))
+    );
+    // A catalog partition whose directory is gone stays.
+    std::fs::remove_dir_all(dir.path().join("t/p=x/q=5")).unwrap();
+    run(&s, "INSERT INTO t PARTITION (p = 'x', q = 2) VALUES (6)");
+    assert_eq!(rows(&s, "SHOW PARTITIONS t PARTITION (p = 'x')").len(), 2);
+}
+
+#[test]
+fn analyze_noscan_records_size_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO t PARTITION (p = 'x') VALUES (1), (2)");
+    run(
+        &s,
+        "ANALYZE TABLE t PARTITION (p = 'x') COMPUTE STATISTICS NOSCAN",
+    );
+    let stats = rows(&s, "DESC EXTENDED t PARTITION (p = 'x')")
+        .into_iter()
+        .find(|r| r.starts_with("Partition Statistics"))
+        .unwrap();
+    assert!(stats.ends_with(" bytes"), "{stats}");
+    run(&s, "ANALYZE TABLE t PARTITION (p = 'x') COMPUTE STATISTICS");
+    let stats = rows(&s, "DESC EXTENDED t PARTITION (p = 'x')")
+        .into_iter()
+        .find(|r| r.starts_with("Partition Statistics"))
+        .unwrap();
+    assert!(stats.ends_with(" bytes, 2 rows"), "{stats}");
+}
+
+#[test]
+fn layouts_spark_refuses_or_copies() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    assert_eq!(
+        class(
+            &s,
+            "CREATE TABLE c USING parquet PARTITIONED BY (p STRING) AS SELECT 1 AS a, 'x' AS p"
+        ),
+        // `Partition column types may not be specified in Create Table As Select (CTAS)`.
+        "_LEGACY_ERROR_TEMP_0035"
+    );
+    // `PARTITION BY: Cannot mix partition expressions and partition columns` (`operationNotAllowed`).
+    assert_eq!(
+        class(
+            &s,
+            "CREATE TABLE m (a INT, b INT) USING parquet PARTITIONED BY (a, c STRING)"
+        ),
+        "_LEGACY_ERROR_TEMP_0035"
+    );
+    run(
+        &s,
+        "CREATE TABLE b (a INT, b STRING, c INT) USING parquet CLUSTERED BY (a) SORTED BY (b) INTO 4 BUCKETS",
+    );
+    run(&s, "CREATE TABLE b2 LIKE b");
+    let buckets: Vec<String> = rows(&s, "DESC EXTENDED b2")
+        .into_iter()
+        .filter(|r| r.contains("Bucket") || r.starts_with("Sort Columns"))
+        .collect();
+    assert_eq!(
+        buckets,
+        [
+            "Num Buckets\t4",
+            "Bucket Columns\t[`a`]",
+            "Sort Columns\t[`b`]"
+        ]
+    );
+}
+
+#[test]
+fn alter_column_drop_default_and_comment_property() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT DEFAULT 42, b INT) USING parquet");
+    run(&s, "INSERT INTO t (b) VALUES (1)");
+    run(&s, "ALTER TABLE t ALTER COLUMN a DROP DEFAULT");
+    run(&s, "INSERT INTO t (b) VALUES (2)");
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT coalesce(CAST(a AS STRING), 'null') FROM t ORDER BY b"
+        ),
+        ["42", "null"]
+    );
+    // describe-table-after-alter-table: the `comment` property is the table comment.
+    run(
+        &s,
+        "ALTER TABLE t SET TBLPROPERTIES (comment = \"added comment\")",
+    );
+    let extended = rows(&s, "DESC EXTENDED t");
+    assert!(extended.contains(&"Comment\tadded comment".to_owned()));
+    assert!(!extended.iter().any(|r| r.starts_with("Table Properties")));
+}

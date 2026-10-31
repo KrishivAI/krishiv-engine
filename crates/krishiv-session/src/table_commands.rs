@@ -776,7 +776,16 @@ impl Session {
                     .await?;
             }
             AlterTableAction::SetTblProperties(props) => {
-                changed.properties.extend(options_of(props, original));
+                // The `comment` property is the table comment (`AlterTableSetPropertiesCommand`); the
+                // catalog shows it as `Comment`, not among the properties (Spark 4.2 golden
+                // describe-table-after-alter-table).
+                for (k, v) in options_of(props, original) {
+                    if k == "comment" {
+                        changed.comment = Some(v);
+                    } else {
+                        changed.properties.insert(k, v);
+                    }
+                }
             }
             AlterTableAction::UnsetTblProperties { keys, .. } => {
                 for key in options_of(keys, original).keys() {
@@ -1343,13 +1352,10 @@ impl Session {
             df.clone()
         };
         // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        self.write_table_rows(&table, &df, "errorifexists").await?;
-        let partitioned = table.is_partitioned();
+        let dirs = self.write_table_rows(&table, &df, "errorifexists").await?;
         self.add_table(table, mode, true).await?;
-        if partitioned {
-            // `RepairTableCommand`: the partitions written, with their file statistics.
-            self.sync_partitions(&name, true);
-        }
+        // `RepairTableCommand`: the partitions written, with their file statistics.
+        self.register_partitions(&name, &dirs, true);
         Ok(())
     }
 
@@ -1873,11 +1879,11 @@ impl Session {
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
         self.forget_cached(name);
-        if table.is_partitioned() {
-            // The partitions written (`AlterTableAddPartitionCommand` after an insert).
-            self.sync_partitions(name, false);
-        }
-        written.map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment))
+        let dirs =
+            written.map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment))?;
+        // The partitions written (`AlterTableAddPartitionCommand` after an insert).
+        self.register_partitions(name, &dirs, false);
+        Ok(())
     }
 
     /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`
@@ -1976,13 +1982,14 @@ impl Session {
     }
 
     /// Writes `df` to the files of `table` with the writer's save `mode`, in partition directories when the
-    /// table is partitioned. Bucketed files are not written: a bucketed table refuses the write.
+    /// table is partitioned, and returns the partition directories written. Bucketed files are not written:
+    /// a bucketed table refuses the write.
     async fn write_table_rows(
         &self,
         table: &CatalogTable,
         df: &DataFrame,
         mode: &str,
-    ) -> Result<(), KrishivError> {
+    ) -> Result<Vec<String>, KrishivError> {
         if table.layout.bucket.is_some() {
             return Err(unsupported("writes to bucketed tables"));
         }
@@ -1993,7 +2000,9 @@ impl Session {
         for (k, v) in &table.options {
             writer = writer.option(k, v);
         }
-        writer.save(&table.location.display().to_string()).await
+        writer
+            .save_reporting(&table.location.display().to_string())
+            .await
     }
 }
 
@@ -2073,6 +2082,7 @@ fn partition_fields(
     use krishiv_sql::ast::PartitionFieldKind;
     let mut names = Vec::new();
     let mut typed = Vec::new();
+    let mut references = Vec::new();
     for f in fields {
         match &f.kind {
             PartitionFieldKind::Column(c) => {
@@ -2085,16 +2095,38 @@ fn partition_fields(
             PartitionFieldKind::Transform(t) => match (&t.name, t.args.is_empty()) {
                 (DdlName::Parts(n), true) if n.parts.len() == 1 => {
                     names.push(n.parts[0].value.clone());
+                    references.push(n.parts[0].value.clone());
                 }
                 _ => return Err(unsupported("partition transforms")),
             },
             _ => return Err(unsupported("this PARTITIONED BY element")),
         }
     }
-    if !typed.is_empty() && typed.len() != names.len() {
-        return Err(unsupported(
-            "PARTITIONED BY mixing partition columns and expressions",
-        ));
+    if !typed.is_empty() && !references.is_empty() {
+        // `AstBuilder.partitionExpressions` (`operationNotAllowed`).
+        let columns = typed
+            .iter()
+            .map(|c| {
+                let name = match &c.name {
+                    ColumnName::Ident(i) => i.value.clone(),
+                    _ => String::new(),
+                };
+                let t = c
+                    .data_type
+                    .to_data_type()
+                    .map(|t| t.catalog_string())
+                    .unwrap_or_default();
+                format!("{name} {t}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(krishiv_common::error::LegacyErrorTemp0035 {
+            message: format!(
+                "PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: {}\nColumns: {columns}",
+                references.join(", ")
+            ),
+        }
+        .into());
     }
     Ok((names, typed))
 }

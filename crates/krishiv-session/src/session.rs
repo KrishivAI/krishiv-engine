@@ -1555,13 +1555,16 @@ impl Session {
     /// replaces). A failed or cancelled write deletes its files and leaves
     /// the directory as it was. The plan carries the write as data; the
     /// commit runs from the plan's result rows (one per file: `path`,
-    /// `size`, `rows`).
+    /// `size`, `rows`). Returns the directories below `path` that hold the
+    /// committed files (`col=value/...` of a partitioned write, in their
+    /// escaped form; empty for an unpartitioned one or when nothing was
+    /// written).
     pub(crate) async fn write_files(
         &self,
         physical: PhysicalPlan,
         env: &QueryEnv,
         target: WriteTarget,
-    ) -> Result<(), KrishivError> {
+    ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
             mode,
@@ -1650,7 +1653,7 @@ impl Session {
             .await?
             .map(|w| w.partitioned(!partitions.is_empty())) else {
                 // `ignore` found the path: nothing is written.
-                return Ok(());
+                return Ok(Vec::new());
             };
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
@@ -1678,14 +1681,27 @@ impl Session {
                 }
                 return Err(denied);
             }
-            write
+            let committed = write
                 .commit(&io, format.as_ref(), schema, &parsed, files)
                 .await?;
             // The engine's own write may have replaced a cached path: entries
             // reading files are dropped, so the next action lists them again.
             // (An external change drops nothing and stays invisible.)
             self.refresh_files();
-            Ok(())
+            let mut dirs = std::collections::BTreeSet::new();
+            for f in &committed {
+                let below: Vec<String> = f
+                    .path
+                    .prefix_match(&at.path)
+                    .map(|parts| parts.map(|p| percent_decoded(p.as_ref())).collect())
+                    .unwrap_or_default();
+                if let Some((_, leaf)) = below.split_last()
+                    && !leaf.is_empty()
+                {
+                    dirs.insert(leaf.join("/"));
+                }
+            }
+            Ok(dirs.into_iter().collect())
         }
         .await;
         // A store error after the anchor is open may be a link swapped into
@@ -2241,6 +2257,30 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// An object-store path part as the file system names it: object_store percent-encodes characters it does
+/// not keep in a part (`%` among them), so `13%253A33` is the directory `13%3A33`.
+fn percent_decoded(part: &str) -> String {
+    let bytes = part.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(Some(h)), Some(Some(l))) = (
+                bytes.get(i + 1).map(|b| hex(*b)),
+                bytes.get(i + 2).map(|b| hex(*b)),
+            )
+        {
+            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]

@@ -414,40 +414,26 @@ fn location_size(dir: &Path) -> i128 {
         .sum()
 }
 
-/// The partition directories below `root` for `columns` (`RepairTableCommand.scanPartitions`): `<col>=<value>`
-/// directories, the column matched by name, the value unescaped.
-fn scan_partitions(
-    root: &Path,
+/// The spec of the partition directory `dir` (`col=value/...` below the table directory, escaped), when its
+/// segments name the partition `columns` in order.
+fn spec_of_dir(
+    dir: &str,
     columns: &[String],
-    prefix: &mut Vec<(String, String)>,
     case_sensitive: bool,
-    out: &mut Vec<(Vec<(String, String)>, PathBuf)>,
-) {
-    let Some((head, rest)) = columns.split_first() else {
-        out.push((prefix.clone(), root.to_path_buf()));
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    let mut dirs: Vec<(String, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
-        .filter(|(name, _)| name != "_temporary" && !name.starts_with('.'))
-        .collect();
-    dirs.sort();
-    for (name, path) in dirs {
-        let Some((column, value)) = name.split_once('=') else {
-            continue;
-        };
-        if !same_name(&unescape_path_name(column), head, case_sensitive) {
-            continue;
-        }
-        prefix.push((head.clone(), unescape_path_name(value)));
-        scan_partitions(&path, rest, prefix, case_sensitive, out);
-        prefix.pop();
+) -> Option<Vec<(String, String)>> {
+    let segments: Vec<&str> = dir.split('/').collect();
+    if segments.len() != columns.len() {
+        return None;
     }
+    segments
+        .iter()
+        .zip(columns)
+        .map(|(segment, column)| {
+            let (name, value) = segment.split_once('=')?;
+            same_name(&unescape_path_name(name), column, case_sensitive)
+                .then(|| (column.clone(), unescape_path_name(value)))
+        })
+        .collect()
 }
 
 impl Session {
@@ -481,7 +467,9 @@ impl Session {
         e: &Expr,
         original: &str,
     ) -> Result<Option<String>, KrishivError> {
-        let text = original.get(e.span.start..e.span.end).unwrap_or_default();
+        let text = original
+            .get(e.span.start..e.span.end)
+            .ok_or_else(|| internal("a partition value outside its statement".to_owned()))?;
         let sql = format!("SELECT CAST(({text}) AS STRING)");
         let analysis = self.analyze_variable_query(&sql).await?;
         let batches = self.run_analyzed_variable_query(&analysis).await?;
@@ -565,10 +553,25 @@ impl Session {
             }
             .into());
         }
+        // Every check first, then the directories: a failure removes the ones this command created.
         for p in &added {
             self.authorize_dir(&p.location).await?;
-            std::fs::create_dir_all(&p.location)
-                .map_err(|e| internal(format!("cannot create {}: {e}", p.location.display())))?;
+        }
+        let mut created: Vec<&Path> = Vec::new();
+        for p in &added {
+            if p.location.is_dir() {
+                continue;
+            }
+            if let Err(e) = std::fs::create_dir_all(&p.location) {
+                for dir in created {
+                    let _ = std::fs::remove_dir(dir);
+                }
+                return Err(internal(format!(
+                    "cannot create {}: {e}",
+                    p.location.display()
+                )));
+            }
+            created.push(&p.location);
         }
         changed.layout.partitions.extend(added);
         Ok(changed)
@@ -589,40 +592,36 @@ impl Session {
         crate::access::audit(self, StatementClass::Ddl, r)
     }
 
-    /// Registers the partition directories found under the table's directory after a write, and forgets
-    /// the partitions whose directory the write removed (`INSERT OVERWRITE`); with `file_stats` the new ones
-    /// carry `numFiles`, `totalSize` and `transient_lastDdlTime` (`RepairTableCommand` after a CTAS).
-    pub(crate) fn sync_partitions(&self, name: &TableName, file_stats: bool) {
+    /// Registers the partitions a successful write committed files to (`dirs`, as
+    /// [`DataFrameWriter`](crate::DataFrameWriter) reports them) that the catalog does not have yet
+    /// (`AlterTableAddPartitionCommand` after an insert); with `file_stats` they carry `numFiles`,
+    /// `totalSize` and `transient_lastDdlTime` (`RepairTableCommand` after a CTAS). Partitions are never
+    /// dropped here: Spark keeps a catalog partition whose directory is gone.
+    pub(crate) fn register_partitions(&self, name: &TableName, dirs: &[String], file_stats: bool) {
         let store = &self.state.catalog.store;
         let Some(table) = store.table(&name.namespace, &name.name) else {
             return;
         };
-        if !table.is_partitioned() {
+        if !table.is_partitioned() || dirs.is_empty() {
             return;
         }
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
-        let mut found = Vec::new();
-        scan_partitions(
-            &table.location,
-            &table.layout.partition_columns,
-            &mut Vec::new(),
-            case_sensitive,
-            &mut found,
-        );
         let mut changed = (*table).clone();
-        let root = &table.location;
-        changed
-            .layout
-            .partitions
-            .retain(|p| !p.location.starts_with(root) || p.location.is_dir());
         let now = crate::table_commands::now_ms();
-        for (spec, dir) in found {
+        for dir in dirs {
+            let Some(spec) = spec_of_dir(dir, &table.layout.partition_columns, case_sensitive)
+            else {
+                continue;
+            };
             if find_partition(&changed, &spec).is_some() {
                 continue;
             }
+            let location = dir
+                .split('/')
+                .fold(table.location.clone(), |p, s| p.join(s));
             let mut parameters = BTreeMap::new();
             if file_stats {
-                let files = listed_files(&dir);
+                let files = listed_files(&location);
                 parameters.insert("numFiles".to_owned(), files.len().to_string());
                 parameters.insert(
                     "totalSize".to_owned(),
@@ -632,14 +631,14 @@ impl Session {
             }
             changed.layout.partitions.push(CatalogPartition {
                 spec,
-                location: dir,
+                location,
                 parameters,
                 created_ms: now,
                 stats: None,
             });
         }
         if changed != *table {
-            // A concurrent change wins: the partitions are found again by the next write.
+            // A concurrent change wins: its own write registers what it wrote.
             let _ = store.replace_table(&table, changed);
         }
     }

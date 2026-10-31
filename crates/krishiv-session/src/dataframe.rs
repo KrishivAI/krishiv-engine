@@ -1991,6 +1991,12 @@ impl DataFrameWriter {
     /// the output has not; `ALL_PARTITION_COLUMNS_NOT_ALLOWED` when every
     /// output column is a partition column.
     pub async fn save(self, path: &str) -> Result<(), KrishivError> {
+        self.save_reporting(path).await.map(drop)
+    }
+
+    /// [`Self::save`], returning the partition directories (`col=value/...`
+    /// below `path`, escaped) that hold the committed files.
+    pub(crate) async fn save_reporting(self, path: &str) -> Result<Vec<String>, KrishivError> {
         let target = WriteTarget {
             format: self.format,
             mode: self.mode,
