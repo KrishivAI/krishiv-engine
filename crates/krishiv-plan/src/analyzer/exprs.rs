@@ -239,8 +239,10 @@ const MASK_DEFAULTS: [Option<&str>; 4] = [Some("X"), Some("x"), Some("n"), None]
 /// The position of the options argument of the CSV and JSON functions.
 fn options_index(name: &str) -> Option<usize> {
     match name {
-        "from_csv" | "from_json" => Some(2),
-        "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" => Some(1),
+        "from_csv" | "from_json" | "from_xml" => Some(2),
+        "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" | "to_xml" | "schema_of_xml" => {
+            Some(1)
+        }
         _ => None,
     }
 }
@@ -1659,6 +1661,40 @@ impl Resolver<'_> {
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
+                // `date + int`, `int + date` and `date - int` are `date_add`
+                // and `date_sub` to Spark, which names them so.
+                if !session_qualified
+                    && n == 2
+                    && let Some((name, swap)) =
+                        date_with_days(lookup_name, &kids[0].ty, &kids[1].ty)
+                {
+                    let (first, second) = if swap { (1, 0) } else { (0, 1) };
+                    let call = Expr::function(
+                        name,
+                        vec![
+                            Expr::clone(&kids[first].expr),
+                            Expr::clone(&kids[second].expr),
+                        ],
+                    )
+                    .with_origin(e.origin);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    // Shown as Spark names it, over the operands as written
+                    // (a session variable keeps its name).
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            name,
+                            vec![kids[first].shown(), kids[second].shown()]
+                                .into_iter()
+                                .map(|k| Expr::clone(&k))
+                                .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
+                }
                 if !session_qualified && let Some(op) = builtin_op(lookup_name, n) {
                     // `ILIKE` and `LIKE|ILIKE ANY|SOME|ALL` are rewritten to
                     // the calls they denote, keeping Spark's display name.
@@ -2010,11 +2046,15 @@ impl Resolver<'_> {
                 // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
                 // Only for the built-in: a qualified session UDF of the
                 // same name runs the UDF.
-                let is_schema_of_csv =
-                    is_builtin_entry(&entry) && entry.id.name() == "schema_of_csv";
+                let is_schema_of_csv = is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "schema_of_csv" | "schema_of_xml");
+                let of_xml = entry.id.name() == "schema_of_xml";
                 // `from_csv` and `to_csv` show only their first argument.
-                let is_csv =
-                    is_builtin_entry(&entry) && matches!(entry.id.name(), "from_csv" | "to_csv");
+                let is_csv = is_builtin_entry(&entry)
+                    && matches!(
+                        entry.id.name(),
+                        "from_csv" | "to_csv" | "from_xml" | "to_xml"
+                    );
                 if is_builtin_entry(&entry) && entry.id.name() == "mask" {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
@@ -2067,7 +2107,7 @@ impl Resolver<'_> {
                 // `SchemaOfCsv` evaluates its foldable child): the DDL
                 // literal, shown as the call.
                 if is_schema_of_csv {
-                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound)?;
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml)?;
                 }
                 // `from_csv` and `to_csv` show only their first argument
                 // (Spark's `toPrettySQL` drops the schema and options).
@@ -2929,6 +2969,7 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         kids: &[Bound],
         bound: &mut Bound,
+        xml: bool,
     ) -> Result<(), AnalysisError> {
         if kids.is_empty() || kids.len() > 2 {
             return Ok(());
@@ -2939,13 +2980,57 @@ impl Resolver<'_> {
         let Some(Constant::String(csv)) = csv else {
             return Ok(());
         };
-        let options = match kids.get(1) {
+        let ddl = if xml {
+            // `schema_of_xml`: the document under the written options.
+            let pairs = match kids.get(1) {
+                None => Vec::new(),
+                Some(opts) => match &opts.expr.node {
+                    ExprNode::Literal(Literal::Map(pairs)) => pairs.clone(),
+                    // Spark reads the options only from a `map(...)` call.
+                    _ => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::InvalidOptionsNonMapFunction {},
+                            e.origin,
+                        ));
+                    }
+                },
+            };
+            krishiv_functions::scalar::schema_of_xml_ddl(&csv, &pairs)
+                .map_err(|err| AnalysisError::new(err, e.origin))?
+        } else {
+            // Options other than a map literal keep the call (the signature
+            // accepts them; the executor has no binding for it).
+            if kids
+                .get(1)
+                .is_some_and(|o| !matches!(o.expr.node, ExprNode::Literal(Literal::Map(_))))
+            {
+                return Ok(());
+            }
+            self.csv_ddl(e, &csv, kids.get(1))?
+        };
+        self.show_schema_literal(e, kids.len(), bound, ddl);
+        Ok(())
+    }
+
+    /// The DDL `schema_of_csv(csv[, options])` resolves to (`None`: defaults).
+    fn csv_ddl(
+        &self,
+        e: &Arc<Expr>,
+        csv: &str,
+        options: Option<&Bound>,
+    ) -> Result<String, AnalysisError> {
+        let options = match options {
             None => krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema()),
             Some(opts) => {
                 // Options other than a literal map keep the call (the
                 // signature accepts them; the executor has no binding).
                 let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
-                    return Ok(());
+                    return Err(AnalysisError::new(
+                        InternalError {
+                            message: "schema_of_csv options are not a map literal".to_owned(),
+                        },
+                        e.origin,
+                    ));
                 };
                 // Option names are case-insensitive: of two spellings of one
                 // name, the one written last wins (Spark's `CaseInsensitiveMap`).
@@ -2966,7 +3051,7 @@ impl Resolver<'_> {
                     .0
             }
         };
-        let ddl = krishiv_io::csv::ddl_of_string(&csv, &options).map_err(|err| {
+        krishiv_io::csv::ddl_of_string(csv, &options).map_err(|err| {
             AnalysisError::new(
                 match err {
                     krishiv_io::FormatError::Other(e) => e,
@@ -2977,14 +3062,19 @@ impl Resolver<'_> {
                 },
                 e.origin,
             )
-        })?;
+        })
+    }
+
+    /// Replaces the resolved call by its DDL literal, shown as the call
+    /// without its options.
+    fn show_schema_literal(&self, e: &Arc<Expr>, args: usize, bound: &mut Bound, ddl: String) {
         // Keep the form the call already shows (a session variable's name,
         // not its value); otherwise show the call itself.
         if bound.shown.is_none() {
             bound.shown = Some(Arc::clone(&bound.expr));
         }
         // Spark's output name drops the options (`schema_of_csv(1|abc)`).
-        if kids.len() == 2
+        if args == 2
             && let Some(shown) = &bound.shown
             && let ExprNode::Resolved(ResolvedExpr::Function(call)) = &shown.node
         {
@@ -2997,7 +3087,6 @@ impl Resolver<'_> {
         }
         bound.expr =
             Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
-        Ok(())
     }
 
     /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,
@@ -6035,6 +6124,26 @@ fn is_pattern_function(name: &str, args: &[Bound]) -> bool {
         "to_date" | "try_to_date" | "to_timestamp" | "try_to_timestamp" | "to_timestamp_ntz"
         | "to_timestamp_ltz" => args.len() >= 2,
         _ => false,
+    }
+}
+
+/// The function Spark rewrites `+`/`-` to when one operand is a date and
+/// the other a byte, short or int (`date_add`, `date_sub`), and whether the
+/// operands swap (`int + date`). Other mixes of dates and numbers stay
+/// refused by the coercion.
+fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static str, bool)> {
+    let days = |t: &ArgType| {
+        matches!(
+            t.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer)
+        )
+    };
+    let date = |t: &ArgType| matches!(t.data_type, Some(DataType::Date));
+    match op {
+        "+" if date(left) && days(right) => Some(("date_add", false)),
+        "+" if days(left) && date(right) => Some(("date_add", true)),
+        "-" if date(left) && days(right) => Some(("date_sub", false)),
+        _ => None,
     }
 }
 

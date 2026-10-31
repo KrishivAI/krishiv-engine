@@ -143,7 +143,7 @@ fn nodes_are_numbered_in_pre_order() {
     );
     // The same numbering instantiation tags operators with.
     let p = plan(matching());
-    let mut by_addr = crate::physical::node_ids(p.root())
+    let mut by_addr = crate::physical::node_ids([p.root()])
         .into_values()
         .collect::<Vec<_>>();
     by_addr.sort_unstable();
@@ -198,6 +198,75 @@ fn json_round_trips() {
     assert_eq!(v["format"], PROFILE_FORMAT);
     assert_eq!(v["version"], PROFILE_VERSION);
     assert_eq!(v["plan"][0]["children"], serde_json::json!([1]));
+}
+
+/// A shared plan's nodes are numbered before the root's, as instantiation
+/// numbers them, and each tree keeps its own text.
+#[test]
+fn a_profile_numbers_the_shared_plans_first() {
+    use crate::physical::{SharedId, SharedPlan};
+
+    let read = PhysNode::SharedRead {
+        id: SharedId(3),
+        layout: Vec::new(),
+    };
+    let plan = PhysicalPlan::new(
+        PhysNode::Limit {
+            input: Box::new(read),
+            offset: 0,
+            limit: 1,
+        },
+        Arc::new(Schema::empty()),
+        ExplainNode::new("Limit", "1", vec![ExplainNode::leaf("SharedRead", "#3")]),
+        env(),
+    )
+    .with_shared(vec![SharedPlan {
+        id: SharedId(3),
+        plan: PhysNode::OneRow,
+        explain: ExplainNode::leaf("OneRowRelation", ""),
+        deterministic: true,
+        ordered: false,
+    }])
+    .unwrap();
+    let node = ProfileNode::of(&plan);
+    assert_eq!((node.id, node.name.as_str()), (None, "WithShared"));
+    let [body, root] = node.children.as_slice() else {
+        panic!("{node:?}");
+    };
+    assert_eq!((body.id, body.detail.as_str()), (None, "#3"));
+    assert_eq!(body.children[0].id, Some(0));
+    assert_eq!(body.children[0].name, "OneRowRelation");
+    assert_eq!(root.id, Some(1));
+    assert_eq!(root.children[0].id, Some(2));
+    let ids = crate::physical::node_ids(plan.roots());
+    assert_eq!(ids[&std::ptr::from_ref(plan.root()).addr()], 1);
+    assert_eq!(ids[&std::ptr::from_ref(&plan.shared()[0].plan).addr()], 0);
+    let p = QueryProfile::new(&plan, QueryMetrics::default(), false);
+    let back = QueryProfile::from_json(&p.to_json()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back, p);
+}
+
+/// The deepest plan a document holds: a body at the limit, below the two
+/// headings of a shared plan.
+#[test]
+fn a_shared_plan_at_the_depth_limit_is_read() {
+    let plan = PhysicalPlan::new(
+        PhysNode::OneRow,
+        Arc::new(Schema::empty()),
+        ExplainNode::leaf("OneRowRelation", ""),
+        env(),
+    );
+    let doc = QueryProfile::new(&plan, QueryMetrics::default(), false).to_json();
+    let mut v: serde_json::Value = serde_json::from_str(&doc).unwrap();
+    let n = 2 * krishiv_plan::MAX_DEPTH + 2;
+    v["plan"] = (0..n)
+        .map(|i| {
+            let children: Vec<usize> = if i + 1 < n { vec![i + 1] } else { vec![] };
+            serde_json::json!({"id": null, "name": "x", "detail": "", "children": children})
+        })
+        .collect();
+    let read = QueryProfile::from_json(&v.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(read.plan.name, "x");
 }
 
 #[test]
@@ -272,7 +341,7 @@ fn corrupt_documents_are_rejected() {
         (
             "the plan is too deep",
             Box::new(|v| {
-                let n = 2 * krishiv_plan::MAX_DEPTH + 1;
+                let n = 2 * krishiv_plan::MAX_DEPTH + 3;
                 v["plan"] = (0..n)
                     .map(|i| {
                         let children: Vec<usize> = if i + 1 < n { vec![i + 1] } else { vec![] };

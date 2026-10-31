@@ -61,6 +61,9 @@ use krishiv_plan::{AttrId, Expr, Scan};
 use data::plan_data;
 pub use data::{PlanData, assert_plan_data};
 #[cfg(test)]
+mod shared_tests;
+
+#[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub(crate) use instantiate::{
@@ -102,6 +105,29 @@ impl SubqueryId {
 /// by it (with the stage, map partition and attempt; ADR 0013, I10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExchangeId(pub u64);
+
+/// A shared plan of a plan, numbered by the planner. A separate space from
+/// [`ExchangeId`]: on one worker a shared plan is not an exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SharedId(pub u64);
+
+/// A subplan run once per query instantiation and read in full by each
+/// [`PhysNode::SharedRead`]: a CTE body several references would otherwise
+/// compute separately.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SharedPlan {
+    /// Its number, unique in the plan.
+    pub id: SharedId,
+    /// The subplan.
+    pub plan: PhysNode,
+    /// Its printable tree.
+    pub explain: ExplainNode,
+    /// Whether it computes the same rows when run again: a lost output of
+    /// one that does not forces its readers to run again too.
+    pub deterministic: bool,
+    /// Whether readers must see its rows in the order it produces them.
+    pub ordered: bool,
+}
 
 /// A value computed while a plan runs and read by other operators of the
 /// plan: a runtime filter, a subquery's result or a broadcast exchange's
@@ -416,6 +442,13 @@ pub enum PhysNode {
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
+    /// The rows of a shared plan, under the reader's attribute ids.
+    SharedRead {
+        /// The plan read.
+        id: SharedId,
+        /// The attribute id of each of its output columns here.
+        layout: Vec<AttrId>,
+    },
 }
 
 /// A table scan.
@@ -673,6 +706,8 @@ impl WritePlan {
 plan_data!(tuple ScanId(id));
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
+plan_data!(tuple SharedId(id));
+plan_data!(struct SharedPlan { id, plan, explain, deterministic, ordered });
 plan_data!(
     enum ValueId {
         Filter(id),
@@ -729,6 +764,7 @@ plan_data!(enum PhysNode {
     Union { inputs },
     WriteFiles { input, write },
     Exchange(exchange),
+    SharedRead { id, layout },
 });
 plan_data!(struct WritePlan {
     format,
@@ -760,14 +796,14 @@ plan_data!(struct HashJoinPlan {
     distinct_build, runtime_filters, distribution
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
-plan_data!(struct PhysicalPlan { root, schema, explain, warnings, env });
+plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
 
 impl PhysNode {
     /// The plans this node reads: its inputs, then the subqueries it runs
     /// first.
     pub fn children(&self) -> Vec<&PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow | Self::Range(_) => Vec::new(),
+            Self::Scan(_) | Self::OneRow | Self::Range(_) | Self::SharedRead { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -799,7 +835,7 @@ impl PhysNode {
     /// [`Self::children`], mutable.
     pub(crate) fn children_mut(&mut self) -> Vec<&mut PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow | Self::Range(_) => Vec::new(),
+            Self::Scan(_) | Self::OneRow | Self::Range(_) | Self::SharedRead { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -835,6 +871,7 @@ impl PhysNode {
 #[derive(Clone, PartialEq)]
 pub struct PhysicalPlan {
     root: Arc<PhysNode>,
+    shared: Vec<SharedPlan>,
     schema: SchemaRef,
     explain: ExplainNode,
     warnings: Vec<String>,
@@ -847,6 +884,7 @@ impl PhysicalPlan {
     pub fn new(root: PhysNode, schema: SchemaRef, explain: ExplainNode, env: ExprEnv) -> Self {
         Self {
             root: Arc::new(root),
+            shared: Vec::new(),
             schema,
             explain,
             warnings: Vec::new(),
@@ -859,14 +897,65 @@ impl PhysicalPlan {
         &self.root
     }
 
+    /// The plans [`PhysNode::SharedRead`]s read, inner first.
+    pub fn shared(&self) -> &[SharedPlan] {
+        &self.shared
+    }
+
+    /// Every tree of the plan: the shared plans in order, then the root. A
+    /// walk over the plan's nodes starts here.
+    pub fn roots(&self) -> impl Iterator<Item = &PhysNode> {
+        self.shared
+            .iter()
+            .map(|s| &s.plan)
+            .chain(std::iter::once(&*self.root))
+    }
+
+    /// The same plan reading `shared`, listed inner first.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if two shared plans have one id, or a node reads a
+    /// shared plan that is not listed before it.
+    pub fn with_shared(mut self, shared: Vec<SharedPlan>) -> Result<Self> {
+        let mut known = std::collections::HashSet::with_capacity(shared.len());
+        for s in &shared {
+            check_shared_reads(&s.plan, &known)?;
+            if !known.insert(s.id) {
+                return Err(crate::error::internal(format!(
+                    "two shared plans numbered {}",
+                    s.id.0
+                )));
+            }
+        }
+        check_shared_reads(&self.root, &known)?;
+        self.shared = shared;
+        Ok(self)
+    }
+
     /// The schema of the result batches: the logical plan's output names.
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
-    /// The printable tree.
+    /// The printable tree of the root.
     pub fn explain(&self) -> &ExplainNode {
         &self.explain
+    }
+
+    /// The printable tree of the whole plan: as [`Self::explain`], with the
+    /// shared plans printed first when there are any.
+    #[must_use]
+    pub fn explain_all(&self) -> ExplainNode {
+        if self.shared.is_empty() {
+            return self.explain.clone();
+        }
+        let mut children: Vec<ExplainNode> = self
+            .shared
+            .iter()
+            .map(|s| shared_explain(s.id, s.explain.clone()))
+            .collect();
+        children.push(self.explain.clone());
+        ExplainNode::new(WITH_SHARED, "", children)
     }
 
     /// The expression environment.
@@ -944,6 +1033,7 @@ impl PhysicalPlan {
                 input: Box::new(root),
                 write: Some(write),
             }),
+            shared: self.shared,
             explain,
             warnings: self.warnings,
             env: self.env,
@@ -970,6 +1060,33 @@ impl fmt::Debug for PhysicalPlan {
 
 impl fmt::Display for PhysicalPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.explain.fmt(f)
+        self.explain_all().fmt(f)
     }
+}
+
+/// The node [`PhysicalPlan::explain_all`] prints above a plan with shared
+/// plans.
+pub(crate) const WITH_SHARED: &str = "WithShared";
+/// The node printed above a shared plan.
+pub(crate) const SHARED_PLAN: &str = "SharedPlan";
+
+fn shared_explain(id: SharedId, body: ExplainNode) -> ExplainNode {
+    ExplainNode::new(SHARED_PLAN, format!("#{}", id.0), vec![body])
+}
+
+/// Every [`PhysNode::SharedRead`] under `node` reads a plan in `known`.
+fn check_shared_reads(node: &PhysNode, known: &std::collections::HashSet<SharedId>) -> Result<()> {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if let PhysNode::SharedRead { id, .. } = n
+            && !known.contains(id)
+        {
+            return Err(crate::error::internal(format!(
+                "a read of shared plan {}, which is not listed before it",
+                id.0
+            )));
+        }
+        stack.extend(n.children());
+    }
+    Ok(())
 }
