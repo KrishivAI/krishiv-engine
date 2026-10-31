@@ -854,6 +854,16 @@ fn strings_to_booleans_match_spark() {
     );
     assert_eq!(one(s("2"), b.clone(), Try), "NULL");
     assert_eq!(one(s(""), b.clone(), Legacy), "NULL");
+    // Only bytes <= 0x20 and DEL are trimmed (Spark 4.2.0 oracle): a
+    // Unicode space before the word is malformed.
+    for t in ["\u{a0}true", "\u{3000}true", "\u{85}yes"] {
+        assert_eq!(one(s(t), b.clone(), Legacy), "NULL", "{t:?}");
+        assert!(
+            one(s(t), b.clone(), Ansi).contains("CAST_INVALID_INPUT"),
+            "{t:?}"
+        );
+    }
+    assert_eq!(one(s("\u{7f}true\u{7f}"), b.clone(), Ansi), "true");
     let with_null: ArrayRef = Arc::new(StringArray::from(vec![Some("yes"), None, Some("no")]));
     let out = run(&with_null, &b, Ansi).unwrap();
     let out = out.as_any().downcast_ref::<BooleanArray>().unwrap();

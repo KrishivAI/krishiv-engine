@@ -1008,14 +1008,15 @@ fn from_string<O: OffsetSizeTrait>(
             // Spark's `StringUtils.isTrueString` / `isFalseString` on the
             // trimmed, lower-cased text.
             let flags = map_rows::<Int8Type>(s, |i| {
-                let t = s
-                    .value(i)
-                    .trim_matches(|c: char| c.is_whitespace() || c.is_control());
-                let t = t.to_ascii_lowercase();
-                match t.as_str() {
-                    "t" | "true" | "y" | "yes" | "1" => Ok(Some(1)),
-                    "f" | "false" | "n" | "no" | "0" => Ok(Some(0)),
-                    _ => fail(mode, None, || invalid(i)),
+                // Bytes only, as `UTF8String.trimAll`: a Unicode space stays.
+                let t = text::trim_all(s.value(i).as_bytes());
+                let is = |word: &str| t.eq_ignore_ascii_case(word.as_bytes());
+                if ["t", "true", "y", "yes", "1"].iter().any(|w| is(w)) {
+                    Ok(Some(1))
+                } else if ["f", "false", "n", "no", "0"].iter().any(|w| is(w)) {
+                    Ok(Some(0))
+                } else {
+                    fail(mode, None, || invalid(i))
                 }
             })?;
             let out: BooleanArray = flags.iter().map(|v| v.map(|x| x != 0)).collect();
