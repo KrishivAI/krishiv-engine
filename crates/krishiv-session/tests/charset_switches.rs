@@ -41,7 +41,7 @@ fn both(session: &Session, call: &str, arg: &str) -> [Result<Vec<u8>, KrishivErr
 #[test]
 fn java_charsets_need_the_switch() {
     let s = Session::new().unwrap();
-    let arg = "'caf\u{e9}', 'WINDOWS-1252'";
+    let arg = "'abc\u{e9}', 'WINDOWS-1252'";
     for r in both(&s, "encode", arg) {
         assert_eq!(
             r.unwrap_err().error_class().name(),
@@ -50,10 +50,10 @@ fn java_charsets_need_the_switch() {
     }
     run(&s, "set spark.sql.legacy.javaCharsets=true");
     for r in both(&s, "encode", arg) {
-        assert_eq!(r.unwrap(), b"caf\xe9");
+        assert_eq!(r.unwrap(), b"abc\xe9");
     }
-    for r in both(&s, "decode", "X'636166E9', 'windows-1252'") {
-        assert_eq!(r.unwrap(), "caf\u{e9}".as_bytes());
+    for r in both(&s, "decode", "X'616263E9', 'windows-1252'") {
+        assert_eq!(r.unwrap(), "abc\u{e9}".as_bytes());
     }
     run(&s, "reset spark.sql.legacy.javaCharsets");
     assert!(both(&s, "encode", arg).iter().all(Result::is_err));
@@ -82,5 +82,19 @@ fn the_coding_error_action_replaces_instead_of_raising() {
     }
     for r in both(&s, "decode", malformed) {
         assert_eq!(r.unwrap(), "\u{fffd}".as_bytes());
+    }
+}
+
+#[test]
+fn the_krishiv_names_set_the_same_switches() {
+    let s = Session::new().unwrap();
+    let arg = "'abc\u{e9}', 'WINDOWS-1252'";
+    run(&s, "set krishiv.sql.legacy.javaCharsets=true");
+    for r in both(&s, "encode", arg) {
+        assert_eq!(r.unwrap(), b"abc\xe9");
+    }
+    run(&s, "set krishiv.sql.legacy.codingErrorAction=true");
+    for r in both(&s, "encode", "'\u{20ac}', 'US-ASCII'") {
+        assert_eq!(r.unwrap(), b"?");
     }
 }
