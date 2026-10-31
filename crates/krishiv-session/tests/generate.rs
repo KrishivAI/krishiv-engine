@@ -222,3 +222,54 @@ fn aggregates_count_each_generated_row_once() {
         .value(0);
     assert_eq!(n, 4);
 }
+
+#[test]
+fn star_does_not_pick_up_a_select_list_generators_column() {
+    let s = Session::new().unwrap();
+    // Spark: `a, b, col` (the generated column once, where the generator is).
+    let df =
+        block_on(s.sql("select *, explode(b) from values (1, array(10, 20)) as t(a, b)")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["a", "b", "col"]);
+    let df = block_on(s.sql("select explode(b), * from values (1, array(10)) as t(a, b)")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["col", "a", "b"]);
+}
+
+#[test]
+fn inline_turns_a_null_struct_element_into_null_fields() {
+    let s = Session::new().unwrap();
+    for generator in ["inline", "inline_outer"] {
+        assert_eq!(
+            rows(
+                &s,
+                &format!("select {generator}(array(struct(1, 'a'), null))")
+            ),
+            table(&[&["1", "a"], &["NULL", "NULL"]]),
+            "{generator}"
+        );
+    }
+}
+
+#[test]
+fn outer_generators_keep_rows_of_maps_and_inline_too() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select a, key, value from values (1, cast(null as map<int, string>)), (2, map(3, 'c')) as t(a, m) \
+             lateral view outer explode(m) g order by a"
+        ),
+        table(&[&["1", "NULL", "NULL"], &["2", "3", "c"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select a, c1 from values (1, cast(array() as array<struct<c1: int>>)) as t(a, s) \
+             lateral view outer inline(s) g"
+        ),
+        table(&[&["1", "NULL"]])
+    );
+}

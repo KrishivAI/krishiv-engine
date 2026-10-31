@@ -52,7 +52,14 @@ fn generated(kind: GeneratorKind, ty: &DataType) -> Option<Vec<(String, DataType
             DataType::Struct(s) => Some(
                 s.fields()
                     .iter()
-                    .map(|f| (f.name().to_owned(), f.data_type().clone(), f.nullable()))
+                    // A NULL element of the array gives NULL fields.
+                    .map(|f| {
+                        (
+                            f.name().to_owned(),
+                            f.data_type().clone(),
+                            f.nullable() || a.contains_null(),
+                        )
+                    })
                     .collect(),
             ),
             _ => None,

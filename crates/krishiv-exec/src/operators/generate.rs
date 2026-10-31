@@ -5,9 +5,10 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray as _;
-use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, UInt32Array};
+use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, UInt32Array};
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_select::nullif::nullif;
 use arrow_select::take::{take, take_record_batch};
 use krishiv_plan::GeneratorKind;
 use krishiv_types::batch::{Batch, Weights};
@@ -63,13 +64,6 @@ fn generated_fields(kind: GeneratorKind, outer: bool, ty: &DataType) -> Result<V
     if kind == GeneratorKind::PosExplode {
         out.push(Arc::new(Field::new("pos", DataType::Int32, outer)));
     }
-    let element = |f: &Field| {
-        Arc::new(Field::new(
-            f.name().as_str(),
-            f.data_type().clone(),
-            f.is_nullable() || outer,
-        ))
-    };
     match (kind, ty) {
         (GeneratorKind::Explode | GeneratorKind::PosExplode, DataType::List(f)) => {
             out.push(Arc::new(Field::new(
@@ -99,7 +93,15 @@ fn generated_fields(kind: GeneratorKind, outer: bool, ty: &DataType) -> Result<V
                     "inline of an array that is not of structs".to_owned(),
                 ));
             };
-            out.extend(fields.iter().map(|f| element(f)));
+            // A NULL element of the array gives NULL fields.
+            let null_element = f.is_nullable();
+            out.extend(fields.iter().map(|field| {
+                Arc::new(Field::new(
+                    field.name().as_str(),
+                    field.data_type().clone(),
+                    field.is_nullable() || null_element || outer,
+                ))
+            }));
         }
         _ => {
             return Err(internal(format!("a {kind:?} generator over a {ty} column")));
@@ -116,6 +118,8 @@ struct Partition(u32);
 /// from.
 struct Elements {
     ranges: Vec<Option<(usize, usize)>>,
+    /// `inline`: which struct elements are NULL (their fields are NULL).
+    struct_nulls: Option<arrow_buffer::NullBuffer>,
     /// The columns the elements are read from, in output order, before any
     /// position.
     sources: Vec<ArrayRef>,
@@ -140,15 +144,21 @@ impl Elements {
         if let Some(list) = arg.as_list_opt::<i32>() {
             let ranges = offsets_ranges(list.offsets(), list.nulls());
             let values = Arc::clone(list.values());
+            let mut struct_nulls = None;
             let sources = if kind == GeneratorKind::Inline {
                 let s = values.as_struct_opt().ok_or_else(|| {
                     internal("inline of an array that is not of structs".to_owned())
                 })?;
+                struct_nulls = s.nulls().cloned();
                 s.columns().to_vec()
             } else {
                 vec![values]
             };
-            return Ok(Self { ranges, sources });
+            return Ok(Self {
+                ranges,
+                struct_nulls,
+                sources,
+            });
         }
         if let Some(map) = arg.as_map_opt() {
             if kind == GeneratorKind::Inline {
@@ -158,6 +168,7 @@ impl Elements {
             let entries = map.entries();
             return Ok(Self {
                 ranges,
+                struct_nulls: None,
                 sources: vec![Arc::clone(entries.column(0)), Arc::clone(entries.column(1))],
             });
         }
@@ -233,8 +244,19 @@ impl Operator for Generate {
             columns.push(Arc::new(Int32Array::from(positions)));
         }
         let element_indices = UInt32Array::from(taken);
+        // A NULL struct of `inline`'s array gives NULL in every field.
+        let struct_nulls: Option<BooleanArray> = elements.struct_nulls.as_ref().map(|nulls| {
+            element_indices
+                .iter()
+                .map(|i| Some(i.is_some_and(|i| nulls.is_null(i as usize))))
+                .collect()
+        });
         for source in &elements.sources {
-            columns.push(take(source.as_ref(), &element_indices, None).map_err(arrow)?);
+            let column = take(source.as_ref(), &element_indices, None).map_err(arrow)?;
+            columns.push(match &struct_nulls {
+                Some(mask) => nullif(&column, mask).map_err(arrow)?,
+                None => column,
+            });
         }
         let data = RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(arrow)?;
         let weights = match input.weights() {
@@ -242,7 +264,8 @@ impl Operator for Generate {
             Weights::Column(c) => Weights::Column(
                 take(c, &indices, None)
                     .map_err(arrow)?
-                    .as_primitive()
+                    .as_primitive_opt::<arrow_array::types::Int64Type>()
+                    .ok_or_else(|| internal("weights that are not BIGINT".to_owned()))?
                     .clone(),
             ),
         };

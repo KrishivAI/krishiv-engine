@@ -743,7 +743,7 @@ impl Lowerer {
         };
         // A reserved qualifier the generated columns are read through; no
         // user table can have it.
-        let qualifier = format!("__krishiv_generate_{index}");
+        let qualifier = format!("{}{index}", krishiv_plan::GENERATE_QUALIFIER_PREFIX);
         let arg = self.arg(&arg.expr)?;
         let plan = self.node(
             PlanNode::Generate {
