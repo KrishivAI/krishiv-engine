@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "test-udfs": [
-      16
-    ]
-  },
-  "file": "udf/udf-inline-table",
-  "format_version": 1
-}
