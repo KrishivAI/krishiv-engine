@@ -17,10 +17,18 @@ fn an_unknown_zone_is_refused_when_it_is_set() {
         let s = Session::new().unwrap();
         let before = s.conf().get(KEY);
         let e = s.conf().set(KEY, bad).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InvalidConfValueTimeZone, "{bad}");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::InvalidConfValueTimeZone,
+            "{bad}"
+        );
         let text = e.to_string();
         assert!(text.contains(KEY) && text.contains(bad), "{text}");
-        assert_eq!(s.conf().get(KEY), before, "a refused SET changes nothing: {bad}");
+        assert_eq!(
+            s.conf().get(KEY),
+            before,
+            "a refused SET changes nothing: {bad}"
+        );
     }
 }
 
@@ -31,8 +39,14 @@ fn the_sql_forms_are_refused_the_same_way() {
         "SET spark.sql.session.timeZone = Mars/Base",
         "SET TIME ZONE 'Europe/Pariss'",
     ] {
-        let e = block_on(s.sql(sql)).and_then(|df| block_on(df.collect())).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::InvalidConfValueTimeZone, "{sql}");
+        let e = block_on(s.sql(sql))
+            .and_then(|df| block_on(df.collect()))
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::InvalidConfValueTimeZone,
+            "{sql}"
+        );
     }
 }
 
@@ -50,7 +64,9 @@ fn known_zones_and_offsets_are_accepted() {
         "UTC+8",
         "PST",
     ] {
-        s.conf().set(KEY, ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        s.conf()
+            .set(KEY, ok)
+            .unwrap_or_else(|e| panic!("{ok}: {e}"));
         assert_eq!(s.conf().get(KEY).as_deref(), Some(ok));
     }
 }
