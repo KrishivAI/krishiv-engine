@@ -430,3 +430,16 @@ fn stack_takes_a_bounded_int_row_count() {
         );
     }
 }
+
+#[test]
+fn the_generator_argument_is_visible_to_group_by_as_gen_input_0() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select id, explode(arr) from (values (1, array(7))) as t(id, arr) \
+             group by id, _gen_input_0"
+        ),
+        table(&[&["1", "7"]])
+    );
+}

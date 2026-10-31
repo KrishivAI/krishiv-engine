@@ -336,7 +336,9 @@ impl Resolver<'_> {
         };
         let (data_type, nullable) = super::subquery::typed(arg);
         let ty = super::exprs::arg_type(data_type.unwrap_or(DataType::Null), nullable);
-        let input = self.attr(&format!("_gen_input_{index}"), &ty);
+        // Spark names the hidden column after the generator's child index:
+        // the one argument of the explode family is child 0.
+        let input = self.attr("_gen_input_0", &ty);
         let mut items = items;
         let replaced = Arc::new(
             Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
