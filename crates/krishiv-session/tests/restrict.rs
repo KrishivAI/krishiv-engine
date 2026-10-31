@@ -272,6 +272,93 @@ fn correlated_references_spark_refuses() {
     }
 }
 
+/// Each outer row reads the subquery as if it ran for that row alone.
+#[test]
+fn correlated_rewrites_keep_per_row_results() {
+    let s = correlated_session();
+    for (query, want) in [
+        // A global aggregate has one row even with no matches: NULL here.
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT max(lc.k) FROM lc WHERE lc.g = lt.id)",
+            vec!["4"],
+        ),
+        (
+            "SELECT id FROM lt WHERE k NOT IN (SELECT max(lc.k) FROM lc WHERE lc.g = lt.id)",
+            vec!["1", "2"],
+        ),
+        // A count over no matches is 0, so the value is 3 for id 3.
+        (
+            "SELECT id FROM lt WHERE id IN (SELECT count(*) + 3L FROM lc WHERE lc.g = lt.id)",
+            vec!["3", "4"],
+        ),
+        // EXISTS: a grouped aggregate or a LIMIT has a row when its input has.
+        (
+            "SELECT id FROM lt WHERE EXISTS (SELECT max(y) FROM lc WHERE lc.g = lt.id GROUP BY lc.g)",
+            vec!["1", "2", "4"],
+        ),
+        (
+            "SELECT id FROM lt WHERE EXISTS (SELECT 1 FROM lc WHERE lc.g = lt.id LIMIT 1)",
+            vec!["1", "2", "4"],
+        ),
+        // The correlated column is neither a key nor selected.
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT min(lc.k) FROM lc WHERE lc.g = lt.id GROUP BY lc.y)",
+            vec!["1", "4"],
+        ),
+        // The equality either way round; a LIMIT with no sort (id 4 has one row).
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lt.id = lc.g ORDER BY y DESC LIMIT 1)",
+            vec!["4"],
+        ),
+        (
+            "SELECT id FROM lt WHERE id = 4 AND k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id LIMIT 1)",
+            vec!["4"],
+        ),
+        // Grouped by a constant: no row, so NULL and not the count 0.
+        (
+            "SELECT id, (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY 'a') FROM lt",
+            vec!["1,2", "2,2", "3,NULL", "4,1"],
+        ),
+    ] {
+        assert_eq!(rows(&s, query), want, "{query}");
+    }
+}
+
+/// Shapes the rewrites cannot keep correct stay named refusals.
+#[test]
+fn correlated_shapes_without_a_rewrite_are_refused() {
+    let s = correlated_session();
+    for (query, want) in [
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT max(lc.k) FROM lc WHERE lc.g > lt.id GROUP BY lc.y)",
+            "not equalities",
+        ),
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g > lt.id ORDER BY y LIMIT 1)",
+            "LIMIT of this form",
+        ),
+        (
+            "SELECT id, (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY lc.y + 1) FROM lt",
+            "with GROUP BY",
+        ),
+        (
+            "SELECT id, (SELECT sum(v) FROM (SELECT lc.k v FROM lc WHERE lc.g = lt.id UNION ALL SELECT k FROM lc) GROUP BY v) FROM lt",
+            "with GROUP BY",
+        ),
+        (
+            "SELECT id, (SELECT c FROM (SELECT count(*) c FROM lc WHERE lc.g = lt.id GROUP BY lc.g) q) FROM lt",
+            "of this shape",
+        ),
+        (
+            "SELECT id, (SELECT lc.y FROM lc WHERE lc.g + 1 = lt.id) FROM lt",
+            "correlation key of this form",
+        ),
+    ] {
+        let err = failure(&s, query);
+        assert!(err.contains(want), "{query}: {err}");
+    }
+}
+
 fn correlated_session() -> Session {
     let s = session();
     for ddl in [
