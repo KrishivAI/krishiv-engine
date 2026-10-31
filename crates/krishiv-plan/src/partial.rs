@@ -137,6 +137,59 @@ mod tests {
         );
     }
 
+    /// The plan cache tells apart nodes that differ only in their states, and
+    /// calls that differ only in a merge's raw type.
+    #[test]
+    fn the_cache_key_covers_the_states() {
+        use std::sync::Arc;
+
+        use crate::cache::normalized_subtree_hash;
+        use crate::{Expr, ExprNode, LogicalPlan, PlanNode, ResolvedExpr};
+
+        let column = BoundColumn {
+            id: AttrId(1),
+            name: "k".to_owned(),
+            data_type: DataType::Long,
+            nullable: false,
+        };
+        let key = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            column.clone(),
+        ))));
+        let node = |states: Vec<BoundColumn>, raw_type: DataType| {
+            let mut f = call("sum", DataType::Long);
+            f.args = vec![Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::StateInput {
+                    columns: vec![Arc::clone(&key)],
+                    raw_type,
+                },
+            )))];
+            LogicalPlan::new(PlanNode::PartialAggregate {
+                input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                keys: vec![Arc::clone(&key)],
+                aggregates: vec![Arc::new(Expr::new(ExprNode::Resolved(
+                    ResolvedExpr::Function(f),
+                )))],
+                states,
+            })
+        };
+        let long = DataType::Long;
+        let base = normalized_subtree_hash(&node(vec![column.clone()], long.clone()));
+        assert_eq!(
+            base,
+            normalized_subtree_hash(&node(vec![column.clone()], long.clone()))
+        );
+        let other_states = node(
+            vec![BoundColumn {
+                data_type: DataType::Double,
+                ..column.clone()
+            }],
+            long,
+        );
+        assert_ne!(base, normalized_subtree_hash(&other_states));
+        let other_raw = node(vec![column], DataType::Integer);
+        assert_ne!(base, normalized_subtree_hash(&other_raw));
+    }
+
     #[test]
     fn states_are_numbered_from_first() {
         let avg = call("avg", DataType::Double);

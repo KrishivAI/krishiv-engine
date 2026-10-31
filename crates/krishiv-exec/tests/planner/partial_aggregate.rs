@@ -408,6 +408,98 @@ fn a_malformed_partial_aggregate_is_refused() {
     }
 }
 
+/// The rule runs before the optimizer's last passes, so they must keep the
+/// split plan's rows: `Prune` narrows what the partial aggregate reads, and
+/// leaves its state columns.
+#[test]
+fn the_optimizer_keeps_a_split_plan() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(
+        dir.path(),
+        &[
+            (1, Some(2), Some(100), Some(1)),
+            (1, Some(4), Some(300), Some(2)),
+            (2, None, None, None),
+        ],
+        &[1, 1, 2, 3],
+        &rt,
+    );
+    for q in [QUERY, OUTER] {
+        let plan = t.optimized(q, Order::Statistics).unwrap();
+        let again = krishiv_optimizer::optimize(&eager(&plan, &|s| s)).unwrap();
+        let runnable = physical(&t, &again).unwrap();
+        assert!(
+            runnable.to_string().contains("PartialHashAggregate"),
+            "{runnable}"
+        );
+        assert_eq!(
+            sorted(&run(&runnable).unwrap()),
+            sorted(&run(&physical(&t, &plan).unwrap()).unwrap())
+        );
+    }
+}
+
+/// `e` with a `FILTER` on its call.
+fn with_filter(e: &Arc<Expr>) -> Arc<Expr> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => resolved(ResolvedExpr::Alias {
+            expr: with_filter(expr),
+            output: output.clone(),
+        }),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            let mut f = f.clone();
+            f.filter = Some(Arc::new(Expr::new(ExprNode::Literal(
+                krishiv_plan::Literal::Boolean(true),
+            ))));
+            resolved(ResolvedExpr::Function(f))
+        }
+        other => panic!("not an aggregate call: {other:?}"),
+    }
+}
+
+/// States are already filtered: a merge with a filter is a malformed plan.
+#[test]
+fn a_filter_on_a_merge_is_refused() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = sample(&rt, dir.path());
+    let q = "SELECT f.k, sum(f.i) FROM f JOIN w ON f.k = w.wk GROUP BY f.k";
+    let plan = t.optimized(q, Order::Statistics).unwrap();
+    let split = eager(&plan, &|s| s);
+    let filtered = Arc::clone(split.root())
+        .transform_down(&mut |p: Arc<LogicalPlan>| {
+            Ok::<_, Infallible>(match &p.node {
+                PlanNode::Aggregate {
+                    input,
+                    grouping,
+                    aggregates,
+                } => {
+                    let merged = aggregates
+                        .iter()
+                        .map(|e| {
+                            if matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Column(_))) {
+                                return Arc::clone(e);
+                            }
+                            with_filter(e)
+                        })
+                        .collect();
+                    Arc::new(LogicalPlan::new(PlanNode::Aggregate {
+                        input: Arc::clone(input),
+                        grouping: grouping.clone(),
+                        aggregates: merged,
+                    }))
+                }
+                _ => p,
+            })
+        })
+        .unwrap();
+    let filtered = Plan::try_new(LogicalPlan::clone(&filtered)).unwrap();
+    let e = physical(&t, &filtered).err().unwrap();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("a filter on a call merging"), "{e}");
+}
+
 #[test]
 fn the_plan_prints_the_split() {
     let rt = runtime();
