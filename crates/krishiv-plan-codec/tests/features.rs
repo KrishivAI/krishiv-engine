@@ -361,6 +361,12 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::ModeRegrBitListaggAggs)
     );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::ApproxCountDistinct { p: 14 }
+        )),
+        Some(Feature::PercentileAggregates)
+    );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
     use krishiv_exec::window::{FrameBound, FrameUnits, WindowFrame};
@@ -609,6 +615,24 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
     assert_eq!(
         decode_with(&plain, &Limits::default(), &reader).unwrap(),
         decode(&plain).unwrap()
+    );
+    // A reader without `percentile_aggregates` refuses the percentile plan
+    // naming the feature.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "aggregate_percentiles")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::NestedTypes]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["percentile_aggregates".to_owned()]
+        }
     );
 }
 

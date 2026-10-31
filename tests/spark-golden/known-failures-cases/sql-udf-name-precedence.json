@@ -3,16 +3,13 @@
     "depends-on-command": [
       10,
       12,
-      16,
-      25
+      16
     ],
     "sql-commands": [
       11,
       15,
-      24,
       33,
-      35,
-      39
+      35
     ]
   },
   "file": "sql-udf-name-precedence",

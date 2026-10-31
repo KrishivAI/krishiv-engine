@@ -207,7 +207,7 @@ pub struct FunctionCall {
     /// `f(...) FILTER (WHERE filter)`.
     pub filter: Option<Arc<Expr>>,
     /// `f(...) WITHIN GROUP (ORDER BY ...)` (ordered-set aggregates:
-    /// `listagg`, `mode`); empty for other calls. The analyzer lowers a
+    /// `listagg`, `mode`, `percentile_cont`, `percentile_disc`); empty for other calls. The analyzer lowers a
     /// valid one into the aggregate's arguments and keeps this form only
     /// for naming (Spark's `toPrettySQL` renders the call as written).
     pub within_group: Vec<SortOrder>,
