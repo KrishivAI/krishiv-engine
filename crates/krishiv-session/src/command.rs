@@ -1165,14 +1165,29 @@ impl Session {
             if let ExprNode::Subquery { plan, .. } = &e.node {
                 let mut plans = vec![plan];
                 while let Some(p) = plans.pop() {
-                    // A table function of the session, called by a bare name.
-                    if let PlanNode::TableFunction { name, .. } = &p.node
-                        && !name.contains(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
-                        && temporary
-                            .get(name)
-                            .is_some_and(|t| t.def.returns_table.is_some())
-                    {
-                        return Some(name.to_lowercase());
+                    // A table function of the session, called by a bare or
+                    // session-qualified name.
+                    if let PlanNode::TableFunction { name, .. } = &p.node {
+                        let parts: Vec<&str> =
+                            name.split(krishiv_plan::TABLE_FUNCTION_NAME_SEP).collect();
+                        let function = match parts.as_slice() {
+                            [f] => Some(*f),
+                            [q, f] if q.eq_ignore_ascii_case("session") => Some(*f),
+                            [s, q, f]
+                                if s.eq_ignore_ascii_case("system")
+                                    && q.eq_ignore_ascii_case("session") =>
+                            {
+                                Some(*f)
+                            }
+                            _ => None,
+                        };
+                        if let Some(f) = function
+                            && temporary
+                                .get(f)
+                                .is_some_and(|t| t.def.returns_table.is_some())
+                        {
+                            return Some(f.to_lowercase());
+                        }
                     }
                     p.for_each_expr(&mut |x| stack.push(x));
                     p.for_each_child(&mut |c| plans.push(c));

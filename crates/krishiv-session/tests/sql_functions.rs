@@ -1107,6 +1107,11 @@ fn a_table_function_takes_deterministic_arguments_and_no_temporary_ones() {
     assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
     assert_eq!(params["tempObj"], "FUNCTION");
     assert_eq!(params["tempObjName"], "`tmp_t`");
+    let (class, _) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION calls_tmp_q() RETURNS TABLE (a INT) RETURN SELECT * FROM session.tmp_t()",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
     // A quoted name with a dot is one name.
     ok(
         &s,
