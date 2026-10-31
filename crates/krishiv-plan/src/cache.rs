@@ -1387,6 +1387,10 @@ mod tests {
                     }),
                 ),
                 (
+                    "pipe-operator",
+                    node(PlanNode::PipeOperator { input: base() }),
+                ),
+                (
                     "join-hint",
                     node(PlanNode::JoinHint {
                         input: base(),
