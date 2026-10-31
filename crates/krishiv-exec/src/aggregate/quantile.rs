@@ -147,6 +147,13 @@ impl ExactAcc {
             .saturating_add(rows.saturating_mul(2 * 32))
     }
 
+    /// Copies group `from`'s values to group `to` (a window snapshot).
+    pub(crate) fn copy_group(&mut self, from: usize, to: usize) {
+        let map = self.maps[from].clone();
+        self.maps[to] = map;
+        self.totals[to] = self.totals[from];
+    }
+
     /// Folds `count` of `v` into `g`.
     pub(crate) fn add(&mut self, g: usize, v: f64, count: i64) {
         if count == 0 {

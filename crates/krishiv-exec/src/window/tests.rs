@@ -1788,6 +1788,18 @@ async fn one_large_partition_spills_through_the_runner() {
             (agg(Sum, Some(3)), rows),
             (agg(Count, None), range),
             (agg(Sum, Some(3)), WindowFrame::whole(FrameUnits::Rows)),
+            // An exact percentile over the whole partition, folded from disk.
+            (
+                agg(
+                    AggregateFunction::Percentile {
+                        percentages: vec![0.5],
+                        array: false,
+                        reverse: false,
+                    },
+                    Some(3),
+                ),
+                WindowFrame::whole(FrameUnits::Rows),
+            ),
         ],
         true,
     );
@@ -1827,6 +1839,13 @@ async fn one_large_partition_spills_through_the_runner() {
         root.child("q", Some(limit)),
     );
     let total: i64 = (0..n).map(|i| i % 11).sum();
+    let median = {
+        let mut v: Vec<i64> = (0..n).map(|i| i % 11).collect();
+        v.sort_unstable();
+        // percentile(x, 0.5): the mean of the two middle values.
+        let (lo, hi) = ((v.len() - 1) / 2, v.len() / 2);
+        (v[lo] + v[hi]) as f64 / 2.0
+    };
     let mut stream = runner.execute(node, Arc::clone(&q)).await.unwrap();
     let mut next = 0_i64;
     let mut running = 0_i64;
@@ -1836,6 +1855,10 @@ async fn one_large_partition_spills_through_the_runner() {
         let col = |c: usize| d.column(c).as_primitive::<Int64Type>().clone();
         let int = |c: usize| d.column(c).as_primitive::<Int32Type>().clone();
         let (ids, rn, rank, sum, count, whole) = (col(2), int(5), int(6), col(7), col(8), col(9));
+        let med = d
+            .column(10)
+            .as_primitive::<arrow_array::types::Float64Type>()
+            .clone();
         for r in 0..d.num_rows() {
             let i = ids.value(r);
             assert_eq!(i, next, "rows in order");
@@ -1845,6 +1868,7 @@ async fn one_large_partition_spills_through_the_runner() {
             assert_eq!(sum.value(r), running);
             assert_eq!(count.value(r), (i / 3 * 3 + 3).min(n));
             assert_eq!(whole.value(r), total);
+            assert!((med.value(r) - median).abs() < 1e-9);
             next += 1;
         }
     }
