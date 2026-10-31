@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray as _;
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
@@ -114,6 +115,92 @@ pub(super) struct CastParts {
     pub(super) kernel_to: ArrowType,
     pub(super) mode: KernelMode,
     pub(super) zone: krishiv_kernels::datetime::ZoneRef,
+    /// Where the `time(p)` targets are: a time cast to `time(p)` drops the
+    /// digits below `p` (a string cast keeps them, as Spark does). Arrow's
+    /// `Time64` does not carry `p`, so a nested target's precisions travel
+    /// here.
+    pub(super) precision: Precision,
+}
+
+/// The `time(p)` precisions of a cast target, in the shape of the type.
+#[derive(Debug, Clone, Default)]
+pub(super) enum Precision {
+    /// Nothing to truncate.
+    #[default]
+    None,
+    /// A `time(p)`: nanoseconds per unit (`10^(9-p)`).
+    Time(i64),
+    /// The element of an array.
+    List(Box<Precision>),
+    /// The key and value of a map.
+    Map(Box<Precision>, Box<Precision>),
+    /// The fields of a struct.
+    Struct(Vec<Precision>),
+}
+
+impl Precision {
+    /// The precisions inside `t`; `None` where no `time` occurs.
+    pub(super) fn of(t: &DataType) -> Self {
+        let p = match t {
+            DataType::Time { precision } => {
+                Self::Time(10_i64.pow(9 - u32::from(*precision).min(9)))
+            }
+            DataType::Array(a) => Self::List(Box::new(Self::of(a.element_type()))),
+            DataType::Map(m) => Self::Map(
+                Box::new(Self::of(m.key_type())),
+                Box::new(Self::of(m.value_type())),
+            ),
+            DataType::Struct(s) => {
+                Self::Struct(s.fields().iter().map(|f| Self::of(f.data_type())).collect())
+            }
+            _ => return Self::None,
+        };
+        if p.is_empty() { Self::None } else { p }
+    }
+
+    /// Whether no `time(p)` target needs truncating (none, or only `time(6)` and wider: a time is whole
+    /// microseconds already).
+    pub(super) fn is_empty(&self) -> bool {
+        match self {
+            Self::None => true,
+            Self::Time(unit) => *unit <= 1_000,
+            Self::List(e) => e.is_empty(),
+            Self::Map(k, v) => k.is_empty() && v.is_empty(),
+            Self::Struct(f) => f.iter().all(Self::is_empty),
+        }
+    }
+
+    /// Nanoseconds per unit of a `time(p)` target; 1 where there is none.
+    fn unit(&self) -> i64 {
+        match self {
+            Self::Time(unit) => *unit,
+            _ => 1,
+        }
+    }
+
+    /// The element of an array.
+    pub(super) fn element(&self) -> Self {
+        match self {
+            Self::List(e) => (**e).clone(),
+            _ => Self::None,
+        }
+    }
+
+    /// The entries (key, value) of a map, as the struct they are stored as.
+    pub(super) fn entries(&self) -> Self {
+        match self {
+            Self::Map(k, v) => Self::Struct(vec![(**k).clone(), (**v).clone()]),
+            _ => Self::None,
+        }
+    }
+
+    /// Field `i` of a struct.
+    pub(super) fn field(&self, i: usize) -> Self {
+        match self {
+            Self::Struct(f) => f.get(i).cloned().unwrap_or_default(),
+            _ => Self::None,
+        }
+    }
 }
 
 /// The cast of `from` to `to` in `mode`, with the session zone of `env`.
@@ -144,13 +231,14 @@ pub(super) fn parts(
         kernel_to,
         mode,
         zone,
+        precision: Precision::None,
     })
 }
 
 impl CastParts {
     /// The cast of an element, value or field to `to`, in the same mode
     /// and zone.
-    pub(super) fn child(&self, to: &ArrowType) -> Self {
+    pub(super) fn child(&self, to: &ArrowType, precision: Precision) -> Self {
         let kernel_to = match to {
             ArrowType::Utf8View => ArrowType::Utf8,
             ArrowType::BinaryView => ArrowType::Binary,
@@ -161,6 +249,7 @@ impl CastParts {
             kernel_to,
             mode: self.mode,
             zone: self.zone.clone(),
+            precision,
         }
     }
 }
@@ -180,6 +269,17 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &p.zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
+    let out = match (input.data_type(), out.data_type()) {
+        (ArrowType::Time64(_), ArrowType::Time64(_)) if p.precision.unit() > 1 => {
+            use arrow_array::types::Time64NanosecondType;
+            let unit = p.precision.unit();
+            Arc::new(
+                out.as_primitive::<Time64NanosecondType>()
+                    .unary::<_, Time64NanosecondType>(|v| v - v % unit),
+            ) as ArrayRef
+        }
+        _ => out,
+    };
     let out: ArrayRef = match (out.data_type(), &p.to) {
         (a, b) if a == b => out,
         (ArrowType::Timestamp(..), ArrowType::Timestamp(..)) => {
@@ -204,7 +304,8 @@ pub(super) fn compile(
     mode: CastMode,
     input: Input<'_>,
 ) -> Result<Arc<dyn PhysExpr>> {
-    let parts = parts(e.data_type(), to.to_arrow(), mode, input.env)?;
+    let mut parts = parts(e.data_type(), to.to_arrow(), mode, input.env)?;
+    parts.precision = Precision::of(to);
     // Every cast to a narrower or textual type can produce NULL in legacy
     // and `TRY_CAST` modes; ANSI keeps the input's nullability.
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;

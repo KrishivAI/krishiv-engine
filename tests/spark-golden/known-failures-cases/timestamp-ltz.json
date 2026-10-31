@@ -13,9 +13,7 @@
     ],
     "time-geo-types": [
       8,
-      10,
-      16,
-      18
+      16
     ]
   },
   "file": "timestamp-ltz",
