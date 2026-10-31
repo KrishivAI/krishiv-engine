@@ -497,6 +497,12 @@ impl Rewriter {
             PlanNode::Project { input, exprs } => {
                 self.project(&p, Arc::clone(input), exprs.clone())
             }
+            PlanNode::Join {
+                left,
+                right,
+                kind,
+                condition: JoinCondition::On(on),
+            } if self.existential(on) => self.join(&p, left, right, kind, on),
             _ => {
                 let mut bad = false;
                 p.for_each_expr(&mut |e| bad |= self.reads_correlated(e));
@@ -634,6 +640,69 @@ impl Rewriter {
             );
         }
         Ok(if widened { columns(base, &out) } else { base })
+    }
+
+    /// A join whose `ON` holds `EXISTS` / `IN` subqueries: each is an
+    /// existence join under the side whose columns it reads, and the `ON`
+    /// reads the `exists` column (Spark plans the same `ExistenceJoin`
+    /// below the join). A subquery that reads both sides stays unsupported.
+    fn join(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+        kind: &JoinKind,
+        on: &Arc<Expr>,
+    ) -> R<Arc<LogicalPlan>> {
+        let out = output(p)?;
+        let left_ids: HashSet<AttrId> = output(left)?.iter().map(|c| c.id).collect();
+        let right_ids: HashSet<AttrId> = output(right)?.iter().map(|c| c.id).collect();
+        let (mut plain, mut on_left, mut on_right) = (Vec::new(), Vec::new(), Vec::new());
+        for c in conjuncts(on) {
+            if !self.existential(&c) {
+                plain.push(c);
+                continue;
+            }
+            let ids = outer_ids(&c);
+            if ids.iter().all(|i| left_ids.contains(i)) {
+                on_left.push(c);
+            } else if ids.iter().all(|i| right_ids.contains(i)) {
+                on_right.push(c);
+            } else {
+                return Err(unsupported(
+                    "correlated subqueries in a join condition that read both sides",
+                    c.origin,
+                ));
+            }
+        }
+        let (mut l, mut r) = (Arc::clone(left), Arc::clone(right));
+        if !on_left.is_empty() {
+            let (joined, conds) = self.existence(l, on_left)?;
+            l = joined;
+            plain.extend(conds);
+        }
+        if !on_right.is_empty() {
+            let (joined, conds) = self.existence(r, on_right)?;
+            r = joined;
+            plain.extend(conds);
+        }
+        if plain.iter().any(|c| self.reads_correlated(c)) {
+            return Err(unsupported(
+                "correlated subqueries outside a filter or a projection",
+                p.origin,
+            ));
+        }
+        let condition = and_all(plain).map_or(JoinCondition::None, JoinCondition::On);
+        let joined = node(
+            PlanNode::Join {
+                left: l,
+                right: r,
+                kind: *kind,
+                condition,
+            },
+            p.origin,
+        );
+        Ok(columns(joined, &out))
     }
 
     /// Whether `e` holds a correlated subquery.
@@ -1367,6 +1436,21 @@ impl Rewriter {
         self.next_id += 1;
         AttrId(self.next_id - 1)
     }
+}
+
+/// The attribute ids of the enclosing query's columns the subqueries in `e`
+/// read.
+fn outer_ids(e: &Arc<Expr>) -> HashSet<AttrId> {
+    let mut ids = HashSet::new();
+    let _ = visit_distinct(Node::Expr(e), |n| {
+        if let Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &x.node
+        {
+            ids.insert(c.id);
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    ids
 }
 
 /// The union under `input`'s plain aliases and distinct aggregates (`UNION`

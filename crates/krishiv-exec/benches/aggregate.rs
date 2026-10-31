@@ -5,6 +5,9 @@
 //! - `aggregate/grouped_sum_{64,262144}_keys`: `select k, sum(v), count(*)
 //!   group by k` over 1 Mi rows (`Int64` keys and values), low and high
 //!   cardinality: probe-bound vs insert-bound.
+//! - `aggregate/grouped_sum_string_keys`: the same over a 12-byte `Utf8` key,
+//!   `grouped_sum_two_keys` over two `Int64` keys (about 262,144 groups) and
+//!   `grouped_multi_agg` computing `sum`, `min`, `max`, `avg` and `count(*)`.
 //! - `aggregate/grouped_sum_spill`: the high-cardinality query under a
 //!   4 MiB budget with a spill directory: spill runs, then the partitioned
 //!   merge from disk.
@@ -31,7 +34,7 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Decimal128Array, Int64Array, RecordBatch};
+use arrow_array::{ArrayRef, Decimal128Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
@@ -118,6 +121,60 @@ fn input(keys: u64) -> Vec<Batch> {
             Batch::new(RecordBatch::try_new(schema(), cols).expect("batch"))
         })
         .collect()
+}
+
+/// `(k1, k2, s, v)`: `k1` in `0..512`, `k2` in `0..512` (together about
+/// 262,144 groups), `s` a 12-byte string of the pair, `v = i`.
+fn wide_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("k1", DataType::Int64, false),
+        Field::new("k2", DataType::Int64, false),
+        Field::new("s", DataType::Utf8, false),
+        Field::new("v", DataType::Int64, false),
+    ]))
+}
+
+fn wide_input() -> Vec<Batch> {
+    (0..ROWS)
+        .step_by(DEFAULT_BATCH_SIZE)
+        .map(|start| {
+            let r = start as u64..(start + DEFAULT_BATCH_SIZE).min(ROWS) as u64;
+            let pair = |i: u64| {
+                let x = i.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11;
+                (x % 512, (x >> 9) % 512)
+            };
+            let k1 = Int64Array::from_iter_values(r.clone().map(|i| pair(i).0 as i64));
+            let k2 = Int64Array::from_iter_values(r.clone().map(|i| pair(i).1 as i64));
+            let s = StringArray::from_iter_values(r.clone().map(|i| {
+                let (a, b) = pair(i);
+                format!("key-{a:03}-{b:03}")
+            }));
+            let v = Int64Array::from_iter_values(r.map(|i| i as i64));
+            let cols: Vec<ArrayRef> = vec![Arc::new(k1), Arc::new(k2), Arc::new(s), Arc::new(v)];
+            Batch::new(RecordBatch::try_new(wide_schema(), cols).expect("batch"))
+        })
+        .collect()
+}
+
+/// `group by <group_by>` computing `aggregates` over `wide_input` batches.
+fn wide_plan(
+    batches: &[Batch],
+    group_by: Vec<usize>,
+    aggregates: Vec<AggregateExpr>,
+) -> Arc<dyn ExecNode> {
+    let s = wide_schema();
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by,
+        aggregates,
+        output: AggregateOutput::Final,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+    };
+    let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
+    AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
 }
 
 fn plan(batches: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
@@ -214,6 +271,39 @@ fn bench(c: &mut Criterion) {
         for (suffix, mode) in modes {
             g.bench_function(format!("grouped_sum_{keys}_keys{suffix}"), |b| {
                 b.iter(|| black_box(run(&runner, &caller, plan(&batches, None), 1 << 30, mode)));
+            });
+        }
+    }
+    let wide = wide_input();
+    let sum = || AggregateExpr::new(AggregateFunction::Sum, 3, DataType::Int64, "s");
+    let multi = || {
+        vec![
+            sum(),
+            AggregateExpr::new(AggregateFunction::Min, 3, DataType::Int64, "lo"),
+            AggregateExpr::new(AggregateFunction::Max, 3, DataType::Int64, "hi"),
+            AggregateExpr::new(AggregateFunction::Avg, 3, DataType::Int64, "a"),
+            AggregateExpr::count_star("c"),
+        ]
+    };
+    type Make<'a> = Box<dyn Fn() -> Arc<dyn ExecNode> + 'a>;
+    let wide_cases: [(&str, Make<'_>); 3] = [
+        (
+            "grouped_sum_string_keys",
+            Box::new(|| wide_plan(&wide, vec![2], vec![sum()])),
+        ),
+        (
+            "grouped_sum_two_keys",
+            Box::new(|| wide_plan(&wide, vec![0, 1], vec![sum()])),
+        ),
+        (
+            "grouped_multi_agg",
+            Box::new(|| wide_plan(&wide, vec![0, 1], multi())),
+        ),
+    ];
+    for (name, make) in &wide_cases {
+        for (suffix, mode) in modes {
+            g.bench_function(format!("{name}{suffix}"), |b| {
+                b.iter(|| black_box(run(&runner, &caller, make(), 1 << 30, mode)));
             });
         }
     }
