@@ -39,6 +39,7 @@ fuzz_target!(|data: &[u8]| {
         single_character_pipe_operator: true,
         consecutive_string_literals: rest.first().is_some_and(|b| b & 1 != 0),
         case_sensitive: rest.first().is_some_and(|b| b & 2 != 0),
+        view_schema_binding: rest.first().is_some_and(|b| b & 4 != 0),
     };
     match parse_query(&sql, &options) {
         Ok(q) => {
