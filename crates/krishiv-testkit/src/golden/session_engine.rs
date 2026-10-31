@@ -12,7 +12,8 @@
 //!   own error, and the statement is scored on that answer.
 //!
 //! The harness adds no SQL support of its own: everything the score measures is the session's
-//! answer. Rows are rendered by [`super::cell`] from the batches and the result's Spark types;
+//! answer. Rows are rendered by [`super::cell`] from the batches and the result's Spark types
+//! (the rows of a `DESCRIBE` table or query padded as Spark's `formatDescribeTableOutput` pads them);
 //! row order counts when [`super::sorted::is_semantically_sorted`] says so on the analyzed plan.
 //! Each statement runs under a wall-clock limit ([`SessionEngine::with_timeout`]): a statement
 //! that exceeds it is cancelled (its future is dropped, which cancels the query) and recorded
@@ -278,6 +279,11 @@ impl Engine for SessionEngine {
                 .collect::<Vec<_>>()
                 .join(",")
         );
+        let describe = schema == DESCRIBE_SCHEMA
+            && matches!(
+                krishiv_sql::parse_statement(sql, &self.options()),
+                Ok(krishiv_sql::ast::Statement::Describe(_))
+            );
         let mut rows = Vec::new();
         for batch in &batches {
             // Each column's Spark type, from the batch's own field.
@@ -294,7 +300,11 @@ impl Engine for SessionEngine {
                     .zip(&types)
                     .map(|(col, ty)| arrow_cell(col, row, ty))
                     .collect::<Result<Vec<_>, _>>()?;
-                rows.push(format.render_row(&cells));
+                rows.push(if describe {
+                    describe_row(&format, &cells)
+                } else {
+                    format.render_row(&cells)
+                });
             }
         }
         Ok(QueryOutput {
@@ -303,6 +313,26 @@ impl Engine for SessionEngine {
             sorted: Some(is_semantically_sorted(analyzed.plan.root())),
         })
     }
+}
+
+/// The schema of `DESCRIBE [EXTENDED] table` and `DESCRIBE QUERY`.
+const DESCRIBE_SCHEMA: &str = "struct<col_name:string,data_type:string,comment:string>";
+
+/// A row of a `DESCRIBE` command as `HiveResult.hiveResultString` renders it
+/// (`formatDescribeTableOutput`): each cell, a NULL comment as the empty string,
+/// left-justified to 20 characters (`String.format("%-20s", _)`, counted in UTF-16 units).
+fn describe_row(format: &CellFormat, cells: &[Cell]) -> Vec<String> {
+    cells
+        .iter()
+        .map(|c| {
+            let text = match c {
+                Cell::Null => String::new(),
+                c => format.render(c, true),
+            };
+            let width = text.encode_utf16().count();
+            format!("{text}{}", " ".repeat(20usize.saturating_sub(width)))
+        })
+        .collect()
 }
 
 /// The value at `row` of `col`, a column of Spark type `ty`.
@@ -783,6 +813,35 @@ mod tests {
         assert_eq!(out.sorted, Some(false));
         let sorted = e.execute("SELECT 2 AS a ORDER BY a").map_err(err)?;
         assert_eq!(sorted.sorted, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn describe_rows_are_padded_like_hive_results() -> R {
+        let mut e = engine(vec![]).map_err(err)?;
+        let out = e
+            .execute("DESCRIBE QUERY SELECT 1 AS a, 'x' AS long_column_name_over_20")
+            .map_err(err)?;
+        assert_eq!(
+            out.rows,
+            [
+                [
+                    "a                   ",
+                    "int                 ",
+                    "                    "
+                ],
+                [
+                    "long_column_name_over_20",
+                    "string              ",
+                    "                    "
+                ],
+            ]
+        );
+        // Other results with that schema keep their cells.
+        let plain = e
+            .execute("SELECT 'a' AS col_name, 'int' AS data_type, 'c' AS comment")
+            .map_err(err)?;
+        assert_eq!(plain.rows, [["a", "int", "c"]]);
         Ok(())
     }
 
