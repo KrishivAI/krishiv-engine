@@ -765,7 +765,17 @@ impl Rewriter {
                 plain.push(c);
                 continue;
             }
-            let ids = outer_ids(&c);
+            let mut ids = outer_ids(&c);
+            // An `IN` value reads the side it belongs to, too.
+            for s in subqueries(&c) {
+                if let ExprNode::Subquery {
+                    kind: SubqueryKind::In(values),
+                    ..
+                } = &s.node
+                {
+                    ids.extend(values.iter().flat_map(inner_columns).map(|c| c.id));
+                }
+            }
             if ids.iter().all(|i| left_ids.contains(i)) {
                 on_left.push(c);
             } else if ids.iter().all(|i| right_ids.contains(i)) {
@@ -1447,6 +1457,7 @@ impl Rewriter {
                 inner,
                 &inner_keys,
                 &outer_keys,
+                true,
             );
         }
         let (inner, corr) = self.pull(input, true)?;
@@ -1475,6 +1486,7 @@ impl Rewriter {
             inner,
             &inner_keys,
             &outer_keys,
+            false,
         )
     }
 
@@ -1492,7 +1504,17 @@ impl Rewriter {
         inner: Arc<LogicalPlan>,
         inner_keys: &[Arc<Expr>],
         outer_keys: &[Arc<Expr>],
+        null_safe: bool,
     ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        // Over a union the keys are the domain of outer values, NULL
+        // included, and a NULL outer value owns the NULL group (Spark joins
+        // with `<=>`); a lifted `inner = outer` leaves no NULL group, and
+        // the inner NULL keys must not match.
+        let op = if null_safe {
+            Builtin::EqNullSafe
+        } else {
+            Builtin::Eq
+        };
         // The aggregate outputs its value and its keys.
         let mut aggregates = vec![Arc::clone(item)];
         let mut key_cols: Vec<BoundColumn> = Vec::new();
@@ -1544,7 +1566,7 @@ impl Rewriter {
             .zip(&key_cols)
             .map(|(o, k)| {
                 let k = renumber.inner(&col_expr(k, Origin::UNKNOWN));
-                boolean(Builtin::Eq, vec![renumber.inner(o), k])
+                boolean(op, vec![renumber.inner(o), k])
             })
             .collect();
         let join = PlanNode::Join {

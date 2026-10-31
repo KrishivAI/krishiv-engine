@@ -213,6 +213,14 @@ pub enum PlanNode {
         /// Its parameters.
         params: Vec<Arc<Expr>>,
     },
+    /// The boundary Spark puts between pipe operators (`PipeOperator`):
+    /// a `WHERE` or `ORDER BY` after `|>` reads only what the operator
+    /// before it output, never a column that operator dropped. The
+    /// analyzer resolves it to its input and drops the node.
+    PipeOperator {
+        /// Input.
+        input: Arc<LogicalPlan>,
+    },
     /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
     /// this relation is a side of prefers `strategy`. Rows pass through.
     JoinHint {
@@ -828,6 +836,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::PipeOperator { input }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -869,6 +878,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::PipeOperator { input }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -901,6 +911,7 @@ impl LogicalPlan {
             | PlanNode::OneRowRelation
             | PlanNode::Range { .. }
             | PlanNode::Shift { .. }
+            | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
@@ -980,6 +991,7 @@ impl LogicalPlan {
             | PlanNode::OneRowRelation
             | PlanNode::Range { .. }
             | PlanNode::Shift { .. }
+            | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
@@ -1214,6 +1226,7 @@ impl LogicalPlan {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
