@@ -188,6 +188,94 @@ pub fn time_diff(
     Ok(out.into_iter().collect())
 }
 
+const NANOS_PER_HOUR: i128 = 3_600 * NANOS_PER_SECOND as i128;
+const NANOS_PER_DAY: i128 = 24 * NANOS_PER_HOUR;
+
+/// `time_from_seconds|millis|micros`: `values` scaled by `nanos_per_unit`
+/// (the seconds form takes a `decimal(14,6)`, so its unit is a microsecond).
+///
+/// # Errors
+/// `DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION` for a value outside one
+/// day.
+pub fn time_from_units(
+    values: impl Iterator<Item = Option<i128>>,
+    nanos_per_unit: i128,
+) -> Result<PrimitiveArray<Time64NanosecondType>, KernelError> {
+    let mut out = Vec::new();
+    for (row, v) in values.enumerate() {
+        let Some(v) = v else {
+            out.push(None);
+            continue;
+        };
+        let nanos = v.saturating_mul(nanos_per_unit);
+        if !(0..NANOS_PER_DAY).contains(&nanos) {
+            return Err(KernelError::time_field_out_of_bounds(
+                row,
+                format!(
+                    "Invalid TIME value: must be between 00:00:00 and 23:59:59.999999999, but got {nanos} nanoseconds"
+                ),
+            ));
+        }
+        out.push(i64::try_from(nanos).ok());
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// `make_time(hour, minute, seconds)`; `seconds` is a `decimal(16,6)` read
+/// as microseconds. The fields are checked in `LocalTime.of`'s order.
+///
+/// # Errors
+/// `DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION`.
+pub fn make_time(
+    hours: &arrow_array::Int32Array,
+    minutes: &arrow_array::Int32Array,
+    seconds: &arrow_array::Decimal128Array,
+) -> Result<PrimitiveArray<Time64NanosecondType>, KernelError> {
+    let mut out = Vec::with_capacity(hours.len());
+    for row in 0..hours.len() {
+        if hours.is_null(row) || minutes.is_null(row) || seconds.is_null(row) {
+            out.push(None);
+            continue;
+        }
+        let (h, m, micros) = (
+            i64::from(hours.value(row)),
+            i64::from(minutes.value(row)),
+            seconds.value(row),
+        );
+        let bad = |field: &str, hi: u8, v: i128| {
+            KernelError::time_field_out_of_bounds(
+                row,
+                format!("Invalid value for {field} (valid values 0 - {hi}): {v}"),
+            )
+        };
+        if !(0..24).contains(&h) {
+            return Err(bad("HourOfDay", 23, i128::from(h)));
+        }
+        if !(0..60).contains(&m) {
+            return Err(bad("MinuteOfHour", 59, i128::from(m)));
+        }
+        let whole = micros.checked_div(1_000_000).unwrap_or(0);
+        if !(0..60).contains(&whole) {
+            return Err(bad("SecondOfMinute", 59, whole));
+        }
+        let nanos = h
+            .wrapping_mul(3_600)
+            .wrapping_add(m.wrapping_mul(60))
+            .wrapping_mul(NANOS_PER_SECOND)
+            .wrapping_add(i64::try_from(micros).unwrap_or(0).wrapping_mul(1_000));
+        out.push(Some(nanos));
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// `time_to_seconds|millis|micros`: whole `nanos_per_unit`s of each time.
+pub fn time_to_units(
+    times: &PrimitiveArray<Time64NanosecondType>,
+    nanos_per_unit: i64,
+) -> PrimitiveArray<arrow_array::types::Int64Type> {
+    times.unary(|n| n.checked_div(nanos_per_unit).unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,5 +361,41 @@ mod tests {
         }
         let units = StringArray::from(vec![Some("HOUR"), Some("bad")]);
         assert!(time_trunc(&units, &t).is_ok());
+    }
+    #[test]
+    fn make_time_checks_fields_in_order() {
+        use arrow_array::{Decimal128Array, Int32Array};
+        let h = Int32Array::from(vec![Some(1), Some(-1), Some(1), None]);
+        let m = Int32Array::from(vec![Some(18), Some(0), Some(60), Some(0)]);
+        let sec = Decimal128Array::from(vec![Some(19_870_000), Some(0), Some(0), Some(0)])
+            .with_precision_and_scale(16, 6)
+            .unwrap();
+        // Row 1 fails on the hour first, row 2 on the minute.
+        let e = make_time(&h.slice(0, 1), &m.slice(0, 1), &sec.slice(0, 1)).unwrap();
+        assert_eq!(e.value(0), (3_600 + 18 * 60) * S + 19_870_000_000);
+        for row in [1, 2] {
+            let err =
+                make_time(&h.slice(row, 1), &m.slice(row, 1), &sec.slice(row, 1)).unwrap_err();
+            assert_eq!(
+                err.error().error_class(),
+                krishiv_common::error::ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion
+            );
+        }
+        assert!(
+            make_time(&h.slice(3, 1), &m.slice(3, 1), &sec.slice(3, 1))
+                .unwrap()
+                .is_null(0)
+        );
+    }
+
+    #[test]
+    fn time_from_and_to_units_round_trip_and_refuse_out_of_day() {
+        let t = time_from_units([Some(52_200_500_i128), None].into_iter(), 1_000_000).unwrap();
+        assert_eq!(t.value(0), 52_200_500 * 1_000_000);
+        assert!(t.is_null(1));
+        assert_eq!(time_to_units(&t, 1_000_000).value(0), 52_200_500);
+        for bad in [-1_i128, 86_400_000] {
+            assert!(time_from_units([Some(bad)].into_iter(), 1_000_000).is_err());
+        }
     }
 }

@@ -34,11 +34,11 @@
 
 use krishiv_common::error::{
     ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTimestamp, CastInvalidInput,
-    CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion, DatetimeOverflow, DivideByZero,
-    ErrorClass, IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd,
-    InvalidFormatEscInTheMiddle, InvalidFractionOfSecond, InvalidUtf8String,
-    KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
-    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
+    CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion,
+    DatetimeFieldOutOfBoundsWithoutSuggestion, DatetimeOverflow, DivideByZero, ErrorClass,
+    IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
+    InvalidFractionOfSecond, InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError,
+    KrishivUnsupportedFeature, NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
     NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
 
@@ -298,6 +298,18 @@ impl KernelError {
             row: Some(row),
             error: DatetimeFieldOutOfBoundsWithSuggestion {
                 ansi_config: ANSI_CONF.to_owned(),
+                range_message: message,
+            }
+            .into(),
+        }
+    }
+
+    /// `DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION`: a `TIME` value or
+    /// field outside its range (no ANSI switch to suggest).
+    pub(crate) fn time_field_out_of_bounds(row: usize, message: String) -> Self {
+        Self {
+            row: Some(row),
+            error: DatetimeFieldOutOfBoundsWithoutSuggestion {
                 range_message: message,
             }
             .into(),
