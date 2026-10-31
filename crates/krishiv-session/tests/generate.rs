@@ -77,9 +77,8 @@ fn lateral_view_drops_empty_rows_unless_outer() {
         rows(
             &s,
             &format!("select a, e from {T} lateral view explode_outer(b) x as e order by a, e")
-        )
-        .len(),
-        4
+        ),
+        table(&[&["1", "10"], &["1", "20"], &["2", "NULL"], &["3", "NULL"]])
     );
 }
 
