@@ -490,11 +490,11 @@ fn insert_overwrite_never_loses_the_old_rows_before_the_new_ones_are_complete() 
         run(&s, "INSERT OVERWRITE t VALUES (1), (2), (3)");
     }
     let (seen, errors) = reader.join().unwrap();
-    // See open-issues: until P2-T082b a concurrent reader can see a MIXED old+new result (count 8), a wrong
-    // row count, as well as a FILE_NOT_EXIST error. Both are allowed here until the manifest commit lands.
     // A reader sees the old rows, the new rows, or (between the two steps of the writer's commit, until the
-    // manifest commit of P2-T082b) both: never fewer rows than either side. Until that commit a reader that
-    // listed the old files can also lose one to the overwrite's cleanup: that is the only error allowed.
+    // manifest commit of P2-T082b) both: never fewer rows than either side, and never none. The directory
+    // listing re-reads a directory in which an entry vanished, so a file replaced mid-listing is replaced in
+    // it. Until that commit a reader that listed the old files can also lose one to the overwrite's cleanup:
+    // that is the only error allowed.
     assert!(
         errors.iter().all(|e| e.contains("FILE_NOT_EXIST")),
         "{errors:?}"
