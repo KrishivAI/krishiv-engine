@@ -186,3 +186,22 @@ fn cache_table_reads_a_relation_into_the_cache() {
     assert_eq!(class(&s, "CACHE TABLE missing"), "TABLE_OR_VIEW_NOT_FOUND");
     run(&s, "CACHE TABLE IDENTIFIER('v')");
 }
+
+#[test]
+fn text_that_is_not_a_clause_is_left_to_the_parser() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    // A column list is not an expression: the parser decides (as it did before this change), the
+    // evaluation never runs, so there is no `NOT_A_CONSTANT_STRING` or unresolved column.
+    assert_eq!(
+        class(&s, "CREATE TABLE identifier (a INT) USING parquet"),
+        "PARSE_SYNTAX_ERROR"
+    );
+    // A script's clauses are not rewritten before it runs (its locals are the interpreter's).
+    run(&s, "BEGIN DECLARE v INT DEFAULT 1; SELECT v; END");
+    // `:IDENTIFIER(...)` is a parameter marker, not a clause.
+    assert_eq!(
+        class(&s, "SELECT :IDENTIFIER('p') FROM VALUES (1) AS T(c)"),
+        "PARSE_SYNTAX_ERROR"
+    );
+}

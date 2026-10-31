@@ -49,6 +49,21 @@ impl Session {
             .into_iter()
             .filter(|t| !t.kind.is_trivia())
             .collect();
+        // A script is left alone: its clauses may name locals, which only the interpreter can see.
+        let word = |k: usize| {
+            tokens
+                .get(k)
+                .and_then(|t| sql.get(t.span.start..t.span.end))
+                .unwrap_or_default()
+        };
+        if word(0).eq_ignore_ascii_case("BEGIN")
+            || (tokens
+                .get(1)
+                .is_some_and(|t| t.kind == TokenKind::Sym(Sym::Colon))
+                && word(2).eq_ignore_ascii_case("BEGIN"))
+        {
+            return Ok(Cow::Borrowed(sql));
+        }
         let mut out = String::new();
         let mut copied = 0;
         let mut i = 0;
@@ -61,11 +76,13 @@ impl Session {
                 && tokens
                     .get(i + 1)
                     .is_some_and(|n| n.kind == TokenKind::Sym(Sym::LParen));
-            if !is_clause {
+            // `:IDENTIFIER(...)` is a named parameter marker, not a clause.
+            let after_colon = i > 0 && tokens[i - 1].kind == TokenKind::Sym(Sym::Colon);
+            if !is_clause || after_colon {
                 i += 1;
                 continue;
             }
-            // The matching `)`.
+            // The matching `)`: the first token scanned is the `(`, so `depth` never underflows.
             let mut depth = 0_usize;
             let mut close = None;
             for (j, u) in tokens.iter().enumerate().skip(i + 1) {
@@ -98,7 +115,10 @@ impl Session {
                 i = close + 1;
                 continue;
             }
-            let name = self.identifier_of(inner, options).await?;
+            let Some(name) = self.identifier_of(inner, options).await? else {
+                i = close + 1;
+                continue;
+            };
             out.push_str(sql.get(copied..t.span.start).unwrap_or_default());
             out.push_str(&name);
             copied = last.span.end;
@@ -116,9 +136,13 @@ impl Session {
         &self,
         inner: &str,
         options: &ParserOptions,
-    ) -> Result<String, KrishivError> {
+    ) -> Result<Option<String>, KrishivError> {
         let name = || "IDENTIFIER".to_owned();
-        let item = parse_named_expression(inner, options).map_err(|e| e.error)?;
+        // Not an expression (`CREATE TABLE identifier (a INT)`): a plain name, left to the parser.
+        let item = match parse_named_expression(inner, options) {
+            Ok(item) if item.alias.is_none() => item,
+            _ => return Ok(None),
+        };
         if !is_constant(&item.expr) {
             return Err(NotAConstantStringNotConstant {
                 name: name(),
@@ -151,12 +175,14 @@ impl Session {
             }
         };
         let parsed = parse_multipart_identifier(&text, options).map_err(|e| e.error)?;
-        Ok(parsed
-            .parts
-            .iter()
-            .map(|p| format!("`{}`", p.value.replace('`', "``")))
-            .collect::<Vec<_>>()
-            .join("."))
+        Ok(Some(
+            parsed
+                .parts
+                .iter()
+                .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join("."),
+        ))
     }
 }
 

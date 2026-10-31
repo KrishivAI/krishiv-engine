@@ -430,7 +430,15 @@ impl Session {
                 }
                 // The relation is cached by reading it once: `LAZY` is the same here, since a
                 // snapshot is taken the first time anything reads it either way.
-                let frame = self.table(&parts.join(".")).cache();
+                let frame = self
+                    .table(
+                        &parts
+                            .iter()
+                            .map(|p| format!("`{}`", p.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join("."),
+                    )
+                    .cache();
                 frame.collect().await?;
             }
             _ => {
