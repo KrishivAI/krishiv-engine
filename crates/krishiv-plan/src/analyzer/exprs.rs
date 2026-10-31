@@ -307,13 +307,17 @@ enum Conditional {
     ZeroIfNull,
     /// `nanvl(a, b)`: both sides are `float`/`double` already.
     Nanvl,
+    /// `decode(expr, search, result, ...)`: a `CASE` over null-safe
+    /// equality (the two-argument form is the charset decoder, a function).
+    Decode,
 }
 
 impl Conditional {
     /// Which conditional `name` is, ASCII case-insensitively (function
     /// names are); `None` for any other function, `coalesce` included.
-    fn of(name: &str) -> Option<Self> {
+    fn of(name: &str, args: usize) -> Option<Self> {
         Some(match name.to_ascii_lowercase().as_str() {
+            "decode" if args >= 3 => Self::Decode,
             "if" => Self::If,
             "nvl" | "ifnull" => Self::Coalesce,
             "nvl2" => Self::Nvl2,
@@ -2027,7 +2031,7 @@ impl Resolver<'_> {
                 // the UDF, while a bare `nvl` runs the built-in (which wins
                 // the search path).
                 if is_builtin_entry(&entry)
-                    && let Some(which) = Conditional::of(lookup_name)
+                    && let Some(which) = Conditional::of(lookup_name, n)
                 {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
@@ -3785,6 +3789,50 @@ impl Resolver<'_> {
         Ok(())
     }
 
+    /// `decode(expr, search1, result1, ..., [default])` (Oracle style): a
+    /// `CASE` over null-safe equality, so a NULL `expr` matches a NULL
+    /// search. A trailing unpaired argument is the default; without one the
+    /// result is NULL. The column is named by the call as written.
+    fn decode_case(&mut self, e: &Arc<Expr>, kids: &[Bound]) -> Result<Bound, AnalysisError> {
+        let origin = e.origin;
+        let mut parts = Vec::with_capacity(kids.len());
+        for pair in kids[1..].chunks(2) {
+            if let [search, result] = pair {
+                let cond = self.operator_call(
+                    Builtin::EqNullSafe,
+                    origin,
+                    &[kids[0].clone(), search.clone()],
+                )?;
+                parts.push(cond);
+                parts.push(result.clone());
+            } else {
+                parts.extend(pair.iter().cloned());
+            }
+        }
+        // Without a default Spark ends the CASE with a string-typed NULL,
+        // which takes part in the result type (`typeof(decode(1, 1, 2))` is
+        // `string` outside ANSI mode).
+        if kids.len() % 2 == 1 {
+            let null = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Null(Some(DataType::String))))
+                    .with_origin(origin),
+            );
+            parts.push(Bound {
+                expr: null,
+                ty: arg_type(DataType::String, true),
+                agg: None,
+                win: None,
+                outer: None,
+                lateral: Vec::new(),
+                shown: None,
+            });
+        }
+        let mut b = self.operator_call(Builtin::When, origin, &parts)?;
+        b.carry_markers(kids);
+        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        Ok(b)
+    }
+
     /// A conditional function rewritten during analysis (Spark's
     /// `RuntimeReplaceable`): `if` and `nvl2` become `CASE WHEN`, `nvl` and
     /// `ifnull` become `coalesce`, `zeroifnull` becomes `coalesce` with a
@@ -3800,6 +3848,24 @@ impl Resolver<'_> {
         kids: &[Bound],
     ) -> Result<Bound, AnalysisError> {
         let n = f.args.len();
+        if matches!(which, Conditional::Decode) {
+            // A scalar function has no `DISTINCT` or `FILTER` form.
+            for (present, syntax) in [
+                (f.distinct, "DISTINCT"),
+                (f.filter.is_some(), "FILTER CLAUSE"),
+            ] {
+                if present {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: "`decode`".to_owned(),
+                            syntax: syntax.to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
+            }
+            return self.decode_case(e, &kids[..n]);
+        }
         // The arity and the input checks quote the call as written.
         let (mut call_kids, ty) = self.typed_call(entry, e, &kids[..n])?;
         call_kids.extend(kids.get(n).cloned());
@@ -3933,6 +3999,7 @@ impl Resolver<'_> {
                     call_kids.get(n).map(|k| Arc::clone(&k.expr)),
                 )
             }
+            Conditional::Decode => return self.decode_case(e, &kids[..n]),
         };
         let mut lateral: Vec<AttrId> = Vec::new();
         for id in kids.iter().flat_map(|k| k.lateral.iter()) {
