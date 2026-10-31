@@ -548,7 +548,7 @@ impl<'a> Planner<'a> {
         let layout: Vec<AttrId> = r.output.iter().map(|c| c.id).collect();
         let explain = ExplainNode::leaf(
             "SharedRead",
-            &format!("#{} {} [{}]", id.0, r.name, columns(&r.output)),
+            format!("#{} {} [{}]", id.0, r.name, columns(&r.output)),
         );
         // No runtime filter reaches a shared plan: it is computed once for every reader.
         Ok(Planned {

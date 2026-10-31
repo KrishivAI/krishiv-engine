@@ -41,6 +41,9 @@ use crate::operators::{global_ref, local_mut};
 use crate::output_spill::{OutputSpill, SpillUnread, refused};
 use crate::sync::{Mutex, lock};
 
+/// What a spill writer is lent from the memory it frees.
+const SCRATCH_BYTES: usize = 1 << 20;
+
 /// A run of batches of the list: in memory, or in one spill file (in the
 /// same order).
 enum Segment {
@@ -147,29 +150,26 @@ impl SpillUnread for Output {
                 hook.set_spillable_bytes(0);
                 return Ok(0);
             }
-            let mut written = Vec::with_capacity(work.len());
-            for (i, batches) in work {
-                let scratch = consumer.reservation().for_spill_scratch();
-                let writer = match scope.writer(Arc::clone(&self.schema), scratch) {
-                    Ok(w) => w,
-                    Err(e) => return refused(KrishivError::from(e)),
-                };
-                let query = Arc::clone(&self.query);
-                let guard = self.query.blocking_started();
-                let file = run_blocking(&*self.executor, move || {
-                    let mut writer = writer;
-                    for b in &batches {
-                        query.check_cancelled()?;
-                        writer.write(b).map_err(KrishivError::from)?;
+            // Working memory for the writers, lent from the first segment in memory (grant credit).
+            let lent = lock(&self.state)
+                .iter_mut()
+                .find_map(|s| match s {
+                    Segment::Memory { reservation, .. } => {
+                        let lent = reservation.size().min(SCRATCH_BYTES);
+                        reservation.shrink_to_credit(lent);
+                        Some(lent)
                     }
-                    let file = writer.finish().map_err(KrishivError::from)?;
-                    Ok((file, guard))
+                    Segment::File(_) => None,
                 })
-                .await?
-                .0;
-                written.push((i, Arc::new(file)));
-            }
-            let mut freed = 0;
+                .unwrap_or(0);
+            let written = self.write_segments(scope, consumer, work).await;
+            consumer.release_credit();
+            let written = written?;
+            let Some(written) = written else {
+                hook.set_spillable_bytes(self.memory_bytes());
+                return Ok(lent);
+            };
+            let mut freed = lent;
             {
                 let mut segments = lock(&self.state);
                 for (i, file) in written {
@@ -185,6 +185,41 @@ impl SpillUnread for Output {
             hook.set_spillable_bytes(self.memory_bytes());
             Ok(freed)
         })
+    }
+}
+
+impl Output {
+    /// Writes each `(segment, batches)` to a file of its own; `None` when the pool refused a writer its working
+    /// memory (nothing was written).
+    async fn write_segments(
+        &self,
+        scope: &SpillScope,
+        consumer: &Arc<ConsumerHandle>,
+        work: Vec<(usize, Vec<Batch>)>,
+    ) -> Result<Option<Vec<(usize, Arc<SpillFile>)>>> {
+        let mut written = Vec::with_capacity(work.len());
+        for (i, batches) in work {
+            let scratch = consumer.reservation().for_spill_scratch();
+            let writer = match scope.writer(Arc::clone(&self.schema), scratch) {
+                Ok(w) => w,
+                Err(e) => return refused(KrishivError::from(e)).map(|_| None),
+            };
+            let query = Arc::clone(&self.query);
+            let guard = self.query.blocking_started();
+            let file = run_blocking(&*self.executor, move || {
+                let mut writer = writer;
+                for b in &batches {
+                    query.check_cancelled()?;
+                    writer.write(b).map_err(KrishivError::from)?;
+                }
+                let file = writer.finish().map_err(KrishivError::from)?;
+                Ok((file, guard))
+            })
+            .await?
+            .0;
+            written.push((i, Arc::new(file)));
+        }
+        Ok(Some(written))
     }
 }
 
@@ -317,10 +352,17 @@ impl Sink for SharedSink {
             if l.batches.is_empty() {
                 return Ok(0);
             }
+            // The writer's working memory is lent from the batches' own reservation (as grant credit, so no
+            // other consumer takes it meanwhile): a full pool cannot grant it afresh.
+            let lent = l.reservation.size().min(SCRATCH_BYTES);
+            l.reservation.shrink_to_credit(lent);
             let scratch = ctx.consumer().reservation().for_spill_scratch();
             let writer = match scope.writer(Arc::clone(&self.schema), scratch) {
                 Ok(w) => w,
-                Err(e) => return refused(KrishivError::from(e)),
+                Err(e) => {
+                    ctx.consumer().consumer().release_credit();
+                    return refused(KrishivError::from(e));
+                }
             };
             let batches = std::mem::take(&mut l.batches);
             let query = Arc::clone(ctx.query());
@@ -331,14 +373,14 @@ impl Sink for SharedSink {
                         query.check_cancelled()?;
                         writer.write(b).map_err(KrishivError::from)?;
                     }
-                    writer
-                        .finish()
-                        .map_err(KrishivError::from)
-                        .map_err(Into::into)
+                    writer.finish().map_err(KrishivError::from)
                 })
-                .await?;
-            let freed = l.reservation.size();
-            l.reservation.shrink(freed);
+                .await;
+            ctx.consumer().consumer().release_credit();
+            let written = written?;
+            let freed = l.reservation.size() + lent;
+            let rest = l.reservation.size();
+            l.reservation.shrink(rest);
             l.signal.set_spillable_bytes(0);
             l.segments.push(Segment::File(Arc::new(written)));
             Ok(freed)
@@ -478,5 +520,161 @@ impl Source for SharedSource {
                 }
             }
         })
+    }
+}
+
+#[cfg(all(test, not(loom)))]
+#[expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test-only runtime plumbing via #[tokio::test] and test assertions; never runs on a compute worker"
+)]
+mod tests {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_memory::{
+        MemoryConfig, MemoryPool as _, SpillConfig, SpillManager, SpillOwner, TreePool,
+    };
+
+    use super::*;
+    use crate::context::{ExecConfig, OperatorId, QueryId};
+    use crate::executor::{TokioExecutor, WorkloadClass};
+
+    fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]))
+    }
+
+    fn batch(start: i64, rows: i64) -> Batch {
+        let col = Int64Array::from_iter_values(start..start + rows);
+        Batch::new(RecordBatch::try_new(schema(), vec![Arc::new(col)]).unwrap())
+    }
+
+    fn values(b: &Batch) -> Vec<i64> {
+        let col = b
+            .data()
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        col.values().to_vec()
+    }
+
+    /// A finalized list of `batches` (in one driver's order) and a context to read it with.
+    async fn finalized(
+        batches: Vec<Batch>,
+        spill_first: bool,
+    ) -> (
+        Arc<SharedSink>,
+        GlobalState,
+        Arc<QueryContext>,
+        TaskContext,
+        tempfile::TempDir,
+    ) {
+        let pool = TreePool::new(&MemoryConfig::default());
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool.child("q", None),
+        );
+        let executor = TokioExecutor::deterministic(1).unwrap();
+        let ctx = TaskContext::new(
+            Arc::clone(&query),
+            executor,
+            SpillOwner::new(),
+            OperatorId(1),
+            "shared",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let scope = SpillManager::open(&SpillConfig {
+            dir: dir.path().join("spill"),
+            ..SpillConfig::default()
+        })
+        .unwrap()
+        .scope()
+        .unwrap();
+        let sink = SharedSink::new(schema(), Some(scope));
+        let global = sink.global_state(&ctx).unwrap();
+        let mut local = sink.local_state(&ctx, &global).unwrap();
+        for (i, b) in batches.into_iter().enumerate() {
+            let status = sink.sink(b, &mut local, &global).unwrap();
+            assert!(matches!(status, SinkStatus::NeedMoreInput));
+            if spill_first && i == 0 {
+                // The driver's own spill: the batches so far go to a file.
+                assert!(sink.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+            }
+        }
+        sink.combine(local, &global).unwrap();
+        sink.finalize(&global, &ctx).await.unwrap();
+        (sink, global, query, ctx, dir)
+    }
+
+    /// A reader's context: the finalized sink state as its dependency.
+    fn reader_ctx(query: &Arc<QueryContext>, dep: &GlobalState) -> TaskContext {
+        TaskContext::new(
+            Arc::clone(query),
+            TokioExecutor::deterministic(1).unwrap(),
+            SpillOwner::new(),
+            OperatorId(2),
+            "shared read",
+        )
+        .with_dependency(Arc::clone(dep))
+    }
+
+    async fn read_all(
+        source: &SharedSource,
+        query: &Arc<QueryContext>,
+        dep: &GlobalState,
+    ) -> Vec<i64> {
+        let ctx = reader_ctx(query, dep);
+        let g = source.global_state(&ctx).unwrap();
+        let mut local = source.local_state(&ctx, &g).unwrap();
+        let mut out = Vec::new();
+        while let Some(b) = source.get_data(&mut local, &g).await.unwrap() {
+            out.extend(values(&b));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn a_reader_reads_every_batch_of_a_list_that_was_spilled_by_the_driver_and_after_finalize()
+     {
+        let (sink, global, query, _ctx, _dir) =
+            finalized(vec![batch(0, 3), batch(3, 3), batch(6, 3)], true).await;
+        let source = SharedSource::new(schema());
+        let want: Vec<i64> = (0..9).collect();
+        assert_eq!(read_all(&source, &query, &global).await, want);
+        // The list after finalize spills as a whole: the memory segment goes to a file.
+        let g = global_ref::<SinkGlobal>(&global, "test").unwrap();
+        let output = Arc::clone(g.done.get().unwrap());
+        let freed = Arc::clone(&output).spill_unread().await.unwrap();
+        assert!(freed > 0, "the batches in memory were freed");
+        assert_eq!(Arc::clone(&output).spill_unread().await.unwrap(), 0);
+        assert_eq!(read_all(&source, &query, &global).await, want);
+        drop(sink);
+    }
+
+    #[tokio::test]
+    async fn a_reader_part_way_through_a_segment_continues_from_the_file_after_a_spill() {
+        let (_sink, global, query, _ctx, _dir) =
+            finalized(vec![batch(0, 2), batch(2, 2), batch(4, 2)], false).await;
+        let source = SharedSource::new(schema());
+        let ctx = reader_ctx(&query, &global);
+        let g = source.global_state(&ctx).unwrap();
+        let mut local = source.local_state(&ctx, &g).unwrap();
+        let mut read = Vec::new();
+        for _ in 0..2 {
+            read.extend(values(
+                &source.get_data(&mut local, &g).await.unwrap().unwrap(),
+            ));
+        }
+        let sink_g = global_ref::<SinkGlobal>(&global, "test").unwrap();
+        let output = Arc::clone(sink_g.done.get().unwrap());
+        assert!(output.spill_unread().await.unwrap() > 0);
+        // The reader was two batches in: the file continues at the third.
+        while let Some(b) = source.get_data(&mut local, &g).await.unwrap() {
+            read.extend(values(&b));
+        }
+        assert_eq!(read, (0..6).collect::<Vec<i64>>());
     }
 }

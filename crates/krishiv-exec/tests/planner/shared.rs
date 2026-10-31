@@ -76,11 +76,11 @@ fn a_spilled_shared_list_is_read_in_full_by_each_reader() {
     .unwrap()
     .scope()
     .unwrap();
-    let sql = "WITH c AS (SELECT id, rand() AS r FROM range(300000)) \
+    let sql = "WITH c AS (SELECT id, rand() AS r FROM range(1500000)) \
                SELECT id FROM c UNION ALL SELECT id FROM c";
     let plan = env.plan(sql).unwrap().with_spill(scope);
     let root = TreePool::new(&MemoryConfig {
-        limit: Some(6 << 20),
+        limit: Some(16 << 20),
         ..MemoryConfig::default()
     });
     let (out, query) = super::run_in(&plan, &root);
@@ -89,7 +89,7 @@ fn a_spilled_shared_list_is_read_in_full_by_each_reader() {
         .iter()
         .map(arrow_array::RecordBatch::num_rows)
         .sum();
-    assert_eq!(rows, 600_000);
+    assert_eq!(rows, 3_000_000);
     let files: u64 = query
         .metrics()
         .operators
