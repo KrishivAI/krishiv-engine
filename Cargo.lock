@@ -2195,6 +2195,7 @@ dependencies = [
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
+ "krishiv-kernels",
  "krishiv-memory",
  "krishiv-optimizer",
  "krishiv-plan",

@@ -608,6 +608,26 @@ fn io_blocking_threads_parses_and_defaults() {
 }
 
 #[test]
+fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&AGENT_GATE_BYTES).and_then(ConfigValue::as_size),
+        Some(1 << 30)
+    );
+    c.set("krishiv.agent.gateBytes", "256m").unwrap();
+    assert_eq!(
+        c.get(&AGENT_GATE_BYTES).and_then(ConfigValue::as_size),
+        Some(256 << 20)
+    );
+    c.set("krishiv.agent.gateBytes", "0").unwrap();
+    assert_eq!(
+        c.get(&AGENT_GATE_BYTES).and_then(ConfigValue::as_size),
+        Some(0)
+    );
+    assert!(c.set("krishiv.agent.gateBytes", "lots").is_err());
+}
+
+#[test]
 fn share_cte_instances_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(

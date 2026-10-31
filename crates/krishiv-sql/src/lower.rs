@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature, MissingWindowSpecification,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
@@ -36,10 +37,10 @@ use krishiv_types::DecimalType;
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause,
     FromStatement, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, Join,
-    JoinConstraint, JoinKind, Limit, Literal, NamedWindow, NullTreatment, NumKind, Pipe,
-    PipeAggregate, PipeOp, PipeOpKind, Pivot, Query, Relation, RelationExt, Select, SelectItem,
-    SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias, TableFactor,
-    TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
+    JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow, NullTreatment, NumKind,
+    Pipe, PipeAggregate, PipeOp, PipeOpKind, Pivot, Query, Relation, RelationExt, Select,
+    SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias,
+    TableFactor, TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
@@ -836,11 +837,153 @@ impl Lowerer {
         }))
     }
 
-    fn select_list(&mut self, s: &Select, input: LogicalPlan) -> R<LogicalPlan> {
-        if !s.lateral_views.is_empty() {
-            return Err(unsupported("LATERAL VIEW", s.span));
+    /// `LATERAL VIEW [OUTER] generator(arg) table AS columns` over `plan`:
+    /// a [`PlanNode::Generate`] per view, in order, as Spark's `AstBuilder`
+    /// stacks them. Only the one-argument generators (`explode`,
+    /// `posexplode`, `inline` and their `_outer` forms) are lowered.
+    fn lateral_views(&mut self, mut plan: LogicalPlan, views: &[LateralView]) -> R<LogicalPlan> {
+        for v in views {
+            let [name] = &v.function.parts[..] else {
+                return Err(unsupported("a qualified generator name", v.span));
+            };
+            let lower = name.value.to_ascii_lowercase();
+            let (base, outer_name) = match lower.strip_suffix("_outer") {
+                Some(base) => (base, true),
+                None => (lower.as_str(), false),
+            };
+            let kind = match base {
+                "explode" => krishiv_plan::GeneratorKind::Explode,
+                "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
+                "inline" => krishiv_plan::GeneratorKind::Inline,
+                _ => {
+                    return Err(unsupported(
+                        &format!("the generator function {}", name.value),
+                        v.span,
+                    ));
+                }
+            };
+            let [arg] = &v.args[..] else {
+                return Err(err(
+                    WrongNumArgsWithoutSuggestion {
+                        function_name: format!("`{}`", name.value),
+                        expected_num: "1".to_owned(),
+                        actual_num: v.args.len().to_string(),
+                        docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                    },
+                    v.span,
+                ));
+            };
+            let arg = arc(self.expr(arg)?);
+            plan = self.node(
+                PlanNode::Generate {
+                    input: arc(plan),
+                    kind,
+                    outer: v.outer || outer_name,
+                    arg,
+                    output: Vec::new(),
+                    names: v.columns.iter().map(|c| c.value.clone()).collect(),
+                    qualifier: Some(v.table.value.clone()),
+                },
+                v.span,
+            );
         }
-        let mut plan = input;
+        Ok(plan)
+    }
+
+    /// The generator a select item is, when its expression is a call of
+    /// `explode`, `posexplode`, `inline` or one of their `_outer` forms:
+    /// the kind, whether it is `_outer`, and the arguments.
+    fn generator_of(
+        e: &Expr,
+    ) -> Option<(
+        krishiv_plan::GeneratorKind,
+        bool,
+        &[crate::ast::FunctionArg],
+        &Ident,
+    )> {
+        let ExprKind::Function(f) = &e.kind else {
+            return None;
+        };
+        let [name] = &f.name.parts[..] else {
+            return None;
+        };
+        let lower = name.value.to_ascii_lowercase();
+        let (base, outer) = match lower.strip_suffix("_outer") {
+            Some(base) => (base, true),
+            None => (lower.as_str(), false),
+        };
+        let kind = match base {
+            "explode" => krishiv_plan::GeneratorKind::Explode,
+            "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
+            "inline" => krishiv_plan::GeneratorKind::Inline,
+            _ => return None,
+        };
+        // A window, a filter or DISTINCT makes it no generator call.
+        (f.over.is_none() && f.filter.is_none() && f.quantifier.is_none()).then_some((
+            kind,
+            outer,
+            f.args.as_slice(),
+            name,
+        ))
+    }
+
+    /// `generator(arg)` over `plan` (a [`PlanNode::Generate`]) and the
+    /// select item standing for its columns: a star over the generator's
+    /// own qualifier, in the place of the call.
+    fn select_generator(
+        &mut self,
+        plan: LogicalPlan,
+        item: &SelectItem,
+        index: usize,
+    ) -> R<(LogicalPlan, Arc<IrExpr>)> {
+        let Some((kind, outer, args, name)) = Self::generator_of(&item.expr) else {
+            return Err(unsupported("a select item that is no generator", item.span));
+        };
+        let [arg] = args else {
+            return Err(err(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: format!("`{}`", name.value),
+                    expected_num: "1".to_owned(),
+                    actual_num: args.len().to_string(),
+                    docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                },
+                item.span,
+            ));
+        };
+        let names = match &item.alias {
+            None => Vec::new(),
+            Some(Alias::Name(n)) => vec![n.value.clone()],
+            Some(Alias::List(l)) => l.iter().map(|n| n.value.clone()).collect(),
+        };
+        // A reserved qualifier the generated columns are read through; no
+        // user table can have it.
+        let qualifier = format!("{}{index}", krishiv_plan::GENERATE_QUALIFIER_PREFIX);
+        let arg = self.arg(&arg.expr)?;
+        let plan = self.node(
+            PlanNode::Generate {
+                input: arc(plan),
+                kind,
+                outer,
+                arg,
+                output: Vec::new(),
+                names,
+                qualifier: Some(qualifier.clone()),
+            },
+            item.span,
+        );
+        let star = self.ex(
+            ExprNode::Star(Star {
+                qualifier: vec![qualifier],
+                except: Vec::new(),
+                plan_id: None,
+            }),
+            item.span,
+        );
+        Ok((plan, arc(star)))
+    }
+
+    fn select_list(&mut self, s: &Select, input: LogicalPlan) -> R<LogicalPlan> {
+        let mut plan = self.lateral_views(input, &s.lateral_views)?;
         if let Some(w) = &s.selection {
             let predicate = arc(self.expr(w)?);
             plan = self.node(
@@ -852,7 +995,18 @@ impl Lowerer {
             );
         }
         let mut items = Vec::new();
-        for item in &s.projection {
+        for (index, item) in s.projection.iter().enumerate() {
+            if s.group_by.is_none()
+                && s.having.is_none()
+                && Self::generator_of(&item.expr).is_some()
+            {
+                let taken =
+                    std::mem::replace(&mut plan, LogicalPlan::new(PlanNode::OneRowRelation));
+                let (generated, star) = self.select_generator(taken, item, index)?;
+                plan = generated;
+                items.push(star);
+                continue;
+            }
             items.push(self.select_item(item)?);
         }
         if s.group_by.is_none() && s.having.is_none() {
@@ -1088,9 +1242,6 @@ impl Lowerer {
     }
 
     fn from(&mut self, f: &FromClause) -> R<LogicalPlan> {
-        if !f.lateral_views.is_empty() {
-            return Err(unsupported("LATERAL VIEW", f.span));
-        }
         let mut plan: Option<LogicalPlan> = None;
         for r in &f.relations {
             let right = self.relation(r)?;
@@ -1107,7 +1258,8 @@ impl Lowerer {
                 ),
             });
         }
-        let mut plan = plan.ok_or_else(|| unsupported("an empty FROM clause", f.span))?;
+        let plan = plan.ok_or_else(|| unsupported("an empty FROM clause", f.span))?;
+        let mut plan = self.lateral_views(plan, &f.lateral_views)?;
         if f.pivot.is_some() && f.unpivot.is_some() {
             return Err(err(
                 krishiv_common::error::NotAllowedInFromUnpivotWithPivot {},
@@ -1381,20 +1533,60 @@ impl Lowerer {
                     .iter()
                     .map(|a| self.arg(&a.expr))
                     .collect::<R<Vec<_>>>()?;
-                self.node(
-                    PlanNode::TableFunction {
-                        // A qualified name (`ns.f`) is kept as one string, its
-                        // parts joined by `TABLE_FUNCTION_NAME_SEP`.
-                        name: name
-                            .parts
-                            .iter()
-                            .map(|p| p.value.as_str())
-                            .collect::<Vec<_>>()
-                            .join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()),
-                        args: lowered,
-                    },
-                    tf.span,
-                )
+                // A generator as a table: `FROM explode(array(1, 2))`
+                // generates from one empty row.
+                let lname = name.parts[0].value.to_ascii_lowercase();
+                let (base, outer) = match lname.strip_suffix("_outer") {
+                    Some(base) => (base, true),
+                    None => (lname.as_str(), false),
+                };
+                let kind = match base {
+                    "explode" => Some(krishiv_plan::GeneratorKind::Explode),
+                    "posexplode" => Some(krishiv_plan::GeneratorKind::PosExplode),
+                    "inline" => Some(krishiv_plan::GeneratorKind::Inline),
+                    _ => None,
+                };
+                if let (Some(kind), 1) = (kind, name.parts.len()) {
+                    let [arg] = &lowered[..] else {
+                        return Err(err(
+                            WrongNumArgsWithoutSuggestion {
+                                function_name: format!("`{}`", name.parts[0].value),
+                                expected_num: "1".to_owned(),
+                                actual_num: lowered.len().to_string(),
+                                docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                            },
+                            tf.span,
+                        ));
+                    };
+                    let one_row = self.node(PlanNode::OneRowRelation, tf.span);
+                    self.node(
+                        PlanNode::Generate {
+                            input: arc(one_row),
+                            kind,
+                            outer,
+                            arg: Arc::clone(arg),
+                            output: Vec::new(),
+                            names: Vec::new(),
+                            qualifier: None,
+                        },
+                        tf.span,
+                    )
+                } else {
+                    self.node(
+                        PlanNode::TableFunction {
+                            // A qualified name (`ns.f`) is kept as one string, its
+                            // parts joined by `TABLE_FUNCTION_NAME_SEP`.
+                            name: name
+                                .parts
+                                .iter()
+                                .map(|p| p.value.as_str())
+                                .collect::<Vec<_>>()
+                                .join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()),
+                            args: lowered,
+                        },
+                        tf.span,
+                    )
+                }
             }
         };
         Ok(match &tf.alias {

@@ -166,6 +166,8 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
                 | PlanNode::ReplicateRows { .. } => true,
+                // Lowering builds the generator without its columns.
+                PlanNode::Generate { output, .. } => !output.is_empty(),
             },
             Node::Expr(e) => match &e.node {
                 ExprNode::Column(_)
@@ -282,6 +284,10 @@ impl Teardown {
             | PlanNode::ReplicateRows { input, count: e } => {
                 self.plans.push(input);
                 self.exprs.push(e);
+            }
+            PlanNode::Generate { input, arg, .. } => {
+                self.plans.push(input);
+                self.exprs.push(arg);
             }
             PlanNode::Expand {
                 input, projections, ..
