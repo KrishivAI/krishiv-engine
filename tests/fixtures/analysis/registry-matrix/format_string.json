@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "format_string#58703688fa36/ansi_on",
+      "reason": "SELECT format_string(INTERVAL '1 02:03:04' DAY TO SECOND, 100, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#58703688fa36/ansi_off",
+      "reason": "SELECT format_string(INTERVAL '1 02:03:04' DAY TO SECOND, 100, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#adcf0ee18337/ansi_on",
+      "reason": "SELECT format_string(\"Hello World %d %s\", INTERVAL '1-2' YEAR TO MONTH, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#adcf0ee18337/ansi_off",
+      "reason": "SELECT format_string(\"Hello World %d %s\", INTERVAL '1-2' YEAR TO MONTH, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#b616b12290fd/ansi_on",
+      "reason": "SELECT format_string(\"Hello World %d %s\", 100, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#b616b12290fd/ansi_off",
+      "reason": "SELECT format_string(\"Hello World %d %s\", 100, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#c364875484a9/ansi_on",
+      "reason": "SELECT format_string(\"Hello World %d %s\", 100, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#c364875484a9/ansi_off",
+      "reason": "SELECT format_string(\"Hello World %d %s\", 100, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#e09175683814/ansi_on",
+      "reason": "SELECT format_string(\"Hello World %d %s\", INTERVAL '1 02:03:04' DAY TO SECOND, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#e09175683814/ansi_off",
+      "reason": "SELECT format_string(\"Hello World %d %s\", INTERVAL '1 02:03:04' DAY TO SECOND, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#f2f8b8d376e3/ansi_on",
+      "reason": "SELECT format_string(INTERVAL '1-2' YEAR TO MONTH, 100, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "format_string#f2f8b8d376e3/ansi_off",
+      "reason": "SELECT format_string(INTERVAL '1-2' YEAR TO MONTH, 100, \"days\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "format_string"
+}

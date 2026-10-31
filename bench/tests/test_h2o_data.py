@@ -262,3 +262,21 @@ def test_manifest_records_what_is_needed_to_reproduce(tmp_path: Path):
 def test_digest_rejects_unsupported_types():
     with pytest.raises(TypeError, match="unsupported column type"):
         hd.ColumnDigest().update(pa.array([True]))
+
+
+def test_digest_covers_decimals_nulls_and_slices():
+    from decimal import Decimal
+
+    t = pa.decimal128(15, 2)
+    values = [Decimal("1.50"), None, Decimal("-2.25"), Decimal("1.50")]
+
+    def digest(arr: pa.Array) -> str:
+        d = hd.ColumnDigest()
+        d.update(arr)
+        return d.hexdigest()
+
+    whole = pa.array(values, t)
+    assert digest(whole) == digest(pa.chunked_array([whole.slice(0, 2), whole.slice(2)]))
+    assert digest(whole.slice(1)) == digest(pa.array(values[1:], t))
+    assert digest(whole) != digest(pa.array([Decimal("1.50"), None, Decimal("-2.25"), Decimal("1.51")], t))
+    assert digest(whole) != digest(pa.array([Decimal("1.50"), Decimal("0"), Decimal("-2.25"), Decimal("1.50")], t))

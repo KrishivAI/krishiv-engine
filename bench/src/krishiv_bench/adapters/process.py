@@ -12,7 +12,7 @@ from typing import Any
 
 from .. import worker
 from .base import Dataset, Engine, Measure, Query
-from .proc_mem import TreeProc
+from .proc_mem import TreeProc, tree_cpu_seconds
 
 
 class EngineError(RuntimeError):
@@ -114,15 +114,21 @@ class ProcessEngine(Engine):
         return self._request({"op": "run", "query": query})
 
     def timed_run(self, query: Query) -> tuple[int, float]:
-        """Runs ``query`` in the worker; the worker tree's peak RSS lands in ``last_peak_rss_bytes``."""
-        self.last_peak_rss_bytes = None
+        """Runs ``query`` in the worker; the worker tree's peak RSS and CPU seconds land in ``last_peak_rss_bytes``
+        and ``last_cpu_seconds``."""
+        self.last_peak_rss_bytes = self.last_cpu_seconds = None
         if self._proc is None:
             self._start()  # the window must cover the live worker, not a pid that does not exist yet
+        assert self._proc is not None
+        pid = self._proc.pid
+        cpu0 = tree_cpu_seconds(pid)
         self.begin_measure()
         try:
             return self._request({"op": "time", "query": query})
         finally:
             self.last_peak_rss_bytes = self.end_measure().peak_rss_bytes
+            if self._proc is not None:  # a killed worker has no meaningful CPU reading
+                self.last_cpu_seconds = max(0.0, tree_cpu_seconds(pid) - cpu0)
 
     def profile(self, query: Query) -> dict:
         return self._request({"op": "profile", "query": query})
