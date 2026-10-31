@@ -259,3 +259,94 @@ fn syntax_negatives_carry_spark_class_and_sqlstate() {
         assert!(e.contains("SQLSTATE:"), "{q}: {e}");
     }
 }
+
+fn lineitem() -> String {
+    format!(
+        "lineitem={}/../../tests/fixtures/tpch/q1-lineitem.parquet",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+#[test]
+fn the_cost_gate_stops_a_heavy_statement_and_allow_heavy_runs_it() {
+    let q = "select count(*) as n from lineitem";
+    let gated = krishiv(
+        &[
+            "sql",
+            "--agent",
+            "--table",
+            &lineitem(),
+            "--conf",
+            "krishiv.agent.gateBytes=1k",
+            "-e",
+            q,
+        ],
+        None,
+    );
+    assert_eq!(gated.status.code(), Some(3), "{}", err(&gated));
+    let text = out(&gated);
+    assert!(text.starts_with("-- not run: estimated scan "), "{text}");
+    assert!(
+        text.contains("gate 1.0 KiB") || text.contains("gate 1 KiB") || text.contains("KiB"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("-- rows:"),
+        "the statement did not run: {text}"
+    );
+    let allowed = krishiv(
+        &[
+            "sql",
+            "--agent",
+            "--allow-heavy",
+            "--table",
+            &lineitem(),
+            "--conf",
+            "krishiv.agent.gateBytes=1k",
+            "-e",
+            q,
+        ],
+        None,
+    );
+    assert!(allowed.status.success(), "{}", err(&allowed));
+    assert!(
+        out(&allowed).contains("-- rows: 1 of 1"),
+        "{}",
+        out(&allowed)
+    );
+}
+
+#[test]
+fn a_statement_under_the_gate_or_with_the_gate_off_runs() {
+    let q = "select count(*) as n from lineitem";
+    for conf in ["krishiv.agent.gateBytes=1g", "krishiv.agent.gateBytes=0"] {
+        let o = krishiv(
+            &[
+                "sql",
+                "--agent",
+                "--table",
+                &lineitem(),
+                "--conf",
+                conf,
+                "-e",
+                q,
+            ],
+            None,
+        );
+        assert!(o.status.success(), "{conf}: {}", err(&o));
+        assert!(out(&o).contains("-- rows: 1 of 1"), "{conf}: {}", out(&o));
+    }
+    // A statement that reads no table has nothing to gate.
+    let o = krishiv(
+        &[
+            "sql",
+            "--agent",
+            "--conf",
+            "krishiv.agent.gateBytes=1",
+            "-e",
+            "select 1 as a",
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+}

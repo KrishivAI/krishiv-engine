@@ -716,13 +716,24 @@ pub fn render_estimate(
 }
 
 /// Formats bytes as GiB: whole gibibytes bare (`1 GiB`), else one decimal
-/// (`38.2 GiB`).
+/// (`38.2 GiB`). Under a gibibyte (a small gate or scan) the unit follows the
+/// size: `512.0 MiB`, `3.0 KiB`, `900 B`; zero stays `0 GiB`.
 fn format_gib(bytes: u64) -> String {
     const GIB: u64 = 1 << 30;
-    if bytes.is_multiple_of(GIB) {
-        format!("{} GiB", bytes / GIB)
+    const MIB: u64 = 1 << 20;
+    const KIB: u64 = 1 << 10;
+    if bytes == 0 || bytes >= GIB {
+        if bytes.is_multiple_of(GIB) {
+            format!("{} GiB", bytes / GIB)
+        } else {
+            format!("{:.1} GiB", bytes as f64 / GIB as f64)
+        }
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
     } else {
-        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+        format!("{bytes} B")
     }
 }
 

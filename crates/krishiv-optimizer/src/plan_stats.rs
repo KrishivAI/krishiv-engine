@@ -129,6 +129,19 @@ impl PlanStats {
     #[must_use]
     pub fn describe(&self, plan: &LogicalPlan) -> Option<String> {
         let est = self.get(plan)?;
+        let rows = est.rows.max(0.0).ceil();
+        let size = self.size_bytes(plan)?;
+        let mut out = String::from("Statistics(sizeInBytes=");
+        out.push_str(&bytes_to_string(size));
+        let _ = write!(out, ", rowCount={})", row_count(rows));
+        Some(out)
+    }
+
+    /// The estimated size of `plan`'s rows in bytes, as `EXPLAIN COST` computes it (rows times 8 bytes plus the
+    /// default size of each output column, at least 1 byte); `None` for a relation this table does not hold.
+    #[must_use]
+    pub fn size_bytes(&self, plan: &LogicalPlan) -> Option<f64> {
+        let est = self.get(plan)?;
         let width = plan
             .resolved_output()
             .unwrap_or_default()
@@ -136,11 +149,7 @@ impl PlanStats {
             .map(|c| default_size(&c.data_type))
             .fold(8, u64::saturating_add);
         let rows = est.rows.max(0.0).ceil();
-        let size = (rows * to_f64(width)).max(1.0);
-        let mut out = String::from("Statistics(sizeInBytes=");
-        out.push_str(&bytes_to_string(size));
-        let _ = write!(out, ", rowCount={})", row_count(rows));
-        Some(out)
+        Some((rows * to_f64(width)).max(1.0))
     }
 }
 

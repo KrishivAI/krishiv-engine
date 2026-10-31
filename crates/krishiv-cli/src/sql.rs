@@ -123,6 +123,10 @@ pub(crate) struct SqlArgs {
     /// Register a Parquet file or directory as a temp view; repeatable.
     #[arg(long = "table", value_name = "NAME=PATH", value_parser = key_value)]
     table: Vec<(String, String)>,
+    /// Run statements the agent cost gate would stop (estimated table scans of `krishiv.agent.gateBytes`, 1 GiB by
+    /// default). Without it such a statement is not run: the estimate and plan are printed and the exit status is 3.
+    #[arg(long)]
+    allow_heavy: bool,
     /// Print each statement's elapsed time on stderr.
     #[arg(long)]
     pub(crate) timing: bool,
@@ -183,7 +187,7 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
         return run_repl_command(args);
     }
     match run_inner(args) {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(msg) => {
             if !msg.is_empty() {
                 let _ = writeln!(io::stderr(), "{msg}");
@@ -210,7 +214,11 @@ pub(crate) fn is_agent(args: &SqlArgs) -> bool {
     args.agent || (!io::stdout().is_terminal() && args.format.is_none())
 }
 
-fn run_inner(args: &SqlArgs) -> Result<(), String> {
+/// Exit status of a run in which the cost gate stopped a statement.
+const EXIT_NOT_RUN: i32 = 3;
+
+fn run_inner(args: &SqlArgs) -> Result<i32, String> {
+    let mut code = 0;
     let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
     let session = build_session(&args.conf, &args.table)?;
     let agent = is_agent(args);
@@ -225,7 +233,9 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
             query_id: &query_id,
             start: &start,
         };
-        run_one(&session, args, agent, mode, &statement, &mut out)?;
+        if run_one(&session, args, agent, mode, &statement, &mut out)? == Ran::NotRun {
+            code = EXIT_NOT_RUN;
+        }
         // Flush per statement: on the next statement's failure the rows
         // and agent errors printed so far must already be out.
         out.flush()
@@ -234,7 +244,7 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
             let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
         }
     }
-    Ok(())
+    Ok(code)
 }
 
 /// Plans, runs and prints one statement the way `krishiv sql -e` does: the explain flags, agent output or the
@@ -246,7 +256,7 @@ pub(crate) fn run_one(
     mode: OutputMode,
     statement: &AgentStatement<'_>,
     out: &mut dyn Write,
-) -> Result<(), String> {
+) -> Result<Ran, String> {
     let stmt = statement.text;
     let df = futures::executor::block_on(session.sql(stmt)).map_err(|e| {
         if agent {
@@ -256,12 +266,61 @@ pub(crate) fn run_one(
         describe(stmt, statement.line_offset, &e)
     })?;
     if args.explain_analyze || args.explain_verbose {
-        print_explain(out, &df, args)
+        print_explain(out, &df, args).map(|()| Ran::Yes)
     } else if agent {
-        print_agent_result(out, statement, &df, session, args)
+        if !args.allow_heavy && gated(session, &df, out)? {
+            return Ok(Ran::NotRun);
+        }
+        print_agent_result(out, statement, &df, session, args).map(|()| Ran::Yes)
     } else {
-        print_result(out, &df, session, mode, args)
+        print_result(out, &df, session, mode, args).map(|()| Ran::Yes)
     }
+}
+
+/// Whether a statement ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ran {
+    /// It ran (or failed, which is an error).
+    Yes,
+    /// The cost gate stopped it and its estimate was printed.
+    NotRun,
+}
+
+/// The agent cost gate (ADR 0041): when the estimated table scans of `df` reach `krishiv.agent.gateBytes`, prints
+/// the estimate and the plan outline and returns `true`. An unknown estimate, a statement whose estimate fails (the
+/// run raises the same error) and a gate of 0 let it run.
+fn gated(session: &krishiv::Session, df: &DataFrame, out: &mut dyn Write) -> Result<bool, String> {
+    let gate = gate_bytes(session);
+    if gate == 0 {
+        return Ok(false);
+    }
+    let Ok(estimate) = futures::executor::block_on(df.estimate()) else {
+        return Ok(false);
+    };
+    let Some(scan) = estimate.scan_bytes.filter(|b| *b >= gate) else {
+        return Ok(false);
+    };
+    write!(
+        out,
+        "{}",
+        krishiv::agent::render_estimate(scan, gate, estimate.rows.unwrap_or(0), &estimate.plan)
+    )
+    .map_err(|e| format!("cannot write output: {e}"))?;
+    Ok(true)
+}
+
+/// `krishiv.agent.gateBytes` of the session (1 GiB when unset or unreadable).
+fn gate_bytes(session: &krishiv::Session) -> u64 {
+    session
+        .conf()
+        .get("krishiv.agent.gateBytes")
+        .and_then(|raw| {
+            krishiv_common::config::AGENT_GATE_BYTES
+                .parse("krishiv.agent.gateBytes", &raw)
+                .ok()
+        })
+        .and_then(|v| v.as_size())
+        .unwrap_or(1 << 30)
 }
 
 /// The output format of `--explain-analyze` and `--explain-verbose`:

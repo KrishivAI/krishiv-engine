@@ -665,6 +665,18 @@ fn estimate_answer_layout() {
         small.starts_with("-- not run: estimated scan 0 GiB (≥ gate 1 GiB), ~5 rows\n"),
         "{small}"
     );
+    // Below a gibibyte the unit follows the size.
+    let kib = render_estimate(3_072, 1_024, 5, &[]);
+    assert!(
+        kib.starts_with("-- not run: estimated scan 3.0 KiB (≥ gate 1.0 KiB), ~5 rows\n"),
+        "{kib}"
+    );
+    let mib = render_estimate(536_870_912, 268_435_456, 5, &[]);
+    assert!(
+        mib.contains("512.0 MiB") && mib.contains("gate 256.0 MiB"),
+        "{mib}"
+    );
+    assert!(render_estimate(900, 500, 1, &[]).contains("estimated scan 900 B (≥ gate 500 B)"));
     let frac = render_estimate(1_610_612_736, 1_073_741_824, 1_500, &[]);
     assert!(frac.contains("1.5 GiB"), "{frac}");
     assert!(frac.contains("~1.5K rows"), "{frac}");
