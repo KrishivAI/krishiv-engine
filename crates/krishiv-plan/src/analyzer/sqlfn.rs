@@ -437,10 +437,18 @@ impl Resolver<'_> {
         let rel = resolved?;
         // Spark evaluates an argument once per call. The body inlines it, so
         // a nondeterministic one is accepted only where that is the same:
-        // read at most once, by a body that scans no relation (which would
-        // evaluate it once per row).
+        // read at most once, by a body that produces one row (a scan, a table
+        // function or a multi-row VALUES would evaluate it once per row).
         let scans = visit_distinct(Node::Plan(plan), |node| match node {
-            Node::Plan(x) if matches!(x.node, PlanNode::Read(_)) => ControlFlow::Break(()),
+            Node::Plan(x)
+                if match &x.node {
+                    PlanNode::Read(_) | PlanNode::TableFunction { .. } => true,
+                    PlanNode::InlineTable { rows, .. } => rows.len() > 1,
+                    _ => false,
+                } =>
+            {
+                ControlFlow::Break(())
+            }
             _ => ControlFlow::Continue(()),
         })
         .is_break();
