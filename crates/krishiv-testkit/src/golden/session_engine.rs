@@ -66,7 +66,6 @@ pub struct SessionEngine {
     /// next session starts or the engine drops), and its text for masking.
     warehouse: Option<std::path::PathBuf>,
     warehouse_text: String,
-    sessions: u64,
 }
 
 impl Drop for SessionEngine {
@@ -127,7 +126,6 @@ impl SessionEngine {
             conf: Vec::new(),
             warehouse: None,
             warehouse_text: String::new(),
-            sessions: 0,
         })
     }
 
@@ -261,11 +259,12 @@ impl Engine for SessionEngine {
         self.remove_warehouse();
         // A fresh warehouse per session, known to the harness so that rows mask it as Spark's
         // `replaceNotIncludedMsg` masks its own.
-        self.sessions += 1;
+        // Unique in the process (several engines may run at once) and across processes (the pid).
+        static SESSIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SESSIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let warehouse = std::env::temp_dir().join(format!(
-            "krishiv-golden-warehouse-{}-{}",
-            std::process::id(),
-            self.sessions
+            "krishiv-golden-warehouse-{}-{n}",
+            std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&warehouse);
         std::fs::create_dir_all(&warehouse)
