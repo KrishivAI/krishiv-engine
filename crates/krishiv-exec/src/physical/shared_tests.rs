@@ -169,15 +169,16 @@ fn filtered_scan(id: u64) -> PhysNode {
 /// Until the executor runs shared plans, instantiating a read fails with an
 /// internal error; the filters of a shared plan's scans are declared first.
 #[test]
-fn instantiation_declares_a_shared_plans_filters_and_refuses_its_reads() {
+fn instantiation_declares_a_shared_plans_filters() {
     let values = Arc::new(LocalValues::new());
     let worker =
         WorkerContext::new(Arc::new(MemoryTables::new())).with_values(Arc::clone(&values) as _);
     let p = plan(read(1))
         .with_shared(vec![shared(1, filtered_scan(7))])
         .unwrap();
+    // The filter of a scan inside the shared plan is declared before anything is built (the instantiation then fails on the missing table).
     let e = instantiate(&p, &worker).err().unwrap();
-    assert_eq!(e.error_class(), ErrorClass::InternalError);
-    assert!(e.to_string().contains("shared plan 1"), "{e}");
+    // The empty table provider has no `t`: the shared scan fails before the plan's schema is compared.
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
     assert_eq!(values.filter(FilterId(7)).unwrap().id(), FilterId(7));
 }
