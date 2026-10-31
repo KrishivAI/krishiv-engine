@@ -21,7 +21,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 - Kernels: `integer` (tinyint..bigint `+ - * %`, bigint `div`, unary `-`/`abs`), `decimal` (`+ - * / % div`, unary; Spark result types
   `result_type` incl. allowPrecisionLoss; exact `+ - *` on 128/64-bit lanes, the rest exact in 128 then 256 bits, HALF_UP),
   `float` (`+ - * / %`, unary), `compare` (`= != < <= > >=` for primitives incl. date/timestamp/decimal with Spark
-  float order, strings/binary in byte order, booleans; `null_safe` builds `<=>` from `=`), `cast` (Spark CAST on Arrow
+  float order, strings/binary in byte order (a column against a literal or another column runs on arrow-ord; same order), booleans; `null_safe` builds `<=>` from `=`), `cast` (Spark CAST on Arrow
   carriers: integral/float/decimal, string -> integral/decimal/float/date, date/timestamp/timestamp_ntz, all -> string;
   `CastMode` Ansi/Legacy/Try; session zone via `TimeZoneRules`, `FixedOffset` only here; parsers in `cast/text.rs`). Dividing lanes keep a per-row flag word so NULL slots with a zero divisor never take
   the slow path (measured: `div` with 10% NULLs 302 -> 262 µs, = the no-NULL time; decimal `/` with 10% NULLs is
@@ -32,7 +32,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   toolchain with newer Unicode data does not change the output),
   `char_length`/`byte_length`, `trim` (spaces only by default), `match_str`/`match_binary` (`startswith`/`endswith`/
   `contains`), `replace`, `mask` (classes `Lu`/`Ll`/`Nd` from the generated `string/mask_table.rs`, `tests/scripts/gen_mask_table.py`; a supplementary scalar is two other units, as in Spark), `pad`/`pad_binary`, `substring`/`substring_binary`, `concat`, `like` (`string/like.rs`:
-  literal-shaped patterns take string comparisons, the rest a linear backtracking matcher; errors only on non-NULL rows)
+  a column against a literal pattern is validated by `LikePattern::compile` (Spark's escape errors, only for a non-NULL row), rewritten by `to_arrow_pattern` and run on arrow-string; a per-row pattern, or a pattern arrow-string refuses (its regex size limit), runs on the in-house matcher: literal-shaped patterns take string comparisons, the rest a linear backtracking matcher)
   and `split_literal` (`string/split.rs`: delimiters without regex metacharacters; a regex delimiter is
   `KRISHIV_UNSUPPORTED_FEATURE` until the regex engine). Operands are columns or literals (`StrOperand`, `BinOperand`,
   `Operand<Int32Type>`); NULL rows are skipped, so these kernels have no has-nulls axis. Output offsets are checked.
