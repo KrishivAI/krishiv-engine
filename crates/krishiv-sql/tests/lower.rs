@@ -614,3 +614,18 @@ fn values_lower_to_inline_tables() {
         ["col1", "col2"]
     );
 }
+
+#[test]
+fn pipe_operators_lower_left_to_right() {
+    insta::assert_snapshot!(report(&[
+        "FROM t |> WHERE a > 1 |> SELECT a, b |> ORDER BY a LIMIT 3",
+        "SELECT * FROM t |> EXTEND a + 1 AS c |> DROP b |> AS u",
+        "FROM t |> AGGREGATE sum(a) AS s GROUP BY b",
+        "FROM t |> AGGREGATE GROUP BY b AS k",
+        "FROM t |> JOIN u ON t.a = u.a |> UNION ALL (SELECT 1, 2)",
+        "FROM t |> SELECT DISTINCT a",
+        "FROM t |> AGGREGATE sum(a) GROUP BY 1",
+        "FROM t |> SET a = 1",
+        "FROM t |> TABLESAMPLE (3 ROWS)",
+    ]));
+}

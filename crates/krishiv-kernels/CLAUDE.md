@@ -42,7 +42,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   for Spark's seven default charsets, the UTF-8 validators of `binary`, `url_encode`/`url_decode`); a kernel needs a column operand, the
   binding repeats an all-literal call over one row.
   Known approximations (Spark's defaults apply; the switches are not read): `initcap`/`mask` use the toolchain's Unicode data
-  (pinned by `toolchain_unicode_is_pinned`), `encode`/`decode` ignore the legacy charset/coding switches, `base64` always chunks,
+  (pinned by `toolchain_unicode_is_pinned`), `encode`/`decode` take the legacy charset/coding switches as `CharsetOptions` (`encode_with`/`decode_with`; the SQL layer does not pass them yet), `base64` always chunks,
   `split_part`/`substring_index` with `Int.MIN` return the algorithm's value where the JVM raises, and `unbase64` of rejected text is
   `KRISHIV_INVALID_BASE64_INPUT`.
 - `hash` (P2-T027): `hash` (Murmur3 x86_32, seed 42; the tail bytes are mixed one sign-extended byte at a time, as Spark does), `xxhash64`

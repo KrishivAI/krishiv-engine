@@ -7,7 +7,8 @@
 //! does by default (`spark.sql.chunkBase64String.enabled`; the switch is not
 //! read, chunking is always on); the legacy charset switches
 //! (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`)
-//! are not read, so `encode`/`decode` always take Spark's default charsets
+//! are not read yet (the kernels take them; the plan-codec plumbing is
+//! open), so `encode`/`decode` always take Spark's default charsets
 //! and report unmappable input.
 //!
 //! The validators take `string` or `binary`: a string is always valid
