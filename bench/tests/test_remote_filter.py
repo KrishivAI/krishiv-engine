@@ -725,8 +725,8 @@ def test_the_cli_commands_forward_and_report_errors(monkeypatch, tmp_path):
 
     seen: dict = {}
 
-    def fake_run(data_arg, engines, caps, timeout_s, reps):
-        seen.update(data=data_arg, engines=engines, caps=caps, timeout=timeout_s, reps=reps)
+    def fake_run(data_arg, engines, caps, timeout_s, reps, s3):
+        seen.update(data=data_arg, engines=engines, caps=caps, timeout=timeout_s, reps=reps, s3=s3)
         return tmp_path / "r.json"
 
     monkeypatch.setattr(rf, "run_remote_filter", fake_run)
@@ -735,6 +735,9 @@ def test_the_cli_commands_forward_and_report_errors(monkeypatch, tmp_path):
     assert seen["engines"] == ["duckdb", "polars"]
     assert seen["caps"] == [None, "4g"]
     assert seen["reps"] == 2
+    assert seen["s3"] is False
+    cli.main(["remote-filter", "--mirror", str(tmp_path), "--s3"])
+    assert (seen["engines"], seen["s3"]) == (["duckdb", "polars"], True)
 
     def refuse(*_a, **_k):
         raise FileNotFoundError("no mirror")
@@ -782,3 +785,245 @@ def test_a_new_revision_clears_the_old_mirror_and_the_same_one_keeps_it(monkeypa
     mixed = [*listing("r2"), *listing("r3")]
     rf._pin_revision(dest, dest / "fw", mixed)
     assert (dest / "fw" / ".revision").read_text() == "r2\n"
+
+
+class FakeDocker:
+    """Records the docker calls; ``port`` answers like ``docker port``."""
+
+    def __init__(self, fail_on: str | None = None):
+        self.calls: list[list[str]] = []
+        self.fail_on = fail_on
+
+    def __call__(self, cmd, capture_output, text, check):
+        self.calls.append(cmd)
+        if self.fail_on and cmd[1] == self.fail_on:
+            raise subprocess.CalledProcessError(1, cmd)
+        out = "0.0.0.0:40123\n" if cmd[1] == "port" else "cid\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+
+def test_the_s3_server_starts_a_named_read_only_container_and_always_removes_it(tmp_path):
+    from krishiv_bench.remote_filter_s3 import ACCESS_KEY, BUCKET, IMAGE, S3Server
+
+    table = tmp_path / "fw"
+    table.mkdir()
+    (table / "b.parquet").write_bytes(b"x")
+    (table / "a.parquet").write_bytes(b"x")
+    docker = FakeDocker()
+    with S3Server(table, _run=docker, _ready=lambda endpoint: True) as srv:
+        assert srv.endpoint == "127.0.0.1:40123"
+        assert srv.urls() == [f"s3://{BUCKET}/a.parquet", f"s3://{BUCKET}/b.parquet"]
+        assert json.loads(srv.input_arg()) == srv.urls()
+        assert srv.env()["KRISHIV_BENCH_S3_KEY"] == ACCESS_KEY
+    run_cmd = docker.calls[0]
+    assert run_cmd[:5] == ["docker", "run", "--rm", "-d", "--name"]
+    assert run_cmd[5].startswith("krishiv-bench-rf-")
+    assert "bench-minio" not in " ".join(run_cmd)
+    assert f"{table.resolve()}:/data/{BUCKET}:ro" in run_cmd
+    assert IMAGE in run_cmd
+    assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
+    assert docker.calls[-1][3] == run_cmd[5]
+
+
+def test_the_s3_container_is_removed_when_start_or_readiness_fails(tmp_path):
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    docker = FakeDocker(fail_on="port")
+    with (
+        pytest.raises(RuntimeError, match="docker port failed"),
+        S3Server(tmp_path, _run=docker, _ready=lambda e: True),
+    ):
+        pass
+    assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
+    docker = FakeDocker()
+    with (
+        pytest.raises(RuntimeError, match="not ready"),
+        S3Server(tmp_path, _run=docker, _ready=lambda e: False, ready_timeout_s=0.1),
+    ):
+        pass
+    assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
+
+
+def test_the_http_readiness_probe_reports_a_closed_port_as_not_ready(tmp_path):
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    assert S3Server(tmp_path)._http_ready("127.0.0.1:1") is False
+    # A server that answers 403 to unsigned requests is up.
+    import http.server
+    import threading
+
+    class Refuse(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(403)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Refuse)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        assert S3Server(tmp_path)._http_ready(f"127.0.0.1:{httpd.server_port}") is True
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_sigterm_handler_stops_the_container(tmp_path):
+    import signal
+
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    docker = FakeDocker()
+    before = signal.getsignal(signal.SIGTERM)
+    srv = S3Server(tmp_path, _run=docker, _ready=lambda e: True)
+    with srv:
+        handler = signal.getsignal(signal.SIGTERM)  # the one __enter__ installed
+        assert handler != before
+        assert callable(handler)
+        with pytest.raises(SystemExit) as e:
+            handler(signal.SIGTERM, None)
+        assert e.value.code == 143
+        assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
+    assert signal.getsignal(signal.SIGTERM) == before
+    assert sum(c[1] == "rm" for c in docker.calls) == 1  # stop is idempotent
+
+
+def test_each_server_gets_its_own_container_name(tmp_path):
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    assert S3Server(tmp_path).name != S3Server(tmp_path).name
+
+
+def test_s3_mode_serves_the_mirror_to_duckdb_and_polars_through_the_environment(monkeypatch, tmp_path):
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    mirror = tmp_path / "mirror"
+    (mirror / "fw").mkdir(parents=True)
+    (mirror / "fw" / "p.parquet").write_bytes(b"x")
+    docker = FakeDocker()
+    seen: list[tuple[str, str, str | None]] = []
+
+    def run(engine, data_arg, cap, timeout_s, work):
+        seen.append((engine, data_arg, os.environ.get("KRISHIV_BENCH_S3_ENDPOINT")))
+        return _scripted({e: _fin() for e in ("duckdb", "polars")})(engine, data_arg, cap, timeout_s, work)
+
+    srv = S3Server(mirror / "fw", _run=docker, _ready=lambda e: True)
+    f = run_remote_filter(str(mirror), ["duckdb", "polars"], None, 60, run=run, reps=1, s3=True, _s3_server=srv)
+    assert {(e, a, ep) for e, a, ep in seen} == {
+        ("duckdb", '["s3://fw/p.parquet"]', "127.0.0.1:40123"),
+        ("polars", '["s3://fw/p.parquet"]', "127.0.0.1:40123"),
+    }
+    assert "KRISHIV_BENCH_S3_ENDPOINT" not in os.environ  # restored
+    assert json.loads(f.read_text())["source"] == "s3"
+    assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
+    for engines, mirror_arg, want in [
+        (["krishiv", "duckdb"], str(mirror), "drop it from --engines"),
+        (["duckdb"], '["s3://fw/p.parquet"]', "part files of a local mirror"),
+    ]:
+        with pytest.raises(ValueError, match=want):
+            run_remote_filter(mirror_arg, engines, None, 60, run=run, reps=1, s3=True)
+
+
+def test_s3_sources_are_urls_and_the_engines_get_the_endpoint(monkeypatch):
+    from krishiv_bench import remote_filter_child as child
+
+    assert child.parse_input('["s3://fw/a.parquet"]') == ("urls", ["s3://fw/a.parquet"])
+    monkeypatch.delenv("KRISHIV_BENCH_S3_ENDPOINT", raising=False)
+    assert child.s3_settings() is None
+    with pytest.raises(SystemExit, match="--s3"):
+        child.run_polars(["s3://fw/a.parquet"], Path("."))
+    with pytest.raises(SystemExit, match="--s3"):
+        child.run_duckdb(["s3://fw/a.parquet"], Path("."))
+    monkeypatch.setenv("KRISHIV_BENCH_S3_ENDPOINT", "127.0.0.1:9")
+    monkeypatch.setenv("KRISHIV_BENCH_S3_KEY", "k")
+    assert child.s3_settings() == {"endpoint": "127.0.0.1:9", "key": "k", "secret": ""}
+
+
+def test_a_mirror_revision_that_differs_from_expected_json_is_refused(tmp_path):
+    from krishiv_bench import remote_filter as rf
+
+    mirror = tmp_path / "m"
+    (mirror / "fw").mkdir(parents=True)
+    assert rf.check_mirror_revision(mirror) is None  # hand-placed mirror: no marker
+    (mirror / "fw" / ".revision").write_text("r1\n")
+    assert rf.check_mirror_revision(mirror) == "r1"  # no recorded revision to compare
+    write_expected(mirror, 1, 2, [], "r1")
+    assert rf.check_mirror_revision(mirror) == "r1"
+    write_expected(mirror, 1, 2, [], "r0")
+    with pytest.raises(ValueError, match=r"commit r1 but expected\.json was recorded at r0"):
+        rf.check_mirror_revision(mirror)
+
+
+def test_fetch_adds_the_commit_to_an_old_expected_json_and_recording_counts_keeps_it(monkeypatch, tmp_path):
+    from krishiv_bench import remote_filter as rf
+
+    monkeypatch.setattr(rf.subprocess, "run", lambda cmd, check: Path(cmd[cmd.index("-o") + 1]).write_bytes(b"x"))
+    monkeypatch.setattr(rf, "list_remote_files", lambda: [("https://h/datasets/x/resolve/r9/a.parquet", "a.parquet")])
+    mirror = tmp_path / "m"
+    write_expected(mirror, 7, 70, ["a.parquet"])  # written before commits were recorded
+    rf.fetch_remote_filter(mirror, yes=True)
+    assert json.loads((mirror / "expected.json").read_text()) == {
+        "rows": 7,
+        "sum_tokens": 70,
+        "files": ["a.parquet"],
+        "revision": "r9",
+    }
+    write_expected(mirror, 8, 80, ["a.parquet"])  # recording counts keeps the commit
+    assert json.loads((mirror / "expected.json").read_text())["revision"] == "r9"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("KRISHIV_BENCH_DOCKER_SMOKE"), reason="set KRISHIV_BENCH_DOCKER_SMOKE=1 (needs docker)"
+)
+def test_a_real_container_serves_a_parquet_file_to_polars_and_duckdb(tmp_path):
+    from krishiv_bench import remote_filter_child as child
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    table = tmp_path / "fw"
+    table.mkdir()
+    pq.write_table(
+        pa.table(
+            {
+                "id": ["a", "b"],
+                "int_score": [4, 5],
+                "token_count": [5000, 10],
+                "language_score": [0.99, 0.5],
+                "text": ["x", "y"],
+            }
+        ),
+        table / "p.parquet",
+    )
+    with S3Server(table) as srv:
+        os.environ.update(srv.env())
+        try:
+            for run in (child.run_polars, child.run_duckdb):
+                out = tmp_path / run.__name__
+                out.mkdir()
+                run(srv.urls(), out)
+                assert child.output_stats(out)[:2] == (1, 5000)
+        finally:
+            for k in srv.env():
+                os.environ.pop(k, None)
+
+
+def test_an_s3_startup_failure_is_recorded_in_the_result(monkeypatch, tmp_path):
+    from krishiv_bench.remote_filter_s3 import S3Server
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    mirror = tmp_path / "mirror"
+    (mirror / "fw").mkdir(parents=True)
+    (mirror / "fw" / "p.parquet").write_bytes(b"x")
+    srv = S3Server(mirror / "fw", _run=FakeDocker(fail_on="run"), _ready=lambda e: True)
+    with pytest.raises(RuntimeError, match="docker run failed"):
+        run_remote_filter(str(mirror), ["duckdb"], None, 60, run=_scripted({}), reps=1, s3=True, _s3_server=srv)
+    (result,) = (tmp_path / "data").rglob("*_remote-filter.json")
+    assert "docker run failed" in json.loads(result.read_text())["error"]
+
+
+def test_remote_url_inputs_are_recorded_as_remote(monkeypatch, tmp_path):
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    run = _scripted({"duckdb": _fin()})
+    f = run_remote_filter('["https://example.invalid/a.parquet"]', ["duckdb"], None, 60, run=run, reps=1)
+    assert json.loads(f.read_text())["source"] == "remote"
