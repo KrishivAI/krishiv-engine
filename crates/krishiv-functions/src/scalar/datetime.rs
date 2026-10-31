@@ -111,6 +111,19 @@ pub(super) const NAMES: &[&str] = &[
     "current_timezone",
 ];
 
+/// The hour, minute or microseconds-in-the-minute (`Second`) of each time.
+fn time_field(
+    times: &arrow_array::PrimitiveArray<Time64NanosecondType>,
+    part: DatePart,
+) -> arrow_array::PrimitiveArray<Int64Type> {
+    const NANOS: i64 = 1_000_000_000;
+    times.unary::<_, Int64Type>(|n| match part {
+        DatePart::Hour => n / (3_600 * NANOS),
+        DatePart::Minute => n / (60 * NANOS) % 60,
+        _ => n % (60 * NANOS) / 1_000,
+    })
+}
+
 /// The Arrow type of `timestamp` results.
 fn timestamp() -> DataType {
     DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
@@ -687,6 +700,27 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 })) as ArrayRef)
             })
         }
+        ("hour" | "minute" | "second", [DataType::Time64(TimeUnit::Nanosecond)]) => {
+            let part = match listed {
+                "hour" => DatePart::Hour,
+                "minute" => DatePart::Minute,
+                _ => DatePart::Second,
+            };
+            Binding::new(DataType::Int32, move |x: &Inputs<'_>| {
+                let times = x.array::<Time64NanosecondType>(0)?;
+                Ok(
+                    Arc::new(time_field(&times, part).unary::<_, Int32Type>(|v| {
+                        // Hour, minute and whole second are below 60 or 24.
+                        i32::try_from(if part == DatePart::Second {
+                            v / 1_000_000
+                        } else {
+                            v
+                        })
+                        .unwrap_or_default()
+                    })) as ArrayRef,
+                )
+            })
+        }
         ("hour" | "minute" | "second", [t]) if is_timestamp(t) => {
             let part = match listed {
                 "hour" => DatePart::Hour,
@@ -1049,6 +1083,32 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 );
                 Ok(Arc::new(make_date(&y, &m, &d, ansi, &ctx)?) as ArrayRef)
             })
+        }
+        ("extract" | "date_part", [f, DataType::Time64(TimeUnit::Nanosecond)]) if is_string(f) => {
+            match field(&args[0]) {
+                Err(e) => return Some((listed, Err(e))),
+                Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {
+                    Ok(arrow_array::new_null_array(&DataType::Float64, x.rows()))
+                }),
+                Ok(Some(part @ (DatePart::Hour | DatePart::Minute | DatePart::Second))) => {
+                    Binding::new(part.result_type(), move |x: &Inputs<'_>| {
+                        let times = x.array::<Time64NanosecondType>(1)?;
+                        let v = time_field(&times, part);
+                        Ok(if part == DatePart::Second {
+                            Arc::new(
+                                v.unary::<_, Decimal128Type>(i128::from)
+                                    .with_precision_and_scale(8, 6)
+                                    .map_err(|e| internal(e.to_string()))?,
+                            ) as ArrayRef
+                        } else {
+                            Arc::new(
+                                v.unary::<_, Int32Type>(|h| i32::try_from(h).unwrap_or_default()),
+                            ) as ArrayRef
+                        })
+                    })
+                }
+                Ok(Some(_)) => return Some((listed, Err(bad_types(listed, args)))),
+            }
         }
         ("extract" | "date_part", [f, t]) if is_string(f) => match field(&args[0]) {
             Err(e) => return Some((listed, Err(e))),

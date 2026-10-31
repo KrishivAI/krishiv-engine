@@ -409,9 +409,12 @@ fn is_time_field(part: DatePart) -> bool {
 /// timestamp is cast), the time fields a timestamp (a date is cast).
 fn extract_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let source = match extract_field(c) {
-        Ok(Some(part)) if is_time_field(part) => {
-            InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz])
-        }
+        Ok(Some(part)) if is_time_field(part) => InputType::OneOf(
+            [DataType::Timestamp, DataType::TimestampNtz]
+                .into_iter()
+                .chain((0..=6).map(|precision| DataType::Time { precision }))
+                .collect(),
+        ),
         Ok(Some(_)) => exact(DataType::Date),
         // The result rule reports the field.
         Ok(None) | Err(_) => InputType::Any,
@@ -829,7 +832,12 @@ fn datetime() -> Vec<Spec> {
     ));
     // The time fields read a timestamp of either kind; a date is cast to
     // one.
-    let any_timestamp = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    let any_timestamp = InputType::OneOf(
+        [DataType::Timestamp, DataType::TimestampNtz]
+            .into_iter()
+            .chain((0..=6).map(|precision| DataType::Time { precision }))
+            .collect(),
+    );
     out.extend(scalar(
         &["hour", "minute", "second"],
         &Inputs::Expects(vec![any_timestamp]),
