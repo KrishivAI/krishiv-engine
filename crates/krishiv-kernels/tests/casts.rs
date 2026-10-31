@@ -603,7 +603,7 @@ fn unsupported_and_identity() {
             &arrow_array::BinaryArray::from(vec![Some(&b"x"[..]), None]) as &dyn Array
         );
     }
-    assert!(run(&s("1"), &DataType::Boolean, Ansi).is_err());
+    assert!(run(&bin, &DataType::Boolean, Ansi).is_err());
     let d: ArrayRef = Arc::new(Date32Array::from(vec![1]));
     assert!(run(&d, &DataType::Int32, Ansi).is_err());
     let same = run(&d, &DataType::Date32, Ansi).unwrap();
@@ -837,4 +837,28 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn strings_to_booleans_match_spark() {
+    let b = DataType::Boolean;
+    for t in ["t", "TRUE", " Yes ", "y", "1"] {
+        assert_eq!(one(s(t), b.clone(), Ansi), "true", "{t:?}");
+    }
+    for f in ["f", "False", "NO", "n", "0\n"] {
+        assert_eq!(one(s(f), b.clone(), Ansi), "false", "{f:?}");
+    }
+    assert_eq!(
+        one(s("maybe"), b.clone(), Ansi),
+        invalid("'maybe'", "BOOLEAN")
+    );
+    assert_eq!(one(s("2"), b.clone(), Try), "NULL");
+    assert_eq!(one(s(""), b.clone(), Legacy), "NULL");
+    let with_null: ArrayRef = Arc::new(StringArray::from(vec![Some("yes"), None, Some("no")]));
+    let out = run(&with_null, &b, Ansi).unwrap();
+    let out = out.as_any().downcast_ref::<BooleanArray>().unwrap();
+    assert_eq!(
+        out,
+        &BooleanArray::from(vec![Some(true), None, Some(false)])
+    );
 }

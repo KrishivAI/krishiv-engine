@@ -31,8 +31,8 @@ use arrow_array::types::{
     Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, GenericStringArray, OffsetSizeTrait,
-    PrimitiveArray, StringArray, cast::AsArray,
+    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, GenericStringArray,
+    OffsetSizeTrait, PrimitiveArray, StringArray, cast::AsArray,
 };
 use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
@@ -990,6 +990,23 @@ fn from_string<O: OffsetSizeTrait>(
                 }
             })?;
             Ok(Arc::new(out.with_timezone_opt(zone.clone())))
+        }
+        DataType::Boolean => {
+            // Spark's `StringUtils.isTrueString` / `isFalseString` on the
+            // trimmed, lower-cased text.
+            let flags = map_rows::<Int8Type>(s, |i| {
+                let t = s
+                    .value(i)
+                    .trim_matches(|c: char| c.is_whitespace() || c.is_control());
+                let t = t.to_ascii_lowercase();
+                match t.as_str() {
+                    "t" | "true" | "y" | "yes" | "1" => Ok(Some(1)),
+                    "f" | "false" | "n" | "no" | "0" => Ok(Some(0)),
+                    _ => fail(mode, None, || invalid(i)),
+                }
+            })?;
+            let out: BooleanArray = flags.iter().map(|v| v.map(|x| x != 0)).collect();
+            Ok(Arc::new(out))
         }
         _ => Err(KernelError::unsupported(format!(
             "CAST from STRING to {to_name}"
