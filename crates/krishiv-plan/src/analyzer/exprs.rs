@@ -2195,6 +2195,17 @@ impl Resolver<'_> {
                 // built-in: a qualified session UDF named `typeof` runs
                 // the UDF.
                 let is_typeof = is_builtin_entry(&entry) && entry.id.name() == "typeof";
+                let session_value_early = if is_builtin_entry(&entry) {
+                    match entry.id.name() {
+                        "current_schema" | "current_database" => {
+                            Some(self.ctx.catalogs.current_namespace().join("."))
+                        }
+                        "current_path" => Some(super::current_path(&*self.ctx.catalogs)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 let plain_args: Vec<Arc<Expr>> =
                     call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
                 let zipped = !zip_names.is_empty();
@@ -2229,7 +2240,16 @@ impl Resolver<'_> {
                 // `typeof(x)` is Spark's `RuntimeReplaceable`: the analyzer
                 // replaces it with the type name literal, keeping the call
                 // as the shown form (the executor gets no type logic).
-                let (expr, shown) = if is_typeof {
+                // `current_schema()`, `current_database()` and `current_path()`
+                // read the session: the analyzer replaces them with the
+                // value, as the query sees it.
+                let session_value = session_value_early;
+                let (expr, shown) = if let Some(value) = session_value {
+                    (
+                        rebuilt(ExprNode::Literal(Literal::String(value))),
+                        Some(expr),
+                    )
+                } else if is_typeof {
                     let name = call_kids
                         .first()
                         .and_then(|k| k.ty.data_type.clone())

@@ -1045,6 +1045,10 @@ impl Session {
             Arc::clone(&self.state.cache),
             Arc::clone(&files),
             scans,
+            &config
+                .get(&krishiv_common::config::SQL_DEFAULT_PATH)
+                .map(ToString::to_string)
+                .unwrap_or_default(),
         ));
         let resolution = {
             let values = conf_values(&config, &ResolutionConf::KEYS);
@@ -1064,19 +1068,24 @@ impl Session {
                 ..(*variables).clone()
             })
         };
-        let sql_functions = Arc::new(QueryFunctions::new(
-            Arc::clone(&self.state.functions),
-            self.state.sql_functions.snapshot(),
-            Arc::clone(&self.state.catalog),
-            resolution.case_sensitive,
-            Some(crate::sql_functions::ViewSource {
-                parser,
-                next_source: {
-                    let state = Arc::clone(&self.state);
-                    Arc::new(move || SourceId(state.sql_sources.fetch_add(1, Ordering::Relaxed)))
-                },
-            }),
-        ));
+        let sql_functions = Arc::new(
+            QueryFunctions::new(
+                Arc::clone(&self.state.functions),
+                self.state.sql_functions.snapshot(),
+                Arc::clone(&self.state.catalog),
+                resolution.case_sensitive,
+                Some(crate::sql_functions::ViewSource {
+                    parser,
+                    next_source: {
+                        let state = Arc::clone(&self.state);
+                        Arc::new(move || {
+                            SourceId(state.sql_sources.fetch_add(1, Ordering::Relaxed))
+                        })
+                    },
+                }),
+            )
+            .with_path(catalog.sql_path_snapshot()),
+        );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
         let analysis = AnalysisContext {
@@ -1135,6 +1144,7 @@ impl Session {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
+                path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
             }),
         )?;

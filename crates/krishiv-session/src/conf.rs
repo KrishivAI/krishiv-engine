@@ -4,7 +4,9 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{Config, SESSION_TIME_ZONE, Scope, ValueType, lookup};
-use krishiv_common::error::{CannotModifyStaticConfig, InvalidConfValueTimeZone, KrishivError};
+use krishiv_common::error::{
+    CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
+};
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
 
@@ -292,6 +294,18 @@ impl RuntimeConf {
             return Err(InvalidConfValueTimeZone {
                 conf_name: key.to_owned(),
                 conf_value: value.to_owned(),
+            }
+            .into());
+        }
+        if lookup(key).is_some_and(|e| std::ptr::eq(e, &krishiv_common::config::SQL_DEFAULT_PATH))
+            && krishiv_common::sql_path::parse_conf(value).is_none()
+        {
+            return Err(InvalidConfValueRequirement {
+                conf_name: key.to_owned(),
+                conf_value: value.to_owned(),
+                conf_requirement: "The value must be empty or a comma-separated SET PATH \
+                    element list (same grammar as SET PATH, except PATH is not allowed)."
+                    .to_owned(),
             }
             .into());
         }

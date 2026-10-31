@@ -91,6 +91,7 @@ __all__ = [
     "current_catalog",
     "current_database",
     "current_date",
+    "current_path",
     "current_schema",
     "current_timestamp",
     "current_timezone",
@@ -680,6 +681,11 @@ def current_database() -> Column:
 def current_date() -> Column:
     """Calls the registry function ``current_date``."""
     return _call("current_date")
+
+
+def current_path() -> Column:
+    """Calls the registry function ``current_path``."""
+    return _call("current_path")
 
 
 def current_schema() -> Column:
