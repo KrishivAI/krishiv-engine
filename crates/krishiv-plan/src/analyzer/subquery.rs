@@ -47,6 +47,10 @@ use krishiv_common::stack::{STEP, on_big_stack};
 
 type R<T> = Result<T, AnalysisError>;
 
+/// A subquery's input with its correlation lifted out: the plan, the keys it
+/// groups by, and the outer expressions they match.
+type Lifted = (Arc<LogicalPlan>, Vec<Arc<Expr>>, Vec<Arc<Expr>>);
+
 /// Rewrites the subqueries of `root`; `next_id` is one past every
 /// attribute id in use and is kept so.
 pub(super) fn rewrite(root: &Arc<LogicalPlan>, next_id: &mut u64) -> R<Arc<LogicalPlan>> {
@@ -104,6 +108,21 @@ impl Renumber {
         } else {
             id
         }
+    }
+
+    /// `e`, a predicate of a branch's attributes and of outer references,
+    /// reading the outer references as the renumbered domain columns.
+    fn outer(self, e: &Arc<Expr>) -> Arc<Expr> {
+        let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
+            Ok::<_, std::convert::Infallible>(match &x.node {
+                ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
+                    let id = self.id(c.id);
+                    col_expr(&BoundColumn { id, ..c.clone() }, x.origin)
+                }
+                _ => x,
+            })
+        });
+        out.unwrap_or_else(|never| match never {})
     }
 
     /// `e`, an expression of the right side's attributes and of the outer
@@ -644,7 +663,17 @@ impl Rewriter {
                 plain.push(c);
                 continue;
             }
-            let ids = outer_ids(&c);
+            let mut ids = outer_ids(&c);
+            // An `IN` value reads the side it belongs to, too.
+            for s in subqueries(&c) {
+                if let ExprNode::Subquery {
+                    kind: SubqueryKind::In(values),
+                    ..
+                } = &s.node
+                {
+                    ids.extend(values.iter().flat_map(inner_columns).map(|c| c.id));
+                }
+            }
             if ids.iter().all(|i| left_ids.contains(i)) {
                 on_left.push(c);
             } else if ids.iter().all(|i| right_ids.contains(i)) {
@@ -971,6 +1000,22 @@ impl Rewriter {
                     plan.origin,
                 ))
             }
+            // Spark rejects a correlated reference in a nested aggregate.
+            PlanNode::Aggregate { aggregates, .. }
+                if aggregates.iter().any(|e| has_outer(Node::Expr(e))) =>
+            {
+                let outer: Vec<String> = aggregates
+                    .iter()
+                    .filter(|e| has_outer(Node::Expr(e)))
+                    .map(|e| format!("\"{}\"", pretty(e, None)))
+                    .collect();
+                Err(AnalysisError::new(
+                    UnsupportedSubqueryExpressionCategoryCorrelatedReference {
+                        sql_exprs: outer.join(", "),
+                    },
+                    plan.origin,
+                ))
+            }
             _ => Err(unsupported(
                 "outer references below a join, aggregate, limit or set operation",
                 plan.origin,
@@ -1098,6 +1143,20 @@ impl Rewriter {
                 plan.origin,
             )
         })?;
+        if let Some(union) = under_union(input) {
+            let (inner, inner_keys, outer_keys) = self.domain_union(&base, input, union)?;
+            return self.scalar_join(
+                base,
+                plan,
+                item,
+                value,
+                empty,
+                inner,
+                &inner_keys,
+                &outer_keys,
+                true,
+            );
+        }
         let (inner, corr) = self.pull(input, true)?;
         // Each correlated predicate is `inner = outer`: a grouping key.
         let mut inner_keys = Vec::new();
@@ -1125,11 +1184,49 @@ impl Rewriter {
             inner_keys.push(Arc::clone(i));
             outer_keys.push(Arc::clone(o));
         }
+        self.scalar_join(
+            base,
+            plan,
+            item,
+            value,
+            empty,
+            inner,
+            &inner_keys,
+            &outer_keys,
+            false,
+        )
+    }
+
+    /// The left outer join of `base` with the aggregate of `inner` (the
+    /// subquery's input, its correlation lifted out) grouped by
+    /// `inner_keys`, matched to `outer_keys`; and the value it reads.
+    #[expect(clippy::too_many_arguments, reason = "the pieces `scalar` has built")]
+    fn scalar_join(
+        &mut self,
+        base: Arc<LogicalPlan>,
+        plan: &Arc<LogicalPlan>,
+        item: &Arc<Expr>,
+        value: &BoundColumn,
+        empty: Option<Literal>,
+        inner: Arc<LogicalPlan>,
+        inner_keys: &[Arc<Expr>],
+        outer_keys: &[Arc<Expr>],
+        null_safe: bool,
+    ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        // Over a union the keys are the domain of outer values, NULL
+        // included, and a NULL outer value owns the NULL group (Spark joins
+        // with `<=>`); a lifted `inner = outer` leaves no NULL group, and
+        // the inner NULL keys must not match.
+        let op = if null_safe {
+            Builtin::EqNullSafe
+        } else {
+            Builtin::Eq
+        };
         // The aggregate outputs its value and its keys.
         let mut aggregates = vec![Arc::clone(item)];
         let mut key_cols: Vec<BoundColumn> = Vec::new();
         let mut grouping: Vec<Arc<Expr>> = Vec::new();
-        for k in &inner_keys {
+        for k in inner_keys {
             let col = match &k.node {
                 // A column met again (`u.a = t.a AND u.a = t.x`) is one key:
                 // the aggregate outputs each attribute once.
@@ -1176,7 +1273,7 @@ impl Rewriter {
             .zip(&key_cols)
             .map(|(o, k)| {
                 let k = renumber.inner(&col_expr(k, Origin::UNKNOWN));
-                boolean(Builtin::Eq, vec![renumber.inner(o), k])
+                boolean(op, vec![renumber.inner(o), k])
             })
             .collect();
         let join = PlanNode::Join {
@@ -1208,6 +1305,155 @@ impl Rewriter {
         Ok((node(join, Origin::UNKNOWN), read))
     }
 
+    /// The input of a correlated scalar aggregate that is a `UNION ALL`
+    /// (`union`, under `input`'s aliases), decorrelated through the domain
+    /// of the outer columns it reads: each branch joins the distinct
+    /// values of those columns on its correlated predicates and outputs
+    /// them, so the aggregate groups by them. Returns the new input, the
+    /// grouping keys and the outer columns they match.
+    fn domain_union(
+        &mut self,
+        base: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        union: &Arc<LogicalPlan>,
+    ) -> R<Lifted> {
+        let PlanNode::Union {
+            inputs,
+            by_name: false,
+            ..
+        } = &union.node
+        else {
+            return Err(unsupported("a set operation by name", union.origin));
+        };
+        let mut pulled = Vec::new();
+        let mut domain: Vec<BoundColumn> = Vec::new();
+        for branch in inputs {
+            // A select list that reads the outer query reads the domain.
+            let (inner, corr, select) = match &branch.node {
+                PlanNode::Project { input, exprs }
+                    if exprs.iter().any(|e| has_outer(Node::Expr(e))) =>
+                {
+                    let (inner, corr) = self.pull(input, true)?;
+                    (inner, corr, Some(exprs.clone()))
+                }
+                _ => {
+                    let (inner, corr) = self.pull(branch, true)?;
+                    (inner, corr, None)
+                }
+            };
+            for c in corr.iter().chain(select.iter().flatten()) {
+                for col in outer_columns(c) {
+                    if !domain.iter().any(|d| d.id == col.id) {
+                        domain.push(col);
+                    }
+                }
+            }
+            pulled.push((branch, inner, corr, select));
+        }
+        if domain.is_empty() {
+            return Err(unsupported(
+                "a set operation without correlation",
+                union.origin,
+            ));
+        }
+        let keys = columns(Arc::clone(base), &domain);
+        let exprs: Vec<_> = domain
+            .iter()
+            .map(|c| col_expr(c, Origin::UNKNOWN))
+            .collect();
+        let distinct = node(
+            PlanNode::Aggregate {
+                input: keys,
+                grouping: Grouping::GroupBy(exprs.clone()),
+                aggregates: exprs,
+            },
+            Origin::UNKNOWN,
+        );
+        let mut branches = Vec::new();
+        let mut first_domain = Vec::new();
+        for (i, (branch, inner, corr, select)) in pulled.into_iter().enumerate() {
+            // The first branch outputs the domain under its own ids, the
+            // others under fresh ones; no branch's join shares an id.
+            let (right, renumber) = if i == 0 {
+                self.disjoint(&inner, Arc::clone(&distinct))?
+            } else {
+                self.shifted(Arc::clone(&distinct))?
+            };
+            let cond = corr.iter().map(|c| renumber.outer(c)).collect::<Vec<_>>();
+            let join = node(
+                PlanNode::Join {
+                    left: inner,
+                    right,
+                    kind: JoinKind::Inner,
+                    condition: and_all(cond).map_or(JoinCondition::None, JoinCondition::On),
+                },
+                Origin::UNKNOWN,
+            );
+            let out = output(branch)?;
+            let dom: Vec<BoundColumn> = domain
+                .iter()
+                .map(|c| BoundColumn {
+                    id: renumber.id(c.id),
+                    ..c.clone()
+                })
+                .collect();
+            if i == 0 {
+                first_domain.clone_from(&dom);
+            }
+            let exprs: Vec<Arc<Expr>> = match select {
+                Some(select) => select.iter().map(|e| renumber.outer(e)).collect(),
+                None => out.iter().map(|c| col_expr(c, Origin::UNKNOWN)).collect(),
+            };
+            let exprs = exprs
+                .into_iter()
+                .chain(dom.iter().map(|c| col_expr(c, Origin::UNKNOWN)))
+                .collect();
+            branches.push(node(
+                PlanNode::Project { input: join, exprs },
+                Origin::UNKNOWN,
+            ));
+        }
+        let new_union = node(
+            PlanNode::Union {
+                inputs: branches,
+                by_name: false,
+                allow_missing_columns: false,
+            },
+            union.origin,
+        );
+        let inner_keys: Vec<Arc<Expr>> = first_domain
+            .iter()
+            .map(|c| col_expr(c, Origin::UNKNOWN))
+            .collect();
+        let inner = rewrap(input, &new_union, &inner_keys);
+        let outer_keys = domain
+            .iter()
+            .map(|c| {
+                Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(
+                    c.clone(),
+                ))))
+            })
+            .collect();
+        Ok((inner, inner_keys, outer_keys))
+    }
+
+    /// `right` renumbered to fresh attribute ids whatever it overlaps.
+    fn shifted(&mut self, right: Arc<LogicalPlan>) -> R<(Arc<LogicalPlan>, Renumber)> {
+        let Some((lo, hi)) = hull(&right) else {
+            return Ok((right, Renumber::NONE));
+        };
+        let offset = self.next_id.saturating_sub(lo);
+        if hi.checked_add(offset).is_none_or(|top| top > MAX_ID) {
+            return Err(AnalysisError::new(FailedToParseTooComplex {}, right.origin));
+        }
+        self.next_id += hi - lo + 1;
+        let shift = PlanNode::Shift {
+            input: right,
+            offset,
+        };
+        Ok((node(shift, Origin::UNKNOWN), Renumber { lo, hi, offset }))
+    }
+
     fn fresh(&mut self) -> AttrId {
         self.next_id += 1;
         AttrId(self.next_id - 1)
@@ -1227,6 +1473,96 @@ fn outer_ids(e: &Arc<Expr>) -> HashSet<AttrId> {
         ControlFlow::<()>::Continue(())
     });
     ids
+}
+
+/// The union under `input`'s plain aliases and distinct aggregates (`UNION`
+/// without `ALL`), if that is what `input` is.
+fn under_union(input: &Arc<LogicalPlan>) -> Option<&Arc<LogicalPlan>> {
+    match &input.node {
+        PlanNode::Union { .. } => Some(input),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => under_union(input),
+        PlanNode::Aggregate {
+            input: below,
+            grouping: Grouping::GroupBy(keys),
+            aggregates,
+        } if is_distinct(below, keys, aggregates) => under_union(below),
+        _ => None,
+    }
+}
+
+/// Whether an aggregate of `below` with these keys and outputs is
+/// `SELECT DISTINCT`: it groups by every column and outputs them.
+fn is_distinct(below: &Arc<LogicalPlan>, keys: &[Arc<Expr>], aggregates: &[Arc<Expr>]) -> bool {
+    let column = |e: &Arc<Expr>| match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+        _ => None,
+    };
+    let Some(out) = below.resolved_output() else {
+        return false;
+    };
+    keys.len() == out.len()
+        && aggregates.len() == out.len()
+        && out
+            .iter()
+            .zip(keys.iter().zip(aggregates))
+            .all(|(o, (k, a))| column(k) == Some(o.id) && column(a) == Some(o.id))
+}
+
+/// `input` with the union under it replaced; the distinct aggregates on
+/// the way also group by the `extra` columns.
+fn rewrap(
+    input: &Arc<LogicalPlan>,
+    union: &Arc<LogicalPlan>,
+    extra: &[Arc<Expr>],
+) -> Arc<LogicalPlan> {
+    match &input.node {
+        PlanNode::SubqueryAlias {
+            input: below,
+            alias,
+            columns,
+        } => node(
+            PlanNode::SubqueryAlias {
+                input: rewrap(below, union, extra),
+                alias: alias.clone(),
+                columns: columns.clone(),
+            },
+            input.origin,
+        ),
+        PlanNode::Aggregate {
+            input: below,
+            grouping: Grouping::GroupBy(keys),
+            aggregates,
+        } => {
+            let mut keys = keys.clone();
+            keys.extend(extra.iter().cloned());
+            let mut aggregates = aggregates.clone();
+            aggregates.extend(extra.iter().cloned());
+            node(
+                PlanNode::Aggregate {
+                    input: rewrap(below, union, extra),
+                    grouping: Grouping::GroupBy(keys),
+                    aggregates,
+                },
+                input.origin,
+            )
+        }
+        _ => Arc::clone(union),
+    }
+}
+
+/// The outer columns `e` reads.
+fn outer_columns(e: &Arc<Expr>) -> Vec<BoundColumn> {
+    let mut out: Vec<BoundColumn> = Vec::new();
+    let _ = visit_distinct(Node::Expr(e), |n| {
+        if let Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &x.node
+            && !out.iter().any(|o| o.id == c.id)
+        {
+            out.push(c.clone());
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    out
 }
 
 /// The columns (not outer references) `e` reads.

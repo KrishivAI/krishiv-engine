@@ -169,3 +169,55 @@ fn element_at_reads_a_map_by_key() {
         .is_err()
     );
 }
+
+#[test]
+fn subscript_counts_from_zero_and_errors_out_of_range_under_ansi() {
+    let a = lists(&[Some(ONE_TWO_THREE), None, Some(ONE_TWO_THREE)]);
+    let i = idx(&[Some(0), Some(0), None]);
+    let out = run("__subscript", &BindOptions::new(), &[&a, &i]).unwrap();
+    assert_eq!(ints(&out), [Some(1), None, None]);
+    // Past the end or negative: INVALID_ARRAY_INDEX with ANSI, NULL without.
+    for bad in [3, -1] {
+        let a = lists(&[Some(ONE_TWO_THREE)]);
+        let err = run(
+            "__subscript",
+            &BindOptions::new(),
+            &[&a, &idx(&[Some(bad)])],
+        )
+        .unwrap_err();
+        assert!(err.starts_with("INVALID_ARRAY_INDEX"), "{err}");
+        assert!(
+            !err.starts_with("INVALID_ARRAY_INDEX_IN_ELEMENT_AT"),
+            "{err}"
+        );
+        let legacy = BindOptions::new().with_ansi(false);
+        let out = run("__subscript", &legacy, &[&a, &idx(&[Some(bad)])]).unwrap();
+        assert_eq!(ints(&out), [None]);
+    }
+}
+
+#[test]
+fn subscript_reads_a_map_by_key_and_misses_are_null() {
+    let mut b = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    b.keys().append_value("a");
+    b.values().append_value("b");
+    b.append(true).unwrap();
+    b.keys().append_value("a");
+    b.values().append_value("b");
+    b.append(true).unwrap();
+    let map: ArrayRef = Arc::new(b.finish());
+    let key: ArrayRef = Arc::new(arrow_array::StringArray::from(vec![Some("a"), Some("z")]));
+    for ansi in [true, false] {
+        let opts = BindOptions::new().with_ansi(ansi);
+        let out = run("__subscript", &opts, &[&map, &key]).unwrap();
+        let out = out.as_string::<i32>();
+        assert_eq!([out.is_null(0), out.is_null(1)], [false, true]);
+        assert_eq!(out.value(0), "b");
+    }
+    // A key of another type than the map's does not bind.
+    let wrong = [
+        map.data_type().clone().into(),
+        BindArg::from(DataType::Int32),
+    ];
+    assert!(bind_scalar("__subscript", &wrong, &BindOptions::new()).is_err());
+}

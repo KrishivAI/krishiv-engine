@@ -532,6 +532,9 @@ impl Lowerer {
     fn pipe(&mut self, p: &Pipe) -> R<LogicalPlan> {
         let mut plan = self.deeper(|l| l.body(&p.input))?;
         for op in &p.ops {
+            // Spark's `PipeOperator(left)`: the operator reads what the one
+            // before it output, never a column that one dropped.
+            plan = self.node(PlanNode::PipeOperator { input: arc(plan) }, op.span);
             plan = self.pipe_op(plan, op)?;
         }
         Ok(plan)
@@ -2105,7 +2108,10 @@ impl Lowerer {
             ExprKind::Parameter(_) | ExprKind::NamedParameter(_) => {
                 return Err(unsupported("parameter markers", sp));
             }
-            ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
+            ExprKind::Subscript(base, index) => {
+                let args = vec![self.arg(base)?, self.arg(index)?];
+                self.call("__subscript", args, sp)
+            }
             ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
             ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),

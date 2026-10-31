@@ -284,6 +284,12 @@ pub struct ResolutionConf {
     /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`: duplicate map keys keep
     /// the value inserted last (folded map calls depend on it).
     pub map_key_dedup_last_win: bool,
+    /// `spark.sql.legacy.javaCharsets`: `encode` and `decode` take Java's
+    /// names.
+    pub legacy_java_charsets: bool,
+    /// `spark.sql.legacy.codingErrorAction`: `encode` and `decode` replace
+    /// what they cannot map.
+    pub legacy_coding_error_action: bool,
     /// `spark.sql.runSQLOnFiles`: `` format.`path` `` reads files.
     pub run_sql_on_files: bool,
     /// `spark.sql.legacy.percentileDiscCalculation`: `percentile_disc`
@@ -331,6 +337,8 @@ impl Default for ResolutionConf {
             lateral_column_alias: true,
             decimal_precision_loss: true,
             map_key_dedup_last_win: false,
+            legacy_java_charsets: false,
+            legacy_coding_error_action: false,
             run_sql_on_files: true,
             legacy_percentile_disc: false,
             legacy_negative_index_in_array_insert: false,
@@ -347,7 +355,7 @@ impl Default for ResolutionConf {
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 18] = [
+    pub const KEYS: [&'static str; 20] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -365,6 +373,8 @@ impl ResolutionConf {
         "spark.sql.legacy.allowStarWithSingleTableIdentifierInCount",
         "spark.sql.legacy.allowUdfParameterToShadowParameterlessFunction",
         "spark.sql.legacy.timeParserPolicy",
+        "spark.sql.legacy.javaCharsets",
+        "spark.sql.legacy.codingErrorAction",
         "spark.sql.legacy.negativeIndexInArrayInsert",
     ];
 
@@ -417,7 +427,9 @@ impl ResolutionConf {
                 }),
             legacy_time_parser: conf(Self::KEYS[16])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
-            legacy_negative_index_in_array_insert: on(Self::KEYS[17]),
+            legacy_java_charsets: on(Self::KEYS[17]),
+            legacy_coding_error_action: on(Self::KEYS[18]),
+            legacy_negative_index_in_array_insert: on(Self::KEYS[19]),
         }
     }
 }
@@ -504,6 +516,8 @@ impl ContextFingerprint {
             c.lateral_column_alias,
             c.decimal_precision_loss,
             c.map_key_dedup_last_win,
+            c.legacy_java_charsets,
+            c.legacy_coding_error_action,
             c.run_sql_on_files,
             c.timestamp_ntz,
             c.legacy_time_parser,
