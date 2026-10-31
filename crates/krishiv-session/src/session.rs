@@ -95,6 +95,10 @@ pub type RecordBatchStream = BoxStream<'static, Result<RecordBatch, KrishivError
 #[derive(Clone)]
 pub struct Session {
     pub(crate) state: Arc<SessionState>,
+    /// The local variables of the SQL script this handle runs, outermost frame first. Empty for a
+    /// session a user holds: only the handle a script's statements run on has frames, so no other
+    /// query on the session ever sees them (`locals.rs`).
+    pub(crate) locals: Arc<[krishiv_plan::analyzer::LocalFrame]>,
 }
 
 impl fmt::Debug for Session {
@@ -316,6 +320,7 @@ impl SessionBuilder {
             None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
         };
         Ok(Session {
+            locals: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
                 catalog: Arc::new(SessionCatalog::default()),
@@ -546,12 +551,56 @@ impl Session {
             Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
+            Statement::Script(c) => {
+                let off =
+                    crate::conf::get(&self.state.conf.snapshot(), "spark.sql.scripting.enabled")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("false"));
+                if off {
+                    return Err(krishiv_common::error::UnsupportedFeatureSqlScripting {
+                        sql_scripting_enabled: "\"spark.sql.scripting.enabled\"".to_owned(),
+                    }
+                    .into());
+                }
+                Box::pin(self.exec_script(&c, query, redacted)).await
+            }
             Statement::Analyze(a) => self.exec_analyze(&a).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
-            Statement::Delete(d) => self.exec_row_level_change(&d.table, "DELETE"),
-            Statement::Update(u) => self.exec_row_level_change(&u.table, "UPDATE TABLE"),
-            Statement::Merge(m) => self.exec_row_level_change(&m.target, "MERGE INTO TABLE"),
+            Statement::Delete(d) => {
+                let changes = crate::table_commands::RowChanges {
+                    targets: &[],
+                    values: &[],
+                    condition: d.where_clause.as_ref(),
+                };
+                self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
+                    .await
+            }
+            Statement::Update(u) => {
+                let targets: Vec<_> = u.assignments.iter().map(|a| &a.target).collect();
+                let values: Vec<_> = u.assignments.iter().map(|a| &a.value).collect();
+                let changes = crate::table_commands::RowChanges {
+                    targets: &targets,
+                    values: &values,
+                    condition: u.where_clause.as_ref(),
+                };
+                self.exec_row_level_change(
+                    &u.table,
+                    u.alias.as_ref(),
+                    "UPDATE TABLE",
+                    &changes,
+                    query,
+                )
+                .await
+            }
+            Statement::Merge(m) => {
+                let changes = crate::table_commands::RowChanges {
+                    targets: &[],
+                    values: &[],
+                    condition: None,
+                };
+                self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
+                    .await
+            }
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -1003,6 +1052,14 @@ impl Session {
         // One snapshot of the variables per query, like the configuration
         // snapshot: every reference in the query reads the same values.
         let variables = self.state.variables.snapshot();
+        let variables = if self.locals.is_empty() {
+            variables
+        } else {
+            Arc::new(krishiv_plan::analyzer::VariableSnapshot {
+                locals: self.locals.to_vec(),
+                ..(*variables).clone()
+            })
+        };
         let sql_functions = Arc::new(QueryFunctions::new(
             Arc::clone(&self.state.functions),
             self.state.sql_functions.snapshot(),

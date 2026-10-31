@@ -19,8 +19,9 @@ use std::fmt;
 use krishiv_plan::analyzer::Privilege;
 
 use crate::ast::{
-    AlterNamespaceAction, AlterTableAction, AlterViewAction, CacheKind, DdlName, DescribeKind,
-    ExplainMode, MergeSource, Query, SetVariableKind, ShowKind, Statement,
+    AlterNamespaceAction, AlterTableAction, AlterViewAction, CacheKind, Compound, DdlName,
+    DescribeKind, ExplainMode, HandlerBody, MergeSource, Query, ScriptStatement, SetVariableKind,
+    ShowKind, Statement,
 };
 
 /// What kind of effect a statement has.
@@ -104,6 +105,8 @@ pub fn classify(statement: &Statement) -> StatementClass {
             | ExplainMode::Cost
             | ExplainMode::Verbose => StatementClass::Read,
         },
+        // A script has the class of the strongest statement anywhere in it.
+        Statement::Script(c) => script_class(c),
         // The legacy view nodes are temporary views with a one-part name:
         // session-local, re-analyzed under the session's principal.
         Statement::Set(_)
@@ -251,7 +254,9 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
             }
             Vec::new()
         }
-        Statement::Update(_) | Statement::ExecuteImmediate(_) => return None,
+        Statement::Update(_) | Statement::ExecuteImmediate(_) | Statement::Script(_) => {
+            return None;
+        }
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::DropView(_)
@@ -356,8 +361,15 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             .map_or(TargetObject::CurrentNamespace, TargetObject::Namespace);
         vec![t(object, Privilege::Select)]
     }
+    if let Statement::Script(c) = statement {
+        // What any statement of the script writes, creates or drops, asked up front.
+        let mut out = Vec::new();
+        script_leaves(c, &mut |leaf| out.extend(statement_targets(leaf)));
+        return out;
+    }
     match statement {
         Statement::Query(_)
+        | Statement::Script(_)
         | Statement::Set(_)
         | Statement::Reset(_)
         | Statement::Use(_)
@@ -537,4 +549,105 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         },
         Statement::Refresh(_) | Statement::AddResource(_) => vec![t(O::Cluster, Monitor)],
     }
+}
+
+/// Calls `f` on every SQL statement anywhere in `c`: in nested compounds, branches, loops and
+/// handler bodies.
+pub(crate) fn script_leaves<'a>(c: &'a Compound, f: &mut dyn FnMut(&'a Statement)) {
+    fn list<'a>(items: &'a [ScriptStatement], f: &mut dyn FnMut(&'a Statement)) {
+        for item in items {
+            statement(item, f);
+        }
+    }
+    fn statement<'a>(item: &'a ScriptStatement, f: &mut dyn FnMut(&'a Statement)) {
+        match item {
+            ScriptStatement::Sql(s) => f(s),
+            ScriptStatement::Handler(h) => match &h.body {
+                HandlerBody::Compound(c) => script_leaves(c, f),
+                HandlerBody::Sql(s) => f(s),
+                HandlerBody::Assign(_) => {}
+            },
+            ScriptStatement::If(i) => {
+                for b in &i.branches {
+                    list(&b.body, f);
+                }
+                if let Some(e) = &i.else_body {
+                    list(e, f);
+                }
+            }
+            ScriptStatement::Case(c) => {
+                for b in &c.branches {
+                    list(&b.body, f);
+                }
+                if let Some(e) = &c.else_body {
+                    list(e, f);
+                }
+            }
+            ScriptStatement::While(w) => list(&w.body, f),
+            ScriptStatement::Repeat(r) => list(&r.body, f),
+            ScriptStatement::Loop(l) => list(&l.body, f),
+            ScriptStatement::For(l) => list(&l.body, f),
+            ScriptStatement::Compound(c) => script_leaves(c, f),
+            ScriptStatement::Declare(_)
+            | ScriptStatement::Condition(_)
+            | ScriptStatement::Assign(_)
+            | ScriptStatement::Leave(_)
+            | ScriptStatement::Iterate(_)
+            | ScriptStatement::Cursor(_) => {}
+        }
+    }
+    list(&c.body, f);
+}
+
+/// The class of a script: the strongest of its statements, by the order `Admin > Ddl > Write >
+/// Session > Read`. That is not [`StatementClass`]'s derived order (`Read < Write < Ddl < Session <
+/// Admin`): a script that declares a variable and runs an `INSERT` must read as a write, and a
+/// surface that admits only `Read` and `Session` statements must not admit it.
+fn script_class(c: &Compound) -> StatementClass {
+    const fn strength(class: StatementClass) -> u8 {
+        match class {
+            StatementClass::Read => 0,
+            StatementClass::Session => 1,
+            StatementClass::Write => 2,
+            StatementClass::Ddl => 3,
+            StatementClass::Admin => 4,
+        }
+    }
+    let mut class = StatementClass::Read;
+    script_leaves(c, &mut |leaf| {
+        let leaf = classify(leaf);
+        if strength(leaf) > strength(class) {
+            class = leaf;
+        }
+    });
+    // Declarations and assignments are session state.
+    if has_session_items(&c.body) && strength(class) < strength(StatementClass::Session) {
+        class = StatementClass::Session;
+    }
+    class
+}
+
+/// Whether a declaration or an assignment stands anywhere in `items`.
+fn has_session_items(items: &[ScriptStatement]) -> bool {
+    items.iter().any(|item| match item {
+        ScriptStatement::Declare(_)
+        | ScriptStatement::Condition(_)
+        | ScriptStatement::Handler(_)
+        | ScriptStatement::Assign(_)
+        | ScriptStatement::Cursor(_) => true,
+        ScriptStatement::Compound(c) => has_session_items(&c.body),
+        ScriptStatement::If(i) => {
+            i.branches.iter().any(|b| has_session_items(&b.body))
+                || i.else_body.as_deref().is_some_and(has_session_items)
+        }
+        ScriptStatement::Case(c) => {
+            c.branches.iter().any(|b| has_session_items(&b.body))
+                || c.else_body.as_deref().is_some_and(has_session_items)
+        }
+        ScriptStatement::While(w) => has_session_items(&w.body),
+        ScriptStatement::Repeat(r) => has_session_items(&r.body),
+        ScriptStatement::Loop(l) => has_session_items(&l.body),
+        ScriptStatement::For(f) => has_session_items(&f.body),
+        ScriptStatement::Sql(_) | ScriptStatement::Leave(_) | ScriptStatement::Iterate(_) => false,
+    })
 }

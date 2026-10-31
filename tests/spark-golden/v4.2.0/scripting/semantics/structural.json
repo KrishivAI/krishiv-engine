@@ -1,0 +1,1523 @@
+{
+ "cases": [
+  {
+   "name": "labels_mismatch",
+   "statements": [
+    {
+     "error": {
+      "class": "LABELS_MISMATCH",
+      "exception": "SqlScriptingException",
+      "params": {
+       "beginLabel": "`a`",
+       "endLabel": "`b`"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); a: BEGIN SELECT 1; END b; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "end_label_without_begin_label",
+   "statements": [
+    {
+     "error": {
+      "class": "END_LABEL_WITHOUT_BEGIN_LABEL",
+      "exception": "SqlScriptingException",
+      "params": {
+       "endLabel": "`b`"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SELECT 1; END b; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "label_reuses_enclosing",
+   "statements": [
+    {
+     "error": {
+      "class": "LABEL_OR_FOR_VARIABLE_ALREADY_EXISTS",
+      "exception": "SqlScriptingException",
+      "params": {
+       "label": "`a`"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); a: BEGIN a: BEGIN SELECT 1; END a; END a; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "for_variable_reuses_label",
+   "statements": [
+    {
+     "error": {
+      "class": "LABEL_OR_FOR_VARIABLE_ALREADY_EXISTS",
+      "exception": "SqlScriptingException",
+      "params": {
+       "label": "`a`"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); a: BEGIN FOR a AS SELECT 1 AS x DO SELECT x; END FOR; END a; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "label_session_forbidden",
+   "statements": [
+    {
+     "error": {
+      "class": "LABEL_OR_FOR_VARIABLE_NAME_FORBIDDEN",
+      "exception": "SqlScriptingException",
+      "params": {
+       "label": "`session`"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); session: BEGIN SELECT 1; END session; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "label_system_forbidden",
+   "statements": [
+    {
+     "error": {
+      "class": "LABEL_OR_FOR_VARIABLE_NAME_FORBIDDEN",
+      "exception": "SqlScriptingException",
+      "params": {
+       "label": "`system`"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); system: BEGIN SELECT 1; END system; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "for_variable_session_forbidden",
+   "statements": [
+    {
+     "error": {
+      "class": "LABEL_OR_FOR_VARIABLE_NAME_FORBIDDEN",
+      "exception": "SqlScriptingException",
+      "params": {
+       "label": "`session`"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); FOR session AS SELECT 1 AS x DO SELECT x; END FOR; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "qualified_label",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'.'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); a.b: BEGIN SELECT 1; END a.b; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "leave_unknown_label",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
+      "exception": "SqlScriptingException",
+      "params": {
+       "labelName": "NOPE",
+       "statementType": "LEAVE"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); LEAVE nope; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "iterate_unknown_label",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
+      "exception": "SqlScriptingException",
+      "params": {
+       "labelName": "NOPE",
+       "statementType": "ITERATE"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); ITERATE nope; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "iterate_compound_label",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_LABEL_USAGE.ITERATE_IN_COMPOUND",
+      "exception": "SqlScriptingException",
+      "params": {
+       "labelName": "C"
+      },
+      "sqlstate": "42K0L"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); c: BEGIN ITERATE c; END c; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "declare_after_statement",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_VARIABLE_DECLARATION.ONLY_AT_BEGINNING",
+      "exception": "SqlScriptingException",
+      "params": {
+       "varName": "`x`"
+      },
+      "sqlstate": "42K0M"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SELECT 1; DECLARE x INT; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "declare_after_handler",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_VARIABLE_DECLARATION.ONLY_AT_BEGINNING",
+      "exception": "SqlScriptingException",
+      "params": {
+       "varName": "`x`"
+      },
+      "sqlstate": "42K0M"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; DECLARE x INT; SELECT 2; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "declare_in_if_body",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_VARIABLE_DECLARATION.NOT_ALLOWED_IN_SCOPE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "varName": "`x`"
+      },
+      "sqlstate": "42K0M"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); IF true THEN DECLARE x INT; SELECT 1; END IF; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "declare_in_while_body",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_VARIABLE_DECLARATION.NOT_ALLOWED_IN_SCOPE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "varName": "`x`"
+      },
+      "sqlstate": "42K0M"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); WHILE false DO DECLARE x INT; END WHILE; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "declare_qualified_local",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_VARIABLE_DECLARATION.QUALIFIED_LOCAL_VARIABLE",
+      "params": {
+       "varName": "`a`.`x`"
+      },
+      "sqlstate": "42K0M"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE a.x INT; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "declare_or_replace_local",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_VARIABLE_DECLARATION.REPLACE_LOCAL_VARIABLE",
+      "params": {
+       "varName": "`x`"
+      },
+      "sqlstate": "42K0M"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE OR REPLACE x INT; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_after_statement",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION",
+      "exception": "SqlScriptingException",
+      "params": {},
+      "sqlstate": "42K0Q"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SELECT 1; DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 2; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "divergence": {
+    "krishiv_expected": [
+     "error INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION (before execution; Spark 4.2 crashes with a Java NoSuchElementException)"
+    ],
+    "spark_actual_not_expected": [
+     {
+      "error": {
+       "java": "java.util.NoSuchElementException",
+       "message": "None.get"
+      },
+      "query": "BEGIN INSERT INTO s VALUES (1); IF true THEN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 2; SELECT 1; END IF; END;"
+     }
+    ]
+   },
+   "name": "handler_in_if_body",
+   "statements": [
+    {
+     "error": {
+      "java": "java.util.NoSuchElementException",
+      "message": "None.get"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); IF true THEN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 2; SELECT 1; END IF; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_unknown_condition",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_HANDLER_DECLARATION.CONDITION_NOT_FOUND",
+      "exception": "SqlScriptingException",
+      "params": {
+       "condition": "NO_SUCH_COND"
+      },
+      "sqlstate": "42K0Q"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR no_such_cond SELECT 2; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_sqlexception_combined",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_HANDLER_DECLARATION.INVALID_CONDITION_COMBINATION",
+      "exception": "SqlScriptingException",
+      "params": {},
+      "sqlstate": "42K0Q"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION, DIVIDE_BY_ZERO SELECT 2; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_notfound_combined",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_HANDLER_DECLARATION.INVALID_CONDITION_COMBINATION",
+      "exception": "SqlScriptingException",
+      "params": {},
+      "sqlstate": "42K0Q"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR NOT FOUND, SQLSTATE '22012' SELECT 2; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_sqlexception_notfound",
+   "statements": [
+    {
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION, NOT FOUND SELECT 2; SELECT 1; END; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<1:int>"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_duplicate_condition",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_HANDLER_DECLARATION.DUPLICATE_CONDITION_IN_HANDLER_DECLARATION",
+      "exception": "SqlScriptingException",
+      "params": {
+       "condition": "DIVIDE_BY_ZERO"
+      },
+      "sqlstate": "42K0Q"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO, DIVIDE_BY_ZERO SELECT 2; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_duplicate_sqlstate",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_HANDLER_DECLARATION.DUPLICATE_SQLSTATE_IN_HANDLER_DECLARATION",
+      "exception": "SqlScriptingException",
+      "params": {
+       "sqlState": "22012"
+      },
+      "sqlstate": "42K0Q"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '22012', SQLSTATE '22012' SELECT 2; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "two_handlers_same_condition",
+   "statements": [
+    {
+     "error": {
+      "class": "DUPLICATE_EXCEPTION_HANDLER.CONDITION",
+      "exception": "SqlScriptingException",
+      "params": {
+       "condition": "DIVIDE_BY_ZERO"
+      },
+      "sqlstate": "42734"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 2; DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 3; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "two_handlers_same_sqlstate",
+   "statements": [
+    {
+     "error": {
+      "class": "DUPLICATE_EXCEPTION_HANDLER.SQLSTATE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "sqlState": "22012"
+      },
+      "sqlstate": "42734"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '22012' SELECT 2; DECLARE EXIT HANDLER FOR SQLSTATE '22012' SELECT 3; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "two_handlers_sqlexception",
+   "statements": [
+    {
+     "error": {
+      "class": "DUPLICATE_EXCEPTION_HANDLER.CONDITION",
+      "exception": "SqlScriptingException",
+      "params": {
+       "condition": "SQLEXCEPTION"
+      },
+      "sqlstate": "42734"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 2; DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 3; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "condition_declared_twice",
+   "statements": [
+    {
+     "error": {
+      "class": "DUPLICATE_CONDITION_IN_SCOPE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "condition": "`C`"
+      },
+      "sqlstate": "42734"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE c CONDITION; DECLARE c CONDITION; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "divergence": {
+    "krishiv_expected": [
+     "error INVALID_ERROR_CONDITION_DECLARATION.NOT_AT_START_OF_COMPOUND_STATEMENT (before execution; Spark 4.2 crashes with a Java NoSuchElementException)"
+    ],
+    "spark_actual_not_expected": [
+     {
+      "error": {
+       "java": "java.util.NoSuchElementException",
+       "message": "None.get"
+      },
+      "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 2; DECLARE c CONDITION; SELECT 1; END; END;"
+     }
+    ]
+   },
+   "name": "condition_after_handler",
+   "statements": [
+    {
+     "error": {
+      "java": "java.util.NoSuchElementException",
+      "message": "None.get"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 2; DECLARE c CONDITION; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "condition_qualified_name",
+   "statements": [
+    {
+     "error": {
+      "class": "UNSUPPORTED_DATATYPE",
+      "params": {
+       "typeName": "\"CONDITION\""
+      },
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE a.c CONDITION; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "sqlstate_class_00",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_SQLSTATE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "sqlState": "00001"
+      },
+      "sqlstate": "428B3"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE c CONDITION FOR SQLSTATE '00001'; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "sqlstate_class_01",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_SQLSTATE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "sqlState": "01000"
+      },
+      "sqlstate": "428B3"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '01000' SELECT 2; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "sqlstate_class_xx",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_SQLSTATE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "sqlState": "XX000"
+      },
+      "sqlstate": "428B3"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE c CONDITION FOR SQLSTATE 'XX000'; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "sqlstate_too_short",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_SQLSTATE",
+      "exception": "SqlScriptingException",
+      "params": {
+       "sqlState": "1234"
+      },
+      "sqlstate": "428B3"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE c CONDITION FOR SQLSTATE '1234'; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "sqlstate_lowercase",
+   "statements": [
+    {
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE c CONDITION FOR SQLSTATE 'abc12'; SELECT 1; END; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<1:int>"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "sqlstate_valid_user",
+   "statements": [
+    {
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE c CONDITION FOR SQLSTATE '45000'; SELECT 1; END; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<1:int>"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "continue_handler",
+   "statements": [
+    {
+     "error": {
+      "class": "UNSUPPORTED_FEATURE.CONTINUE_EXCEPTION_HANDLER",
+      "exception": "SqlScriptingException",
+      "params": {},
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SELECT 2; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "cursor_declare",
+   "statements": [
+    {
+     "error": {
+      "class": "UNSUPPORTED_FEATURE.SQL_CURSOR",
+      "exception": "SqlScriptingException",
+      "params": {},
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE cur CURSOR FOR SELECT 1; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "cursor_open",
+   "statements": [
+    {
+     "error": {
+      "class": "UNSUPPORTED_FEATURE.SQL_CURSOR",
+      "exception": "SqlScriptingException",
+      "params": {},
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SELECT 1; OPEN cur; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "signal",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'SQLSTATE'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SIGNAL SQLSTATE '45000'; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "resignal",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "';'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION RESIGNAL; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "get_diagnostics",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'DIAGNOSTICS'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN GET DIAGNOSTICS x = ROW_COUNT; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "select_into",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'x'",
+       "hint": ": extra input 'x'"
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE x INT; SELECT 1 INTO x; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "handler_body_if",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'true'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION IF true THEN SELECT 2; END IF; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "variable_already_exists",
+   "statements": [
+    {
+     "error": {
+      "class": "VARIABLE_ALREADY_EXISTS",
+      "params": {
+       "variableName": "`<scope>`.`x`"
+      },
+      "sqlstate": "42723"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE x INT; DECLARE x INT; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "variable_already_exists_case",
+   "statements": [
+    {
+     "error": {
+      "class": "VARIABLE_ALREADY_EXISTS",
+      "params": {
+       "variableName": "`<scope>`.`x`"
+      },
+      "sqlstate": "42723"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE x INT; DECLARE X INT; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "variable_already_exists_one_declare",
+   "statements": [
+    {
+     "error": {
+      "class": "DUPLICATE_VARIABLE_NAME_INSIDE_DECLARE",
+      "params": {
+       "variableName": "`<scope>`.`a`"
+      },
+      "sqlstate": "42734"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE a, A INT; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "duplicate_assignments",
+   "statements": [
+    {
+     "error": {
+      "class": "DUPLICATE_ASSIGNMENTS",
+      "params": {
+       "nameList": "`a`"
+      },
+      "sqlstate": "42701"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE a INT DEFAULT 0; SET a = 1, a = 2; SELECT a; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "default_subquery",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_DEFAULT_VALUE.SUBQUERY_EXPRESSION",
+      "params": {
+       "colName": "`local`.`<scope>`.`x`",
+       "defaultValue": "(SELECT 1)",
+       "statement": "DECLARE VARIABLE"
+      },
+      "sqlstate": "42623"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE x INT DEFAULT (SELECT 1); SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "declare_no_type_no_default",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_SQL_SYNTAX.VARIABLE_TYPE_OR_DEFAULT_REQUIRED",
+      "params": {},
+      "sqlstate": "42000"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE x; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "drop_temporary_variable",
+   "statements": [
+    {
+     "error": {
+      "class": "UNSUPPORTED_FEATURE.SQL_SCRIPTING_DROP_TEMPORARY_VARIABLE",
+      "params": {},
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SELECT 1; DROP TEMPORARY VARIABLE v; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "set_config",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_VARIABLE",
+      "params": {
+       "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`<db>`]",
+       "variableName": "`spark`.`sql`.`ansi`.`enabled`"
+      },
+      "sqlstate": "42883"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SET spark.sql.ansi.enabled = false; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "set_bare",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "';'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SET; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "set_key",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "';'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SET spark.sql.ansi.enabled; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "set_time_zone",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'ZONE'",
+       "hint": ": missing EQ"
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SET TIME ZONE 'UTC'; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "reset",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "';'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN RESET; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "set_variable_keyword",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'x'",
+       "hint": ": extra input 'x'"
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN DECLARE x INT; SET VARIABLE x = 1; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "unresolved_variable_runtime",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_VARIABLE",
+      "params": {
+       "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`<db>`]",
+       "variableName": "`nope`"
+      },
+      "sqlstate": "42883"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SET nope = 1; SELECT 1; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "unresolved_column_runtime",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`nope`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN SELECT nope; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  },
+  {
+   "name": "explain_script_nested",
+   "statements": [
+    {
+     "error": {
+      "class": "PARSE_SYNTAX_ERROR",
+      "params": {
+       "error": "'BEGIN'",
+       "hint": ""
+      },
+      "sqlstate": "42601"
+     },
+     "query": "BEGIN INSERT INTO s VALUES (1); BEGIN EXPLAIN BEGIN SELECT 1; END; END; END;"
+    },
+    {
+     "query": "SELECT count(*) AS n FROM s;",
+     "rows": [
+      [
+       0
+      ]
+     ],
+     "schema": "struct<n:bigint>"
+    }
+   ]
+  }
+ ],
+ "file": "structural.sql",
+ "spark": "4.2.0"
+}

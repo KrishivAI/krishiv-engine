@@ -134,6 +134,8 @@ pub enum Statement {
     DropVariable(DropVariable),
     /// `EXECUTE IMMEDIATE query [INTO v, ...] [USING args]`.
     ExecuteImmediate(ExecuteImmediate),
+    /// A SQL script: `[NOT ATOMIC] BEGIN ... END`.
+    Script(Box<Compound>),
     /// `CREATE [OR REPLACE] [GLOBAL] [TEMPORARY] VIEW ...`: every view
     /// shape the legacy [`CreateView`] node cannot express (a permanent
     /// view, or a temporary view with a qualified or computed name, a
@@ -199,6 +201,7 @@ impl Statement {
             Self::SetVariable(s) => s.span,
             Self::DropVariable(d) => d.span,
             Self::ExecuteImmediate(e) => e.span,
+            Self::Script(c) => c.span,
             Self::CreatePermanentView(v) => v.span,
             Self::DropPermanentView(v) => v.span,
             Self::AlterTable(a) => a.span,
@@ -3612,4 +3615,230 @@ fn for_each_window_expr<'a>(window: &'a WindowRef, f: &mut impl FnMut(&'a Expr))
             }
         }
     }
+}
+
+/// A compound statement: `[label:] BEGIN [NOT ATOMIC] ... END [label]`. Declarations, handlers and
+/// statements are kept in source order; where each may stand is checked after parsing.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Compound {
+    /// The label before `BEGIN`.
+    pub label: Option<Ident>,
+    /// The label after `END`.
+    pub end_label: Option<Ident>,
+    /// Everything between `BEGIN` and `END`, in source order.
+    pub body: Vec<ScriptStatement>,
+    /// Source text, from `BEGIN` (or the label) to `END` (or its label).
+    pub span: Span,
+}
+
+/// One element of a script body.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScriptStatement {
+    /// Any SQL statement the parser accepts, except a script.
+    Sql(Box<Statement>),
+    /// `DECLARE [OR REPLACE] [VARIABLE] names [type] [DEFAULT expr]`, a local variable.
+    Declare(Box<DeclareVariable>),
+    /// `DECLARE name CONDITION [FOR SQLSTATE 's']`.
+    Condition(DeclareCondition),
+    /// `DECLARE {EXIT | CONTINUE} HANDLER FOR conditions body`.
+    Handler(Box<Handler>),
+    /// `SET name = expr [, ...]` or `SET (names) = (query)`: an assignment, never a configuration key.
+    Assign(SetVariable),
+    /// `IF ... END IF`.
+    If(Box<IfStatement>),
+    /// `CASE ... END CASE`.
+    Case(Box<CaseStatement>),
+    /// `[label:] WHILE cond DO ... END WHILE`.
+    While(Box<WhileStatement>),
+    /// `[label:] REPEAT ... UNTIL cond END REPEAT`.
+    Repeat(Box<RepeatStatement>),
+    /// `[label:] LOOP ... END LOOP`.
+    Loop(Box<LoopStatement>),
+    /// `[label:] FOR [var AS] query DO ... END FOR`.
+    For(Box<ForStatement>),
+    /// `LEAVE label`.
+    Leave(LabelJump),
+    /// `ITERATE label`.
+    Iterate(LabelJump),
+    /// A nested `BEGIN ... END`.
+    Compound(Box<Compound>),
+    /// `DECLARE ... CURSOR`, `OPEN`, `FETCH` or `CLOSE`: parsed so that the refusal comes from the
+    /// checks, as in Spark.
+    Cursor(Span),
+}
+
+impl ScriptStatement {
+    /// The source text of the element.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Sql(s) => s.span(),
+            Self::Declare(d) => d.span,
+            Self::Condition(c) => c.span,
+            Self::Handler(h) => h.span,
+            Self::Assign(a) => a.span,
+            Self::If(i) => i.span,
+            Self::Case(c) => c.span,
+            Self::While(w) => w.span,
+            Self::Repeat(r) => r.span,
+            Self::Loop(l) => l.span,
+            Self::For(f) => f.span,
+            Self::Leave(j) | Self::Iterate(j) => j.span,
+            Self::Compound(c) => c.span,
+            Self::Cursor(span) => *span,
+        }
+    }
+}
+
+/// `DECLARE name CONDITION [FOR SQLSTATE [VALUE] 's']`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeclareCondition {
+    /// The condition name (one part; a qualified name is a syntax error).
+    pub name: Ident,
+    /// The SQLSTATE text and where it is.
+    pub sqlstate: Option<(String, Span)>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `DECLARE {EXIT | CONTINUE} HANDLER FOR conditions body`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Handler {
+    /// `CONTINUE` was written (Spark 4.2 refuses it after parsing).
+    pub continue_handler: bool,
+    /// The conditions it handles.
+    pub conditions: Vec<HandlerCondition>,
+    /// What it runs.
+    pub body: HandlerBody,
+    /// Source text.
+    pub span: Span,
+}
+
+/// One condition of a [`Handler`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HandlerCondition {
+    /// `SQLEXCEPTION`.
+    SqlException(Span),
+    /// `NOT FOUND`.
+    NotFound(Span),
+    /// `SQLSTATE [VALUE] 's'`: the text and where it is.
+    SqlState(String, Span),
+    /// A declared condition or an error class.
+    Name(Ident),
+}
+
+/// What a [`Handler`] runs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HandlerBody {
+    /// `BEGIN ... END`.
+    Compound(Box<Compound>),
+    /// One SQL statement.
+    Sql(Box<Statement>),
+    /// `SET ...` as an assignment.
+    Assign(SetVariable),
+}
+
+/// `IF cond THEN ... [ELSEIF cond THEN ...]... [ELSE ...] END IF`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IfStatement {
+    /// The `IF` and `ELSEIF` branches, in order.
+    pub branches: Vec<ConditionalBranch>,
+    /// The `ELSE` body, if written.
+    pub else_body: Option<Vec<ScriptStatement>>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `cond THEN body` of an [`IfStatement`] or a searched [`CaseStatement`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConditionalBranch {
+    /// The condition (for a simple `CASE`, the value compared with the subject).
+    pub condition: Expr,
+    /// The statements it runs.
+    pub body: Vec<ScriptStatement>,
+}
+
+/// `CASE [subject] WHEN ... THEN ... [ELSE ...] END CASE`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CaseStatement {
+    /// The subject of a simple `CASE`; none for a searched one.
+    pub subject: Option<Expr>,
+    /// The `WHEN` branches, in order.
+    pub branches: Vec<ConditionalBranch>,
+    /// The `ELSE` body, if written.
+    pub else_body: Option<Vec<ScriptStatement>>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `[label:] WHILE cond DO ... END WHILE [label]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WhileStatement {
+    /// The label before `WHILE`.
+    pub label: Option<Ident>,
+    /// The label after `END WHILE`.
+    pub end_label: Option<Ident>,
+    /// The loop condition.
+    pub condition: Expr,
+    /// The body.
+    pub body: Vec<ScriptStatement>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `[label:] REPEAT ... UNTIL cond END REPEAT [label]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RepeatStatement {
+    /// The label before `REPEAT`.
+    pub label: Option<Ident>,
+    /// The label after `END REPEAT`.
+    pub end_label: Option<Ident>,
+    /// The body.
+    pub body: Vec<ScriptStatement>,
+    /// The `UNTIL` condition.
+    pub condition: Expr,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `[label:] LOOP ... END LOOP [label]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LoopStatement {
+    /// The label before `LOOP`.
+    pub label: Option<Ident>,
+    /// The label after `END LOOP`.
+    pub end_label: Option<Ident>,
+    /// The body.
+    pub body: Vec<ScriptStatement>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `[label:] FOR [var AS] query DO ... END FOR [label]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForStatement {
+    /// The label before `FOR`.
+    pub label: Option<Ident>,
+    /// The label after `END FOR`.
+    pub end_label: Option<Ident>,
+    /// The variable naming the row (`var AS`).
+    pub variable: Option<Ident>,
+    /// The query iterated.
+    pub query: Query,
+    /// The body.
+    pub body: Vec<ScriptStatement>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `LEAVE label` or `ITERATE label`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LabelJump {
+    /// The label.
+    pub label: Ident,
+    /// Source text.
+    pub span: Span,
 }

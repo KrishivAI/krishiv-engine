@@ -84,6 +84,28 @@ fn quoted(namespace: &str, name: &str) -> String {
     format!("`spark_catalog`.`{namespace}`.`{name}`")
 }
 
+/// What a `DELETE`, `UPDATE` or `MERGE` asks of a table, for the checks that come before Spark finds
+/// that the table cannot change.
+pub(crate) struct RowChanges<'a> {
+    /// The columns assigned.
+    pub(crate) targets: &'a [&'a krishiv_sql::ast::ObjectName],
+    /// The new values.
+    pub(crate) values: &'a [&'a krishiv_sql::ast::Expr],
+    /// The `WHERE` condition.
+    pub(crate) condition: Option<&'a krishiv_sql::ast::Expr>,
+}
+
+/// The scalar subqueries anywhere in the expression.
+fn scalar_subqueries<'a>(
+    e: &'a krishiv_sql::ast::Expr,
+    out: &mut Vec<&'a krishiv_sql::ast::Query>,
+) {
+    if let krishiv_sql::ast::ExprKind::Subquery(q) = &e.kind {
+        out.push(q);
+    }
+    e.for_each_child(&mut |c| scalar_subqueries(c, out));
+}
+
 fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
@@ -1340,14 +1362,60 @@ impl Session {
 
     /// `DELETE FROM`, `UPDATE` and `MERGE INTO` a file-source table: Spark's
     /// v1 tables support none of them, and says so once the table resolves.
-    pub(crate) fn exec_row_level_change(
+    pub(crate) async fn exec_row_level_change(
         &self,
         table: &DdlName,
+        alias: Option<&krishiv_sql::ast::Ident>,
         operation: &str,
+        changes: &RowChanges<'_>,
+        original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(table, &env)?;
         self.table_for_write(&name, operation, &env)?;
+        // Spark analyzes the condition and the new values against the table before it finds that the
+        // table cannot change: an unknown column is the error then.
+        // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
+        // error (with its suggestions), not a message of ours.
+        let plain = self.with_locals(Vec::new());
+        for target in changes.targets {
+            let written = target
+                .parts
+                .iter()
+                .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join(".");
+            let sql = format!("SELECT {written} FROM {}", name.quoted());
+            plain.analyze_variable_query(&sql).await?;
+        }
+        let slice = |e: &krishiv_sql::ast::Expr| {
+            original
+                .get(e.span.start..e.span.end)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        // `SET c = DEFAULT` takes the column's default: nothing to resolve.
+        let mut select: Vec<String> = changes
+            .values
+            .iter()
+            .filter(|e| !crate::command::is_bare_default(e))
+            .map(|e| slice(e))
+            .collect();
+        if select.is_empty() {
+            select.push("1".to_owned());
+        }
+        let mut sql = format!("SELECT {} FROM {}", select.join(", "), name.quoted());
+        if let Some(alias) = alias {
+            sql.push_str(&format!(" AS `{}`", alias.value.replace('`', "``")));
+        }
+        if let Some(condition) = changes.condition {
+            sql.push_str(&format!(" WHERE {}", slice(condition)));
+        }
+        // Spark 4.2 does not resolve a running script's local variables in these statements (the
+        // record shows `UNRESOLVED_COLUMN` for one), so the analysis does not see them either.
+        self.with_locals(Vec::new())
+            .analyze_variable_query(&sql)
+            .await?;
         Err(UnsupportedFeatureTableOperation {
             table_name: name.quoted(),
             operation: operation.to_owned(),
@@ -1412,6 +1480,28 @@ impl Session {
         }
         let name = self.table_name(&c.name, &env)?;
         let table = self.table_for_write(&name, "INSERT", &env)?;
+        // Spark resolves a scalar subquery in the rows of `INSERT ... VALUES` (an unknown column is
+        // the error then) and refuses it afterwards (a plain `VALUES` table reports the cell it
+        // cannot evaluate instead).
+        if let krishiv_sql::ast::SetExprKind::Values(values) = &c.query.body.kind {
+            let mut subqueries = Vec::new();
+            values
+                .rows
+                .iter()
+                .for_each(|r| scalar_subqueries(r, &mut subqueries));
+            for query in &subqueries {
+                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                DataFrame::new(self.clone(), Arc::clone(plan.root()))
+                    .analyzed_in(self.query_env())
+                    .await?;
+            }
+            if !subqueries.is_empty() {
+                return Err(
+                    krishiv_common::error::UnsupportedSubqueryExpressionCategoryScalarSubqueryInValues {}
+                        .into(),
+                );
+            }
+        }
         let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let listed: Vec<String> = c
