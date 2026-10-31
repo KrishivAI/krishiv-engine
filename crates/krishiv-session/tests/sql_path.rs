@@ -159,3 +159,19 @@ fn canonical_conf_keys_drive_the_path() {
     run(&s, "SET PATH = SYSTEM_PATH");
     assert!(!first(&s, "SELECT current_path()").is_empty());
 }
+
+#[test]
+fn the_session_functions_take_no_arguments() {
+    let s = session();
+    for sql in [
+        "SELECT current_path(1)",
+        "SELECT current_schema(1)",
+        "SELECT current_database(1)",
+    ] {
+        let err = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("WrongNumArgs"),
+            "{sql}: {err:?}"
+        );
+    }
+}

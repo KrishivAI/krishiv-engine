@@ -1068,24 +1068,20 @@ impl Session {
                 ..(*variables).clone()
             })
         };
-        let sql_functions = Arc::new(
-            QueryFunctions::new(
-                Arc::clone(&self.state.functions),
-                self.state.sql_functions.snapshot(),
-                Arc::clone(&self.state.catalog),
-                resolution.case_sensitive,
-                Some(crate::sql_functions::ViewSource {
-                    parser,
-                    next_source: {
-                        let state = Arc::clone(&self.state);
-                        Arc::new(move || {
-                            SourceId(state.sql_sources.fetch_add(1, Ordering::Relaxed))
-                        })
-                    },
-                }),
-            )
-            .with_path(catalog.sql_path_snapshot()),
-        );
+        let sql_functions = Arc::new(QueryFunctions::new(
+            Arc::clone(&self.state.functions),
+            self.state.sql_functions.snapshot(),
+            Arc::clone(&self.state.catalog),
+            resolution.case_sensitive,
+            Some(crate::sql_functions::ViewSource {
+                parser,
+                next_source: {
+                    let state = Arc::clone(&self.state);
+                    Arc::new(move || SourceId(state.sql_sources.fetch_add(1, Ordering::Relaxed)))
+                },
+            }),
+            catalog.sql_path_snapshot(),
+        ));
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
         let analysis = AnalysisContext {

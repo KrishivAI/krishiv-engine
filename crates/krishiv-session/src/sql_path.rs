@@ -32,8 +32,9 @@ fn system(name: &str) -> Entry {
 pub(crate) fn default_entries(conf: &str) -> Vec<Entry> {
     match parse_conf(conf) {
         Some(elements) if !elements.is_empty() => {
-            // The configuration cannot hold `PATH`, and `DEFAULT_PATH` inside
-            // it would recurse; both were refused when it was set.
+            // `PATH` inside the configuration expands to nothing (there is no live
+            // path to read), and `DEFAULT_PATH` inside it expands with no
+            // configuration, so it cannot recurse.
             elements.iter().flat_map(|e| one(e, &[], "")).collect()
         }
         _ => vec![system("builtin"), system("session"), Entry::CurrentSchema],

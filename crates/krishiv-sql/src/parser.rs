@@ -2062,10 +2062,6 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// The raw rest of a `SET key =` assignment, trimmed: decoded only
-    /// when it is one backquoted token, which is how Spark lets a value
-    /// hold a semicolon. An unterminated quote fails where the quote
-    /// is, as in Spark. The cursor ends at the `;` or end of input.
     /// The elements of `SET PATH =`: `DEFAULT_PATH`, `SYSTEM_PATH`, `PATH`,
     /// `CURRENT_SCHEMA`, `CURRENT_DATABASE` or a namespace of at least two
     /// parts.
@@ -2114,6 +2110,10 @@ impl<'s> Parser<'s> {
         }))
     }
 
+    /// The raw rest of a `SET key =` assignment, trimmed: decoded only
+    /// when it is one backquoted token, which is how Spark lets a value
+    /// hold a semicolon. An unterminated quote fails where the quote
+    /// is, as in Spark. The cursor ends at the `;` or end of input.
     fn set_value(&mut self) -> PR<(String, Span)> {
         let from_pos = self.pos;
         let mut end = self.toks.len();

@@ -151,9 +151,9 @@ impl QueryFunctions {
         catalog: Arc<SessionCatalog>,
         case_sensitive: bool,
         views: Option<ViewSource>,
+        path: Vec<Vec<String>>,
     ) -> Self {
         let stored = catalog.store.functions();
-        let path = catalog.sql_path("");
         Self {
             path,
             base,
@@ -165,12 +165,6 @@ impl QueryFunctions {
             expanded: Mutex::new(HashMap::new()),
             reads: Mutex::new((Vec::new(), None)),
         }
-    }
-
-    /// This registry resolving bare names through `path`.
-    pub(crate) fn with_path(mut self, path: Vec<Vec<String>>) -> Self {
-        self.path = path;
-        self
     }
 
     /// This registry over `stored` instead (the candidate functions a new
@@ -191,8 +185,8 @@ impl QueryFunctions {
             Arc::clone(&self.catalog),
             self.case_sensitive,
             self.views.clone(),
+            self.path.clone(),
         )
-        .with_path(self.path.clone())
     }
 
     /// The catalog-store lookups the bodies expanded so far made, in order,
@@ -516,12 +510,15 @@ mod tests {
     }
 
     fn registry(functions: &SqlFunctions) -> QueryFunctions {
+        let catalog = Arc::new(SessionCatalog::default());
+        let path = catalog.sql_path("");
         QueryFunctions::new(
             Arc::new(BuiltinFunctions::new()),
             functions.snapshot(),
-            Arc::new(SessionCatalog::default()),
+            catalog,
             false,
             None,
+            path,
         )
     }
 
