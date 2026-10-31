@@ -392,3 +392,31 @@ fn quantile_error_parameters_follow_spark() -> R {
     );
     Ok(())
 }
+
+/// `percentile` (unlike `median` and the `percentile_cont/disc` forms)
+/// accepts an ordered or framed window, as Spark does: each row sees the
+/// percentile of its frame. A running frame freezes its answer per row
+/// instead of copying the value map.
+#[test]
+fn percentile_over_running_and_sliding_frames() -> R {
+    let s = Session::new()?;
+    let data = "FROM VALUES (1, 1.0), (2, 5.0), (3, 9.0), (4, CAST(NULL AS DOUBLE)) t(id, v)";
+    assert_eq!(
+        shown(
+            &s,
+            &format!("SELECT percentile(v, 0.5) OVER (ORDER BY id) {data} ORDER BY id")
+        )?,
+        vec!["1", "3", "5", "5"]
+    );
+    assert_eq!(
+        shown(
+            &s,
+            &format!(
+                "SELECT percentile(v, 0.5) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND \
+                 CURRENT ROW) {data} ORDER BY id"
+            )
+        )?,
+        vec!["1", "3", "7", "9"]
+    );
+    Ok(())
+}

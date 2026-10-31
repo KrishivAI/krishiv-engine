@@ -113,17 +113,24 @@ fn key(v: f64) -> u64 {
 pub(crate) struct ExactAcc {
     maps: Vec<HashMap<u64, i64>>,
     totals: Vec<i64>,
+    /// Window snapshots: the percentiles a running frame computed at a row,
+    /// kept instead of a copy of the value map (so a snapshot costs the
+    /// size of its answer, not of the partition's distinct values).
+    /// `Some(r)` for a snapshot group `g`, whose `evaluate` returns `r`.
+    frozen: Vec<Option<Option<Vec<f64>>>>,
 }
 
 impl ExactAcc {
     pub(crate) fn resize(&mut self, n: usize) {
         self.maps.resize_with(n, HashMap::new);
         self.totals.resize(n, 0);
+        self.frozen.resize(n, None);
     }
 
     pub(crate) fn reserve(&mut self, new: usize) {
         self.maps.reserve(new);
         self.totals.reserve(new);
+        self.frozen.reserve(new);
     }
 
     /// Bytes held: the maps (an entry is two words) and the totals.
@@ -133,6 +140,14 @@ impl ExactAcc {
             .map(|m| m.capacity().saturating_mul(32))
             .sum::<usize>()
             + self.totals.capacity().saturating_mul(8)
+            + self.frozen.capacity().saturating_mul(32)
+            + self
+                .frozen
+                .iter()
+                .flatten()
+                .flatten()
+                .map(|v| v.capacity().saturating_mul(8))
+                .sum::<usize>()
     }
 
     /// The projected size after adding `new` groups (empty maps) and folding
@@ -147,11 +162,20 @@ impl ExactAcc {
             .saturating_add(rows.saturating_mul(2 * 32))
     }
 
-    /// Copies group `from`'s values to group `to` (a window snapshot).
-    pub(crate) fn copy_group(&mut self, from: usize, to: usize) {
-        let map = self.maps[from].clone();
-        self.maps[to] = map;
-        self.totals[to] = self.totals[from];
+    /// Freezes the percentiles of group `from` as group `to`'s answer (a
+    /// window snapshot): no copy of the value map, and `to` holds only its
+    /// result. The flags are those of [`evaluate`](Self::evaluate).
+    pub(crate) fn freeze(
+        &mut self,
+        from: usize,
+        to: usize,
+        percentages: &[f64],
+        reverse: bool,
+        cont: bool,
+        legacy_disc: bool,
+    ) {
+        let answer = self.evaluate(from, percentages, reverse, cont, legacy_disc);
+        self.frozen[to] = Some(answer);
     }
 
     /// Folds `count` of `v` into `g`.
@@ -198,6 +222,9 @@ impl ExactAcc {
         cont: bool,
         legacy_disc: bool,
     ) -> Option<Vec<f64>> {
+        if let Some(Some(answer)) = self.frozen.get(g) {
+            return answer.clone();
+        }
         let total = self.totals[g];
         if total == 0 || self.maps[g].is_empty() {
             return None;
