@@ -222,3 +222,27 @@ fn a_scalar_subquery_without_an_aggregate_matches_at_most_one_row() {
         "{err}"
     );
 }
+
+/// `IN (... WHERE g = o ORDER BY y LIMIT 1)` ranks by the subquery's order
+/// even when the sort column is not selected, and partitions only by an
+/// equality whose outer side reads no inner column.
+#[test]
+fn a_correlated_limit_keeps_its_order_and_partitions_by_clean_keys() {
+    let s = session();
+    for ddl in [
+        "CREATE TEMPORARY VIEW lt AS SELECT * FROM VALUES (1, 1), (2, 2), (3, CAST(NULL AS INT)), (4, 4) AS lt(id, k)",
+        "CREATE TEMPORARY VIEW lc AS SELECT * FROM VALUES (1, 1, 10), (1, 5, 20), (2, 9, 30), (2, CAST(NULL AS INT), 5), (4, 4, 1) AS lc(g, k, y)",
+    ] {
+        block_on(s.sql(ddl)).unwrap();
+    }
+    let desc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC LIMIT 1)";
+    assert_eq!(rows(&s, desc), ["4"]);
+    let asc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y ASC LIMIT 1)";
+    assert_eq!(rows(&s, asc), ["1", "4"]);
+    // An outer side reading inner columns is refused, never mis-partitioned.
+    let mixed = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g + lc.y = lt.id + lc.y ORDER BY lc.k DESC LIMIT 1)";
+    if let Ok(df) = block_on(s.sql(mixed)) {
+        let got = block_on(df.collect());
+        assert!(got.is_err(), "mixed-side equality must be refused");
+    }
+}

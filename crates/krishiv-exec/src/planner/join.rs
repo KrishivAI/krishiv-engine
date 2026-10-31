@@ -378,6 +378,10 @@ impl Planner<'_> {
         kind: JoinKind,
         residual: &[&Expr],
     ) -> Result<Planned> {
+        // The nested loop has no at-most-one-row check.
+        if kind == JoinKind::Single {
+            return Err(unsupported("a scalar subquery join without equality keys"));
+        }
         // Every probe row meets every build row: the build is broadcast.
         let build = self.require(build, Distribution::Broadcast)?;
         let filter = residual_of(&probe, &build, residual);

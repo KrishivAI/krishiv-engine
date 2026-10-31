@@ -360,6 +360,18 @@ fn positive_literal(e: &Expr) -> bool {
     }
 }
 
+/// Whether an aggregate sits under `p`'s projections and filters.
+fn aggregates_below(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::Aggregate { .. } => true,
+        PlanNode::Project { input, .. }
+        | PlanNode::SubqueryAlias { input, .. }
+        | PlanNode::Filter { input, .. }
+        | PlanNode::Sort { input, .. } => aggregates_below(input),
+        _ => false,
+    }
+}
+
 /// Whether `p` is one row of expressions over no relation: `SELECT 1`,
 /// `VALUES (1)`, through aliases and projections.
 fn one_row_literals(p: &LogicalPlan) -> bool {
@@ -806,15 +818,6 @@ impl Rewriter {
         input: Arc<LogicalPlan>,
         exprs: Vec<Arc<Expr>>,
     ) -> R<Arc<LogicalPlan>> {
-        let exprs: Vec<Arc<Expr>> = exprs
-            .into_iter()
-            .map(|e| {
-                let replaced = e.transform_up(&mut |x: Arc<Expr>| {
-                    Ok::<_, std::convert::Infallible>(self.single_row_in(&x).unwrap_or(x))
-                });
-                replaced.unwrap_or_else(|never| match never {})
-            })
-            .collect();
         if !exprs
             .iter()
             .any(|e| self.reads_correlated(e) || self.existential(e))
@@ -1192,15 +1195,31 @@ impl Rewriter {
     ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
         let unsupported_limit =
             || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
-        let (below, order) = match &input.node {
+        // The analyzer puts a Project between the Limit and the Sort when
+        // the sort columns are not selected: the window ranks below it.
+        let ordered = |sort: &Arc<LogicalPlan>| match &sort.node {
             PlanNode::Sort { input, order, .. }
                 if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
             {
-                (input, order.clone())
+                Some((Arc::clone(input), order.clone()))
             }
-            _ => (input, Vec::new()),
+            _ => None,
         };
-        let (inner, corr) = self.pull(below, true)?;
+        let (below, order, select) = match &input.node {
+            PlanNode::Project { input: sort, exprs }
+                if !exprs.iter().any(|e| has_outer(Node::Expr(e))) =>
+            {
+                match ordered(sort) {
+                    Some((below, order)) => (below, order, Some(exprs.clone())),
+                    None => (Arc::clone(input), Vec::new(), None),
+                }
+            }
+            _ => match ordered(input) {
+                Some((below, order)) => (below, order, None),
+                None => (Arc::clone(input), Vec::new(), None),
+            },
+        };
+        let (inner, corr) = self.pull(&below, true)?;
         let mut partition_by = Vec::new();
         for c in &corr {
             let ExprNode::Resolved(ResolvedExpr::Function(f)) = &c.node else {
@@ -1211,8 +1230,8 @@ impl Rewriter {
             }
             let (a, b) = (&f.args[0], &f.args[1]);
             match (has_outer(Node::Expr(a)), has_outer(Node::Expr(b))) {
-                (false, true) => partition_by.push(Arc::clone(a)),
-                (true, false) => partition_by.push(Arc::clone(b)),
+                (false, true) if inner_columns(b).is_empty() => partition_by.push(Arc::clone(a)),
+                (true, false) if inner_columns(a).is_empty() => partition_by.push(Arc::clone(b)),
                 _ => return Err(unsupported_limit()),
             }
         }
@@ -1271,7 +1290,27 @@ impl Rewriter {
             },
             plan.origin,
         );
-        Ok((columns(filtered, &out), corr))
+        let Some(mut exprs) = select else {
+            return Ok((columns(filtered, &out), corr));
+        };
+        let mut have: HashSet<AttrId> = output(input)?.iter().map(|c| c.id).collect();
+        for c in &corr {
+            for col in inner_columns(c) {
+                if have.insert(col.id) {
+                    exprs.push(col_expr(&col, Origin::UNKNOWN));
+                }
+            }
+        }
+        Ok((
+            node(
+                PlanNode::Project {
+                    input: filtered,
+                    exprs,
+                },
+                plan.origin,
+            ),
+            corr,
+        ))
     }
 
     /// `right`, renumbered where its attribute ids would meet `left`'s (so
@@ -1554,6 +1593,12 @@ impl Rewriter {
             ));
         };
         let value = value.clone();
+        if aggregates_below(plan) {
+            return Err(unsupported(
+                "a correlated scalar subquery of this shape",
+                plan.origin,
+            ));
+        }
         let (inner, corr) = self.pull(plan, true)?;
         let (inner_keys, outer_keys) = equality_keys(&corr, plan.origin)?;
         if inner_keys.is_empty() {
