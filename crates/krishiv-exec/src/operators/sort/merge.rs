@@ -329,7 +329,11 @@ pub(crate) struct Merger {
 /// The rows of a sorted merge, in output order, and the memory they hold.
 struct SortedRows {
     /// `(source, row)` in output order.
-    order: Arc<[(u32, u32)]>,
+    #[expect(
+        clippy::rc_buffer,
+        reason = "`Arc<[_]>` would copy a large order once more"
+    )]
+    order: Arc<Vec<(u32, u32)>>,
     /// The next row of `order` to emit or gather.
     pos: usize,
     /// What [`GatherJob`]s read.
@@ -345,10 +349,9 @@ struct SortedRows {
 /// In-memory slices above which a bucket's merge sorts its rows instead of
 /// running a loser tree: with many small slices each tree step is a chain
 /// of cache misses, while one sort of the rows' key prefixes stays in
-/// cache (most comparisons end at a 16-byte prefix). Only a sort with hash
-/// buckets does: an unbucketed sort's slices are whole sorted batches,
-/// which the tree merges in far fewer comparisons than a sort of all their
-/// rows.
+/// cache (most comparisons end at a 16-byte prefix). An unbucketed sort has
+/// one reader, so above this many batches it sorts on several threads
+/// ([`parallel_merge`]) when they and the memory allow, else runs the tree.
 const SORT_MIN_SLICES: usize = 64;
 
 /// Fewest rows worth a part of a parallel merge of its own.
@@ -377,9 +380,10 @@ fn merge_cmp(memory: &[Slice], (sa, ra): (u32, u32), (sb, rb): (u32, u32)) -> st
 /// largest row, which each slice's ends give. A part of a merge has a narrow
 /// key range, so its 16-byte prefixes do more past these bytes.
 fn shared_prefix_len(memory: &[Slice]) -> usize {
-    let mut ends = memory.iter().filter(|(_, r)| !r.is_empty()).flat_map(|(s, r)| {
-        [r.start, r.end - 1].map(|at| s.rows.row(s.order[at] as usize))
-    });
+    let mut ends = memory
+        .iter()
+        .filter(|(_, r)| !r.is_empty())
+        .flat_map(|(s, r)| [r.start, r.end - 1].map(|at| s.rows.row(s.order[at] as usize)));
     let Some(first) = ends.next() else {
         return 0;
     };
@@ -445,10 +449,10 @@ pub(super) fn parallel_merge(
         return None;
     }
     let data: usize = memory.iter().map(|(s, _)| data_bytes(&s.batch)).sum();
+    // About: by the rows' mean width, like the headroom of an output batch.
     let ready_bytes = data
         .div_ceil(rows)
-        .saturating_mul(batch_rows)
-        .saturating_mul(parts);
+        .saturating_mul(batch_rows.saturating_mul(parts).min(rows));
     let mut scratch = handle.reservation();
     scratch
         .try_grow(
@@ -468,7 +472,11 @@ pub(super) fn parallel_merge(
 pub(super) struct GatherJob {
     schema: SchemaRef,
     sources: Arc<[Batch]>,
-    order: Arc<[(u32, u32)]>,
+    #[expect(
+        clippy::rc_buffer,
+        reason = "`Arc<[_]>` would copy a large order once more"
+    )]
+    order: Arc<Vec<(u32, u32)>>,
     range: std::ops::Range<usize>,
 }
 
@@ -510,8 +518,8 @@ pub(super) fn merge_splitters(memory: &[Slice], parts: usize) -> Result<Vec<(u32
             // A fraction of the slice from the golden-ratio sequence, so
             // that slices with one sample each cover the whole key range.
             let spot = u128::from(((i + j) as u64).wrapping_mul(GOLDEN_RATIO));
-            let at = spot * range.len() as u128 >> 64;
-            let at = range.start + at as usize;
+            let at = (spot * range.len() as u128) >> 64;
+            let at = range.start + usize::try_from(at).unwrap_or(0);
             ((index, s.order[at]), range.len() / taken)
         }));
     }
@@ -552,7 +560,11 @@ pub(super) fn merge_part(
             }
             None => range.end,
         };
-        let start = if lo.is_some() { at(range.start, lo) } else { range.start };
+        let start = if lo.is_some() {
+            at(range.start, lo)
+        } else {
+            range.start
+        };
         part.push((Arc::clone(s), start..at(start, hi)));
     }
     Ok(part)
@@ -656,7 +668,7 @@ impl Merger {
             stamp: Vec::new(),
             generation: 0,
             sorted: Some(SortedRows {
-                order: order.into(),
+                order: Arc::new(order),
                 pos: 0,
                 sources: shared,
                 ready: VecDeque::new(),
@@ -713,7 +725,7 @@ impl Merger {
     pub(super) fn slices(
         schema: SchemaRef,
         encoder: Arc<KeyEncoder>,
-        memory: Vec<(Arc<SortedBatch>, std::ops::Range<usize>)>,
+        memory: Vec<Slice>,
         spilled: &[SpillRun],
         handle: &Arc<ConsumerHandle>,
     ) -> Result<Self> {
@@ -834,6 +846,18 @@ impl Merger {
     /// `None` once every run is exhausted. Reading a spilled run is blocking
     /// I/O.
     pub(crate) fn next(&mut self, max_rows: usize) -> Result<Option<Batch>> {
+        if let Some(s) = &mut self.sorted {
+            // Batches gathered ahead are the reader's size. A caller wanting
+            // fewer rows (a spill's small batches) gathers them again.
+            if s.ready
+                .front()
+                .is_some_and(|b| b.num_rows() > max_rows.max(1))
+            {
+                let rows: usize = s.ready.iter().map(Batch::num_rows).sum();
+                s.pos -= rows;
+                s.ready.clear();
+            }
+        }
         if let Some(batch) = self.pop_ready() {
             return Ok(Some(batch));
         }
