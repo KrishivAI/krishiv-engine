@@ -947,6 +947,10 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
                     .collect(),
             }
         },
+        Percentile => percentile_function(a)?,
+        PercentileApprox => percentile_approx_function(a)?,
+        PercentileDisc => percentile_disc_function(a)?,
+        ApproxCountDistinct => hll_function(a)?,
     })?;
     if !matches!(function, AggregateFunction::ListAgg { .. })
         && (!a.listagg_delimiter.is_empty()
@@ -981,6 +985,85 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         name: a.name.clone(),
         mask: a.mask.map(usize_of).transpose()?,
     })
+}
+
+/// A `percentile` function from its wire form: the percentages must be
+/// present, finite and in `[0.0, 1.0]` (the analyzer folds them), and no
+/// parameter of another variant may be set.
+fn percentile_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    let bad = || corrupt("a `percentile` of bad parameters");
+    if a.percentile_accuracy != 0 || a.percentile_legacy || a.hll_precision != 0 {
+        return Err(bad());
+    }
+    if a.percentages.is_empty()
+        || a.percentages
+            .iter()
+            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
+    {
+        return Err(bad());
+    }
+    Ok(AggregateFunction::Percentile {
+        percentages: a.percentages.clone(),
+        array: a.percentile_array,
+        reverse: a.percentile_reverse,
+    })
+}
+
+/// A `percentile_approx` function from its wire form.
+fn percentile_approx_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    let bad = || corrupt("a `percentile_approx` of bad parameters");
+    if a.percentile_reverse || a.percentile_legacy || a.hll_precision != 0 {
+        return Err(bad());
+    }
+    if a.percentile_accuracy <= 0
+        || a.percentages.is_empty()
+        || a.percentages
+            .iter()
+            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
+    {
+        return Err(bad());
+    }
+    Ok(AggregateFunction::PercentileApprox {
+        percentages: a.percentages.clone(),
+        array: a.percentile_array,
+        accuracy: a.percentile_accuracy,
+    })
+}
+
+/// A `percentile_disc` function from its wire form: one percentage.
+fn percentile_disc_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    let bad = || corrupt("a `percentile_disc` of bad parameters");
+    if a.percentile_accuracy != 0 || a.hll_precision != 0 {
+        return Err(bad());
+    }
+    if a.percentages.is_empty()
+        || a.percentages
+            .iter()
+            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
+    {
+        return Err(bad());
+    }
+    Ok(AggregateFunction::PercentileDisc {
+        percentages: a.percentages.clone(),
+        array: a.percentile_array,
+        reverse: a.percentile_reverse,
+        legacy: a.percentile_legacy,
+    })
+}
+
+/// An `approx_count_distinct` function from its wire form.
+fn hll_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    let bad = || corrupt("an `approx_count_distinct` of bad parameters");
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+        || !(4..=30).contains(&a.hll_precision)
+    {
+        return Err(bad());
+    }
+    Ok(AggregateFunction::ApproxCountDistinct { p: a.hll_precision })
 }
 
 fn join_type(t: i32) -> Result<JoinType> {

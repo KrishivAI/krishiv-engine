@@ -552,13 +552,13 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
             "SELECT count(a) FILTER (WHERE b = 'x') FROM t",
             default,
             t().project(vec![Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "count".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
                 args: vec![Arc::new(c("a"))],
                 distinct: false,
                 filter: Some(Arc::new(eq(c("b"), s("x")))),
-                within_group: Vec::new(),
             }))]),
         ),
         ("SELECT * FROM t JOIN u USING (z)", default, using(&["z"])),
@@ -669,13 +669,13 @@ fn shared_expressions_stay_linear() {
     let doubled = || {
         (0..30).fold(Arc::new(c("a")), |e, _| {
             Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "+".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
                 args: vec![Arc::clone(&e), e],
                 distinct: false,
                 filter: None,
-                within_group: Vec::new(),
             })))
         })
     };
@@ -1975,13 +1975,13 @@ fn shared_subexpressions_in_rewrites() {
     let twice = |name: &str| {
         let x = Arc::new(c(name));
         Expr::new(ExprNode::Function(crate::FunctionCall {
+            within_group: Vec::new(),
             name: "+".to_owned(),
             qualifier: Vec::new(),
             arg_names: Vec::new(),
             args: vec![Arc::clone(&x), x],
             distinct: false,
             filter: None,
-            within_group: Vec::new(),
         }))
     };
     let lateral =
@@ -2481,13 +2481,13 @@ fn typed_literals_resolve_with_the_session_zone() {
 fn conditional_with_filter_names_the_filter_once() {
     let ctx = ctx();
     let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        within_group: Vec::new(),
         name: "nvl".to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),
         args: vec![Arc::new(c("a")), Arc::new(int(1))],
         distinct: false,
         filter: Some(Arc::new(eq(c("b"), s("x")))),
-        within_group: Vec::new(),
     }));
     let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
     assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
@@ -3420,7 +3420,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 16);
+    assert_eq!(ResolutionConf::KEYS.len(), 17);
 }
 
 /// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`, or 0 with

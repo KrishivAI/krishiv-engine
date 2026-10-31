@@ -41,6 +41,7 @@ use std::sync::{Arc, LazyLock};
 
 pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
+pub use defs::{approx_percentile_result, exact_percentile_result};
 pub(crate) use json::parse_json_schema;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
@@ -169,6 +170,20 @@ pub enum Aggregate {
     TrySum,
     /// `try_avg(x)`: `avg` that gives NULL instead of an overflow error.
     TryAvg,
+    /// `percentile(x, percentage[, frequency])`: the exact percentiles; the
+    /// analyzer folds the percentages into the execution form.
+    Percentile,
+    /// `percentile_approx(x, percentage[, accuracy])` /
+    /// `approx_percentile`: Spark's Greenwald-Khanna summary.
+    PercentileApprox,
+    /// `median(x)`: `percentile(x, 0.5)`.
+    Median,
+    /// `percentile_cont(percentage) WITHIN GROUP (ORDER BY x)`.
+    PercentileCont,
+    /// `percentile_disc(percentage) WITHIN GROUP (ORDER BY x)`.
+    PercentileDisc,
+    /// `approx_count_distinct(x[, relativeSD])`: HyperLogLog++.
+    ApproxCountDistinct,
 }
 
 /// A built-in function.

@@ -34,13 +34,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Int8Type, Int16Type, Int32Type, Int64Type};
+use arrow_array::types::{
+    Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type,
+};
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
     Int8Array, Int16Array, Int32Array, Int64Array, StringArray, new_null_array,
 };
 use arrow_schema::DataType as ArrowType;
-use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_common::error::{ErrorClass, InternalError, KrishivError};
 use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, bind_scalar, is_argument_pure};
 use krishiv_functions::signature::FunctionKind;
@@ -225,6 +228,88 @@ fn unsupported() -> KrishivError {
     .into()
 }
 
+/// `e` folded to doubles, for a quantile percentage or an array of
+/// them: `None` when `e` is not foldable here, else its values (`None`
+/// for a NULL) or the error evaluating it raises. Strings are never
+/// parsed (the caller folds the cast to `DOUBLE`, whose kernels raise
+/// `CAST_INVALID_INPUT` for them); any other non-numeric type is an
+/// internal error (the caller type-checks first).
+pub(super) fn doubles(
+    e: &Arc<Expr>,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Option<Result<Vec<Option<f64>>, KrishivError>> {
+    let array = match fold(e, conf, memo, functions)? {
+        Err(e) => return Some(Err(e)),
+        Ok(a) => a,
+    };
+    Some(doubles_of(&array))
+}
+
+/// The values of the one-row array `a` as doubles (`None` for a NULL),
+/// descending into a one-row list for an array of percentages.
+fn doubles_of(a: &ArrayRef) -> Result<Vec<Option<f64>>, KrishivError> {
+    match a.data_type() {
+        ArrowType::List(_) | ArrowType::LargeList(_) | ArrowType::FixedSizeList(..) => {
+            let list = arrow_array::cast::as_list_array(a);
+            if list.null_count() > 0 || list.len() != 1 {
+                return scalar_double(a).map(|v| vec![v]);
+            }
+            let values = list.value(0);
+            (0..values.len())
+                .map(|i| scalar_double(&values.slice(i, 1)))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|v| v.into_iter().collect())
+        }
+        _ => scalar_double(a).map(|v| vec![v]),
+    }
+}
+
+/// The one-row array `a` as a double (`None` for a NULL).
+fn scalar_double(a: &ArrayRef) -> Result<Option<f64>, KrishivError> {
+    if a.is_empty() || a.null_count() > 0 || a.data_type() == &ArrowType::Null {
+        return Ok(None);
+    }
+    Ok(Some(match a.data_type() {
+        ArrowType::Int8 => f64::from(a.as_primitive::<Int8Type>().value(0)),
+        ArrowType::Int16 => f64::from(a.as_primitive::<Int16Type>().value(0)),
+        ArrowType::Int32 => f64::from(a.as_primitive::<Int32Type>().value(0)),
+        ArrowType::Int64 => a.as_primitive::<Int64Type>().value(0) as f64,
+        ArrowType::Float32 => f64::from(a.as_primitive::<Float32Type>().value(0)),
+        ArrowType::Float64 => a.as_primitive::<Float64Type>().value(0),
+        ArrowType::Decimal128(_, s) => {
+            decimal_to_double(a.as_primitive::<Decimal128Type>().value(0), *s)?
+        }
+        ArrowType::Decimal64(_, s) => {
+            decimal_to_double(i128::from(a.as_primitive::<Decimal64Type>().value(0)), *s)?
+        }
+        _ => {
+            return Err(InternalError {
+                message: format!("a quantile percentage of type {}", a.data_type()),
+            }
+            .into());
+        }
+    }))
+}
+
+/// The unscaled decimal `unscaled` at `scale` as the nearest `f64`, as
+/// Java's `BigDecimal.doubleValue` gives it (correctly rounded, through
+/// the decimal text).
+fn decimal_to_double(unscaled: i128, scale: i8) -> Result<f64, KrishivError> {
+    let digits = unscaled.unsigned_abs().to_string();
+    let scale = usize::try_from(scale).unwrap_or(0);
+    let padded = format!("{digits:0>width$}", width = scale + 1);
+    let (int, frac) = padded.split_at(padded.len() - scale);
+    let text = format!("{}{int}.{frac}", if unscaled < 0 { "-" } else { "" });
+    text.parse::<f64>().map_err(|_| {
+        InternalError {
+            message: format!("a quantile percentage of {text}"),
+        }
+        .into()
+    })
+}
+
 /// `e` as a one-row array: `None` when it is not foldable here. Every
 /// `STEP` levels run on a fresh stack (see `Resolver::rel`).
 fn fold(e: &Arc<Expr>, conf: Conf, memo: &mut Memo, functions: &dyn FunctionRegistry) -> Folded {
@@ -283,6 +368,11 @@ fn fold_cast(
     // A NULL of any type casts to a NULL of the target type.
     if inner.null_count() > 0 || inner.data_type() == &ArrowType::Null {
         return Some(Ok(new_null_array(&to.to_arrow(), 1)));
+    }
+    // A cast to the value's own type is the value (the kernels below do
+    // not cover every target, e.g. arrays of literals).
+    if inner.data_type() == &to.to_arrow() {
+        return Some(Ok(inner));
     }
     // The kernels' targets: numbers, strings and dates (no timestamp: it
     // reads the session time zone, so a cast to one stays unfolded).

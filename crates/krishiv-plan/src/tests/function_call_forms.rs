@@ -365,13 +365,13 @@ fn ilike_rewrites_to_lower_like_with_its_name() {
 #[test]
 fn ilike_with_escape_keeps_the_escape_but_hides_it() {
     let call = Expr::new(ExprNode::Function(FunctionCall {
+        within_group: Vec::new(),
         name: "ilike".to_owned(),
         qualifier: Vec::new(),
         args: vec![Arc::new(c("s")), Arc::new(s("a%b")), Arc::new(s("#"))],
         arg_names: Vec::new(),
         distinct: false,
         filter: None,
-        within_group: Vec::new(),
     }));
     let r = analyze(vec![call]).unwrap();
     assert_eq!(names(&r), ["ilike(s, a%b)"]);

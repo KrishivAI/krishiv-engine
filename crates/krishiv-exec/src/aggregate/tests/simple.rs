@@ -23,6 +23,7 @@ fn f64s(v: &[Option<f64>]) -> ArrayRef {
 
 /// `by(x, y)` over columns 1 and 2 of `s`.
 fn by(f: &AggregateFunction, s: &SchemaRef) -> AggregateExpr {
+    let name = format!("{f:?}");
     AggregateExpr::by(
         f.clone(),
         (1, 2),
@@ -30,7 +31,7 @@ fn by(f: &AggregateFunction, s: &SchemaRef) -> AggregateExpr {
             s.field(1).data_type().clone(),
             s.field(2).data_type().clone(),
         ),
-        format!("{f:?}"),
+        name,
     )
 }
 
@@ -391,7 +392,7 @@ async fn every_value_and_key_type() {
                     r.sort();
                     r
                 };
-                let sp = spec(&s, vec![0], vec![by(f, &s)]);
+                let sp = spec(&s, vec![0], vec![by(&f.clone(), &s)]);
                 let single = node(scan(&s, vec![batch.clone()]), sp.clone());
                 assert_eq!(run_one(single).await, expected, "{f:?} of {tx} by {ty}");
                 // Two batches through the partial phase.
