@@ -238,7 +238,7 @@ impl QueryFunctions {
                     };
                     if !call.qualifier.is_empty()
                         || !matches!(
-                            self.base.lookup(&[call.name.clone()], profile),
+                            self.base.lookup(std::slice::from_ref(&call.name), profile),
                             FunctionLookup::NotFound
                         )
                     {
