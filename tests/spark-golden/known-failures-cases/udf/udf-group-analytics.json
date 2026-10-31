@@ -1,12 +1,7 @@
 {
   "cases": {
     "depends-on-command": [
-      6,
-      12,
-      13,
-      18,
-      20,
-      25
+      18
     ]
   },
   "file": "udf/udf-group-analytics",
