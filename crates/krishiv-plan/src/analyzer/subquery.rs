@@ -920,7 +920,7 @@ impl Rewriter {
             PlanNode::Project { input, exprs } => {
                 // EXISTS reads no column: its select list goes.
                 if !keep {
-                    return self.pull(input, true);
+                    return self.pull(input, false);
                 }
                 if exprs.iter().any(|e| has_outer(Node::Expr(e))) {
                     return Err(unsupported(
@@ -1005,6 +1005,20 @@ impl Rewriter {
                     },
                     plan.origin,
                 ))
+            }
+            // EXISTS reads no column: a grouped aggregate with no HAVING
+            // has a row exactly when its input has one, and a global one
+            // always has exactly one row, whatever the correlation.
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                ..
+            } if !keep && !keys.iter().any(|k| has_outer(Node::Expr(k))) => {
+                if keys.is_empty() {
+                    Ok((node(PlanNode::OneRowRelation, plan.origin), Vec::new()))
+                } else {
+                    self.pull(input, false)
+                }
             }
             _ => Err(unsupported(
                 "outer references below a join, aggregate, limit or set operation",
