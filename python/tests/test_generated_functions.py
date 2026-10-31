@@ -287,6 +287,27 @@ PYSPARK_CALLS = [
     (lambda: F.array_insert("a", "p", 1), ("call", "array_insert", (("col", "a"), ("col", "p"), ("lit", 1)))),
     (lambda: F.try_element_at("a", "k"), ("call", "try_element_at", (("col", "a"), ("col", "k")))),
     (lambda: F.element_at("a", "k"), ("call", "element_at", (("col", "a"), ("lit", "k")))),
+    # The percentile family sends its defaulted frequency and accuracy as PySpark does;
+    # `approx_count_distinct` leaves an omitted `rsd` out.
+    (lambda: F.median("v"), ("call", "median", (("col", "v"),))),
+    (lambda: F.percentile("v", 0.5), ("call", "percentile", (("col", "v"), ("lit", 0.5), ("lit", 1)))),
+    (
+        lambda: F.percentile("v", 0.5, 3),
+        ("call", "percentile", (("col", "v"), ("lit", 0.5), ("lit", 3))),
+    ),
+    (
+        lambda: F.percentile_approx("v", 0.5),
+        ("call", "percentile_approx", (("col", "v"), ("lit", 0.5), ("lit", 10000))),
+    ),
+    (
+        lambda: F.approx_percentile("v", 0.9, 100),
+        ("call", "approx_percentile", (("col", "v"), ("lit", 0.9), ("lit", 100))),
+    ),
+    (lambda: F.approx_count_distinct("v"), ("call", "approx_count_distinct", (("col", "v"),))),
+    (
+        lambda: F.approx_count_distinct("v", 0.05),
+        ("call", "approx_count_distinct", (("col", "v"), ("lit", 0.05))),
+    ),
 ]
 
 

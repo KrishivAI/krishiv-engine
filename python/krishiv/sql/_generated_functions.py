@@ -359,15 +359,10 @@ def approx_count_distinct(col: ColumnOrName, rsd: ColumnOrName | float | None = 
     return _call("approx_count_distinct", _named(col, "col"), *_opt(_num_or_col, rsd, "rsd"))
 
 
-def approx_percentile(
-    col: ColumnOrName, percentage: ColumnOrName | float, accuracy: ColumnOrName | int | None = None
-) -> Column:
+def approx_percentile(col: ColumnOrName, percentage: ColumnOrName | float, accuracy: Column | int = 10000) -> Column:
     """Calls the registry function ``approx_percentile``."""
     return _call(
-        "approx_percentile",
-        _named(col, "col"),
-        _num_or_col(percentage, "percentage"),
-        *_opt(_int_or_col, accuracy, "accuracy"),
+        "approx_percentile", _named(col, "col"), _num_or_col(percentage, "percentage"), _lit(accuracy, "accuracy")
     )
 
 
@@ -1239,22 +1234,15 @@ def percent_rank() -> Column:
     return _call("percent_rank")
 
 
-def percentile(col: ColumnOrName, percentage: ColumnOrName | float, frequency: ColumnOrName | None = None) -> Column:
+def percentile(col: ColumnOrName, percentage: ColumnOrName | float, frequency: Column | int = 1) -> Column:
     """Calls the registry function ``percentile``."""
-    return _call(
-        "percentile", _named(col, "col"), _num_or_col(percentage, "percentage"), *_opt(_named, frequency, "frequency")
-    )
+    return _call("percentile", _named(col, "col"), _num_or_col(percentage, "percentage"), _lit(frequency, "frequency"))
 
 
-def percentile_approx(
-    col: ColumnOrName, percentage: ColumnOrName | float, accuracy: ColumnOrName | int | None = None
-) -> Column:
+def percentile_approx(col: ColumnOrName, percentage: ColumnOrName | float, accuracy: Column | int = 10000) -> Column:
     """Calls the registry function ``percentile_approx``."""
     return _call(
-        "percentile_approx",
-        _named(col, "col"),
-        _num_or_col(percentage, "percentage"),
-        *_opt(_int_or_col, accuracy, "accuracy"),
+        "percentile_approx", _named(col, "col"), _num_or_col(percentage, "percentage"), _lit(accuracy, "accuracy")
     )
 
 

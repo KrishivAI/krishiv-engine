@@ -447,15 +447,15 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("median", C),
         Row::new(
             "percentile",
-            "col: ColumnOrName, percentage: ColumnOrName | float, frequency: ColumnOrName = None",
+            "col: ColumnOrName, percentage: ColumnOrName | float, frequency: Column | int = 1",
         ),
         Row::new(
             "percentile_approx",
-            "col: ColumnOrName, percentage: ColumnOrName | float, accuracy: ColumnOrName | int = None",
+            "col: ColumnOrName, percentage: ColumnOrName | float, accuracy: Column | int = 10000",
         ),
         Row::new(
             "approx_percentile",
-            "col: ColumnOrName, percentage: ColumnOrName | float, accuracy: ColumnOrName | int = None",
+            "col: ColumnOrName, percentage: ColumnOrName | float, accuracy: Column | int = 10000",
         ),
         Row::new(
             "approx_count_distinct",
