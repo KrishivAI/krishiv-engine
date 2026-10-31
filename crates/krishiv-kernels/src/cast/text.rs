@@ -31,6 +31,22 @@ fn trim_by(s: &[u8], strip: impl Fn(u8) -> bool) -> &[u8] {
     s.get(start..end).unwrap_or_default()
 }
 
+/// Spark's `StringUtils.isTrueString` / `isFalseString` on trimmed input:
+/// `t`, `true`, `y`, `yes`, `1` and `f`, `false`, `n`, `no`, `0`, in any
+/// letter case. `None` is neither.
+pub(crate) fn parse_boolean(s: &[u8]) -> Option<bool> {
+    let s = trim_all(s);
+    const TRUE: [&[u8]; 5] = [b"t", b"true", b"y", b"yes", b"1"];
+    const FALSE: [&[u8]; 5] = [b"f", b"false", b"n", b"no", b"0"];
+    if TRUE.iter().any(|w| s.eq_ignore_ascii_case(w)) {
+        Some(true)
+    } else if FALSE.iter().any(|w| s.eq_ignore_ascii_case(w)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// `UTF8String.toLong` (`exact == false`, legacy cast: a fraction after
 /// `.` is dropped) or `toLongExact` (`exact`, ANSI cast: digits only), on
 /// trimmed input. `None` is malformed or out of `i64` range.
