@@ -217,7 +217,7 @@ fn group(int: &str) -> String {
     let n = int.len();
     let mut out = String::with_capacity(n + n / 3);
     for (i, c) in int.chars().enumerate() {
-        if i > 0 && (n - i) % 3 == 0 {
+        if i > 0 && (n - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -791,7 +791,7 @@ mod tests {
         assert_eq!(f("%.1f", &[Val::F64(0.25)]), "0.3");
         assert_eq!(f("%.0f", &[Val::F64(2.5)]), "3");
         assert_eq!(f("%,.2f", &[Val::F64(1234567.891)]), "1,234,567.89");
-        assert_eq!(f("%08.2f", &[Val::F64(-3.14159)]), "-0003.14");
+        assert_eq!(f("%08.2f", &[Val::F64(-3.15159)]), "-0003.15");
         assert_eq!(f("%e", &[Val::F64(12345.6789)]), "1.234568e+04");
         assert_eq!(f("%.2E", &[Val::F64(0.000123)]), "1.23E-04");
         assert_eq!(f("%g", &[Val::F64(123.456)]), "123.456");
