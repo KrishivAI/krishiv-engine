@@ -23,8 +23,8 @@ use krishiv_common::error::{
     AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ColumnNotDefinedInTable,
     ForbiddenOperation, InternalError, InvalidPartitionColumnDataType,
     InvalidPartitionOperationPartitionSchemaIsEmpty, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1232, LegacyErrorTemp1237,
-    LegacyErrorTemp1251, PartitionsAlreadyExist, PartitionsNotFound,
+    LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1169, LegacyErrorTemp1232,
+    LegacyErrorTemp1237, LegacyErrorTemp1251, PartitionsAlreadyExist, PartitionsNotFound,
 };
 use krishiv_plan::Literal;
 use krishiv_plan::analyzer::{Privilege, Securable, authorize};
@@ -33,6 +33,7 @@ use krishiv_sql::ast::{BucketSpec, Expr, PartitionSpec, PartitionWithLocation};
 use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
+use crate::functions::col;
 use crate::session::Session;
 use crate::store::{
     BucketMeta, CatalogPartition, CatalogStore, CatalogTable, PartitionStats, StoreColumn,
@@ -494,7 +495,21 @@ impl Session {
     ) -> Result<Vec<(String, String)>, KrishivError> {
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let written = self.written_spec(spec, original).await?;
-        Ok(normalize_spec(table, &written, case_sensitive)?
+        let normalized = normalize_spec(table, &written, case_sensitive)?;
+        // `PreprocessTableInsertion`: a written spec names every partition column (a dynamic one by key alone).
+        if !normalized.is_empty() && normalized.len() != table.layout.partition_columns.len() {
+            return Err(LegacyErrorTemp1169 {
+                table_name: table_sql_id(table),
+                normalized_part_spec: normalized
+                    .iter()
+                    .map(|(k, _)| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                part_col_names: table.layout.partition_columns.join(","),
+            }
+            .into());
+        }
+        Ok(normalized
             .into_iter()
             .filter_map(|(k, v)| v.map(|v| (k, v)))
             .collect())
@@ -599,47 +614,50 @@ impl Session {
     /// dropped here: Spark keeps a catalog partition whose directory is gone.
     pub(crate) fn register_partitions(&self, name: &TableName, dirs: &[String], file_stats: bool) {
         let store = &self.state.catalog.store;
-        let Some(table) = store.table(&name.namespace, &name.name) else {
-            return;
-        };
-        if !table.is_partitioned() || dirs.is_empty() {
-            return;
-        }
-        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
-        let mut changed = (*table).clone();
-        let now = crate::table_commands::now_ms();
-        for dir in dirs {
-            let Some(spec) = spec_of_dir(dir, &table.layout.partition_columns, case_sensitive)
-            else {
-                continue;
+        // The swap can lose to a concurrent write or ALTER; read the table again and merge again (a partition
+        // already registered is skipped, so a retry is harmless) until it lands or the table is gone.
+        loop {
+            let Some(table) = store.table(&name.namespace, &name.name) else {
+                return;
             };
-            if find_partition(&changed, &spec).is_some() {
-                continue;
+            if !table.is_partitioned() || dirs.is_empty() {
+                return;
             }
-            let location = dir
-                .split('/')
-                .fold(table.location.clone(), |p, s| p.join(s));
-            let mut parameters = BTreeMap::new();
-            if file_stats {
-                let files = listed_files(&location);
-                parameters.insert("numFiles".to_owned(), files.len().to_string());
-                parameters.insert(
-                    "totalSize".to_owned(),
-                    files.iter().map(|(_, n)| n).sum::<u64>().to_string(),
-                );
-                parameters.insert("transient_lastDdlTime".to_owned(), (now / 1000).to_string());
+            let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+            let mut changed = (*table).clone();
+            let now = crate::table_commands::now_ms();
+            for dir in dirs {
+                let Some(spec) = spec_of_dir(dir, &table.layout.partition_columns, case_sensitive)
+                else {
+                    continue;
+                };
+                if find_partition(&changed, &spec).is_some() {
+                    continue;
+                }
+                let location = dir
+                    .split('/')
+                    .fold(table.location.clone(), |p, s| p.join(s));
+                let mut parameters = BTreeMap::new();
+                if file_stats {
+                    let files = listed_files(&location);
+                    parameters.insert("numFiles".to_owned(), files.len().to_string());
+                    parameters.insert(
+                        "totalSize".to_owned(),
+                        files.iter().map(|(_, n)| n).sum::<u64>().to_string(),
+                    );
+                    parameters.insert("transient_lastDdlTime".to_owned(), (now / 1000).to_string());
+                }
+                changed.layout.partitions.push(CatalogPartition {
+                    spec,
+                    location,
+                    parameters,
+                    created_ms: now,
+                    stats: None,
+                });
             }
-            changed.layout.partitions.push(CatalogPartition {
-                spec,
-                location,
-                parameters,
-                created_ms: now,
-                stats: None,
-            });
-        }
-        if changed != *table {
-            // A concurrent change wins: its own write registers what it wrote.
-            let _ = store.replace_table(&table, changed);
+            if changed == *table || store.replace_table(&table, changed) {
+                return;
+            }
         }
     }
 
@@ -797,7 +815,11 @@ impl Session {
             .collect();
         names.sort();
         let rows = names.into_iter().map(|n| vec![Some(n)]).collect();
-        self.string_frame(&["partition"], rows).await
+        // A union of rows keeps no order, so sort the frame itself.
+        Ok(self
+            .string_frame(&["partition"], rows)
+            .await?
+            .order_by([col("partition")]))
     }
 
     /// The partition a `DESCRIBE ... PARTITION (...)` names (`DescribeTableCommand

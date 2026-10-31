@@ -672,7 +672,7 @@ impl Parser<'_> {
                 word(self, "NULL")
                     || word(self, "TRUE")
                     || word(self, "FALSE")
-                    || word(self, "INTERVAL")
+                    || (word(self, "INTERVAL") && self.interval_follows())
                     // `identifier EQ DEFAULT`.
                     || (word(self, "DEFAULT")
                         && (self.sym_at(1, Sym::Comma) || self.sym_at(1, Sym::RParen)))

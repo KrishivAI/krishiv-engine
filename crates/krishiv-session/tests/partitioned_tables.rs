@@ -923,11 +923,19 @@ fn partition_values_are_escaped_and_filtered() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     // A failed insert registers nothing.
-    assert!(
-        err(&s, "INSERT INTO t PARTITION (p = 'y', q = 9) SELECT 1 / 0")
-            .error_class()
-            .name()
-            != ""
+    assert_eq!(
+        class(&s, "INSERT INTO t PARTITION (p = 'y', q = 9) SELECT 1 / 0"),
+        "DIVIDE_BY_ZERO"
+    );
+    // A bare `INTERVAL` is no constant.
+    assert_eq!(
+        class(&s, "INSERT INTO t PARTITION (p = INTERVAL, q = 1) SELECT 1"),
+        "PARSE_SYNTAX_ERROR"
+    );
+    // A written spec names every partition column (`PreprocessTableInsertion`).
+    assert_eq!(
+        class(&s, "INSERT INTO t PARTITION (p = 'y') SELECT 1"),
+        "_LEGACY_ERROR_TEMP_1169"
     );
     assert!(
         !rows(&s, "SHOW PARTITIONS t")
@@ -1028,4 +1036,15 @@ fn alter_column_drop_default_and_comment_property() {
     let extended = rows(&s, "DESC EXTENDED t");
     assert!(extended.contains(&"Comment\tadded comment".to_owned()));
     assert!(!extended.iter().any(|r| r.starts_with("Table Properties")));
+}
+
+#[test]
+fn partitioned_ctas_keeps_dotted_column_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE d USING parquet PARTITIONED BY (p) AS SELECT 1 AS `a.b`, 'x' AS p",
+    );
+    assert_eq!(rows(&s, "SHOW PARTITIONS d"), ["p=x"]);
 }

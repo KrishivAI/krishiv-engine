@@ -266,8 +266,7 @@ impl Engine for SessionEngine {
             "krishiv-golden-warehouse-{}-{n}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&warehouse);
-        std::fs::create_dir_all(&warehouse)
+        std::fs::create_dir(&warehouse)
             .map_err(|e| harness_error(format!("warehouse {}: {e}", warehouse.display())))?;
         self.warehouse_text = warehouse.display().to_string();
         self.warehouse = Some(warehouse);

@@ -1347,7 +1347,12 @@ impl Session {
         }
         // The partition columns go last, in the table's order.
         let df = if table.is_partitioned() {
-            df.select(table.columns.iter().map(|c| col(&c.name)))
+            df.select(
+                table
+                    .columns
+                    .iter()
+                    .map(|c| col(&format!("`{}`", c.name.replace('`', "``")))),
+            )
         } else {
             df.clone()
         };
