@@ -79,7 +79,7 @@ impl ExplainFormat {
 }
 
 /// Arguments of `krishiv sql`.
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug)]
 #[command(group(clap::ArgGroup::new("explain").args(["explain_analyze", "explain_verbose"])))]
 pub(crate) struct SqlArgs {
     /// SQL to run (one or more `;`-separated statements).
@@ -109,7 +109,7 @@ pub(crate) struct SqlArgs {
     /// pipe. Agent mode stops reading the query one row past the cap and
     /// reports `stopped (row cap)` with a `≥ N` lower bound.
     #[arg(long)]
-    max_rows: Option<usize>,
+    pub(crate) max_rows: Option<usize>,
     /// Wall-clock budget per statement in seconds (agent mode): checked
     /// between result batches; when spent, the query is dropped and the
     /// table reports `stopped (time cap)` with the rows read so far. A
@@ -124,7 +124,7 @@ pub(crate) struct SqlArgs {
     table: Vec<(String, String)>,
     /// Print each statement's elapsed time on stderr.
     #[arg(long)]
-    timing: bool,
+    pub(crate) timing: bool,
     /// Run each query and print its profile (`EXPLAIN ANALYZE`) instead of its rows.
     #[arg(long = "explain-analyze", conflicts_with = "explain_verbose")]
     explain_analyze: bool,
@@ -145,8 +145,15 @@ pub(crate) struct SqlArgs {
     explain_format: Option<ExplainFormat>,
 }
 
+impl SqlArgs {
+    /// The result format `-o` names (`table` without it).
+    pub(crate) fn output_mode(&self) -> OutputMode {
+        self.format.map_or(OutputMode::Table, Format::mode)
+    }
+}
+
 /// Default row cap of agent mode and the REPL.
-const DEFAULT_MAX_ROWS: usize = 1000;
+pub(crate) const DEFAULT_MAX_ROWS: usize = 1000;
 
 /// A finite, positive number of seconds.
 fn positive_seconds(s: &str) -> Result<f64, String> {
@@ -188,7 +195,7 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
 /// The interactive REPL (`krishiv sql` with no `-e`/`-f` on a terminal).
 fn run_repl_command(args: &SqlArgs) -> i32 {
     match build_session(&args.conf, &args.table) {
-        Ok(session) => crate::repl::run_repl(&session, args.max_rows.unwrap_or(DEFAULT_MAX_ROWS)),
+        Ok(session) => crate::repl::run_repl(&session, args),
         Err(msg) => {
             let _ = writeln!(io::stderr(), "{msg}");
             1
@@ -198,7 +205,7 @@ fn run_repl_command(args: &SqlArgs) -> i32 {
 
 /// Whether agent mode applies: `--agent`, or stdout piped/redirected
 /// without an explicit `--format`.
-fn is_agent(args: &SqlArgs) -> bool {
+pub(crate) fn is_agent(args: &SqlArgs) -> bool {
     args.agent || (!io::stdout().is_terminal() && args.format.is_none())
 }
 
@@ -206,45 +213,18 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
     let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
     let session = build_session(&args.conf, &args.table)?;
     let agent = is_agent(args);
-    let mode = args.format.map_or(OutputMode::Table, Format::mode);
+    let mode = args.output_mode();
     let mut out = io::BufWriter::new(io::stdout().lock());
     for (idx, (line_offset, stmt)) in split_statements(&input).into_iter().enumerate() {
         let start = Instant::now();
         let query_id = format!("q{}", idx.saturating_add(1));
-        let df = futures::executor::block_on(session.sql(&stmt)).map_err(|e| {
-            if agent {
-                print_agent_error(
-                    &mut out,
-                    &AgentStatement {
-                        text: &stmt,
-                        line_offset,
-                        query_id: &query_id,
-                        start: &start,
-                    },
-                    &e,
-                );
-                let _ = out.flush();
-            }
-            describe(&stmt, line_offset, &e)
-        })?;
-        if args.explain_analyze || args.explain_verbose {
-            print_explain(&df, args)?;
-        } else if agent {
-            print_agent_result(
-                &mut out,
-                &AgentStatement {
-                    text: &stmt,
-                    line_offset,
-                    query_id: &query_id,
-                    start: &start,
-                },
-                &df,
-                &session,
-                args,
-            )?;
-        } else {
-            print_result(&mut out, &df, &session, mode, args)?;
-        }
+        let statement = AgentStatement {
+            text: &stmt,
+            line_offset,
+            query_id: &query_id,
+            start: &start,
+        };
+        run_one(&session, args, agent, mode, &statement, &mut out)?;
         // Flush per statement: on the next statement's failure the rows
         // and agent errors printed so far must already be out.
         out.flush()
@@ -256,57 +236,30 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs one REPL statement and prints its result; the REPL exit-code
-/// contribution (0 ok, 1 query or I/O error). Timing prints on stderr
-/// when `timer` (`.timer on`).
-pub(crate) fn print_batches(
+/// Plans, runs and prints one statement the way `krishiv sql -e` does: the explain flags, agent output or the
+/// chosen `mode`. Shared by the batch path and the REPL, so both honour the same flags.
+pub(crate) fn run_one(
     session: &krishiv::Session,
-    stmt: &str,
+    args: &SqlArgs,
+    agent: bool,
     mode: OutputMode,
-    max_rows: usize,
-    timer: bool,
+    statement: &AgentStatement<'_>,
     out: &mut dyn Write,
-) -> i32 {
-    let start = Instant::now();
-    let outcome = run_statement(session, stmt, mode, max_rows, out);
-    if timer {
-        let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
-    }
-    outcome
-}
-
-/// Collects `stmt` and renders it in `mode`, capped to `max_rows` rows
-/// for display; 0 on success, else the error text.
-fn run_statement(
-    session: &krishiv::Session,
-    stmt: &str,
-    mode: OutputMode,
-    max_rows: usize,
-    out: &mut dyn Write,
-) -> i32 {
-    let df = match futures::executor::block_on(session.sql(stmt)) {
-        Ok(df) => df,
-        Err(e) => {
-            let _ = writeln!(io::stderr(), "{}", describe(stmt, 0, &e));
-            return 1;
-        }
-    };
-    match collect_rows(&df, session, max_rows) {
-        Ok(c) => {
-            let _ = write!(
-                out,
-                "{}",
-                render_mode(
-                    mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls
-                )
-            );
+) -> Result<(), String> {
+    let stmt = statement.text;
+    let df = futures::executor::block_on(session.sql(stmt)).map_err(|e| {
+        if agent {
+            print_agent_error(out, statement, &e);
             let _ = out.flush();
-            0
         }
-        Err(msg) => {
-            let _ = writeln!(io::stderr(), "{msg}");
-            1
-        }
+        describe(stmt, statement.line_offset, &e)
+    })?;
+    if args.explain_analyze || args.explain_verbose {
+        print_explain(out, &df, args)
+    } else if agent {
+        print_agent_result(out, statement, &df, session, args)
+    } else {
+        print_result(out, &df, session, mode, args)
     }
 }
 
@@ -322,7 +275,7 @@ fn explain_format(args: &SqlArgs) -> ExplainFormat {
 
 /// Prints the profile (`--explain-analyze`) or the optimizer's stages
 /// (`--explain-verbose`) of the query `df`, in the requested format.
-fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
+fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
     // One run per branch: the `Json`/`Mermaid`/`Dot` arms share
     // `explain_*_with`, so there is a single route to each document and no
     // second rendering that can drift.
@@ -348,7 +301,6 @@ fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
                 .map_err(|e| e.to_string())?,
         }
     };
-    let mut out = io::stdout().lock();
     writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
 }
 
@@ -430,15 +382,15 @@ fn print_result(
 }
 
 /// The statement an agent result is for.
-struct AgentStatement<'a> {
+pub(crate) struct AgentStatement<'a> {
     /// The statement text.
-    text: &'a str,
+    pub(crate) text: &'a str,
     /// Lines before it in its file (for error positions).
-    line_offset: usize,
+    pub(crate) line_offset: usize,
     /// Its query id (`q1`, `q2`, ...).
-    query_id: &'a str,
+    pub(crate) query_id: &'a str,
     /// When it started.
-    start: &'a Instant,
+    pub(crate) start: &'a Instant,
 }
 
 /// Runs `df` and prints the v1 agent table from `krishiv-session::agent`.

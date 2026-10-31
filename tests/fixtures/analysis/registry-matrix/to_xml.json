@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "to_xml#09e689631c09/ansi_on",
+      "reason": "SELECT to_xml(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#09e689631c09/ansi_off",
+      "reason": "SELECT to_xml(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#293060e7a1af/ansi_on",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_xml#293060e7a1af/ansi_off",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_xml#37cf933771d3/ansi_on",
+      "reason": "SELECT to_xml(NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#37cf933771d3/ansi_off",
+      "reason": "SELECT to_xml(NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#4cdca211235c/ansi_on",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_xml#4cdca211235c/ansi_off",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_xml#5f6110d7957f/ansi_on",
+      "reason": "SELECT to_xml(INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#5f6110d7957f/ansi_off",
+      "reason": "SELECT to_xml(INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#793cff558ee4/ansi_on",
+      "reason": "SELECT to_xml(INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#793cff558ee4/ansi_off",
+      "reason": "SELECT to_xml(INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#9cd3415677a2/ansi_on",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_xml#9cd3415677a2/ansi_off",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_xml#b33cc710f2e4/ansi_on",
+      "reason": "SELECT to_xml(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#b33cc710f2e4/ansi_off",
+      "reason": "SELECT to_xml(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#d22ca68bfb3b/ansi_on",
+      "reason": "SELECT to_xml(NULL, map('timestampFormat', 'dd/MM/yyyy')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#d22ca68bfb3b/ansi_off",
+      "reason": "SELECT to_xml(NULL, map('timestampFormat', 'dd/MM/yyyy')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_xml#e3af81045096/ansi_on",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(NULL AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    },
+    {
+      "id": "to_xml#e3af81045096/ansi_off",
+      "reason": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(NULL AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_xml"
+}

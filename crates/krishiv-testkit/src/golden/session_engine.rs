@@ -12,8 +12,7 @@
 //!   own error, and the statement is scored on that answer.
 //!
 //! The harness adds no SQL support of its own: everything the score measures is the session's
-//! answer. Rows are rendered by [`super::cell`] from the batches and the result's Spark types
-//! (the rows of a `DESCRIBE` table or query padded as Spark's `formatDescribeTableOutput` pads them);
+//! answer. Rows are rendered by [`super::cell`] from the batches and the result's Spark types;
 //! row order counts when [`super::sorted::is_semantically_sorted`] says so on the analyzed plan.
 //! Each statement runs under a wall-clock limit ([`SessionEngine::with_timeout`]): a statement
 //! that exceeds it is cancelled (its future is dropped, which cancels the query) and recorded
@@ -34,6 +33,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::{Executor, ExecutorConfig, TokioExecutor};
 use krishiv_session::Session;
 use krishiv_sql::ParserOptions;
+use krishiv_sql::ast::{DescribeKind, Statement};
 use krishiv_types::DataType;
 
 use super::cell::{Cell, CellFormat};
@@ -270,6 +270,13 @@ impl Engine for SessionEngine {
             Ok((analyzed, batches))
         })?;
         let format = format?;
+        // `HiveResult.formatDescribeTableOutput`: the rows of DESCRIBE TABLE / COLUMN / QUERY print
+        // each of their three cells left-aligned in 20 characters (`DESCRIBE SCHEMA` is not padded).
+        let padded = matches!(
+            krishiv_sql::parse_statement(sql, &self.options()),
+            Ok(Statement::Describe(d))
+                if matches!(d.kind, DescribeKind::Table { .. } | DescribeKind::Query { .. })
+        );
         let output = &analyzed.output;
         let schema = format!(
             "struct<{}>",
@@ -279,11 +286,6 @@ impl Engine for SessionEngine {
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        let describe = schema == DESCRIBE_SCHEMA
-            && matches!(
-                krishiv_sql::parse_statement(sql, &self.options()),
-                Ok(krishiv_sql::ast::Statement::Describe(_))
-            );
         let mut rows = Vec::new();
         for batch in &batches {
             // Each column's Spark type, from the batch's own field.
@@ -300,11 +302,12 @@ impl Engine for SessionEngine {
                     .zip(&types)
                     .map(|(col, ty)| arrow_cell(col, row, ty))
                     .collect::<Result<Vec<_>, _>>()?;
-                rows.push(if describe {
-                    describe_row(&format, &cells)
+                let cells = if padded && cells.len() == 3 {
+                    cells.into_iter().map(describe_cell).collect()
                 } else {
-                    format.render_row(&cells)
-                });
+                    cells
+                };
+                rows.push(format.render_row(&cells));
             }
         }
         Ok(QueryOutput {
@@ -315,24 +318,15 @@ impl Engine for SessionEngine {
     }
 }
 
-/// The schema of `DESCRIBE [EXTENDED] table` and `DESCRIBE QUERY`.
-const DESCRIBE_SCHEMA: &str = "struct<col_name:string,data_type:string,comment:string>";
-
-/// A row of a `DESCRIBE` command as `HiveResult.hiveResultString` renders it
-/// (`formatDescribeTableOutput`): each cell, a NULL comment as the empty string,
-/// left-justified to 20 characters (`String.format("%-20s", _)`, counted in UTF-16 units).
-fn describe_row(format: &CellFormat, cells: &[Cell]) -> Vec<String> {
-    cells
-        .iter()
-        .map(|c| {
-            let text = match c {
-                Cell::Null => String::new(),
-                c => format.render(c, true),
-            };
-            let width = text.encode_utf16().count();
-            format!("{text}{}", " ".repeat(20usize.saturating_sub(width)))
-        })
-        .collect()
+/// A DESCRIBE cell as Java's `String.format("%-20s", ...)` prints it, a NULL comment as empty.
+/// The width counts UTF-16 code units, as `String.length()` does.
+fn describe_cell(cell: Cell) -> Cell {
+    let text = match cell {
+        Cell::Str(s) => s,
+        _ => String::new(),
+    };
+    let width = 20_usize.saturating_sub(text.encode_utf16().count());
+    Cell::Str(format!("{text}{}", " ".repeat(width)))
 }
 
 /// The value at `row` of `col`, a column of Spark type `ty`.
@@ -813,35 +807,6 @@ mod tests {
         assert_eq!(out.sorted, Some(false));
         let sorted = e.execute("SELECT 2 AS a ORDER BY a").map_err(err)?;
         assert_eq!(sorted.sorted, Some(true));
-        Ok(())
-    }
-
-    #[test]
-    fn describe_rows_are_padded_like_hive_results() -> R {
-        let mut e = engine(vec![]).map_err(err)?;
-        let out = e
-            .execute("DESCRIBE QUERY SELECT 1 AS a, 'x' AS long_column_name_over_20")
-            .map_err(err)?;
-        assert_eq!(
-            out.rows,
-            [
-                [
-                    "a                   ",
-                    "int                 ",
-                    "                    "
-                ],
-                [
-                    "long_column_name_over_20",
-                    "string              ",
-                    "                    "
-                ],
-            ]
-        );
-        // Other results with that schema keep their cells.
-        let plain = e
-            .execute("SELECT 'a' AS col_name, 'int' AS data_type, 'c' AS comment")
-            .map_err(err)?;
-        assert_eq!(plain.rows, [["a", "int", "c"]]);
         Ok(())
     }
 
@@ -1449,5 +1414,22 @@ mod tests {
             Cell::Binary(b"ab".to_vec())
         );
         Ok(())
+    }
+
+    #[test]
+    fn describe_cells_pad_to_twenty_characters() {
+        // `%-20s`: short text is padded, a NULL comment prints as spaces, long text is kept whole.
+        assert_eq!(
+            describe_cell(Cell::Str("a".to_owned())),
+            Cell::Str(format!("a{}", " ".repeat(19)))
+        );
+        assert_eq!(describe_cell(Cell::Null), Cell::Str(" ".repeat(20)));
+        // A supplementary character is two UTF-16 code units, so it takes two off the padding.
+        assert_eq!(
+            describe_cell(Cell::Str("\u{1F600}".to_owned())),
+            Cell::Str(format!("\u{1F600}{}", " ".repeat(18)))
+        );
+        let long = "x".repeat(25);
+        assert_eq!(describe_cell(Cell::Str(long.clone())), Cell::Str(long));
     }
 }

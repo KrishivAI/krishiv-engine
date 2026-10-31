@@ -33,6 +33,7 @@ mod r#struct;
 mod text;
 mod url;
 mod vector;
+mod xml;
 
 use std::collections::HashMap;
 use std::fmt;

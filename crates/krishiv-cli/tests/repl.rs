@@ -188,6 +188,31 @@ fn agent_errors_are_json_with_class_state_and_position() {
     assert!(err(&o).contains("[PARSE_SYNTAX_ERROR]"), "{}", err(&o));
 }
 
+/// The agent output may use at most this share of the table's proxy tokens on TPC-H q1 (measured 52%, pinned
+/// with headroom: a format change that loses the saving fails here).
+const PINNED_TOKEN_RATIO_PERCENT: usize = 60;
+
+/// A tokenizer-free proxy for an LLM's token count: each run of letters, digits and underscores is one token, and so is each
+/// other non-space character (table borders and separators cost a token each).
+fn proxy_tokens(text: &str) -> usize {
+    let mut count = 0;
+    let mut in_word = false;
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            if !in_word {
+                count += 1;
+            }
+            in_word = true;
+        } else {
+            in_word = false;
+            if !c.is_whitespace() {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 #[test]
 fn agent_q1_is_smaller_than_the_table() {
     let lineitem = format!(
@@ -209,6 +234,12 @@ fn agent_q1_is_smaller_than_the_table() {
     assert!(
         agent_len < table_len,
         "table {table_len} vs agent {agent_len}"
+    );
+    let (table_tokens, agent_tokens) = (proxy_tokens(&out(&table)), proxy_tokens(&out(&agent)));
+    eprintln!("agent/table proxy tokens: {agent_tokens}/{table_tokens}");
+    assert!(
+        agent_tokens * 100 <= table_tokens * PINNED_TOKEN_RATIO_PERCENT,
+        "agent {agent_tokens} vs table {table_tokens} proxy tokens"
     );
     let t = out(&agent);
     assert!(t.starts_with("-- data from lineitem; "), "{t}");

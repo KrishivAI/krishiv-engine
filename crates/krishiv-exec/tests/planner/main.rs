@@ -12,6 +12,7 @@
 
 mod conditionals;
 mod cse;
+mod date_arith;
 mod exchanges;
 mod existence;
 mod folding;
