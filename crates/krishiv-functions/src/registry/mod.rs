@@ -275,7 +275,14 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
     let name = match name {
         "timestampadd" => "timestampadd",
         "timestampdiff" => "timestampdiff",
+        // `base[index]`: the lowering of a subscript (Spark's `ExtractValue`).
+        "__subscript" => "__subscript",
         _ => return None,
+    };
+    let arity = if name == "__subscript" {
+        Arity::new([false, false, true, false, false, false, false], "2")
+    } else {
+        Arity::new([false, false, false, true, false, false, false], "3")
     };
     Some(SparkFunction {
         name,
@@ -283,7 +290,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         since: SparkProfile::V3_5,
         deterministic: Some(true),
         kind: Some(FunctionKind::Scalar),
-        arity: Arity::new([false, false, false, true, false, false, false], "3"),
+        arity,
     })
 }
 

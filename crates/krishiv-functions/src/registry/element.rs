@@ -9,7 +9,9 @@
 //! an `INT` index; `element_at` takes an array and an `INT` index, or a map
 //! and a key of the map's key type.
 
-use krishiv_common::error::{DatatypeMismatchUnexpectedInputType, KrishivError};
+use krishiv_common::error::{
+    DatatypeMismatchUnexpectedInputType, InvalidExtractBaseFieldType, KrishivError,
+};
 use krishiv_types::DataType;
 
 use super::defs::{Spec, exact, scalar};
@@ -65,6 +67,21 @@ fn try_element_at(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     element_at_named("try_element_at", c)
 }
 
+/// `base[index]` (the lowering of a subscript): the array element or the map
+/// value, NULL when absent. A struct base never gets here: the analyzer
+/// reads it as a field.
+fn subscript(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    match c.data_type(0) {
+        Some(DataType::Map(m)) => Ok(ArgType::new(m.value_type().clone(), true)),
+        Some(DataType::Array(a)) => Ok(ArgType::new(a.element_type().clone(), true)),
+        other => Err(InvalidExtractBaseFieldType {
+            base: format!("\"{}\"", c.sql(0).unwrap_or_default()),
+            other: quoted(other),
+        }
+        .into()),
+    }
+}
+
 /// The second argument: the map's key type, else an `INT` index.
 fn element_at_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let second = match c.data_type(0) {
@@ -87,6 +104,7 @@ pub(super) fn specs() -> Vec<Spec> {
         get,
     ));
     let built = Inputs::Built(InputBuilder(element_at_inputs));
+    out.extend(scalar(&["__subscript"], &built, subscript));
     out.extend(scalar(&["element_at"], &built, element_at));
     out.extend(scalar(&["try_element_at"], &built, try_element_at));
     out

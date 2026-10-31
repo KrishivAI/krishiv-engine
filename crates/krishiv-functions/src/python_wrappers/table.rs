@@ -21,6 +21,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>>", "operator"),
     ("if", "no PySpark function"),
     (
+        "__subscript",
+        "the lowering of `base[index]`; PySpark: `Column.getItem`",
+    ),
+    (
         "timestampadd",
         "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
     ),
