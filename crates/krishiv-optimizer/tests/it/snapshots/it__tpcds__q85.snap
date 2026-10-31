@@ -30,8 +30,8 @@ Project [substring(r_reason_desc, 1, 20)#134, avg1#135, avg2#136, avg(wr_fee)#13
                                              :- Project [wr_item_sk#36, wr_refunded_cdemo_sk#38, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_order_number#47, wr_fee#52, wr_refunded_cash#54, ca_state#98, ca_country#100]
                                              :  +- Join Inner, (ca_address_sk#90 == wr_refunded_addr_sk#40)
                                              :     :- Scan spark_catalog.default.web_returns [wr_item_sk#36, wr_refunded_cdemo_sk#38, wr_refunded_addr_sk#40, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_order_number#47, wr_fee#52, wr_refunded_cash#54]
-                                             :     +- Filter (((cse_138#138 and (ca_state#98 IN ('IN', 'OH', 'NJ'))) or (cse_138#138 and (ca_state#98 IN ('WI', 'CT', 'KY')))) or (cse_138#138 and (ca_state#98 IN ('LA', 'IA', 'AR'))))
-                                             :        +- Project [ca_address_sk#90, ca_state#98, ca_country#100, (ca_country#100 == 'United States') AS cse_138#138]
+                                             :     +- Filter (((krishiv_cse_0#4294967296 and (ca_state#98 IN ('IN', 'OH', 'NJ'))) or (krishiv_cse_0#4294967296 and (ca_state#98 IN ('WI', 'CT', 'KY')))) or (krishiv_cse_0#4294967296 and (ca_state#98 IN ('LA', 'IA', 'AR'))))
+                                             :        +- Project [ca_address_sk#90, ca_state#98, ca_country#100, (ca_country#100 == 'United States') AS krishiv_cse_0#4294967296]
                                              :           +- Scan spark_catalog.default.customer_address [ca_address_sk#90, ca_state#98, ca_country#100]
                                              +- Filter ((((cd_marital_status#74 == 'M') and (cd_education_status#75 == 'Advanced Degree')) or ((cd_marital_status#74 == 'S') and (cd_education_status#75 == 'College'))) or ((cd_marital_status#74 == 'W') and (cd_education_status#75 == '2 yr Degree')))
                                                 +- Shared #1, printed above
