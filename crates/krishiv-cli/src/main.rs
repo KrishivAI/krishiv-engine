@@ -15,6 +15,11 @@
 mod archive;
 mod bundle;
 mod common;
+mod complete;
+mod format;
+mod highlight;
+mod history;
+mod repl;
 mod sql;
 
 use clap::Parser;

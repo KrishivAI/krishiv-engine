@@ -9,8 +9,13 @@ The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate
 ## Key files
 Paths are relative to this crate.
 - `src/main.rs` subcommand dispatch and the allocator/memory hook set-up
-- `src/sql.rs` the `krishiv sql` subcommand: input (`-e`, `-f`, stdin), output (`-o`), `--conf`, `--table`, `--timing`
-- `tests/sql.rs` end-to-end tests of `krishiv sql`; `tests/version.rs` version output
+- `src/sql.rs` the `krishiv sql` subcommand: input (`-e`, `-f`, stdin), output (`-o`), `--conf`, `--table`, `--timing`, `--agent`, `--max-rows`, `--max-seconds`
+- `src/repl.rs` the interactive loop (no `-e`/`-f` on a terminal): `.timer`, `.format`, `.complete`, `.history`, history persistence
+- `src/complete.rs` completion sources (keywords, function registry, session catalog, config registry)
+- `src/highlight.rs` ANSI highlighting of statements
+- `src/history.rs` `~/.krishiv/history` (10,000 entries; sensitive `SET` lines not persisted)
+- `src/format.rs` one renderer per output mode (agent output lives in `krishiv-session::agent`)
+- `tests/sql.rs` end-to-end tests of `krishiv sql`; `tests/repl.rs` modes, agent detection, caps; `tests/version.rs` version output
 - `Cargo.toml` features (`mimalloc` links `krishiv-alloc` and `krishiv-memory`)
 
 ## Extension points

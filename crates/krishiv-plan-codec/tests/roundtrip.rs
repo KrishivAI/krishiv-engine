@@ -112,6 +112,22 @@ fn every_variant_has_a_case_and_round_trips() {
     assert!(missing.is_empty(), "no round-trip case for {missing:?}");
 }
 
+/// A scan's wait for a runtime filter survives the wire. The field is
+/// ignorable, so the goldens only ever hold it unset.
+#[test]
+fn a_filters_scan_wait_round_trips() {
+    let mut join = cases()
+        .into_iter()
+        .find_map(|(_, plan)| match plan.root() {
+            PhysNode::HashJoin(j) if !j.runtime_filters.is_empty() => Some(j.clone()),
+            _ => None,
+        })
+        .unwrap();
+    join.runtime_filters[0].options.scan_waits = true;
+    let plan = plan_of(PhysNode::HashJoin(join));
+    assert_eq!(round_trip(&plan), plan);
+}
+
 #[test]
 fn a_shared_subexpression_is_stored_once() {
     // `a > 10 AND a IS NOT NULL`: the column, the literal and three calls.

@@ -70,6 +70,15 @@ fn splits(max_partition_bytes: u64) -> SplitConfig {
     }
 }
 
+/// As [`splits`], with an open cost that keeps every split one morsel
+/// (the floor of a morsel's size): for tests of what happens inside one.
+fn whole_splits(max_partition_bytes: u64) -> SplitConfig {
+    SplitConfig {
+        open_cost_in_bytes: 1 << 40,
+        ..splits(max_partition_bytes)
+    }
+}
+
 struct Leaf(Arc<dyn Source>);
 
 impl ExecNode for Leaf {
@@ -599,7 +608,7 @@ fn prefetch_hides_store_latency() {
                 prefetch_bytes,
                 ..ScanOptions::default()
             },
-            splits(1 << 30),
+            whole_splits(1 << 30),
         )
         .build(ScanPushdowns::default())
         .unwrap();
@@ -653,7 +662,7 @@ fn footers_are_read_ahead_across_a_partition() {
         files,
         o,
         ScanOptions::default(),
-        splits(1 << 30),
+        whole_splits(1 << 30),
     )
     .with_partitions(vec![partition])
     .source(ScanPushdowns::default())
@@ -673,6 +682,111 @@ fn footers_are_read_ahead_across_a_partition() {
     let m = scan.metrics();
     assert_eq!((m.splits, m.rows), (4, 1200));
     assert!(m.units > 0 && m.bytes > 0);
+}
+
+/// A scan reporting `row_index` keeps the planned split whole (a text
+/// format would count the lines before every piece again), and the indexes
+/// come back in file order.
+#[test]
+fn a_scan_reporting_row_index_keeps_whole_splits() {
+    let t = Timed::new(StorePolicy::UNPACED);
+    let file = t.file("m/f", 4000);
+    let fx = MockFixture::default();
+    let o = krishiv_io::FormatOptions::defaults(fx.format().options());
+    let scan = FileScan::new(
+        fx.format(),
+        t.sched.context(),
+        schema(),
+        vec![file],
+        o,
+        ScanOptions::default(),
+        splits(1 << 30),
+    )
+    .source(ScanPushdowns {
+        metadata: MetadataCols {
+            row_index: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    })
+    .unwrap();
+    let scan = Arc::new(scan);
+    let out =
+        t.rt.block_on(run(
+            &t.pool,
+            Arc::new(Leaf(Arc::clone(&scan) as Arc<dyn Source>)),
+            4,
+        ))
+        .unwrap();
+    let indexes: Vec<i64> = out
+        .iter()
+        .flat_map(|b| {
+            let m = b.column(b.num_columns() - 1).as_struct();
+            let row = m.column_by_name("row_index").unwrap();
+            row.as_primitive::<Int64Type>().values().to_vec()
+        })
+        .collect();
+    assert_eq!(indexes, (0..4000).collect::<Vec<i64>>());
+    assert_eq!(scan.metrics().splits, 1);
+}
+
+/// One split of a file whose units are many is cut into about four
+/// morsels per driver; the drivers read every unit once and the rows come
+/// back in file order, with the planned split as `_metadata`'s block.
+#[test]
+fn a_split_is_cut_into_morsels_for_every_driver() {
+    let t = Timed::new(StorePolicy::UNPACED);
+    let file = t.file("m/f", 4000);
+    let fx = MockFixture::default();
+    let o = krishiv_io::FormatOptions::defaults(fx.format().options());
+    let size = file.size;
+    let scan = FileScan::new(
+        fx.format(),
+        t.sched.context(),
+        schema(),
+        vec![file],
+        o,
+        ScanOptions::default(),
+        splits(1 << 30),
+    )
+    .source(ScanPushdowns {
+        metadata: MetadataCols {
+            file_block_start: true,
+            file_block_length: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    })
+    .unwrap();
+    assert_eq!(scan.partitions().len(), 1);
+    let scan = Arc::new(scan);
+    let out =
+        t.rt.block_on(run(
+            &t.pool,
+            Arc::new(Leaf(Arc::clone(&scan) as Arc<dyn Source>)),
+            4,
+        ))
+        .unwrap();
+    let ids: Vec<i32> = out
+        .iter()
+        .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+        .collect();
+    assert_eq!(ids, (0..4000).collect::<Vec<i32>>());
+    for b in &out {
+        let m = b.column(b.num_columns() - 1).as_struct();
+        let block = |name: &str| m.column_by_name(name).unwrap().as_primitive::<Int64Type>();
+        let (start, len) = (block("file_block_start"), block("file_block_length"));
+        assert!(start.values().iter().all(|v| *v == 0));
+        assert!(
+            len.values()
+                .iter()
+                .all(|v| *v == i64::try_from(size).unwrap())
+        );
+    }
+    // 4 drivers, 4 morsels each: 16 pieces of the one split.
+    let m = scan.metrics();
+    assert_eq!((m.splits, m.rows), (16, 4000));
+    assert!(size > 16);
 }
 
 /// The mock format without selections, row indexes or writing.

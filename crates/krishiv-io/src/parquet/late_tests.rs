@@ -467,3 +467,69 @@ fn narrow_payloads_are_not_filtered() {
     req.row_filter = RowFilterPolicy::On;
     assert_eq!(rows(&env.scan(&f, &req, &o).unwrap()), 15);
 }
+
+/// A later piece of a file starts from what the last one measured instead
+/// of guessing: told "off", the first row group is read whole and measured;
+/// the stream then reports what its last row group asks of the next piece.
+#[test]
+fn a_later_piece_starts_from_what_the_last_one_measured() {
+    let env = Env::new();
+    let (f, o, _) = file(&env);
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    let mut req = ScanRequest::new(schema, vec![ColumnPath::new("k"), ColumnPath::new("v")]);
+    req.predicate = Some(k_is_zero());
+    let drain = |req: &ScanRequest| {
+        env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("scan", None);
+            let mut s = crate::ScanStream::open(
+                &env.io,
+                &ParquetFormat,
+                f.clone(),
+                crate::ByteRange::whole(f.size),
+                req,
+                &o,
+                krishiv_memory::Reservation::new(pool, id),
+                crate::ScanOptions::default(),
+            )
+            .await
+            .unwrap();
+            let opened = s.row_filter_measured();
+            while s.next_batch().await.unwrap().is_some() {}
+            let m = s.metrics();
+            (opened, s.row_filter_measured(), m)
+        })
+    };
+    // No prior: the first guess, and nothing measured before it runs.
+    let (opened, last, m) = drain(&req);
+    assert_eq!(opened, None);
+    assert_eq!((m.units_filtered, m.units_unfiltered), (2, 1));
+    // Row group 2 kept 10 of 5000, above the limit.
+    assert_eq!(last, Some(false));
+    // Told "off": row group 0 is read whole, measured at 0.5%, so 1 is too;
+    // its 1 of 4096 turns the filter on for row group 2.
+    req.row_filter_start = Some(false);
+    let (opened, last, m) = drain(&req);
+    assert_eq!(opened, Some(false));
+    assert_eq!((m.units_filtered, m.units_unfiltered), (1, 2));
+    assert_eq!(m.rows, 5000 + 5000 + 10);
+    assert_eq!(last, Some(false));
+    // Forced policies do not adapt: the prior is ignored, nothing reported.
+    req.row_filter = RowFilterPolicy::On;
+    let (_, last, m) = drain(&req);
+    assert_eq!((m.units_filtered, m.units_unfiltered), (3, 0));
+    assert_eq!(last, None);
+    req.row_filter = RowFilterPolicy::Off;
+    req.row_filter_start = Some(true);
+    let (_, last, m) = drain(&req);
+    assert_eq!((m.units_filtered, m.units_unfiltered), (0, 3));
+    assert_eq!(last, None);
+}

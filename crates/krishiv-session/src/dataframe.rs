@@ -1477,6 +1477,60 @@ impl DataFrame {
             .await
     }
 
+    /// The tables the query reads, in first-use order, as written
+    /// (dotted, e.g. `tpch.lineitem`). Reads by path contribute no names.
+    /// Pure and sync: walks the unresolved plan, subqueries included.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # for v in ["t", "u"] {
+    /// #     futures::executor::block_on(s.sql(&format!("CREATE TEMPORARY VIEW {v} AS SELECT 1 AS a")))?;
+    /// # }
+    /// let df = futures::executor::block_on(s.sql("SELECT t.a FROM t JOIN u ON t.a = u.a"))?;
+    /// assert_eq!(df.input_tables(), vec!["t".to_owned(), "u".to_owned()]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn input_tables(&self) -> Vec<String> {
+        use std::collections::HashSet;
+
+        use krishiv_plan::ExprNode;
+
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        let mut visited: HashSet<*const ()> = HashSet::new();
+        let mut plans = vec![Arc::clone(&self.plan)];
+        while let Some(plan) = plans.pop() {
+            let key = Arc::as_ptr(&plan).cast::<()>();
+            if !visited.insert(key) {
+                continue;
+            }
+            if let PlanNode::Read(ReadSource::Table { name, .. }) = &plan.node {
+                let dotted = name.join(".");
+                if seen.insert(dotted.clone()) {
+                    out.push(dotted);
+                }
+            }
+            // Children visit left-to-right: the stack pops the last push
+            // first, so collected children go on reversed.
+            let mut kids = Vec::new();
+            plan.for_each_child(&mut |c| kids.push(Arc::clone(c)));
+            kids.reverse();
+            plans.extend(kids);
+            let mut exprs = Vec::new();
+            plan.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+            exprs.reverse();
+            let mut estack = exprs;
+            while let Some(expr) = estack.pop() {
+                if let ExprNode::Subquery { plan, .. } = &expr.node {
+                    plans.push(Arc::clone(plan));
+                }
+                expr.for_each_child(&mut |c| estack.push(Arc::clone(c)));
+            }
+        }
+        out
+    }
+
     /// The query's plans as text (PySpark's `explain(mode)`).
     ///
     /// ```

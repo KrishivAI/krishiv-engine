@@ -204,6 +204,7 @@ impl SchemaMapper {
                 .collect(),
             selection: req.selection.clone(),
             row_filter: req.row_filter,
+            row_filter_start: req.row_filter_start,
             // A prefix is never NULL, so a superset of its TRUE rows (all
             // `map_predicate` promises) drops only rows it is FALSE on.
             row_level: match &req.row_level {
