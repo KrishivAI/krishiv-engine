@@ -294,10 +294,11 @@ pub(crate) fn date(s: &str) -> Option<i32> {
 fn time(s: &str) -> bool {
     let s = trim_all(s);
     let s = s.strip_prefix('T').unwrap_or(s);
-    let (clock, meridiem) = match s.rsplit_once(' ') {
-        Some((clock, m)) if m.eq_ignore_ascii_case("AM") || m.eq_ignore_ascii_case("PM") => {
-            (clock.trim_end(), true)
-        }
+    let (clock, meridiem) = match s.rsplit_once(|c: char| c.is_ascii_whitespace()) {
+        Some((clock, m)) if m.eq_ignore_ascii_case("AM") || m.eq_ignore_ascii_case("PM") => (
+            clock.trim_end_matches(|c: char| c.is_ascii_whitespace()),
+            true,
+        ),
         _ => (s, false),
     };
     let number = |p: &str| -> Option<u32> {
@@ -493,6 +494,9 @@ mod tests {
             "0:0:0",
             "T10:00",
             "10:00:00.",
+            "10:00\tPM",
+            "10:00 \t am",
+            "10:00:00.12345678901234",
         ] {
             assert!(time(ok), "{ok}");
         }
@@ -505,6 +509,7 @@ mod tests {
             "10:00:60",
             "1:2:3:4",
             "now",
+            "10:00\u{a0}PM",
         ] {
             assert!(!time(bad), "{bad}");
         }

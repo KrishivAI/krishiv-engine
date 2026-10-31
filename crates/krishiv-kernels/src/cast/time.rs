@@ -18,13 +18,18 @@ use crate::error::KernelError;
 /// Nanoseconds in a second.
 pub(crate) const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
+fn trim_ascii_end(s: &str) -> &str {
+    s.trim_end_matches(|c: char| c.is_ascii_whitespace())
+}
+
 /// Nanoseconds since midnight for `text`, or `None` when malformed.
 pub fn parse_time(text: &str) -> Option<i64> {
     let s = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let s = s.strip_prefix('T').unwrap_or(s);
-    let (clock, meridiem) = match s.rsplit_once(' ') {
-        Some((clock, m)) if m.eq_ignore_ascii_case("AM") => (clock.trim_end(), Some(false)),
-        Some((clock, m)) if m.eq_ignore_ascii_case("PM") => (clock.trim_end(), Some(true)),
+    // The suffix is separated by a run of ASCII whitespace (a tab will do).
+    let (clock, meridiem) = match s.rsplit_once(|c: char| c.is_ascii_whitespace()) {
+        Some((clock, m)) if m.eq_ignore_ascii_case("AM") => (trim_ascii_end(clock), Some(false)),
+        Some((clock, m)) if m.eq_ignore_ascii_case("PM") => (trim_ascii_end(clock), Some(true)),
         _ => (s, None),
     };
     let field = |p: &str| -> Option<i64> {
@@ -206,6 +211,9 @@ mod tests {
             ("12:34:56.1234567890", Some(45296 * S + 123_456_000)),
             ("01:02:03 PM", Some((13 * 3600 + 2 * 60 + 3) * S)),
             ("12:00 AM", Some(0)),
+            ("12:30\tPM", Some((12 * 60 + 30) * 60 * S)),
+            ("12:30 \t am", Some(30 * 60 * S)),
+            ("12:30\u{a0}AM", None),
             ("12:34 PM", Some((12 * 60 + 34) * 60 * S)),
             ("12", None),
             ("-12:34", None),

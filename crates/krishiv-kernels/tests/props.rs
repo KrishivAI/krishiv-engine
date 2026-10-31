@@ -1048,7 +1048,7 @@ fn time_text() -> impl Strategy<Value = String> {
     let piece = proptest::sample::select(
         &[
             "0", "1", "2", "5", "9", "12", "23", "24", "59", "60", "99", "123", ":", ":", ".", " ",
-            "T", "AM", "PM", "pm", "-", "x",
+            "\t", "\u{a0}", "T", "AM", "PM", "pm", "-", "x",
         ][..],
     );
     proptest::collection::vec(piece, 1..9).prop_map(|p| p.concat())

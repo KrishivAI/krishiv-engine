@@ -633,11 +633,11 @@ pub fn time_parse(text: &str) -> Option<i64> {
     }
     let mut pm = None;
     if at < b.len() {
-        while b.get(at) == Some(&b' ') {
+        while b.get(at).is_some_and(u8::is_ascii_whitespace) {
             at += 1;
         }
         let tail = b.get(at..)?;
-        if at == 0 || b[at - 1] != b' ' {
+        if !b[at - 1].is_ascii_whitespace() {
             return None;
         }
         pm = if tail.eq_ignore_ascii_case(b"AM") {
