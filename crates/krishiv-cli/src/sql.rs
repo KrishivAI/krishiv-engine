@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::common::{build_session, key_value, read_input, split_statements};
+use crate::deadline::Deadline;
 use crate::format::{OutputMode, render_mode};
 use clap::{Args, ValueEnum};
 use krishiv::DataFrame;
@@ -79,7 +80,7 @@ impl ExplainFormat {
 }
 
 /// Arguments of `krishiv sql`.
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug)]
 #[command(group(clap::ArgGroup::new("explain").args(["explain_analyze", "explain_verbose"])))]
 pub(crate) struct SqlArgs {
     /// SQL to run (one or more `;`-separated statements).
@@ -109,11 +110,11 @@ pub(crate) struct SqlArgs {
     /// pipe. Agent mode stops reading the query one row past the cap and
     /// reports `stopped (row cap)` with a `≥ N` lower bound.
     #[arg(long)]
-    max_rows: Option<usize>,
-    /// Wall-clock budget per statement in seconds (agent mode): checked
-    /// between result batches; when spent, the query is dropped and the
-    /// table reports `stopped (time cap)` with the rows read so far. A
-    /// single batch that never arrives is not interrupted.
+    pub(crate) max_rows: Option<usize>,
+    /// Wall-clock budget per statement in seconds (agent mode), counted from
+    /// the statement's start: when spent, the query is dropped and the table
+    /// reports `stopped (time cap)` with the rows read so far, even if the
+    /// next batch never arrives. Planning is not interrupted.
     #[arg(long, value_name = "SECS", value_parser = positive_seconds)]
     max_seconds: Option<f64>,
     /// Session configuration entry; repeatable.
@@ -124,7 +125,7 @@ pub(crate) struct SqlArgs {
     table: Vec<(String, String)>,
     /// Print each statement's elapsed time on stderr.
     #[arg(long)]
-    timing: bool,
+    pub(crate) timing: bool,
     /// Run each query and print its profile (`EXPLAIN ANALYZE`) instead of its rows.
     #[arg(long = "explain-analyze", conflicts_with = "explain_verbose")]
     explain_analyze: bool,
@@ -145,8 +146,15 @@ pub(crate) struct SqlArgs {
     explain_format: Option<ExplainFormat>,
 }
 
+impl SqlArgs {
+    /// The result format `-o` names (`table` without it).
+    pub(crate) fn output_mode(&self) -> OutputMode {
+        self.format.map_or(OutputMode::Table, Format::mode)
+    }
+}
+
 /// Default row cap of agent mode and the REPL.
-const DEFAULT_MAX_ROWS: usize = 1000;
+pub(crate) const DEFAULT_MAX_ROWS: usize = 1000;
 
 /// A finite, positive number of seconds.
 fn positive_seconds(s: &str) -> Result<f64, String> {
@@ -188,7 +196,7 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
 /// The interactive REPL (`krishiv sql` with no `-e`/`-f` on a terminal).
 fn run_repl_command(args: &SqlArgs) -> i32 {
     match build_session(&args.conf, &args.table) {
-        Ok(session) => crate::repl::run_repl(&session, args.max_rows.unwrap_or(DEFAULT_MAX_ROWS)),
+        Ok(session) => crate::repl::run_repl(&session, args),
         Err(msg) => {
             let _ = writeln!(io::stderr(), "{msg}");
             1
@@ -198,7 +206,7 @@ fn run_repl_command(args: &SqlArgs) -> i32 {
 
 /// Whether agent mode applies: `--agent`, or stdout piped/redirected
 /// without an explicit `--format`.
-fn is_agent(args: &SqlArgs) -> bool {
+pub(crate) fn is_agent(args: &SqlArgs) -> bool {
     args.agent || (!io::stdout().is_terminal() && args.format.is_none())
 }
 
@@ -206,45 +214,18 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
     let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
     let session = build_session(&args.conf, &args.table)?;
     let agent = is_agent(args);
-    let mode = args.format.map_or(OutputMode::Table, Format::mode);
+    let mode = args.output_mode();
     let mut out = io::BufWriter::new(io::stdout().lock());
     for (idx, (line_offset, stmt)) in split_statements(&input).into_iter().enumerate() {
         let start = Instant::now();
         let query_id = format!("q{}", idx.saturating_add(1));
-        let df = futures::executor::block_on(session.sql(&stmt)).map_err(|e| {
-            if agent {
-                print_agent_error(
-                    &mut out,
-                    &AgentStatement {
-                        text: &stmt,
-                        line_offset,
-                        query_id: &query_id,
-                        start: &start,
-                    },
-                    &e,
-                );
-                let _ = out.flush();
-            }
-            describe(&stmt, line_offset, &e)
-        })?;
-        if args.explain_analyze || args.explain_verbose {
-            print_explain(&df, args)?;
-        } else if agent {
-            print_agent_result(
-                &mut out,
-                &AgentStatement {
-                    text: &stmt,
-                    line_offset,
-                    query_id: &query_id,
-                    start: &start,
-                },
-                &df,
-                &session,
-                args,
-            )?;
-        } else {
-            print_result(&mut out, &df, &session, mode, args)?;
-        }
+        let statement = AgentStatement {
+            text: &stmt,
+            line_offset,
+            query_id: &query_id,
+            start: &start,
+        };
+        run_one(&session, args, agent, mode, &statement, &mut out)?;
         // Flush per statement: on the next statement's failure the rows
         // and agent errors printed so far must already be out.
         out.flush()
@@ -256,57 +237,30 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs one REPL statement and prints its result; the REPL exit-code
-/// contribution (0 ok, 1 query or I/O error). Timing prints on stderr
-/// when `timer` (`.timer on`).
-pub(crate) fn print_batches(
+/// Plans, runs and prints one statement the way `krishiv sql -e` does: the explain flags, agent output or the
+/// chosen `mode`. Shared by the batch path and the REPL, so both honour the same flags.
+pub(crate) fn run_one(
     session: &krishiv::Session,
-    stmt: &str,
+    args: &SqlArgs,
+    agent: bool,
     mode: OutputMode,
-    max_rows: usize,
-    timer: bool,
+    statement: &AgentStatement<'_>,
     out: &mut dyn Write,
-) -> i32 {
-    let start = Instant::now();
-    let outcome = run_statement(session, stmt, mode, max_rows, out);
-    if timer {
-        let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
-    }
-    outcome
-}
-
-/// Collects `stmt` and renders it in `mode`, capped to `max_rows` rows
-/// for display; 0 on success, else the error text.
-fn run_statement(
-    session: &krishiv::Session,
-    stmt: &str,
-    mode: OutputMode,
-    max_rows: usize,
-    out: &mut dyn Write,
-) -> i32 {
-    let df = match futures::executor::block_on(session.sql(stmt)) {
-        Ok(df) => df,
-        Err(e) => {
-            let _ = writeln!(io::stderr(), "{}", describe(stmt, 0, &e));
-            return 1;
-        }
-    };
-    match collect_rows(&df, session, max_rows) {
-        Ok(c) => {
-            let _ = write!(
-                out,
-                "{}",
-                render_mode(
-                    mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls
-                )
-            );
+) -> Result<(), String> {
+    let stmt = statement.text;
+    let df = futures::executor::block_on(session.sql(stmt)).map_err(|e| {
+        if agent {
+            print_agent_error(out, statement, &e);
             let _ = out.flush();
-            0
         }
-        Err(msg) => {
-            let _ = writeln!(io::stderr(), "{msg}");
-            1
-        }
+        describe(stmt, statement.line_offset, &e)
+    })?;
+    if args.explain_analyze || args.explain_verbose {
+        print_explain(out, &df, args)
+    } else if agent {
+        print_agent_result(out, statement, &df, session, args)
+    } else {
+        print_result(out, &df, session, mode, args)
     }
 }
 
@@ -322,7 +276,7 @@ fn explain_format(args: &SqlArgs) -> ExplainFormat {
 
 /// Prints the profile (`--explain-analyze`) or the optimizer's stages
 /// (`--explain-verbose`) of the query `df`, in the requested format.
-fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
+fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
     // One run per branch: the `Json`/`Mermaid`/`Dot` arms share
     // `explain_*_with`, so there is a single route to each document and no
     // second rendering that can drift.
@@ -348,7 +302,6 @@ fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
                 .map_err(|e| e.to_string())?,
         }
     };
-    let mut out = io::stdout().lock();
     writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
 }
 
@@ -430,15 +383,61 @@ fn print_result(
 }
 
 /// The statement an agent result is for.
-struct AgentStatement<'a> {
+pub(crate) struct AgentStatement<'a> {
     /// The statement text.
-    text: &'a str,
+    pub(crate) text: &'a str,
     /// Lines before it in its file (for error positions).
-    line_offset: usize,
+    pub(crate) line_offset: usize,
     /// Its query id (`q1`, `q2`, ...).
-    query_id: &'a str,
+    pub(crate) query_id: &'a str,
     /// When it started.
-    start: &'a Instant,
+    pub(crate) start: &'a Instant,
+}
+
+/// Reads `stream` until it ends, holds more than `max_rows` rows, or the `max_seconds` budget (counted from
+/// `start`) is spent; the batches read and why it stopped early. A batch that never arrives is abandoned at the
+/// budget. A budget too large to be a point in time means no cap.
+fn read_batches<S>(
+    stream: &mut S,
+    max_rows: usize,
+    max_seconds: Option<f64>,
+    start: Instant,
+) -> Result<
+    (
+        Vec<krishiv::arrow::array::RecordBatch>,
+        Option<krishiv::agent::AgentStop>,
+    ),
+    krishiv::Error,
+>
+where
+    S: futures::Stream<Item = Result<krishiv::arrow::array::RecordBatch, krishiv::Error>> + Unpin,
+{
+    use futures::StreamExt as _;
+
+    let mut batches = Vec::new();
+    let mut seen = 0usize;
+    let mut deadline = max_seconds.and_then(|budget| Deadline::after(start, budget));
+    loop {
+        let next = match deadline.as_mut() {
+            Some(d) => match d.next_item(stream) {
+                Some(next) => next,
+                None => return Ok((batches, Some(krishiv::agent::AgentStop::TimeCap))),
+            },
+            None => futures::executor::block_on(stream.next()),
+        };
+        let Some(next) = next else {
+            return Ok((batches, None));
+        };
+        let batch = next?;
+        seen = seen.saturating_add(batch.num_rows());
+        batches.push(batch);
+        if seen > max_rows {
+            return Ok((batches, None));
+        }
+        if max_seconds.is_some_and(|budget| start.elapsed().as_secs_f64() > budget) {
+            return Ok((batches, Some(krishiv::agent::AgentStop::TimeCap)));
+        }
+    }
 }
 
 /// Runs `df` and prints the v1 agent table from `krishiv-session::agent`.
@@ -453,8 +452,6 @@ fn print_agent_result(
     session: &krishiv::Session,
     args: &SqlArgs,
 ) -> Result<(), String> {
-    use futures::StreamExt as _;
-
     let fail = |out: &mut dyn Write, e: &krishiv::Error| {
         print_agent_error(out, stmt, e);
         let _ = out.flush();
@@ -464,24 +461,8 @@ fn print_agent_result(
     let max_rows = args.max_rows.unwrap_or(DEFAULT_MAX_ROWS);
     let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| fail(out, &e))?;
     let schema = futures::executor::block_on(df.schema()).map_err(|e| fail(out, &e))?;
-    let mut batches = Vec::new();
-    let mut seen = 0usize;
-    let mut stop = None;
-    while let Some(next) = futures::executor::block_on(stream.next()) {
-        let batch = next.map_err(|e| fail(out, &e))?;
-        seen = seen.saturating_add(batch.num_rows());
-        batches.push(batch);
-        if seen > max_rows {
-            break;
-        }
-        if args
-            .max_seconds
-            .is_some_and(|budget| stmt.start.elapsed().as_secs_f64() > budget)
-        {
-            stop = Some(krishiv::agent::AgentStop::TimeCap);
-            break;
-        }
-    }
+    let (batches, stop) = read_batches(&mut stream, max_rows, args.max_seconds, *stmt.start)
+        .map_err(|e| fail(out, &e))?;
     drop(stream);
     if let Ok(warnings) = futures::executor::block_on(df.warnings()) {
         for w in warnings {
@@ -639,12 +620,39 @@ fn is_json_number(t: &DataType) -> bool {
 mod tests {
     use std::sync::Arc;
 
+    use futures::StreamExt as _;
     use krishiv::arrow::array::{
         ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
     };
     use krishiv::arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
+
+    fn int_batch(rows: i32) -> RecordBatch {
+        let col = Int32Array::from_iter_values(0..rows);
+        RecordBatch::try_from_iter([("a", Arc::new(col) as ArrayRef)]).expect("batch")
+    }
+
+    #[test]
+    fn a_batch_that_never_arrives_stops_the_read_at_the_budget() {
+        // One batch, then a read that never completes: the old between-batches check never ran again.
+        let mut stream =
+            futures::stream::iter([Ok(int_batch(3))]).chain(futures::stream::pending());
+        let started = Instant::now();
+        let (batches, stop) = read_batches(&mut stream, 1000, Some(0.2), started).expect("read");
+        assert_eq!(batches.len(), 1);
+        assert!(matches!(stop, Some(krishiv::agent::AgentStop::TimeCap)));
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_huge_budget_is_no_cap_and_the_row_cap_still_applies() {
+        let batches = (0..3).map(|_| Ok(int_batch(2)));
+        let mut stream = futures::stream::iter(batches);
+        let (read, stop) = read_batches(&mut stream, 3, Some(1e30), Instant::now()).expect("read");
+        assert_eq!(read.len(), 2, "stops one batch past the row cap");
+        assert!(stop.is_none());
+    }
 
     #[test]
     fn explain_format_names_reuse_graph_format() {

@@ -93,6 +93,14 @@ jobs:
           # xtask runs the gate, so it needs cargo for either language.
           if [ "$rust" = true ] || [ "$bench" = true ]; then echo "cargo=true" >> "$GITHUB_OUTPUT"; else echo "cargo=false" >> "$GITHUB_OUTPUT"; fi
           echo "Rust-relevant changes: $rust, bench changes: $bench"
+      # The instrumented build of a wide change (many dependent packages) can fill
+      # the runner's disk. Drop preinstalled toolchains this job never uses.
+      - name: Free runner disk
+        if: steps.changes.outputs.rust == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: Toolchain (from rust-toolchain.toml)
         if: steps.changes.outputs.cargo == 'true'
         run: rustup show active-toolchain

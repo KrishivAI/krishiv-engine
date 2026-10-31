@@ -551,6 +551,11 @@ impl QueryCatalog {
         if streams_range && tasks > 1 {
             return Err(unsupported("a range source across several tasks"));
         }
+        // Each task would run the shared plan again and read all its rows,
+        // until shared plans lower to exchanges.
+        if !plan.shared().is_empty() && tasks > 1 {
+            return Err(unsupported("a shared plan across several tasks"));
+        }
         scans.sort_by_key(|s| s.id);
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
         for scan in scans {
@@ -796,7 +801,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
     fn go<'a>(node: &'a PhysNode, out: &mut Leaves<'a>) {
         match node {
             PhysNode::Scan(scan) => out.scans.push(scan),
-            PhysNode::OneRow => {}
+            PhysNode::OneRow | PhysNode::SharedRead { .. } => {}
             PhysNode::Range(_) => out.range = true,
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
@@ -2473,6 +2478,28 @@ mod tests {
         let df = block_on(session.sql(sql)).unwrap();
         let analysis = block_on(df.analysis()).unwrap();
         let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        // A shared plan runs in one task until it lowers to an exchange.
+        let shared = physical
+            .clone()
+            .with_shared(vec![krishiv_exec::physical::SharedPlan {
+                id: krishiv_exec::physical::SharedId(0),
+                plan: PhysNode::OneRow,
+                explain: krishiv_exec::planner::ExplainNode::leaf("OneRowRelation", ""),
+                deterministic: true,
+                ordered: false,
+            }])
+            .unwrap();
+        let e = analysis.env.catalog.task_specs(&shared, 2, 2).unwrap_err();
+        assert!(e.to_string().contains("a shared plan across"), "{e}");
+        assert_eq!(
+            analysis
+                .env
+                .catalog
+                .task_specs(&shared, 1, 1)
+                .unwrap()
+                .len(),
+            1
+        );
         for tasks in [2_usize, 3_usize] {
             let specs = analysis
                 .env

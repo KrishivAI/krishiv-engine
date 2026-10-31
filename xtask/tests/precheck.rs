@@ -12,9 +12,9 @@ use std::path::Path;
 
 use xtask::precheck::{
     ADVISORY_STEPS, Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg,
-    REQUIRED_CI_CHECKS, STEP_IDS, Scope, Status, Step, cap_prefix, dependents_closure, failed,
-    host_has_x86_64v3, kernel_require_targets, mapping, memory_cap_error, parse_packages, plan,
-    render_table, tracked_files_cmd, tracked_files_cmd_literal,
+    REQUIRED_CI_CHECKS, STEP_IDS, Scope, Status, Step, cap_prefix, dependents_closure,
+    doc_pkg_args, failed, host_has_x86_64v3, kernel_require_targets, mapping, memory_cap_error,
+    parse_packages, plan, render_table, tracked_files_cmd, tracked_files_cmd_literal,
 };
 
 fn pkg(name: &str, deps: &[&str]) -> Pkg {
@@ -1363,4 +1363,46 @@ fn coverage_can_include_dependents() {
             "xtask"
         ]
     );
+}
+
+#[test]
+fn doctests_skip_binary_only_packages() {
+    let scope = |names: &[&str]| Scope::Packages {
+        touched: names.iter().map(|n| (*n).to_owned()).collect(),
+        with_dependents: names.iter().map(|n| (*n).to_owned()).collect(),
+    };
+    // `krishiv-cli` is a binary crate: `cargo test --doc -p krishiv-cli` fails, so the step is left out.
+    assert_eq!(doc_pkg_args(&scope(&["krishiv-cli"])), None);
+    assert_eq!(
+        doc_pkg_args(&scope(&["krishiv-cli", "krishiv-session"])),
+        Some(vec!["-p".to_owned(), "krishiv-session".to_owned()])
+    );
+    assert_eq!(
+        doc_pkg_args(&Scope::Workspace),
+        Some(vec!["--workspace".to_owned()])
+    );
+}
+
+#[test]
+fn a_cli_only_plan_runs_no_doctests() {
+    let ch = Changes::detect(
+        &["crates/krishiv-cli/src/repl.rs".to_owned()],
+        &[pkg("krishiv-cli", &[])],
+    );
+    let steps = make_plan(&ch, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "nextest").action else {
+        panic!("nextest is not run")
+    };
+    assert_eq!(cmds.len(), 1, "only nextest runs: {cmds:?}");
+    assert_eq!(cmds[0].args[0], "nextest");
+    // A library crate keeps its doctest step.
+    let ch = Changes::detect(
+        &["crates/krishiv-session/src/lib.rs".to_owned()],
+        &[pkg("krishiv-session", &[])],
+    );
+    let steps = make_plan(&ch, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "nextest").action else {
+        panic!("nextest is not run")
+    };
+    assert_eq!(cmds.len(), 2);
 }

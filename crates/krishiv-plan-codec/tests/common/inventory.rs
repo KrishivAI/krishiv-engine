@@ -190,6 +190,19 @@ pub(crate) fn file_scan() -> ScanNode {
     }
 }
 
+/// A partial aggregate over a scan.
+pub(crate) fn partial_aggregate() -> PhysNode {
+    PhysNode::Aggregate {
+        input: boxed(scan()),
+        aggregate: AggregatePlan {
+            group_by: vec![0, 2],
+            distinct: vec![false; aggregate_exprs().len()],
+            aggregates: aggregate_exprs(),
+            output: AggregateOutput::Partial,
+        },
+    }
+}
+
 pub(crate) fn scan() -> PhysNode {
     PhysNode::Scan(table_scan())
 }
@@ -466,7 +479,7 @@ pub(crate) fn residual() -> Residual {
     }
 }
 
-fn join(join_type: JoinType) -> HashJoinPlan {
+pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
     HashJoinPlan {
         probe: boxed(scan()),
         build: boxed(PhysNode::Scan(file_scan())),
@@ -830,48 +843,55 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
-        ("hash_join", PhysNode::HashJoin(join(JoinType::Inner))),
+        ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
+        (
+            "partial_aggregate",
+            PhysNode::HashJoin(HashJoinPlan {
+                probe: boxed(partial_aggregate()),
+                ..join_plan(JoinType::Inner)
+            }),
+        ),
         (
             "hash_join_anti",
             PhysNode::HashJoin(HashJoinPlan {
                 residual: None,
                 runtime_filters: Vec::new(),
-                ..join(JoinType::NullAwareAnti)
+                ..join_plan(JoinType::NullAwareAnti)
             }),
         ),
         (
             "hash_join_right_semi",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::RightSemi)
+                ..join_plan(JoinType::RightSemi)
             }),
         ),
         (
             "hash_join_right_anti",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::RightAnti)
+                ..join_plan(JoinType::RightAnti)
             }),
         ),
         (
             "hash_join_right_outer",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::RightOuter)
+                ..join_plan(JoinType::RightOuter)
             }),
         ),
         (
             "hash_join_full_outer",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::FullOuter)
+                ..join_plan(JoinType::FullOuter)
             }),
         ),
         (
             "hash_join_partitioned",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::Inner)
+                ..join_plan(JoinType::Inner)
             }),
         ),
         (
@@ -1287,6 +1307,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
+    out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
         typed()
             .into_iter()
@@ -1314,6 +1335,40 @@ fn session_zone_name() -> PhysicalPlan {
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
     PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// Two shared plans, the second reading the first, read by a union.
+pub(crate) fn shared_subplan() -> PhysicalPlan {
+    use krishiv_exec::physical::{SharedId, SharedPlan};
+
+    let read = |id| PhysNode::SharedRead {
+        id: SharedId(id),
+        layout: scan_columns().iter().map(|c| c.id).collect(),
+    };
+    plan_of(PhysNode::Union {
+        inputs: vec![read(2), read(5)],
+    })
+    .with_shared(vec![
+        SharedPlan {
+            id: SharedId(2),
+            plan: scan(),
+            explain: ExplainNode::leaf("Scan", "t"),
+            deterministic: true,
+            ordered: false,
+        },
+        SharedPlan {
+            id: SharedId(5),
+            plan: PhysNode::Limit {
+                input: boxed(read(2)),
+                offset: 0,
+                limit: 3,
+            },
+            explain: ExplainNode::new("Limit", "3", vec![ExplainNode::leaf("SharedRead", "#2")]),
+            deterministic: false,
+            ordered: true,
+        },
+    ])
+    .unwrap()
 }
 
 /// A struct field access (`GetStructField`): the `b` of a struct column.

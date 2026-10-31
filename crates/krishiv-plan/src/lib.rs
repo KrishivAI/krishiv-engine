@@ -68,6 +68,7 @@
 //! | `PlanNode::WithColumns` | U | - | `withColumn` |
 //! | `PlanNode::Filter` | U, R | Q1-Q12, Q14-Q22 | `filter`, `where` |
 //! | `PlanNode::Aggregate` | U, R | Q1, Q3-Q5, Q7-Q13, Q15, Q16, Q18, Q21, Q22 | `groupBy.agg`, `rollup.agg`, `cube.agg` |
+//! | `PlanNode::PartialAggregate` | R | - | - |
 //! | `PlanNode::Join` | U, R | Q2, Q3, Q5, Q7-Q21 | `join` |
 //! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
 //! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
@@ -104,6 +105,7 @@
 //! | `ResolvedExpr::LambdaVar` | R | - | - |
 //! | `ResolvedExpr::Alias` | R | - | - |
 //! | `ResolvedExpr::Field` | R | - | - |
+//! | `ResolvedExpr::StateInput` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
 //! `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
@@ -121,6 +123,7 @@ mod expr;
 pub mod function;
 mod literal;
 mod origin;
+mod partial;
 mod plan;
 mod raises;
 pub(crate) mod spark_fmt;
@@ -139,6 +142,7 @@ pub use expr::{
 pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
+pub use partial::partial_state_columns;
 pub use plan::{
     Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan,
     PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,

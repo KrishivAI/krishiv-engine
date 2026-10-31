@@ -42,6 +42,31 @@ pub struct PhysicalPlan {
     /// ignorable: a reader that predates features checks min_reader_version.
     #[prost(uint32, tag = "12")]
     pub epoch: u32,
+    /// feature: shared_subplan
+    /// The plans several `SharedReadNode`s read, inner first: a plan reads only
+    /// earlier ones. Their nodes are entries of `nodes`.
+    #[prost(message, repeated, tag = "13")]
+    pub shared: ::prost::alloc::vec::Vec<SharedPlan>,
+}
+/// feature: shared_subplan
+/// A subplan run once per query instantiation and read in full by each reader.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SharedPlan {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(uint32, tag = "2")]
+    pub root: u32,
+    /// Its printable tree, post-order.
+    #[prost(message, repeated, tag = "3")]
+    pub explain: ::prost::alloc::vec::Vec<ExplainNode>,
+    #[prost(uint32, tag = "4")]
+    pub explain_root: u32,
+    /// Whether it computes the same rows when run again.
+    #[prost(bool, tag = "5")]
+    pub deterministic: bool,
+    /// Whether readers must see its rows in the order it produces them.
+    #[prost(bool, tag = "6")]
+    pub ordered: bool,
 }
 /// The header fields of a `PhysicalPlan`, read without decoding its tables.
 /// ignorable: a reader-side view of `PhysicalPlan`, never written as such.
@@ -98,7 +123,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -146,7 +171,19 @@ pub mod node {
         /// feature: range
         #[prost(message, tag = "18")]
         Range(super::RangeNode),
+        /// feature: shared_subplan
+        #[prost(message, tag = "19")]
+        SharedRead(super::SharedReadNode),
     }
+}
+/// feature: shared_subplan
+/// The rows of a shared plan, under the reader's attribute ids.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SharedReadNode {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: range
 /// `range(start, end, step, numSlices)`: one `id BIGINT NOT NULL` column.

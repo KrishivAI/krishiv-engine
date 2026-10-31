@@ -52,13 +52,27 @@ pub fn encode(plan: &PhysicalPlan) -> Result<Vec<u8>> {
 pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
     let features = plan_features(plan);
     let mut e = Encoder::default();
-    let order = post_order(plan.root(), PhysNode::children);
-    for node in &order {
-        let message = e.node(node)?;
-        e.nodes.insert(std::ptr::from_ref(*node), e.table.len());
-        e.table.push(message);
+    for tree in plan.roots() {
+        let order = post_order(tree, PhysNode::children);
+        for node in &order {
+            let message = e.node(node)?;
+            e.nodes.insert(std::ptr::from_ref(*node), e.table.len());
+            e.table.push(message);
+        }
     }
     let root = e.node_index(plan.root())?;
+    let mut shared = Vec::with_capacity(plan.shared().len());
+    for s in plan.shared() {
+        let (explain, explain_root) = explain_table(&s.explain)?;
+        shared.push(pb::SharedPlan {
+            id: s.id.0,
+            root: e.node_index(&s.plan)?,
+            explain,
+            explain_root,
+            deterministic: s.deterministic,
+            ordered: s.ordered,
+        });
+    }
     if plan
         .schema()
         .fields()
@@ -72,22 +86,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
             "nested types where the feature header does not list them (an engine bug)".to_owned(),
         ));
     }
-    let explain_order = post_order(plan.explain(), |n| n.children.iter().collect());
-    let mut explain = Vec::with_capacity(explain_order.len());
-    let mut explain_ids: HashMap<*const ExplainNode, u32> = HashMap::new();
-    for node in &explain_order {
-        let children = node
-            .children
-            .iter()
-            .map(|c| explain_ids[&std::ptr::from_ref(c)])
-            .collect();
-        explain_ids.insert(std::ptr::from_ref(*node), index(explain.len())?);
-        explain.push(pb::ExplainNode {
-            name: node.name.clone(),
-            detail: node.detail.clone(),
-            children,
-        });
-    }
+    let (explain, explain_root) = explain_table(plan.explain())?;
     Ok(pb::PhysicalPlan {
         format_version: FORMAT_VERSION,
         min_reader_version: legacy_level(&features),
@@ -95,13 +94,36 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         root,
         schema: schema_bytes(plan.schema()),
         explain,
-        explain_root: explain_ids[&std::ptr::from_ref(plan.explain())],
+        explain_root,
         warnings: plan.warnings().to_vec(),
         env: Some(env(plan.env())),
         exprs: e.exprs,
         features: features.iter().map(|f| f.id().to_owned()).collect(),
         epoch: EPOCH,
+        shared,
     })
+}
+
+/// The printable tree `root` as a post-order table, and its root's index.
+fn explain_table(root: &ExplainNode) -> Result<(Vec<pb::ExplainNode>, u32)> {
+    let order = post_order(root, |n| n.children.iter().collect());
+    let mut table = Vec::with_capacity(order.len());
+    let mut ids: HashMap<*const ExplainNode, u32> = HashMap::new();
+    for node in &order {
+        let children = node
+            .children
+            .iter()
+            .map(|c| ids[&std::ptr::from_ref(c)])
+            .collect();
+        ids.insert(std::ptr::from_ref(*node), index(table.len())?);
+        table.push(pb::ExplainNode {
+            name: node.name.clone(),
+            detail: node.detail.clone(),
+            children,
+        });
+    }
+    let at = ids[&std::ptr::from_ref(root)];
+    Ok((table, at))
 }
 
 /// `root` and everything below it, children before parents.
@@ -196,6 +218,10 @@ impl Encoder {
             }
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),
             PhysNode::OneRow => Kind::OneRow(pb::Empty {}),
+            PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
+                id: id.0,
+                layout: layout.iter().map(|a| a.0).collect(),
+            }),
             PhysNode::Range(r) => Kind::Range(pb::RangeNode {
                 start: r.start,
                 end: r.end,

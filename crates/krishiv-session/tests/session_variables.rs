@@ -1537,3 +1537,29 @@ fn keywords_name_variables_and_temp_drops_them() {
         ErrorClass::VariableNotFound
     );
 }
+
+/// `date + variable` is `date_add(date, variable)`: the output name keeps
+/// the variable's name, not its value (Spark 4.2 names it so).
+#[test]
+fn a_date_plus_a_variable_keeps_the_variable_in_its_name() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE VARIABLE v INT DEFAULT 5")).unwrap();
+    for (sql, name) in [
+        (
+            "SELECT DATE'2020-01-30' + v",
+            "date_add(DATE '2020-01-30', v)",
+        ),
+        (
+            "SELECT v + DATE'2020-01-30'",
+            "date_add(DATE '2020-01-30', v)",
+        ),
+        (
+            "SELECT DATE'2020-01-30' - v",
+            "date_sub(DATE '2020-01-30', v)",
+        ),
+    ] {
+        let df = block_on(s.sql(sql)).unwrap();
+        let schema = block_on(df.schema()).unwrap();
+        assert_eq!(schema.field(0).name(), name, "{sql}");
+    }
+}

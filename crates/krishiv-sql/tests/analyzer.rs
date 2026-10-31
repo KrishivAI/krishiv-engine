@@ -353,8 +353,10 @@ fn resolution_corpus_matches_spark() {
         failures.join("\n")
     );
     // The gaps stay the statements they are now (128 since P2-T115 unit 2a
-    // resolved four correlated `EXISTS` / `IN` under `OR` and `NOT`).
-    assert_eq!(gaps, 128, "statements in documented gaps");
+    // resolved four correlated `EXISTS` / `IN` under `OR` and `NOT`; 120
+    // since `date + int`, `int + date` and `date - int` became `date_add`
+    // and `date_sub`).
+    assert_eq!(gaps, 120, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
