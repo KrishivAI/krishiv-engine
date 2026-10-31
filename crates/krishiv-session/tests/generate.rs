@@ -458,6 +458,24 @@ fn stack_checks_its_count_and_column_types() {
 }
 
 #[test]
+fn a_generator_relation_checks_its_alias_count() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "select * from explode(array(1, 2)) t(c1, c2)",
+        "select * from posexplode(array(1, 2)) t(x)",
+        "select * from inline(array(struct(1, 2))) t(a, b, c)",
+        "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') AS t(x)",
+        "select * from stack(2, 1, 2, 3) t(a, b, c)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::NumTableValueAliasesMismatch,
+            "{sql}"
+        );
+    }
+}
+
+#[test]
 fn the_generator_argument_is_visible_to_group_by_as_gen_input_0() {
     let s = Session::new().unwrap();
     assert_eq!(

@@ -10,10 +10,10 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, FailedToParseTooComplex, GroupByAggregate,
     GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
     InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
-    OrderByPosOutOfRange, QualifyAggregateNotAllowed, QualifyRequiresWindowFunction,
-    StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
-    UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin,
-    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    NumTableValueAliasesMismatch, OrderByPosOutOfRange, QualifyAggregateNotAllowed,
+    QualifyRequiresWindowFunction, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt,
+    TableOrViewNotFound, UdtfAliasNumberMismatch, UnresolvedAllInGroupBy,
+    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
 };
 
@@ -3127,6 +3127,16 @@ impl Resolver<'_> {
             c
         } else {
             if columns.len() != c.out.len() {
+                if let Some(func) = generator_relation_name(input) {
+                    return Err(AnalysisError::new(
+                        NumTableValueAliasesMismatch {
+                            func_name: format!("`{func}`"),
+                            aliases_num: columns.len().to_string(),
+                            out_cols_num: c.out.len().to_string(),
+                        },
+                        p.origin,
+                    ));
+                }
                 return Err(AnalysisError::new(
                     AssignmentArityMismatch {
                         num_target: c.out.len().to_string(),
@@ -3176,6 +3186,43 @@ impl Resolver<'_> {
             columns: Vec::new(),
         };
         Ok(self.make(p.origin, node, out, &[&inner]))
+    }
+}
+
+/// The function a table-valued generator relation was written as
+/// (`FROM explode(..)`, `FROM stack(..)`, `FROM json_tuple(..)`), for the
+/// alias-count error; `None` for any other relation.
+fn generator_relation_name(plan: &LogicalPlan) -> Option<String> {
+    match &plan.node {
+        PlanNode::Generate {
+            input,
+            kind,
+            outer,
+            arg,
+            ..
+        } if matches!(input.node, PlanNode::OneRowRelation) => {
+            if let ExprNode::Function(f) = &arg.node
+                && f.unqualified() == Some("stack")
+            {
+                return Some("stack".to_owned());
+            }
+            Some(format!(
+                "{}{}",
+                kind.name(),
+                if *outer { "_outer" } else { "" }
+            ))
+        }
+        PlanNode::Project { input, exprs }
+            if matches!(input.node, PlanNode::OneRowRelation) && exprs.len() == 1 =>
+        {
+            match &exprs[0].node {
+                ExprNode::Function(f) if f.unqualified() == Some("json_tuple") => {
+                    Some("json_tuple".to_owned())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
