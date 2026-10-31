@@ -50,7 +50,7 @@ use std::collections::HashSet;
 
 use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
-    DuplicatedCteNames, IdentityColumnsDuplicatedSequenceGeneratorOption,
+    DuplicatedCteNames, FeatureNotEnabled, IdentityColumnsDuplicatedSequenceGeneratorOption,
     IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceWhereTableAliasNotAllowed,
     InvalidBucketCount, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
     InvalidSetSyntax, InvalidSqlSyntaxCreateFuncWithColumnConstraints,
@@ -75,10 +75,11 @@ use crate::ast::{
     FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
     GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal, Merge,
     MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName, PartitionFieldKind,
-    PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat, RowFormatKind, Select,
-    SelectItem, SetExpr, SetExprKind, SetVariableKind, Show, ShowKind, SortItem, Span, Statement,
-    StructField, TableAlias, TableConstraintKind, TableElement, TableFactor, TableFactorKind,
-    TableOption, TemporalClause, Truncate, Update, UpdateAssignment, WindowRef, WindowSpec, With,
+    PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat, RowFormatKind,
+    SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind, Show, ShowKind,
+    SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind, TableElement,
+    TableFactor, TableFactorKind, TableOption, TemporalClause, Truncate, Update, UpdateAssignment,
+    WindowRef, WindowSpec, With,
 };
 use crate::error::{self, ParseError};
 use crate::lexer::tokenize;
@@ -539,7 +540,11 @@ impl Checker<'_> {
             }
         }
         if !v.temporary {
-            return Ok(());
+            // Spark reads the mode after the query (`visitSchemaBinding`).
+            return v
+                .schema_binding
+                .as_ref()
+                .map_or(Ok(()), |b| self.schema_binding(b));
         }
         let DdlName::Parts(name) = &v.name else {
             return Ok(());
@@ -656,8 +661,25 @@ impl Checker<'_> {
                 property_shapes(keys, false, a.span)?;
                 self.option_values(keys)
             }
-            AlterViewAction::SetSchemaBinding(_) | AlterViewAction::RenameTo { .. } => Ok(()),
+            AlterViewAction::SetSchemaBinding(b) => self.schema_binding(b),
+            AlterViewAction::RenameTo { .. } => Ok(()),
         }
+    }
+
+    /// A `WITH SCHEMA ...` clause: `FEATURE_NOT_ENABLED` unless
+    /// `spark.sql.legacy.viewSchemaBindingMode` is on (`visitSchemaBinding`).
+    fn schema_binding(&self, b: &SchemaBindingClause) -> R {
+        if self.opts.view_schema_binding {
+            return Ok(());
+        }
+        Err(at(
+            FeatureNotEnabled {
+                feature_name: "VIEW ... WITH SCHEMA ...".to_owned(),
+                config_key: "spark.sql.legacy.viewSchemaBindingMode".to_owned(),
+                config_value: "true".to_owned(),
+            },
+            b.span,
+        ))
     }
 
     /// An `INSERT`: each clause's partition values, row filter and query.

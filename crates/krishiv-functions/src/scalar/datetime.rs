@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal128Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, TimestampMicrosecondArray,
@@ -32,6 +33,10 @@ use krishiv_kernels::datetime::{
     trunc_date, trunc_timestamp, unix_date,
 };
 use krishiv_kernels::datetime::{TimeZoneRules, TimestampFields, TimestampUnit, make_timestamp};
+use krishiv_kernels::datetime::{
+    date_from_unix_date, timestamp_from_integral, timestamp_from_seconds,
+    timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
+};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 
 use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
@@ -59,6 +64,13 @@ pub(super) const NAMES: &[&str] = &[
     "monthname",
     "dayname",
     "unix_date",
+    "timestamp_seconds",
+    "timestamp_millis",
+    "timestamp_micros",
+    "unix_seconds",
+    "unix_millis",
+    "unix_micros",
+    "date_from_unix_date",
     "add_months",
     "last_day",
     "next_day",
@@ -146,6 +158,40 @@ fn instants(
 /// time-zone database: unknown ids are `INVALID_TIMEZONE`.
 fn resolve_zone(text: &str) -> Result<ZoneRef, KrishivError> {
     krishiv_kernels::datetime::resolve_zone(text)
+}
+
+fn is_integral_type(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    )
+}
+
+/// What `timestamp_seconds` reads: any integral, float or decimal column.
+fn timestamp_seconds_input(t: &DataType) -> bool {
+    is_integral_type(t)
+        || matches!(
+            t,
+            DataType::Float32 | DataType::Float64 | DataType::Decimal128(..)
+        )
+}
+
+/// Argument 0 cast to `to`; only for lossless widenings (an integral to
+/// `BIGINT`, a float to `DOUBLE`).
+fn widen<T: arrow_array::ArrowPrimitiveType>(
+    x: &Inputs<'_>,
+    to: &DataType,
+) -> Result<arrow_array::PrimitiveArray<T>, KrishivError> {
+    let column = x.column(0)?;
+    let options = CastOptions {
+        mode: CastMode::Ansi,
+        time_zone: &krishiv_kernels::cast::FixedOffset(0),
+    };
+    let widened = cast(column.as_ref(), to, &options)?;
+    widened
+        .as_primitive_opt::<T>()
+        .cloned()
+        .ok_or_else(|| internal(format!("a column of type {to} after the cast")))
 }
 
 /// The unit of `timestampadd`/`timestampdiff`: a literal keyword.
@@ -670,6 +716,51 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
                 let d = x.dates(0)?;
                 Ok(Arc::new(if months { month_name(&d) } else { day_name(&d) }) as ArrayRef)
+            })
+        }
+        ("timestamp_seconds", [t]) if timestamp_seconds_input(t) => {
+            let source = t.clone();
+            Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                let out = match &source {
+                    DataType::Float32 | DataType::Float64 => timestamp_from_seconds_double(
+                        &widen::<Float64Type>(x, &DataType::Float64)?,
+                    )?,
+                    DataType::Decimal128(..) => {
+                        timestamp_from_seconds_decimal(&x.array::<Decimal128Type>(0)?)?
+                    }
+                    _ => timestamp_from_seconds(&widen::<Int64Type>(x, &DataType::Int64)?)?,
+                };
+                Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
+            })
+        }
+        ("timestamp_millis" | "timestamp_micros", [t]) if is_integral_type(t) => {
+            let per = if listed == "timestamp_millis" {
+                1_000
+            } else {
+                1
+            };
+            let name = listed;
+            Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                let out =
+                    timestamp_from_integral(&widen::<Int64Type>(x, &DataType::Int64)?, per, name)?;
+                Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
+            })
+        }
+        ("unix_seconds" | "unix_millis" | "unix_micros", [t])
+            if is_timestamp(t) && *t != ntz_type() =>
+        {
+            let per = match listed {
+                "unix_seconds" => 1_000_000,
+                "unix_millis" => 1_000,
+                _ => 1,
+            };
+            Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+                Ok(Arc::new(unix_time(&x.timestamps(0)?, per)?) as ArrayRef)
+            })
+        }
+        ("date_from_unix_date", [DataType::Int32]) => {
+            Binding::new(DataType::Date32, |x: &Inputs<'_>| {
+                Ok(Arc::new(date_from_unix_date(&x.array::<Int32Type>(0)?)) as ArrayRef)
             })
         }
         ("unix_date", [DataType::Date32]) => Binding::new(DataType::Int32, |x: &Inputs<'_>| {

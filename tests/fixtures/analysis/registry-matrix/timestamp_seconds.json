@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "timestamp_seconds#2deaf9d073c8/ansi_on",
+      "reason": "SELECT timestamp_seconds(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "timestamp_seconds#2deaf9d073c8/ansi_off",
+      "reason": "SELECT timestamp_seconds(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "timestamp_seconds#c68200bda050/ansi_on",
+      "reason": "SELECT timestamp_seconds(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "timestamp_seconds#c68200bda050/ansi_off",
+      "reason": "SELECT timestamp_seconds(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "timestamp_seconds"
+}

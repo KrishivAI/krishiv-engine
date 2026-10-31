@@ -145,8 +145,8 @@ pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
 pub use plan::{
     Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan,
-    PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
-    UnpivotColumnSet,
+    PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP,
+    TableVersion, UnpivotColumnSet,
 };
 pub use raises::{conjuncts, may_raise};
 pub use walk::{MAX_DEPTH, check_depth};

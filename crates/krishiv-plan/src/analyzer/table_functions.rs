@@ -7,8 +7,8 @@ use std::sync::Arc;
 use arrow_array::{Int64Array, StringArray};
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{
-    FailedFunctionCall, KrishivInvalidPartitionNumber, NonFoldableArgument, UnexpectedInputType,
-    UnresolvableTableValuedFunction, WrongNumArgsWithoutSuggestion,
+    FailedFunctionCall, KrishivInvalidPartitionNumber, NonFoldableArgument, NotATableFunction,
+    UnexpectedInputType, UnresolvableTableValuedFunction, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_types::DataType;
@@ -36,12 +36,32 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
         match self.ctx.table_functions.lookup(name, self.ctx.profile) {
-            TableFunctionLookup::NotFound => Err(AnalysisError::new(
-                UnresolvableTableValuedFunction {
-                    name: format!("`{name}`"),
-                },
-                o,
-            )),
+            TableFunctionLookup::NotFound => {
+                // A SQL-bodied table function of the session or its catalog.
+                let parts: Vec<String> = name
+                    .split(crate::TABLE_FUNCTION_NAME_SEP)
+                    .map(str::to_owned)
+                    .collect();
+                if let super::FunctionLookup::Sql(def) =
+                    self.ctx.functions.lookup(&parts, self.ctx.profile)
+                {
+                    if def.returns_table.is_some() {
+                        return self.sql_table_call(p, &def, args, env);
+                    }
+                    return Err(AnalysisError::new(
+                        NotATableFunction {
+                            function_name: def.routine_name(),
+                        },
+                        o,
+                    ));
+                }
+                Err(AnalysisError::new(
+                    UnresolvableTableValuedFunction {
+                        name: super::catalog::quoted(&parts),
+                    },
+                    o,
+                ))
+            }
             TableFunctionLookup::Found(TableFunctionKind::UnsupportedGenerator) => {
                 Err(super::bind::unsupported("table-valued functions", o))
             }
