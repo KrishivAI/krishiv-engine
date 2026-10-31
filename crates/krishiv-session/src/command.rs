@@ -1099,7 +1099,11 @@ impl Session {
                 ));
             }
         };
-        let namespace = namespace.to_lowercase();
+        let namespace = if self.query_env().analysis.conf.case_sensitive {
+            namespace
+        } else {
+            namespace.to_lowercase()
+        };
         if !self.state.catalog.store.has_namespace(&namespace) {
             return Err(SchemaNotFound {
                 schema_name: quote(&namespace),
@@ -1107,6 +1111,38 @@ impl Session {
             .into());
         }
         Ok((namespace, part))
+    }
+
+    /// The first temporary SQL function the body or a default of `def`
+    /// calls by a bare or session-qualified name (built-ins rank first).
+    fn reads_temporary_function(&self, def: &SqlFunction) -> Option<String> {
+        let temporary = self.state.sql_functions.snapshot();
+        let mut stack: Vec<&PlanExpr> = std::iter::once(&*def.body)
+            .chain(def.params.iter().filter_map(|p| p.default.as_deref()))
+            .collect();
+        while let Some(e) = stack.pop() {
+            if let ExprNode::Function(call) = &e.node {
+                let bare = call.qualifier.is_empty();
+                let session = matches!(call.qualifier.as_slice(), [q] if q.eq_ignore_ascii_case("session"))
+                    || matches!(call.qualifier.as_slice(), [s, q]
+                        if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"));
+                let builtin = bare
+                    && !matches!(
+                        self.state
+                            .functions
+                            .lookup(std::slice::from_ref(&call.name), self.state.profile),
+                        FunctionLookup::NotFound
+                    );
+                if (bare || session) && !builtin && temporary.get(&call.name).is_some() {
+                    return Some(call.name.to_lowercase());
+                }
+            }
+            if let ExprNode::Subquery { plan, .. } = &e.node {
+                plan.for_each_expr(&mut |x| stack.push(x));
+            }
+            e.for_each_child(&mut |c| stack.push(c));
+        }
+        None
     }
 
     /// `CREATE [OR REPLACE] FUNCTION` of a function stored in `namespace`
@@ -1126,20 +1162,40 @@ impl Session {
             namespace.to_owned(),
             part.value.clone(),
         ];
+        // A stored function may not depend on an object of the session; Spark
+        // names the function by namespace and name, and the object by kind.
+        let object = format!("`{namespace}`.{}", quote(&entry.def.name));
         if let Some(temp) = crate::sql_functions::reads_temporary_view(
             &self.state.catalog,
             &entry.def.body,
             self.query_env().analysis.conf.case_sensitive,
         ) {
             return Err(krishiv_common::error::InvalidTempObjReference {
-                obj_name: quote_all(&qualified),
-                obj: "function".to_owned(),
+                obj_name: object,
+                obj: "FUNCTION".to_owned(),
                 temp_obj_name: format!("`{temp}`"),
-                temp_obj: "view".to_owned(),
+                temp_obj: "VIEW".to_owned(),
+            }
+            .into());
+        }
+        if let Some(temp) = self.reads_temporary_function(&entry.def) {
+            return Err(krishiv_common::error::InvalidTempObjReference {
+                obj_name: object,
+                obj: "FUNCTION".to_owned(),
+                temp_obj_name: quote(&temp),
+                temp_obj: "FUNCTION".to_owned(),
             }
             .into());
         }
         for _ in 0..MAX_DEFINE_ATTEMPTS {
+            // A namespace dropped while the body was checked is not one to
+            // store into.
+            if !store.has_namespace(namespace) {
+                return Err(SchemaNotFound {
+                    schema_name: quote(namespace),
+                }
+                .into());
+            }
             let current = store.functions();
             if !f.or_replace && current.get(namespace, &entry.def.name).is_some() {
                 return Err(RoutineAlreadyExists {

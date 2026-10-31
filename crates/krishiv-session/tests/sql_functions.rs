@@ -938,8 +938,23 @@ fn a_stored_function_cannot_read_a_temporary_view() {
         "CREATE FUNCTION reads_tv() RETURNS INT RETURN (SELECT max(x) FROM tv)",
     ));
     assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
-    assert_eq!(params["objName"], "`spark_catalog`.`default`.`reads_tv`");
+    // Spark's parameters (sql-udf.sql.out, foo3_5d).
+    assert_eq!(params["obj"], "FUNCTION");
+    assert_eq!(params["objName"], "`default`.`reads_tv`");
+    assert_eq!(params["tempObj"], "VIEW");
     assert_eq!(params["tempObjName"], "`tv`");
+    // Nor a temporary function.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tmp_f(x INT) RETURNS INT RETURN x",
+    );
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION calls_tmp(x INT) RETURNS INT RETURN tmp_f(x)",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    assert_eq!(params["tempObj"], "FUNCTION");
+    assert_eq!(params["tempObjName"], "`tmp_f`");
     // A temporary function may read it.
     ok(
         &s,

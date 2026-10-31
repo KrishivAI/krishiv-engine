@@ -382,7 +382,9 @@ impl CatalogStore for InMemoryCatalogStore {
 
     fn define_function(&self, function: StoredFunction, expected: u64) -> bool {
         let mut state = self.lock();
-        if state.functions.version() != expected {
+        if state.functions.version() != expected
+            || !state.namespaces.contains_key(&function.namespace)
+        {
             return false;
         }
         state.functions = Arc::new(state.functions.with(function));

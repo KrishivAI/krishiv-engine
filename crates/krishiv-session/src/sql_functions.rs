@@ -134,7 +134,7 @@ impl QueryFunctions {
         case_sensitive: bool,
     ) -> Self {
         let stored = catalog.store.functions();
-        let namespace = catalog.current_namespace().to_lowercase();
+        let namespace = fold(&catalog.current_namespace(), case_sensitive);
         Self {
             base,
             map,
@@ -183,6 +183,12 @@ impl QueryFunctions {
         if let Some(hit) = cache.get(&key) {
             return Arc::clone(hit);
         }
+        // A stored function reads the catalog, not the caller's temporary
+        // views (it could not have been created reading one).
+        if !def.qualifier.is_empty() {
+            cache.insert(key, Arc::clone(def));
+            return Arc::clone(def);
+        }
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
         // A body no view expansion can read (a snapshot name, a cycle)
         // stays as written: the analyzer then reports the table missing.
@@ -216,6 +222,7 @@ impl FunctionRegistry for QueryFunctions {
         // namespace (`default.f`, `spark_catalog.default.f`), and a bare
         // name after the temporary ones, in the current namespace.
         let lower: Vec<String> = name.iter().map(|p| p.to_lowercase()).collect();
+        let ns = |i: usize| fold(&name[i], self.case_sensitive);
         let temporary = |f: &String| {
             self.map
                 .get(f)
@@ -230,8 +237,8 @@ impl FunctionRegistry for QueryFunctions {
             [f] => temporary(f).or_else(|| stored(&self.namespace, f)),
             [q, f] if q == "session" => temporary(f),
             [s, q, f] if s == "system" && q == "session" => temporary(f),
-            [ns, f] => stored(ns, f),
-            [c, ns, f] if c == crate::catalog::CATALOG => stored(ns, f),
+            [_, f] => stored(&ns(0), f),
+            [c, _, f] if c == crate::catalog::CATALOG => stored(&ns(1), f),
             _ => None,
         };
         found.unwrap_or(FunctionLookup::NotFound)
@@ -269,6 +276,15 @@ pub(crate) fn reads_temporary_view(
         &one_row_project(vec![Arc::clone(body)]),
         case_sensitive,
     )
+}
+
+/// A namespace name as the session compares them.
+fn fold(namespace: &str, case_sensitive: bool) -> String {
+    if case_sensitive {
+        namespace.to_owned()
+    } else {
+        namespace.to_lowercase()
+    }
 }
 
 /// What a function is cached under: its qualifier and name.
