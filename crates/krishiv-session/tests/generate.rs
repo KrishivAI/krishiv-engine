@@ -331,6 +331,19 @@ fn a_generator_beside_group_by_runs_above_the_aggregate() {
 }
 
 #[test]
+fn order_by_reads_a_grouping_column_the_generator_select_does_not_output() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(arr) as e from (values (2, array('a')), (1, array('b'))) as t(k, arr) \
+             group by k, arr order by k"
+        ),
+        table(&[&["b"], &["a"]])
+    );
+}
+
+#[test]
 fn stack_generates_rows_of_columns() {
     let s = Session::new().unwrap();
     assert_eq!(

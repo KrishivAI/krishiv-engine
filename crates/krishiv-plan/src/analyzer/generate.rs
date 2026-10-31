@@ -22,7 +22,7 @@ use super::bind::unsupported;
 use super::coerce::quoted_type;
 use super::exprs::{Bound, Cx, pretty};
 use super::ops::col_expr;
-use super::resolve::{Attr, Env, Rel, Resolver};
+use super::resolve::{Attr, Env, Rel, Resolver, Widen};
 use crate::{
     BoundColumn, Expr, ExprNode, GeneratorKind, Literal, LogicalPlan, Origin, PlanNode,
     ResolvedExpr,
@@ -509,7 +509,10 @@ impl Resolver<'_> {
             names: Vec::new(),
             qualifier: None,
         };
-        let generate = self.make(origin, node, out, &[agg]);
+        let mut generate = self.make(origin, node, out, &[agg]);
+        // A grouping column the select list leaves out (`ORDER BY k`) comes
+        // back through the aggregate below.
+        generate.widen = Some(Arc::new(Widen::Through { child: agg.clone() }));
         // Select-list order: the aggregate's outputs, the generated
         // columns in the place of the argument.
         let mut exprs = Vec::new();
