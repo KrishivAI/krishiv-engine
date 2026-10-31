@@ -1,11 +1,5 @@
 {
   "cases": {
-    "cast-matrix": [
-      58,
-      59,
-      60,
-      130
-    ],
     "nested-interval-types": [
       39,
       40,
