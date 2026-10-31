@@ -588,10 +588,12 @@ fn results_are_checked_against_the_binding() {
     assert!(err.to_string().contains("returned 1 rows of Utf8"), "{err}");
 }
 
+mod array_edit;
 mod bitwise;
 mod calendar;
 mod csv;
 mod datetime_format;
+mod element;
 mod families;
 mod json;
 mod json_tuple;
@@ -603,6 +605,7 @@ mod random;
 mod r#struct;
 mod text;
 mod url;
+mod vector;
 
 #[test]
 fn session_user_and_local_clock() {

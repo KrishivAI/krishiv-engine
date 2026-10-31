@@ -14,6 +14,5 @@
   "structural/signal": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
   "variables/declare_default_cast_invalid": "CAST_INVALID_INPUT lacks the ansiConfig parameter (cast error parameters, not a scripting matter)",
   "variables/declare_overflow": "CAST_INVALID_INPUT lacks the ansiConfig parameter (cast error parameters, not a scripting matter)",
-  "variables/local_in_cache_table": "CACHE TABLE ... AS SELECT is not implemented",
   "variables/set_cast_invalid": "CAST_INVALID_INPUT lacks the ansiConfig parameter (cast error parameters, not a scripting matter)"
 }

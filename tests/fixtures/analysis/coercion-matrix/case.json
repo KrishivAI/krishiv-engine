@@ -1,504 +1,52 @@
 {
   "entries": [
     {
-      "id": "case/ARRAY<INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BIGINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BIGINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BIGINT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BIGINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BIGINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BIGINT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BINARY) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BINARY) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BINARY) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BINARY) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BINARY) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BINARY) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BOOLEAN) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BOOLEAN) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BOOLEAN) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BOOLEAN) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS BOOLEAN) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BOOLEAN) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DATE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DATE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DATE) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DATE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DATE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DATE) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DOUBLE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DOUBLE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DOUBLE) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DOUBLE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS DOUBLE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DOUBLE) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS FLOAT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS FLOAT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS FLOAT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS FLOAT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS FLOAT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS FLOAT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/INT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS INT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS INT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS INT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/INT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS INT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS INT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS INT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS SMALLINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS SMALLINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS SMALLINT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS SMALLINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS SMALLINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS SMALLINT) END\\\"\"}"
-    },
-    {
       "id": "case/ARRAY<INT>/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS STRING) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS STRING) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS STRING) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS STRING) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TINYINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TINYINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TINYINT) END\\\"\"}"
-    },
-    {
-      "id": "case/ARRAY<INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TINYINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS ARRAY<INT>) ELSE CAST(NULL AS TINYINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TINYINT) END\\\"\"}"
-    },
-    {
-      "id": "case/BIGINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BIGINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BIGINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BIGINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE NULL END\\\"\"}"
     },
     {
       "id": "case/BIGINT/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
-      "id": "case/BIGINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BIGINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BIGINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BINARY/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BINARY/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BINARY/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BINARY/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/BINARY/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS STRING) END\\\"\"}"
-    },
-    {
-      "id": "case/BINARY/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BINARY/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BINARY) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BOOLEAN/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BOOLEAN/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BOOLEAN/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BOOLEAN/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE NULL END\\\"\"}"
     },
     {
       "id": "case/BOOLEAN/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS STRING) END\\\"\"}"
     },
     {
-      "id": "case/BOOLEAN/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/BOOLEAN/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS BOOLEAN) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DATE/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DATE) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DATE/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DATE) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DATE/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DATE) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DATE/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DATE) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/DATE/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DATE) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
-    },
-    {
-      "id": "case/DATE/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DATE) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DATE/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DATE) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DATE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DECIMAL(10,2)/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DECIMAL(10,2)/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DECIMAL(10,2)/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DECIMAL(10,2)/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE NULL END\\\"\"}"
     },
     {
       "id": "case/DECIMAL(10,2)/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
-      "id": "case/DECIMAL(10,2)/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DECIMAL(10,2)/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DECIMAL(10,2)) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DOUBLE/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DOUBLE/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DOUBLE/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DOUBLE/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/DOUBLE/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
-    },
-    {
-      "id": "case/DOUBLE/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/DOUBLE/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS DOUBLE) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/FLOAT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/FLOAT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/FLOAT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/FLOAT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE NULL END\\\"\"}"
     },
     {
       "id": "case/FLOAT/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
-      "id": "case/FLOAT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/FLOAT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS FLOAT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/INT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS INT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/INT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS INT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/INT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS INT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/INT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS INT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/INT/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS INT) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
-    },
-    {
-      "id": "case/INT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS INT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/INT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS INT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS INT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS BIGINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS BIGINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BIGINT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS BIGINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS BIGINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BIGINT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS BINARY) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS BINARY) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BINARY) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS BINARY) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS BINARY) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BINARY) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS BOOLEAN) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS BOOLEAN) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BOOLEAN) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS BOOLEAN) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS BOOLEAN) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BOOLEAN) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS DATE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS DATE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DATE) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS DATE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS DATE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DATE) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS DOUBLE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS DOUBLE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DOUBLE) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS DOUBLE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS DOUBLE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DOUBLE) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS FLOAT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS FLOAT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS FLOAT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS FLOAT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS FLOAT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS FLOAT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/INT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS INT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS INT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS INT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/INT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS INT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS INT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS INT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS SMALLINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS SMALLINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS SMALLINT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS SMALLINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS SMALLINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS SMALLINT) END\\\"\"}"
     },
     {
       "id": "case/MAP<STRING,INT>/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS STRING) END\\\"\"}"
     },
     {
-      "id": "case/MAP<STRING,INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS STRING) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS STRING) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS STRING) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS TIMESTAMP) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS TIMESTAMP) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS TIMESTAMP) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS TIMESTAMP) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS TINYINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS TINYINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TINYINT) END\\\"\"}"
-    },
-    {
-      "id": "case/MAP<STRING,INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS MAP<STRING,INT>) ELSE CAST(NULL AS TINYINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS MAP<STRING, INT>) ELSE CAST(NULL AS TINYINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TINYINT) END\\\"\"}"
-    },
-    {
-      "id": "case/SMALLINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/SMALLINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/SMALLINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/SMALLINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/SMALLINT/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
-      "id": "case/SMALLINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/SMALLINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS SMALLINT) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/STRING/ARRAY<INT>/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS ARRAY<INT>) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/STRING/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE NULL END\\\"\"}"
     },
     {
       "id": "case/STRING/BIGINT/ansi_off",
@@ -537,20 +85,12 @@
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS MAP<STRING,INT>) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE NULL END\\\"\"}"
     },
     {
-      "id": "case/STRING/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/STRING/SMALLINT/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS SMALLINT) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
       "id": "case/STRING/STRUCT<a INT>/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS STRUCT<a INT>) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/STRING/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRING) ELSE NULL END\\\"\"}"
     },
     {
       "id": "case/STRING/TIMESTAMP/ansi_off",
@@ -565,208 +105,20 @@
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRING) ELSE CAST(NULL AS TINYINT) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
-      "id": "case/STRUCT<a INT>/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS BIGINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS BIGINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BIGINT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS BIGINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS BIGINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BIGINT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS BINARY) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS BINARY) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BINARY) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS BINARY) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS BINARY) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BINARY) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS BOOLEAN) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS BOOLEAN) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BOOLEAN) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS BOOLEAN) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS BOOLEAN) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS BOOLEAN) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS DATE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS DATE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DATE) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS DATE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS DATE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DATE) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DECIMAL(10,2)) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS DOUBLE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS DOUBLE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DOUBLE) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS DOUBLE) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS DOUBLE) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS DOUBLE) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS FLOAT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS FLOAT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS FLOAT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS FLOAT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS FLOAT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS FLOAT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/INT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS INT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS INT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS INT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/INT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS INT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS INT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS INT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS SMALLINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS SMALLINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS SMALLINT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS SMALLINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS SMALLINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS SMALLINT) END\\\"\"}"
-    },
-    {
       "id": "case/STRUCT<a INT>/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS STRING) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS STRING) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS STRING) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS STRING) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS TIMESTAMP) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS TIMESTAMP) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS TIMESTAMP) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS TIMESTAMP) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TIMESTAMP_NTZ) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS TINYINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS TINYINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TINYINT) END\\\"\"}"
-    },
-    {
-      "id": "case/STRUCT<a INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS STRUCT<a INT>) ELSE CAST(NULL AS TINYINT) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS STRUCT<a: INT>) ELSE CAST(NULL AS TINYINT) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN NULL ELSE CAST(NULL AS TINYINT) END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE NULL END\\\"\"}"
     },
     {
       "id": "case/TIMESTAMP/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
-      "id": "case/TIMESTAMP/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP_NTZ/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP_NTZ/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/TIMESTAMP_NTZ/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
     },
     {
-      "id": "case/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TIMESTAMP_NTZ) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TINYINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TINYINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS ARRAY<INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS ARRAY<INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TINYINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TINYINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS MAP<STRING,INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS MAP<STRING, INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE NULL END\\\"\"}"
-    },
-    {
       "id": "case/TINYINT/STRING/ansi_off",
       "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS STRING) END) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to string"
-    },
-    {
-      "id": "case/TINYINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE NULL END\\\"\"}"
-    },
-    {
-      "id": "case/TINYINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(CASE WHEN TRUE THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS STRUCT<a INT>) END) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE CAST(NULL AS STRUCT<a: INT>) END\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`casewhen`\", \"sqlExpr\": \"\\\"CASE WHEN true THEN CAST(NULL AS TINYINT) ELSE NULL END\\\"\"}"
     }
   ],
   "form": "case",

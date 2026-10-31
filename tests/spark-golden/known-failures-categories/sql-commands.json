@@ -8,6 +8,10 @@
       "order": 10
     },
     {
+      "file": "^identifier-clause$",
+      "order": 20
+    },
+    {
       "order": 80,
       "query": "(?i)^\\s*explain\\s+(extended\\s+|formatted\\s+)?(desc|describe|show|create|insert|set)\\b"
     },
