@@ -118,6 +118,7 @@ macro_rules! registry {
 // (id, variant, legacy level, kind, meaning)
 registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
+    (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
@@ -129,6 +130,7 @@ registry! {
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
+    (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
@@ -176,9 +178,11 @@ pub enum Construct<'a> {
     Window(&'a WindowFunction),
     /// A window function's frame.
     Frame(&'a WindowFrame),
-    /// An aggregate expression (of an aggregate or a window): its
-    /// function, and whether it reads only the rows of a mask column.
+    /// An aggregate expression (of an aggregate or a window): whether it
+    /// reads only the rows of a mask column.
     Aggregate(&'a AggregateExpr),
+    /// An aggregate function (of an aggregate or a window).
+    AggregateFunction(&'a AggregateFunction),
     /// A resolved function call: only a session UDF needs a feature.
     Function(&'a FunctionId),
     /// A resolved expression (a struct field access needs its feature).
@@ -382,34 +386,52 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             };
             (newer(frame.lower) || newer(frame.upper)).then_some(Feature::WindowFrameOffsets)
         }
-        Construct::Aggregate(a) => {
-            if a.mask.is_some() {
-                return Some(Feature::AggregateFilter);
-            }
-            match a.function {
-                AggregateFunction::Count
-                | AggregateFunction::Sum
-                | AggregateFunction::Avg
-                | AggregateFunction::Min
-                | AggregateFunction::Max
-                | AggregateFunction::First { .. }
-                | AggregateFunction::Last { .. }
-                // These are not encodable yet: the encoder refuses them, so
-                // none reaches a worker.
-                | AggregateFunction::StddevSamp
-                | AggregateFunction::StddevPop
-                | AggregateFunction::VarSamp
-                | AggregateFunction::VarPop
-                | AggregateFunction::Skewness
-                | AggregateFunction::Kurtosis
-                | AggregateFunction::Corr
-                | AggregateFunction::CovarSamp
-                | AggregateFunction::CovarPop
-                | AggregateFunction::AnyValue { .. }
-                | AggregateFunction::MaxBy
-                | AggregateFunction::MinBy => None,
-            }
-        }
+        Construct::Aggregate(a) => a.mask.is_some().then_some(Feature::AggregateFilter),
+        Construct::AggregateFunction(f) => match f {
+            AggregateFunction::Count
+            | AggregateFunction::Sum
+            | AggregateFunction::Avg
+            | AggregateFunction::Min
+            | AggregateFunction::Max
+            | AggregateFunction::First { .. }
+            | AggregateFunction::Last { .. }
+            // These are not encodable yet: the encoder refuses them, so
+            // none reaches a worker.
+            | AggregateFunction::StddevSamp
+            | AggregateFunction::StddevPop
+            | AggregateFunction::VarSamp
+            | AggregateFunction::VarPop
+            | AggregateFunction::Skewness
+            | AggregateFunction::Kurtosis
+            | AggregateFunction::Corr
+            | AggregateFunction::CovarSamp
+            | AggregateFunction::CovarPop
+            | AggregateFunction::AnyValue { .. }
+            | AggregateFunction::MaxBy
+            | AggregateFunction::MinBy => None,
+            AggregateFunction::CollectList
+            | AggregateFunction::CollectSet
+            | AggregateFunction::VectorSum
+            | AggregateFunction::VectorAvg => Some(Feature::CollectAggregates),
+            AggregateFunction::BitAnd
+            | AggregateFunction::BitOr
+            | AggregateFunction::BitXor
+            | AggregateFunction::RegrCount
+            | AggregateFunction::RegrAvgx
+            | AggregateFunction::RegrAvgy
+            | AggregateFunction::RegrSxx
+            | AggregateFunction::RegrSyy
+            | AggregateFunction::RegrSxy
+            | AggregateFunction::RegrSlope
+            | AggregateFunction::RegrIntercept
+            | AggregateFunction::RegrR2
+            | AggregateFunction::Mode
+            | AggregateFunction::ModeMin
+            | AggregateFunction::ModeMax
+            | AggregateFunction::ListAgg { .. }
+            | AggregateFunction::TrySum
+            | AggregateFunction::TryAvg => Some(Feature::ModeRegrBitListaggAggs),
+        },
         // Built-ins and registry functions travel by name; only a
         // session UDF (by name and version) needs a reader with it.
         Construct::Function(id) => match id {
@@ -420,6 +442,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             FunctionId::Registry { .. } | _ => None,
         },
     }
+}
+
+/// Calls `f` with an aggregate expression and its function.
+fn aggregate_constructs<'a>(a: &'a AggregateExpr, f: &mut impl FnMut(Construct<'a>)) {
+    f(Construct::Aggregate(a));
+    f(Construct::AggregateFunction(&a.function));
 }
 
 /// Calls `f` with `node` and each construct inside it (not its children).
@@ -436,14 +464,14 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 f(Construct::Window(&function.function));
                 f(Construct::Frame(&function.frame));
                 if let WindowFunction::Aggregate(a) = &function.function {
-                    f(Construct::Aggregate(a));
+                    aggregate_constructs(a, f);
                 }
             }
         }
         PhysNode::Aggregate { aggregate, .. } => aggregate
             .aggregates
             .iter()
-            .for_each(|a| f(Construct::Aggregate(a))),
+            .for_each(|a| aggregate_constructs(a, f)),
         PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
@@ -623,7 +651,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut stack = vec![plan.root()];
     while let Some(node) = stack.pop() {
         constructs_of(node, &mut |c| {
-            if matches!(c, Construct::Aggregate(a) if is_moment(a.function)) {
+            if matches!(c, Construct::Aggregate(a) if is_moment(&a.function)) {
                 has_moment = true;
             }
             out.extend(feature_of(c));

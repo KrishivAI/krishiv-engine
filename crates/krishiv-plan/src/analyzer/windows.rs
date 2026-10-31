@@ -41,9 +41,9 @@ use krishiv_common::error::{
     DatatypeMismatchSpecifiedWindowFrameUnacceptedType,
     DatatypeMismatchSpecifiedWindowFrameWrongComparison, DistinctWindowFunctionUnsupported,
     FailedFunctionCall, InvalidAggregateFilterContainsWindowFunction,
-    InvalidSqlSyntaxFunctionWithUnsupportedSyntax, KrishivError, LegacyErrorTemp1031,
-    LegacyErrorTemp1035, LegacyErrorTemp1036, MissingWindowSpecification,
-    UnsupportedExprForOperator, UnsupportedExprForWindow,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax, InvalidWindowSpecForAggregationFunc,
+    KrishivError, LegacyErrorTemp1031, LegacyErrorTemp1035, LegacyErrorTemp1036,
+    MissingWindowSpecification, UnsupportedExprForOperator, UnsupportedExprForWindow,
     UnsupportedFeatureLateralColumnAliasInWindow, WindowFunctionFrameNotOrdered,
     WindowFunctionNotAllowedInClause, WindowFunctionWithoutOverClause,
 };
@@ -608,6 +608,38 @@ impl Resolver<'_> {
             return Err(AnalysisError::new(
                 DistinctWindowFunctionUnsupported {
                     window_expr: format!("\"{}\"", window_text(&function_shown, &shown)),
+                },
+                e.origin,
+            ));
+        }
+        // `listagg(...) WITHIN GROUP (ORDER BY ...) OVER (ORDER BY ...)`
+        // is unsupported (Spark only allows the whole-partition frame
+        // without an ordering); the error quotes the aggregate with its
+        // ordering as further arguments, as Spark's `ListAgg.sql` does.
+        if call.id.name() == "listagg"
+            && !call.within_group.is_empty()
+            && (!bound.order_by.is_empty()
+                || frame.units != FrameUnits::Rows
+                || !matches!(frame.lower, FrameBound::UnboundedPreceding)
+                || !matches!(frame.upper, FrameBound::UnboundedFollowing))
+        {
+            let zone = self.ctx.conf.session_zone;
+            let mut parts = Vec::new();
+            let mut orders = Vec::new();
+            if let ExprNode::Resolved(ResolvedExpr::Function(shown_f)) = &function.shown().node {
+                parts.extend(shown_f.args.iter().map(|a| pretty(a, zone)));
+                orders.extend(shown_f.within_group.iter().map(|o| {
+                    format!(
+                        "{}{}",
+                        pretty(&o.expr, zone),
+                        crate::display::order_suffix(o)
+                    )
+                }));
+            }
+            parts.extend(orders);
+            return Err(AnalysisError::new(
+                InvalidWindowSpecForAggregationFunc {
+                    agg_func: format!("\"listagg({})\"", parts.join(", ")),
                 },
                 e.origin,
             ));

@@ -252,6 +252,7 @@ impl Window {
         l.failed = None;
         // The rows are read back as a new input.
         l.started = false;
+        l.open_len = 0;
         l.prev_partition = None;
         l.prev_order = None;
         l.last_start = None;
@@ -389,8 +390,14 @@ impl Window {
         // Frames other than whole, running and peer frames, and the offset
         // functions, are evaluated from disk with a later part of P2-T055.
         for f in &self.env.plan.functions {
+            // A running frame over a growing state (`collect_list`, `mode`,
+            // `listagg`) snapshots a copy per row, quadratic in the
+            // partition, which no per-partition headroom covers.
             let framed = match &f.function {
-                super::WindowFunction::Aggregate(_) => f.shape()? == super::Shape::Frame,
+                super::WindowFunction::Aggregate(a) => {
+                    let shape = f.shape()?;
+                    shape == super::Shape::Frame || super::eval::snapshots_grow(a, shape)
+                }
                 super::WindowFunction::Offset { .. } | super::WindowFunction::NthValue { .. } => {
                     true
                 }
@@ -468,7 +475,13 @@ impl Window {
             .file
             .max_read_reservation()
             .saturating_mul(3)
-            .saturating_add(eval::cost(&self.env.plan, rows, 1, rows)?);
+            .saturating_add(eval::cost(
+                &self.env.plan,
+                rows,
+                1,
+                rows,
+                rows.saturating_mul(rows.saturating_add(1)) / 2,
+            )?);
         let spare = r.headroom.size().saturating_sub(need.max(r.base));
         r.headroom.shrink(spare);
         if r.headroom.size() < need {

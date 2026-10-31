@@ -140,6 +140,7 @@ fn resolved(id: FunctionId, args: Vec<Arc<Expr>>, filter: Option<Arc<Expr>>) -> 
             args,
             distinct: filter.is_some(),
             filter,
+            within_group: Vec::new(),
             data_type: DataType::Long,
             nullable: false,
             deterministic: true,
@@ -204,6 +205,7 @@ fn every_expression_form_prints() {
                 args: vec![col("a")],
                 distinct: false,
                 filter: Some(col("p")),
+                within_group: Vec::new(),
             })),
             "sum(a) FILTER (WHERE p)",
         ),
@@ -272,6 +274,7 @@ fn shared_subqueries_print_once() {
         args: vec![Arc::clone(&sub), sub],
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
     }));
     let plan = LogicalPlan::table(["t"]).filter(both);
     assert_eq!(

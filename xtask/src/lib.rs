@@ -17,5 +17,6 @@ pub mod metrics_gate;
 pub mod policy;
 pub mod precheck;
 pub mod profile;
+pub mod qerror;
 pub mod registry_coverage;
 pub mod wheels;

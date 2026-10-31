@@ -38,6 +38,7 @@ fuzz_target!(|data: &[u8]| {
         max_buckets: krishiv_sql::DEFAULT_MAX_BUCKETS,
         single_character_pipe_operator: true,
         consecutive_string_literals: rest.first().is_some_and(|b| b & 1 != 0),
+        case_sensitive: rest.first().is_some_and(|b| b & 2 != 0),
     };
     match parse_query(&sql, &options) {
         Ok(q) => {

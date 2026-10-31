@@ -1898,6 +1898,14 @@ impl Resolver<'_> {
             return Ok(None);
         }
         let calls = Self::aggregate_calls(items);
+        // A `DISTINCT` call with an ordering has its keys among the
+        // arguments the expansion would split: leave it to the ordinary path.
+        if calls
+            .iter()
+            .any(|(_, f)| f.distinct && !f.within_group.is_empty())
+        {
+            return Ok(None);
+        }
         let mut memo = HashMap::new();
         // The distinct argument sets in order of first appearance, with
         // the indices of their calls; then the other calls.
@@ -2175,17 +2183,41 @@ impl Resolver<'_> {
         let mut partial_of: Vec<Attr> = Vec::with_capacity(regular.len());
         for &i in &regular {
             let f = &calls[i].1;
-            let mut args = Vec::with_capacity(f.args.len());
-            for a in &f.args {
+            let mut mapped = Vec::with_capacity(f.args.len());
+            for (n, a) in f.args.iter().enumerate() {
+                // A `listagg` delimiter and a `mode` tie-break flag must stay foldable literals.
+                if n == 1 && matches!(f.id.name(), "listagg" | "mode") {
+                    mapped.push(Arc::clone(a));
+                    continue;
+                }
                 match expand_col(a, &e0, &regular_cols, &mut memo) {
-                    Some(x) => args.push(col_expr(&x.col, origin)),
-                    None => args.push(Arc::clone(a)),
+                    Some(x) => mapped.push(col_expr(&x.col, origin)),
+                    None => mapped.push(Arc::clone(a)),
                 }
             }
-            let b = self.bind(
-                &synth_call(f.id.name(), args, f.filter.clone(), origin),
-                &expand_cx,
-            )?;
+            // A resolved `listagg` holds its ordering keys after its value
+            // and delimiter: written again, they are the `WITHIN GROUP`
+            // list. A resolved `mode` encodes its ordering in its arguments.
+            let mut call = synth_call(f.id.name(), Vec::new(), f.filter.clone(), origin);
+            if let ExprNode::Function(c) = &mut Arc::make_mut(&mut call).node {
+                let keys = if f.id.name() == "listagg" {
+                    f.within_group.len().min(mapped.len())
+                } else {
+                    0
+                };
+                c.within_group = f
+                    .within_group
+                    .iter()
+                    .zip(mapped.split_off(mapped.len() - keys))
+                    .map(|(o, expr)| SortOrder {
+                        expr,
+                        direction: o.direction,
+                        nulls: o.nulls,
+                    })
+                    .collect();
+                c.args = mapped;
+            }
+            let b = self.bind(&call, &expand_cx)?;
             let b = self.named(b)?;
             partial_of.push(out_attr(&b, &expand.out));
             items1.push(b);
@@ -2681,6 +2713,7 @@ impl Resolver<'_> {
                 args,
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
             }))
             .with_origin(origin),
         );
@@ -3147,6 +3180,7 @@ fn synth_call(
 ) -> Arc<Expr> {
     Arc::new(
         Expr::new(ExprNode::Function(FunctionCall {
+            within_group: Vec::new(),
             name: name.to_owned(),
             qualifier: Vec::new(),
             arg_names: Vec::new(),

@@ -96,7 +96,7 @@ struct WriterTask {
     keep: oneshot::Receiver<bool>,
     failed: Arc<Mutex<Option<KrishivError>>>,
     io: IoContext,
-    store: krishiv_io::StoreId,
+    store: krishiv_io::PinnedStore,
     /// The query does not end before this task has.
     _in_flight: InFlight,
 }
@@ -138,7 +138,7 @@ impl WriterTask {
         let kept = done.send(Ok(files.clone())).is_ok() && keep.await.unwrap_or(false);
         if !kept {
             for f in files {
-                if let Err(e) = io.delete(&store, &f.path).await {
+                if let Err(e) = io.delete_pinned(&store, &f.path).await {
                     tracing::warn!(error = %e, "could not delete a file of a failed write");
                 }
             }
@@ -263,6 +263,7 @@ impl Sink for FileWriteSink {
         let (done_tx, done_rx) = oneshot::channel();
         let (keep_tx, keep_rx) = oneshot::channel();
         let failed = Arc::new(Mutex::new(None));
+        let store = writer.store().clone();
         let task = WriterTask {
             writer,
             batches: batches_rx,
@@ -271,7 +272,7 @@ impl Sink for FileWriteSink {
             keep: keep_rx,
             failed: Arc::clone(&failed),
             io: self.io.clone(),
-            store: self.options.store.clone(),
+            store,
             _in_flight: ctx.query().blocking_started(),
         };
         // Detached: it ends on its own once its channels close.

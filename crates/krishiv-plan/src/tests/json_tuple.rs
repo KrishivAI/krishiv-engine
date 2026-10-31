@@ -310,6 +310,7 @@ fn plan_computes_the_struct_once_and_reads_n_fields() {
 #[test]
 fn generator_with_aggregates_stays_unsupported() {
     let agg = Expr::new(ExprNode::Function(FunctionCall {
+        within_group: Vec::new(),
         name: "count".to_owned(),
         qualifier: Vec::new(),
         args: vec![Arc::new(c("i"))],

@@ -819,3 +819,70 @@ fn analyze_validates_and_resource_commands_are_refused() {
         assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
     }
 }
+
+/// `UPDATE` and `DELETE` resolve their columns and condition before Spark finds that the table cannot
+/// change; an unknown column is the error then, with the analyzer's suggestions.
+#[test]
+fn row_level_changes_resolve_columns_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT, b INT) USING parquet");
+    assert_eq!(
+        class(&s, "UPDATE t SET nope = 1"),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    assert_eq!(
+        class(&s, "UPDATE t SET a = nope"),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    assert_eq!(
+        class(&s, "UPDATE t SET a = 1 WHERE nope = 2"),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    assert_eq!(
+        class(&s, "DELETE FROM t WHERE nope = 2"),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let e = block_on(async { s.sql("UPDATE t SET zzz = 1").await?.collect().await }).unwrap_err();
+    assert!(
+        e.message_parameters()
+            .iter()
+            .any(|(k, v)| *k == "proposal" && v.contains("`a`") && v.contains("`b`")),
+        "{e}"
+    );
+    // A valid statement, `DEFAULT` included, reaches the table-operation error.
+    for sql in [
+        "UPDATE t SET a = b + 1 WHERE a > 0",
+        "UPDATE t SET a = DEFAULT",
+        "DELETE FROM t WHERE b IS NULL",
+    ] {
+        assert_eq!(
+            class(&s, sql),
+            "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+            "{sql}"
+        );
+    }
+}
+
+/// A scalar subquery in `INSERT ... VALUES` is refused after it is resolved: an unknown column inside it
+/// is the error first.
+#[test]
+fn insert_values_refuse_scalar_subqueries() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT) USING parquet");
+    assert_eq!(
+        class(&s, "INSERT INTO t VALUES ((SELECT 1))"),
+        "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES"
+    );
+    assert_eq!(
+        class(&s, "INSERT INTO t VALUES (1 + (SELECT 2))"),
+        "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.SCALAR_SUBQUERY_IN_VALUES"
+    );
+    assert_eq!(
+        class(&s, "INSERT INTO t VALUES ((SELECT nope))"),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+    // Without a subquery nothing changes.
+    run(&s, "INSERT INTO t VALUES (1), (2)");
+}

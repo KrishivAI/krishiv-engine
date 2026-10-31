@@ -450,6 +450,10 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
+            | "aggregate_collects"
+            | "aggregate_vectors"
+            | "aggregate_mode_regr_bit_listagg"
+            | "aggregate_listagg"
             | "write_files_partitioned" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
@@ -577,6 +581,36 @@ fn a_loose_null_of_item_still_needs_the_expand_feature() {
     assert_eq!(m.min_reader_version, 5);
     assert_eq!(m.features, ["expand"]);
     assert_eq!(round_trip(&plan), plan);
+}
+
+#[test]
+fn a_corrupt_listagg_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::AggregateExpr)| {
+        let mut m = message("aggregate_listagg");
+        for node in &mut m.nodes {
+            if let Some(Kind::Aggregate(a)) = &mut node.kind {
+                a.aggregates.iter_mut().for_each(f);
+            }
+        }
+        m
+    };
+    // More orders than ordering-key arguments would index past the keys.
+    corrupt(
+        &edit(&|a| {
+            a.listagg_desc.push(false);
+            a.listagg_nulls_first.push(false);
+        }),
+        "another argument count than its orders",
+    );
+    corrupt(
+        &edit(&|a| a.listagg_nulls_first.clear()),
+        "another shape than its orders",
+    );
+    corrupt(
+        &edit(&|a| a.args.clear()),
+        "another argument count than its orders",
+    );
 }
 
 #[test]

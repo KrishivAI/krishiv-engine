@@ -15,35 +15,35 @@ Limit 100
          :           +- Project [ps_suppkey#17, p_partkey#0, p_mfgr#2]
          :              +- Join Inner, ((ps_supplycost#19 == min(ps_supplycost)#47) and (p_partkey#0 == ps_partkey#16))
          :                 :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19] (shared #3)
-         :                 +- Project [min(ps_supplycost)#47, p_partkey#0, p_mfgr#2]
+         :                 +- Project [p_partkey#0, p_mfgr#2, min(ps_supplycost)#47]
          :                    +- Join Inner, (p_partkey#0 == ps_partkey#28)
-         :                       :- Aggregate [ps_partkey#28], [min(ps_supplycost#31) AS min(ps_supplycost)#47, ps_partkey#28]
-         :                       :  +- Join LeftSemi, (ps_partkey#28 == p_partkey#48)
-         :                       :     :- Project [ps_partkey#28, ps_supplycost#31]
-         :                       :     :  +- Join Inner, (s_suppkey#33 == ps_suppkey#29)
-         :                       :     :     :- Shift +12
-         :                       :     :     :  +- Shared #3, printed above
-         :                       :     :     +- Project [s_suppkey#33]
-         :                       :     :        +- Join Inner, (s_nationkey#36 == n_nationkey#40)
-         :                       :     :           :- Project [s_suppkey#33, s_nationkey#36]
-         :                       :     :           :  +- Shift +24
-         :                       :     :           :     +- Shared #2, printed above
-         :                       :     :           +- Project [n_nationkey#40]
-         :                       :     :              +- Join Inner, (n_regionkey#42 == r_regionkey#44)
-         :                       :     :                 :- Project [n_nationkey#40, n_regionkey#42]
-         :                       :     :                 :  +- Shift +19
-         :                       :     :                 :     +- Shared #1, printed above
-         :                       :     :                 +- Project [r_regionkey#44]
-         :                       :     :                    +- Shift +19
-         :                       :     :                       +- Filter (r_name#26 == 'EUROPE')
-         :                       :     :                          +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26] (shared #4)
-         :                       :     +- Shift +48
-         :                       :        +- Project [p_partkey#0]
-         :                       :           +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
-         :                       :              +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5] (shared #5)
-         :                       +- Project [p_partkey#0, p_mfgr#2]
-         :                          +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
-         :                             +- Shared #5, printed above
+         :                       :- Project [p_partkey#0, p_mfgr#2]
+         :                       :  +- Filter ((p_type#4 like '%BRASS') and (p_size#5 == 15))
+         :                       :     +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5] (shared #4)
+         :                       +- Aggregate [ps_partkey#28], [min(ps_supplycost#31) AS min(ps_supplycost)#47, ps_partkey#28]
+         :                          +- Join LeftSemi, (ps_partkey#28 == p_partkey#48)
+         :                             :- Project [ps_partkey#28, ps_supplycost#31]
+         :                             :  +- Join Inner, (s_suppkey#33 == ps_suppkey#29)
+         :                             :     :- Shift +12
+         :                             :     :  +- Shared #3, printed above
+         :                             :     +- Project [s_suppkey#33]
+         :                             :        +- Join Inner, (s_nationkey#36 == n_nationkey#40)
+         :                             :           :- Project [s_suppkey#33, s_nationkey#36]
+         :                             :           :  +- Shift +24
+         :                             :           :     +- Shared #2, printed above
+         :                             :           +- Project [n_nationkey#40]
+         :                             :              +- Join Inner, (n_regionkey#42 == r_regionkey#44)
+         :                             :                 :- Project [n_nationkey#40, n_regionkey#42]
+         :                             :                 :  +- Shift +19
+         :                             :                 :     +- Shared #1, printed above
+         :                             :                 +- Project [r_regionkey#44]
+         :                             :                    +- Shift +19
+         :                             :                       +- Filter (r_name#26 == 'EUROPE')
+         :                             :                          +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26] (shared #5)
+         :                             +- Shift +48
+         :                                +- Project [p_partkey#0]
+         :                                   +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
+         :                                      +- Shared #4, printed above
          +- Project [r_regionkey#25]
             +- Filter (r_name#26 == 'EUROPE')
-               +- Shared #4, printed above
+               +- Shared #5, printed above

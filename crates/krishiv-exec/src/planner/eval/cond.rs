@@ -984,6 +984,7 @@ mod tests {
             args: Vec::new(),
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type,
             nullable: true,
             deterministic: true,

@@ -172,6 +172,7 @@ impl Translator<'_> {
             args,
             distinct,
             filter: None,
+            within_group: Vec::new(),
         };
         let name = f.function_name.as_str();
         Ok(match name {

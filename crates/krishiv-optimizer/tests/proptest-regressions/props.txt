@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc d5b1ad65e3db79e46e62ecdf3eab02356c5292707e5ade9ae4f54879524e1c29 # shrinks to seed = 2185477434553084226
 cc b2ada06fa62b1d8c60e45a1c1be4a7c792a6e69e70291b16244ca5cc5d4f6dbe # shrinks to seed = 325970679544329886
+cc 645a0fe408f53489f8a2df6c940a9b69076370e646aa21b5cbd022b7ee40bb31 # shrinks to seed = 13629036561525047320
