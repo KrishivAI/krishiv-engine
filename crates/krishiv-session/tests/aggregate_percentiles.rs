@@ -408,15 +408,17 @@ fn percentile_over_running_and_sliding_frames() -> R {
         )?,
         vec!["1", "3", "5", "5"]
     );
-    assert_eq!(
-        shown(
-            &s,
-            &format!(
-                "SELECT percentile(v, 0.5) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND \
-                 CURRENT ROW) {data} ORDER BY id"
-            )
-        )?,
-        vec!["1", "3", "7", "9"]
-    );
+    // A sliding frame would hold every row's value map outside the memory
+    // reservation: refused, not computed.
+    for frame in [
+        "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW",
+        "ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING",
+    ] {
+        let sql = format!("SELECT percentile(v, 0.5) OVER (ORDER BY id {frame}) {data}");
+        let err = block_on(s.sql(&sql))
+            .and_then(|df| block_on(df.collect()))
+            .unwrap_err();
+        assert!(err.to_string().contains("sliding frame"), "{frame}: {err}");
+    }
     Ok(())
 }
