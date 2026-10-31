@@ -1404,7 +1404,11 @@ pub(super) fn force_nullable(from: &DataType, to: &DataType) -> bool {
         | (_, T::String)
         | (T::Timestamp, T::Date)
         | (T::Date, T::Timestamp) => false,
-        (T::String | T::Date, _) | (T::Float | T::Double, T::Timestamp) | (_, T::Date) => true,
+        // The seconds of a time may not fit a `tinyint` or `smallint`.
+        (T::String | T::Date, _)
+        | (T::Float | T::Double, T::Timestamp)
+        | (_, T::Date)
+        | (T::Time { .. }, T::Byte | T::Short) => true,
         (_, T::Decimal(d)) => !null_safe_decimal(from, *d),
         (T::Float | T::Double | T::Decimal(_), t) => integral_digits(t).is_some(),
         (T::Timestamp, t) => integral_digits(t).is_some_and(|p| p < 20),

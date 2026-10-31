@@ -63,3 +63,34 @@ fn listagg_distinct_over_a_time_cast_passes_the_analyzer() {
         krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
     );
 }
+
+/// Spark types a TIME cast to `tinyint`/`smallint` as nullable (the seconds
+/// may overflow, NULL with ANSI off) and `int`/`bigint`/`time(p)` as not; a
+/// map key that may become NULL is refused.
+#[test]
+fn narrowing_time_casts_are_nullable() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    for (to, nullable) in [
+        ("tinyint", true),
+        ("smallint", true),
+        ("int", false),
+        ("bigint", false),
+        ("time(3)", false),
+    ] {
+        let df = block_on(s.sql(&format!(
+            "SELECT CAST(t AS {to}) c FROM (SELECT TIME '12:00:00' t)"
+        )))
+        .unwrap();
+        let schema = block_on(df.schema()).unwrap();
+        assert_eq!(schema.field(0).is_nullable(), nullable, "{to}");
+    }
+    let e =
+        block_on(s.sql("SELECT CAST(map(TIME '23:59:59', 1) AS map<tinyint, int>)")).unwrap_err();
+    assert_ne!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::InternalError,
+        "{e}"
+    );
+}
