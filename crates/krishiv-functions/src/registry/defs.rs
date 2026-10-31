@@ -216,6 +216,11 @@ fn any_time() -> InputType {
     )
 }
 
+/// A `TIME(6)` that is NULL for any row that does not parse.
+fn time6_nullable(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Time { precision: 6 }, true))
+}
+
 fn time6(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Time { precision: 6 }, c)
 }
@@ -927,6 +932,16 @@ fn datetime() -> Vec<Spec> {
         &["time_to_millis", "time_to_micros"],
         &Inputs::Expects(vec![any_time()]),
         long,
+    ));
+    out.extend(scalar(
+        &["to_time"],
+        &Inputs::Expects(vec![exact(DataType::String)]),
+        time6,
+    ));
+    out.extend(scalar(
+        &["try_to_time"],
+        &Inputs::Expects(vec![exact(DataType::String)]),
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_diff"],
@@ -1844,5 +1859,6 @@ fn casts() -> Vec<Spec> {
         cast("binary", binary),
         cast("date", date),
         cast("timestamp", timestamp),
+        cast("time", time6),
     ]
 }

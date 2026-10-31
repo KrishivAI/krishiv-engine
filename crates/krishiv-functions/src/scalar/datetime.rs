@@ -25,6 +25,7 @@ use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_kernels::OverflowMode;
 use krishiv_kernels::cast::{
     CastMode, CastOptions, cast, make_time, time_diff, time_from_units, time_to_units, time_trunc,
+    to_time,
 };
 use krishiv_kernels::datetime::{
     DatePart, ParsePolicy, ZoneRef, Zones, convert_timezone, current_date, date_add,
@@ -90,6 +91,8 @@ pub(super) const NAMES: &[&str] = &[
     "make_date",
     "time_trunc",
     "time_diff",
+    "to_time",
+    "try_to_time",
     "make_time",
     "time_from_seconds",
     "time_from_millis",
@@ -856,6 +859,23 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             );
             Ok(Arc::new(time_diff(&x.strings(0)?, &start, &end)?) as ArrayRef)
         }),
+        ("to_time" | "try_to_time", [s]) if is_string(s) => {
+            let fail = name == "to_time";
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| Ok(Arc::new(to_time(&x.strings(0)?, None, fail)?) as ArrayRef),
+            )
+        }
+        ("to_time" | "try_to_time", [s, f]) if is_string(s) && is_string(f) => {
+            let fail = name == "to_time";
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    let formats = x.strings(1)?;
+                    Ok(Arc::new(to_time(&x.strings(0)?, Some(&formats), fail)?) as ArrayRef)
+                },
+            )
+        }
         (
             "make_time",
             [
