@@ -1087,6 +1087,7 @@ impl TableProviderResolver for QueryCatalog {
 ///
 /// # Errors
 /// `INTERNAL_ERROR` for a view that reads itself.
+#[cfg(test)]
 pub(crate) fn expand_temp_views(
     catalog: &SessionCatalog,
     plan: &Arc<LogicalPlan>,
@@ -1120,12 +1121,24 @@ pub(crate) fn expand_views(
     case_sensitive: bool,
     stored: Option<&StoredViews<'_>>,
 ) -> Result<Expansion, KrishivError> {
+    expand_views_in(catalog, plan, case_sensitive, stored, None)
+}
+
+/// [`expand_views`] for `plan` written inside `namespace`: its bare table names belong to that namespace, never
+/// to a temporary view (the body of a stored function).
+pub(crate) fn expand_views_in(
+    catalog: &SessionCatalog,
+    plan: &Arc<LogicalPlan>,
+    case_sensitive: bool,
+    stored: Option<&StoredViews<'_>>,
+    namespace: Option<String>,
+) -> Result<Expansion, KrishivError> {
     let mut expander = Expander {
         catalog,
         case_sensitive,
         path: Vec::new(),
         stored,
-        view_namespace: None,
+        view_namespace: namespace,
         reads: Vec::new(),
         deferred: None,
         stored_reads: Vec::new(),

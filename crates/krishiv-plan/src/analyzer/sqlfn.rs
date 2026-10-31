@@ -45,8 +45,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use krishiv_common::error::{
     CyclicFunctionReference, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, FailedToParseTooComplex,
-    KrishivError, NotAScalarFunction, RequiredParameterNotFound, UnexpectedPositionalArgument,
-    UnrecognizedParameterName, UserDefinedFunctionsCannotContainComplexFunctions,
+    InvalidExtractBaseFieldType, KrishivError, NotAScalarFunction, RequiredParameterNotFound,
+    UnexpectedPositionalArgument, UnrecognizedParameterName,
+    UserDefinedFunctionsCannotContainComplexFunctions,
     UserDefinedFunctionsReturnColumnCountMismatch, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
@@ -56,7 +57,9 @@ use super::AnalysisError;
 use super::bind::{same, unsupported};
 use super::catalog::quoted;
 use super::coerce;
-use super::exprs::{Bound, Cx, SPARK_DOC_ROOT, WindowUse, cast_error, pretty};
+use super::exprs::{
+    Bound, Cx, SPARK_DOC_ROOT, WindowUse, arg_type, cast_error, pretty, unresolved_field,
+};
 use super::resolve::{Attr, Rel, Resolver};
 use crate::walk::{Node, visit_distinct};
 use crate::{
@@ -111,6 +114,11 @@ pub struct SqlFunction {
     /// that it is, as in Spark). Recorded for the front end; calls keep the
     /// determinism of the body's own expressions.
     pub deterministic: bool,
+    /// Whether the function reads data: declared `READS SQL DATA`, or
+    /// declared nothing and its body reads a relation or calls a function
+    /// that does. A function declared `CONTAINS SQL` may call none that
+    /// does (Spark: `INVALID_SQL_FUNCTION_DATA_ACCESS`).
+    pub reads_data: bool,
 }
 
 impl SqlFunction {
@@ -696,7 +704,23 @@ impl Resolver<'_> {
         let cs = self.ctx.conf.case_sensitive;
         let name = match parts {
             [name] => name,
-            [function, name] if same(function, &frame.name, cs) => name,
+            [function, name] if same(function, &frame.name, cs) && self.has_parameter(name) => name,
+            // A field of a struct parameter: `p.a`, `f.p.a.b`.
+            [first, rest @ ..] => {
+                let named = same(first, &frame.name, cs)
+                    && rest.first().is_some_and(|p| self.has_parameter(p));
+                let split = if named { 2 } else { 1 };
+                if !named && !self.has_parameter(first) || parts.len() <= split {
+                    return Ok(None);
+                }
+                let Some(mut b) = self.parameter(&parts[..split], origin, depth)? else {
+                    return Ok(None);
+                };
+                for (i, part) in parts[split..].iter().enumerate() {
+                    b = self.field_of(b, part, &parts[split + i - 1], parts, origin)?;
+                }
+                return Ok(Some(b));
+            }
             _ => return Ok(None),
         };
         let Some(p) = frame.params.iter().find(|p| same(&p.name, name, cs)) else {
@@ -752,6 +776,61 @@ impl Resolver<'_> {
             outer: Some(0),
             ..p.arg.clone()
         }))
+    }
+
+    /// The field `part` of the struct `base`, read from `parent`; `parts` is
+    /// the whole name, for the errors.
+    fn field_of(
+        &self,
+        base: Bound,
+        part: &str,
+        parent: &str,
+        parts: &[String],
+        origin: Origin,
+    ) -> Result<Bound, AnalysisError> {
+        let Some(DataType::Struct(st)) = &base.ty.data_type else {
+            let other = base
+                .ty
+                .data_type
+                .as_ref()
+                .map_or_else(|| "VOID".to_owned(), DataType::sql);
+            return Err(AnalysisError::new(
+                InvalidExtractBaseFieldType {
+                    base: format!("\"{parent}\""),
+                    other: format!("\"{other}\""),
+                },
+                origin,
+            ));
+        };
+        let cs = self.ctx.conf.case_sensitive;
+        let Some((ordinal, field)) = st
+            .fields()
+            .iter()
+            .enumerate()
+            .find(|(_, f)| same(f.name(), part, cs))
+        else {
+            return Err(unresolved_field(parts, st, origin));
+        };
+        let ty = arg_type(
+            field.data_type().clone(),
+            field.nullable() || base.ty.nullable,
+        );
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                base: Arc::clone(&base.expr),
+                ordinal,
+                name: part.to_owned(),
+                data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                nullable: ty.nullable,
+            }))
+            .with_origin(origin),
+        );
+        Ok(Bound {
+            expr,
+            ty,
+            shown: None,
+            ..base
+        })
     }
 
     /// Whether the function being resolved has a parameter called `name`.

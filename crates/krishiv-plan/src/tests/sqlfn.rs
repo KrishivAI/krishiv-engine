@@ -73,6 +73,7 @@ fn func(name: &str, params: Vec<SqlParam>, returns: Option<DataType>, body: Expr
         body_text: "<body>".to_owned(),
         source: SourceId(1),
         deterministic: true,
+        reads_data: false,
     }
 }
 
