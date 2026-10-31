@@ -12,7 +12,7 @@ use object_store::{
     GetOptions, MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
 };
 
-use super::{AnchorError, BeneathStore, is_staging};
+use super::{AnchorError, BeneathStore, SETTLE_PASSES, entries_with, is_staging};
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -550,4 +550,58 @@ async fn a_listing_holds_one_descriptor_however_wide_the_tree_is() {
 #[cfg(target_os = "linux")]
 fn open_fds() -> usize {
     std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count)
+}
+
+fn names(dir: &FsPath, mut between: impl FnMut()) -> (Vec<String>, usize) {
+    let fd: std::os::fd::OwnedFd = std::fs::File::open(dir).unwrap().into();
+    let mut calls = 0;
+    let listed = entries_with(&fd, || {
+        calls += 1;
+        between();
+    })
+    .unwrap();
+    let mut out: Vec<String> = listed.into_iter().map(|(n, _)| n).collect();
+    out.sort();
+    (out, calls)
+}
+
+#[test]
+fn a_file_replaced_during_a_listing_is_replaced_in_it() {
+    // An overwrite lands its new file and then deletes the old one between
+    // the read of the names and their `lstat`s: the listing must show the
+    // new file, not an empty directory.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("old"), b"1").unwrap();
+    let (listed, calls) = names(tmp.path(), || {
+        if tmp.path().join("old").exists() {
+            std::fs::write(tmp.path().join("new"), b"2").unwrap();
+            std::fs::remove_file(tmp.path().join("old")).unwrap();
+        }
+    });
+    assert_eq!(listed, ["new"]);
+    assert_eq!(calls, 2);
+}
+
+#[test]
+fn a_quiet_listing_reads_the_directory_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a"), b"1").unwrap();
+    let (listed, calls) = names(tmp.path(), || {});
+    assert_eq!((listed, calls), (vec!["a".to_owned()], 1));
+}
+
+#[test]
+fn a_directory_that_keeps_changing_is_listed_after_the_last_pass() {
+    // Every pass loses its file to a replacement: the listing ends after
+    // `SETTLE_PASSES` reads with what the last one found, no error.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut n = 0;
+    std::fs::write(tmp.path().join("f0"), b"1").unwrap();
+    let (listed, calls) = names(tmp.path(), || {
+        std::fs::write(tmp.path().join(format!("f{}", n + 1)), b"1").unwrap();
+        std::fs::remove_file(tmp.path().join(format!("f{n}"))).unwrap();
+        n += 1;
+    });
+    assert_eq!(calls, SETTLE_PASSES);
+    assert!(listed.is_empty(), "{listed:?}");
 }
