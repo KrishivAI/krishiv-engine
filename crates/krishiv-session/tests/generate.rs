@@ -487,3 +487,55 @@ fn the_generator_argument_is_visible_to_group_by_as_gen_input_0() {
         table(&[&["1", "7"]])
     );
 }
+
+/// A session whose batches hold one row, so every generator output splits.
+fn one_row_batches() -> Session {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.exec.batchSize", "1").unwrap();
+    s
+}
+
+#[test]
+fn a_batch_size_of_one_splits_every_row_and_loses_nothing() {
+    let s = one_row_batches();
+    assert_eq!(
+        rows(
+            &s,
+            &format!(
+                "select a, col from ({T}) lateral view outer explode(b) e as col order by a, col"
+            )
+        ),
+        table(&[&["1", "10"], &["1", "20"], &["2", "NULL"], &["3", "NULL"]]),
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select pos, col from (select posexplode(array('x', 'y', 'z')))"
+        ),
+        table(&[&["0", "x"], &["1", "y"], &["2", "z"]]),
+    );
+}
+
+#[test]
+fn counts_keep_their_weights_across_a_split() {
+    let s = one_row_batches();
+    assert_eq!(
+        rows(
+            &s,
+            "select a, cast(count(*) as string) from (select 1 a, explode(array(1, 2, 3))) group by a"
+        ),
+        table(&[&["1", "3"]]),
+    );
+}
+
+#[test]
+fn inline_null_structs_split_mid_row_stay_null() {
+    let s = one_row_batches();
+    assert_eq!(
+        rows(
+            &s,
+            "select inline(array(struct(1, 'a'), null, struct(3, 'c')))"
+        ),
+        table(&[&["1", "a"], &["NULL", "NULL"], &["3", "c"]]),
+    );
+}

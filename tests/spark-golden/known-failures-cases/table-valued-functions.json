@@ -2,13 +2,8 @@
   "cases": {
     "query-features": [
       12,
-      25,
       34,
-      36,
-      38,
-      48,
-      62,
-      70
+      38
     ]
   },
   "file": "table-valued-functions",
