@@ -21,9 +21,10 @@ futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv = { path = "../krishiv" }
 krishiv-alloc = { path = "../krishiv-alloc", optional = true }
 krishiv-memory = { path = "../krishiv-memory", optional = true }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-functions = { path = "../krishiv-functions" }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }
-krishiv-common = { path = "../krishiv-common" }
 serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 

@@ -25,6 +25,8 @@ krishiv-types = { path = "../krishiv-types" }
 krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 # The `EXPLAIN VERBOSE` JSON document.
 serde_json = { workspace = true, features = ["std"] }
+# Row hashes for the agent table (`xxhash3_128`, v1 frozen in `agent.rs`).
+twox-hash = { workspace = true, features = ["xxhash3_128"] }
 # Warnings from analysis and planning are logged, as Spark logs them.
 tracing.workspace = true
 # A oneshot channel back from tasks on the session's executor; `rt` to

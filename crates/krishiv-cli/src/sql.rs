@@ -1,21 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `krishiv sql`: runs SQL from `-e`, `-f` or stdin and prints the rows.
 
-use std::fmt::Write as _;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::common::{build_session, key_value, read_input, split_statements};
+use crate::format::{OutputMode, render_mode};
 use clap::{Args, ValueEnum};
 use krishiv::DataFrame;
-use krishiv::arrow::array::cast::AsArray;
-use krishiv::arrow::array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-};
-use krishiv::arrow::array::{Array, RecordBatch};
-use krishiv::arrow::datatypes::{DataType, TimeUnit};
+use krishiv::agent::{cell, session_tz_micros};
+use krishiv::arrow::array::Array;
+use krishiv::arrow::datatypes::DataType;
 
 /// Output formats of a result set.
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -24,8 +20,30 @@ pub(crate) enum Format {
     Table,
     /// RFC 4180 CSV with a header row.
     Csv,
+    /// Tab-separated values with a header row.
+    Tsv,
     /// One JSON object per row (JSON Lines).
     Json,
+    /// Alias of `json`.
+    Jsonl,
+    /// GitHub-flavoured Markdown table.
+    Markdown,
+    /// `column = value` lines, blank-separated rows.
+    Line,
+}
+
+impl Format {
+    /// The renderer behind the flag value.
+    fn mode(self) -> OutputMode {
+        match self {
+            Format::Table => OutputMode::Table,
+            Format::Csv => OutputMode::Csv,
+            Format::Tsv => OutputMode::Tsv,
+            Format::Json | Format::Jsonl => OutputMode::Json,
+            Format::Markdown => OutputMode::Markdown,
+            Format::Line => OutputMode::Line,
+        }
+    }
 }
 
 /// Output formats of `--explain-analyze` and `--explain-verbose`.
@@ -75,9 +93,29 @@ pub(crate) struct SqlArgs {
     /// Read SQL from a file (`-` is stdin). With neither `-e` nor `-f`, stdin is read.
     #[arg(short = 'f', long = "file", value_name = "PATH")]
     file: Option<PathBuf>,
-    /// Output format.
-    #[arg(short = 'o', long = "format", value_enum, default_value = "table")]
-    format: Format,
+    /// Output format (default `table`; with stdout piped and no `--format`,
+    /// agent mode instead: the `krishiv.agent-result` v1 table, errors
+    /// as JSON).
+    #[arg(short = 'o', long = "format", value_enum)]
+    format: Option<Format>,
+    /// Agent-facing output: the `krishiv.agent-result` v1 table (compact,
+    /// injection-safe, with a `-- rows:` footer) and errors as one JSON
+    /// object each. Implied when stdout is not a TTY unless `--format` is
+    /// given.
+    #[arg(long)]
+    agent: bool,
+    /// Most result rows printed per statement. Default 1,000 in agent
+    /// mode and the REPL, unlimited for `--format` output to a file or
+    /// pipe. Agent mode stops reading the query one row past the cap and
+    /// reports `stopped (row cap)` with a `≥ N` lower bound.
+    #[arg(long)]
+    max_rows: Option<usize>,
+    /// Wall-clock budget per statement in seconds (agent mode): checked
+    /// between result batches; when spent, the query is dropped and the
+    /// table reports `stopped (time cap)` with the rows read so far. A
+    /// single batch that never arrives is not interrupted.
+    #[arg(long, value_name = "SECS", value_parser = positive_seconds)]
+    max_seconds: Option<f64>,
     /// Session configuration entry; repeatable.
     #[arg(long = "conf", value_name = "KEY=VALUE", value_parser = key_value)]
     conf: Vec<(String, String)>,
@@ -107,6 +145,19 @@ pub(crate) struct SqlArgs {
     explain_format: Option<ExplainFormat>,
 }
 
+/// Default row cap of agent mode and the REPL.
+const DEFAULT_MAX_ROWS: usize = 1000;
+
+/// A finite, positive number of seconds.
+fn positive_seconds(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|_| format!("`{s}` is not a number"))?;
+    if v.is_finite() && v > 0.0 {
+        Ok(v)
+    } else {
+        Err(format!("`{s}` must be a finite number of seconds above 0"))
+    }
+}
+
 /// Runs the command; the process exit code (0 ok, 1 query or I/O error).
 pub(crate) fn run(args: &SqlArgs) -> i32 {
     if args.json
@@ -120,8 +171,24 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
         );
         return 2;
     }
+    if args.execute.is_none() && args.file.is_none() && io::stdin().is_terminal() {
+        return run_repl_command(args);
+    }
     match run_inner(args) {
         Ok(()) => 0,
+        Err(msg) => {
+            if !msg.is_empty() {
+                let _ = writeln!(io::stderr(), "{msg}");
+            }
+            1
+        }
+    }
+}
+
+/// The interactive REPL (`krishiv sql` with no `-e`/`-f` on a terminal).
+fn run_repl_command(args: &SqlArgs) -> i32 {
+    match build_session(&args.conf, &args.table) {
+        Ok(session) => crate::repl::run_repl(&session, args.max_rows.unwrap_or(DEFAULT_MAX_ROWS)),
         Err(msg) => {
             let _ = writeln!(io::stderr(), "{msg}");
             1
@@ -129,24 +196,118 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
     }
 }
 
+/// Whether agent mode applies: `--agent`, or stdout piped/redirected
+/// without an explicit `--format`.
+fn is_agent(args: &SqlArgs) -> bool {
+    args.agent || (!io::stdout().is_terminal() && args.format.is_none())
+}
+
 fn run_inner(args: &SqlArgs) -> Result<(), String> {
     let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
     let session = build_session(&args.conf, &args.table)?;
-    let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
-    for (line_offset, stmt) in split_statements(&input) {
+    let agent = is_agent(args);
+    let mode = args.format.map_or(OutputMode::Table, Format::mode);
+    let mut out = io::BufWriter::new(io::stdout().lock());
+    for (idx, (line_offset, stmt)) in split_statements(&input).into_iter().enumerate() {
         let start = Instant::now();
-        let df = futures::executor::block_on(session.sql(&stmt))
-            .map_err(|e| describe(&stmt, line_offset, &e))?;
+        let query_id = format!("q{}", idx.saturating_add(1));
+        let df = futures::executor::block_on(session.sql(&stmt)).map_err(|e| {
+            if agent {
+                print_agent_error(
+                    &mut out,
+                    &AgentStatement {
+                        text: &stmt,
+                        line_offset,
+                        query_id: &query_id,
+                        start: &start,
+                    },
+                    &e,
+                );
+                let _ = out.flush();
+            }
+            describe(&stmt, line_offset, &e)
+        })?;
         if args.explain_analyze || args.explain_verbose {
             print_explain(&df, args)?;
+        } else if agent {
+            print_agent_result(
+                &mut out,
+                &AgentStatement {
+                    text: &stmt,
+                    line_offset,
+                    query_id: &query_id,
+                    start: &start,
+                },
+                &df,
+                &session,
+                args,
+            )?;
         } else {
-            print_result(&df, args.format, tz)?;
+            print_result(&mut out, &df, &session, mode, args)?;
         }
+        // Flush per statement: on the next statement's failure the rows
+        // and agent errors printed so far must already be out.
+        out.flush()
+            .map_err(|e| format!("cannot write output: {e}"))?;
         if args.timing {
             let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
         }
     }
     Ok(())
+}
+
+/// Runs one REPL statement and prints its result; the REPL exit-code
+/// contribution (0 ok, 1 query or I/O error). Timing prints on stderr
+/// when `timer` (`.timer on`).
+pub(crate) fn print_batches(
+    session: &krishiv::Session,
+    stmt: &str,
+    mode: OutputMode,
+    max_rows: usize,
+    timer: bool,
+    out: &mut dyn Write,
+) -> i32 {
+    let start = Instant::now();
+    let outcome = run_statement(session, stmt, mode, max_rows, out);
+    if timer {
+        let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
+    }
+    outcome
+}
+
+/// Collects `stmt` and renders it in `mode`, capped to `max_rows` rows
+/// for display; 0 on success, else the error text.
+fn run_statement(
+    session: &krishiv::Session,
+    stmt: &str,
+    mode: OutputMode,
+    max_rows: usize,
+    out: &mut dyn Write,
+) -> i32 {
+    let df = match futures::executor::block_on(session.sql(stmt)) {
+        Ok(df) => df,
+        Err(e) => {
+            let _ = writeln!(io::stderr(), "{}", describe(stmt, 0, &e));
+            return 1;
+        }
+    };
+    match collect_rows(&df, session, max_rows) {
+        Ok(c) => {
+            let _ = write!(
+                out,
+                "{}",
+                render_mode(
+                    mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls
+                )
+            );
+            let _ = out.flush();
+            0
+        }
+        Err(msg) => {
+            let _ = writeln!(io::stderr(), "{msg}");
+            1
+        }
+    }
 }
 
 /// The output format of `--explain-analyze` and `--explain-verbose`:
@@ -250,9 +411,168 @@ fn shift_header(line: &str, line_offset: usize) -> String {
     format!("{head}{}{tail}", no.saturating_add(line_offset))
 }
 
-fn print_result(df: &DataFrame, format: Format, tz: i64) -> Result<(), String> {
-    let batches = futures::executor::block_on(df.collect()).map_err(|e| e.to_string())?;
+fn print_result(
+    out: &mut dyn Write,
+    df: &DataFrame,
+    session: &krishiv::Session,
+    mode: OutputMode,
+    args: &SqlArgs,
+) -> Result<(), String> {
+    let c = collect_rows(df, session, args.max_rows.unwrap_or(usize::MAX))?;
+    write!(
+        out,
+        "{}",
+        render_mode(
+            mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls
+        )
+    )
+    .map_err(|e| format!("cannot write output: {e}"))
+}
+
+/// The statement an agent result is for.
+struct AgentStatement<'a> {
+    /// The statement text.
+    text: &'a str,
+    /// Lines before it in its file (for error positions).
+    line_offset: usize,
+    /// Its query id (`q1`, `q2`, ...).
+    query_id: &'a str,
+    /// When it started.
+    start: &'a Instant,
+}
+
+/// Runs `df` and prints the v1 agent table from `krishiv-session::agent`.
+/// Reads the result stream itself: it stops one row past `--max-rows` or
+/// when `--max-seconds` is spent (checked between batches) and drops the
+/// stream, which cancels the query. A failure while running prints the
+/// agent JSON error like a failure while planning does.
+fn print_agent_result(
+    out: &mut dyn Write,
+    stmt: &AgentStatement<'_>,
+    df: &DataFrame,
+    session: &krishiv::Session,
+    args: &SqlArgs,
+) -> Result<(), String> {
+    use futures::StreamExt as _;
+
+    let fail = |out: &mut dyn Write, e: &krishiv::Error| {
+        print_agent_error(out, stmt, e);
+        let _ = out.flush();
+        describe(stmt.text, stmt.line_offset, e)
+    };
+    let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
+    let max_rows = args.max_rows.unwrap_or(DEFAULT_MAX_ROWS);
+    let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| fail(out, &e))?;
+    let schema = futures::executor::block_on(df.schema()).map_err(|e| fail(out, &e))?;
+    let mut batches = Vec::new();
+    let mut seen = 0usize;
+    let mut stop = None;
+    while let Some(next) = futures::executor::block_on(stream.next()) {
+        let batch = next.map_err(|e| fail(out, &e))?;
+        seen = seen.saturating_add(batch.num_rows());
+        batches.push(batch);
+        if seen > max_rows {
+            break;
+        }
+        if args
+            .max_seconds
+            .is_some_and(|budget| stmt.start.elapsed().as_secs_f64() > budget)
+        {
+            stop = Some(krishiv::agent::AgentStop::TimeCap);
+            break;
+        }
+    }
+    drop(stream);
+    if let Ok(warnings) = futures::executor::block_on(df.warnings()) {
+        for w in warnings {
+            let _ = writeln!(io::stderr(), "warning: {w}");
+        }
+    }
+    let tables = df.input_tables();
+    let limits = krishiv::agent::AgentLimits {
+        max_rows,
+        max_bytes: krishiv::agent::DEFAULT_MAX_BYTES,
+        max_cell_chars: krishiv::agent::DEFAULT_MAX_CELL_CHARS,
+        max_seconds: args.max_seconds,
+    };
+    let elapsed_ms = stmt
+        .start
+        .elapsed()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let rendered = krishiv::agent::render_batches(
+        &schema,
+        &batches,
+        &krishiv::agent::AgentRender {
+            tables: &tables,
+            limits: &limits,
+            elapsed_ms,
+            query_id: Some(stmt.query_id),
+            tz_micros: tz,
+            stop,
+        },
+    );
+    write!(out, "{}", rendered.text).map_err(|e| format!("cannot write output: {e}"))
+}
+
+/// One failure as agent JSON on stdout (the human rendering still goes
+/// to stderr through the caller's `describe`).
+fn print_agent_error(out: &mut dyn Write, stmt: &AgentStatement<'_>, error: &krishiv::Error) {
+    // Positions are counted in the statement as written; no statement text is echoed.
+    let source = krishiv::agent::ErrorSource {
+        text: stmt.text,
+        first_line: stmt.line_offset.saturating_add(1),
+    };
+    let _ = write!(
+        out,
+        "{}",
+        krishiv::agent::render_error(error, Some(&source), Some(stmt.query_id))
+    );
+}
+
+/// A collected result set: column names, shown rows (SQL NULL as
+/// `NULL`), numeric/float column flags and NULL cells. The non-agent modes
+/// render what is shown; the agent path renders through
+/// `krishiv-session::agent` instead.
+struct Collected {
+    /// Column names.
+    names: Vec<String>,
+    /// Shown rows (cut to the caps).
+    rows: Vec<Vec<String>>,
+    /// Integer and decimal columns (bare in JSON).
+    numeric: Vec<bool>,
+    /// Float columns (bare when finite in JSON).
+    float: Vec<bool>,
+    /// Boolean columns (bare in JSON).
+    bools: Vec<bool>,
+    /// NULL cells.
+    nulls: Vec<Vec<bool>>,
+}
+
+/// Collects `df` into typed string rows, cut to `max_rows` for display.
+fn collect_rows(
+    df: &DataFrame,
+    session: &krishiv::Session,
+    max_rows: usize,
+) -> Result<Collected, String> {
+    use futures::StreamExt as _;
+
+    let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
     let schema = futures::executor::block_on(df.schema()).map_err(|e| e.to_string())?;
+    // Streams and stops at the cap, so a huge result is never buffered: dropping the stream cancels the query.
+    let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| e.to_string())?;
+    let mut batches = Vec::new();
+    let mut seen = 0usize;
+    while seen < max_rows {
+        let Some(next) = futures::executor::block_on(stream.next()) else {
+            break;
+        };
+        let batch = next.map_err(|e| e.to_string())?;
+        seen = seen.saturating_add(batch.num_rows());
+        batches.push(batch);
+    }
+    drop(stream);
     if let Ok(warnings) = futures::executor::block_on(df.warnings()) {
         for w in warnings {
             let _ = writeln!(io::stderr(), "warning: {w}");
@@ -264,118 +584,40 @@ fn print_result(df: &DataFrame, format: Format, tz: i64) -> Result<(), String> {
         .iter()
         .map(|f| is_json_number(f.data_type()))
         .collect();
-    let mut out = io::BufWriter::new(io::stdout().lock());
-    let io_err = |e: io::Error| format!("cannot write output: {e}");
-    match format {
-        Format::Table => write_table(&mut out, &names, &batches, tz).map_err(io_err)?,
-        Format::Csv => write_csv(&mut out, &names, &batches, tz).map_err(io_err)?,
-        Format::Json => write_json(&mut out, &names, &numeric, &batches, tz).map_err(io_err)?,
-    }
-    out.flush().map_err(io_err)
-}
-
-fn write_table(
-    out: &mut impl Write,
-    names: &[String],
-    batches: &[RecordBatch],
-    tz: i64,
-) -> io::Result<()> {
+    let float: Vec<bool> = schema
+        .fields()
+        .iter()
+        .map(|f| matches!(f.data_type(), DataType::Float32 | DataType::Float64))
+        .collect();
+    let bools: Vec<bool> = schema
+        .fields()
+        .iter()
+        .map(|f| *f.data_type() == DataType::Boolean)
+        .collect();
     let mut rows: Vec<Vec<String>> = Vec::new();
-    for b in batches {
+    let mut nulls: Vec<Vec<bool>> = Vec::new();
+    for b in &batches {
         for r in 0..b.num_rows() {
+            if rows.len() >= max_rows {
+                break;
+            }
             rows.push(
                 b.columns()
                     .iter()
                     .map(|c| cell(c.as_ref(), r, "NULL", tz))
                     .collect(),
             );
+            nulls.push(b.columns().iter().map(|c| c.is_null(r)).collect());
         }
     }
-    let mut widths: Vec<usize> = names.iter().map(|n| n.chars().count()).collect();
-    for row in &rows {
-        for (w, c) in widths.iter_mut().zip(row) {
-            *w = (*w).max(c.chars().count());
-        }
-    }
-    let rule: String = widths.iter().fold(String::from("+"), |mut s, w| {
-        let _ = write!(s, "{}+", "-".repeat(w + 2));
-        s
-    });
-    let line = |cells: &[String]| -> String {
-        let mut s = String::from("|");
-        for (c, w) in cells.iter().zip(&widths) {
-            let pad = w - c.chars().count();
-            let _ = write!(s, " {c}{} |", " ".repeat(pad));
-        }
-        s
-    };
-    writeln!(out, "{rule}\n{}\n{rule}", line(names))?;
-    for row in &rows {
-        writeln!(out, "{}", line(row))?;
-    }
-    writeln!(out, "{rule}")?;
-    writeln!(
-        out,
-        "{} row{}",
-        rows.len(),
-        if rows.len() == 1 { "" } else { "s" }
-    )
-}
-
-fn csv_field(s: &str) -> String {
-    if s.is_empty() || s.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_owned()
-    }
-}
-
-fn write_csv(
-    out: &mut impl Write,
-    names: &[String],
-    batches: &[RecordBatch],
-    tz: i64,
-) -> io::Result<()> {
-    let header: Vec<String> = names.iter().map(|n| csv_field(n)).collect();
-    writeln!(out, "{}", header.join(","))?;
-    for b in batches {
-        for r in 0..b.num_rows() {
-            // NULL is an empty field; the empty string is quoted (`""`), as Spark writes it.
-            let row: Vec<String> = b
-                .columns()
-                .iter()
-                .map(|c| {
-                    if c.is_null(r) {
-                        String::new()
-                    } else {
-                        csv_field(&cell(c.as_ref(), r, "", tz))
-                    }
-                })
-                .collect();
-            writeln!(out, "{}", row.join(","))?;
-        }
-    }
-    Ok(())
-}
-
-fn json_string(s: &str) -> String {
-    let mut o = String::with_capacity(s.len() + 2);
-    o.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => o.push_str("\\\""),
-            '\\' => o.push_str("\\\\"),
-            '\n' => o.push_str("\\n"),
-            '\r' => o.push_str("\\r"),
-            '\t' => o.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(o, "\\u{:04x}", c as u32);
-            }
-            c => o.push(c),
-        }
-    }
-    o.push('"');
-    o
+    Ok(Collected {
+        names,
+        rows,
+        numeric,
+        float,
+        bools,
+        nulls,
+    })
 }
 
 fn is_json_number(t: &DataType) -> bool {
@@ -393,168 +635,12 @@ fn is_json_number(t: &DataType) -> bool {
     )
 }
 
-fn write_json(
-    out: &mut impl Write,
-    names: &[String],
-    numeric: &[bool],
-    batches: &[RecordBatch],
-    tz: i64,
-) -> io::Result<()> {
-    for b in batches {
-        for r in 0..b.num_rows() {
-            let mut line = String::from("{");
-            for (i, c) in b.columns().iter().enumerate() {
-                if i > 0 {
-                    line.push(',');
-                }
-                line.push_str(&json_string(&names[i]));
-                line.push(':');
-                let t = c.data_type();
-                if c.is_null(r) {
-                    line.push_str("null");
-                } else if numeric[i] || *t == DataType::Boolean {
-                    line.push_str(&cell(c.as_ref(), r, "", tz));
-                } else if matches!(t, DataType::Float32 | DataType::Float64) {
-                    let v = cell(c.as_ref(), r, "", tz);
-                    // JSON has no NaN or infinity.
-                    if v.parse::<f64>().is_ok_and(f64::is_finite) {
-                        line.push_str(&v);
-                    } else {
-                        line.push_str(&json_string(&v));
-                    }
-                } else {
-                    line.push_str(&json_string(&cell(c.as_ref(), r, "", tz)));
-                }
-            }
-            line.push('}');
-            writeln!(out, "{line}")?;
-        }
-    }
-    Ok(())
-}
-
-/// One value as text; `null` stands in for SQL NULL.
-fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
-    if a.data_type() == &DataType::Null || a.is_null(i) {
-        return null.to_owned();
-    }
-    match a.data_type() {
-        DataType::Boolean => a.as_boolean().value(i).to_string(),
-        DataType::Int8 => a.as_primitive::<Int8Type>().value(i).to_string(),
-        DataType::Int16 => a.as_primitive::<Int16Type>().value(i).to_string(),
-        DataType::Int32 => a.as_primitive::<Int32Type>().value(i).to_string(),
-        DataType::Int64 => a.as_primitive::<Int64Type>().value(i).to_string(),
-        DataType::UInt8 => a.as_primitive::<UInt8Type>().value(i).to_string(),
-        DataType::UInt16 => a.as_primitive::<UInt16Type>().value(i).to_string(),
-        DataType::UInt32 => a.as_primitive::<UInt32Type>().value(i).to_string(),
-        DataType::UInt64 => a.as_primitive::<UInt64Type>().value(i).to_string(),
-        DataType::Float32 => format!("{:?}", a.as_primitive::<Float32Type>().value(i)),
-        DataType::Float64 => format!("{:?}", a.as_primitive::<Float64Type>().value(i)),
-        DataType::Decimal128(..) => a.as_primitive::<Decimal128Type>().value_as_string(i),
-        DataType::Utf8 => a.as_string::<i32>().value(i).to_owned(),
-        DataType::LargeUtf8 => a.as_string::<i64>().value(i).to_owned(),
-        DataType::Utf8View => a.as_string_view().value(i).to_owned(),
-        DataType::Binary => hex(a.as_binary::<i32>().value(i)),
-        DataType::Date32 => a
-            .as_primitive::<Date32Type>()
-            .value_as_date(i)
-            .map_or_else(String::new, |d| d.to_string()),
-        // TIMESTAMP (with a zone) shows in the session zone; TIMESTAMP_NTZ as stored.
-        DataType::Timestamp(TimeUnit::Microsecond, zone) => {
-            let shift = if zone.is_some() { tz } else { 0 };
-            a.as_primitive::<TimestampMicrosecondType>()
-                .value(i)
-                .checked_add(shift)
-                .and_then(krishiv::arrow::array::temporal_conversions::timestamp_us_to_datetime)
-                .map_or_else(String::new, |d| d.to_string())
-        }
-        DataType::List(_) => {
-            let inner = a.as_list::<i32>().value(i);
-            let items: Vec<String> = (0..inner.len())
-                .map(|j| cell(inner.as_ref(), j, "NULL", tz))
-                .collect();
-            format!("[{}]", items.join(", "))
-        }
-        DataType::Struct(fields) => {
-            let s = a.as_struct();
-            let items: Vec<String> = fields
-                .iter()
-                .zip(s.columns())
-                .map(|(f, c)| format!("{}: {}", f.name(), cell(c.as_ref(), i, "NULL", tz)))
-                .collect();
-            format!("{{{}}}", items.join(", "))
-        }
-        DataType::Map(_, _) => {
-            let m = a.as_map();
-            let offsets = m.value_offsets();
-            let (from, to) = (
-                usize::try_from(offsets[i]).unwrap_or(0),
-                usize::try_from(offsets[i + 1]).unwrap_or(0),
-            );
-            let items: Vec<String> = (from..to)
-                .map(|j| {
-                    format!(
-                        "{} -> {}",
-                        cell(m.keys().as_ref(), j, "NULL", tz),
-                        cell(m.values().as_ref(), j, "NULL", tz)
-                    )
-                })
-                .collect();
-            format!("{{{}}}", items.join(", "))
-        }
-        other => format!("<{other}>"),
-    }
-}
-
-/// The session time zone as microseconds east of UTC. Only `UTC` and fixed
-/// offsets are known (the engine has no time-zone database yet); unset is
-/// UTC, where Spark would use the local zone.
-fn session_tz_micros(zone: Option<&str>) -> Result<i64, String> {
-    let z = zone.map_or("UTC", str::trim);
-    let offset = z
-        .strip_prefix("UTC")
-        .or_else(|| z.strip_prefix("GMT"))
-        .unwrap_or(z);
-    if offset.is_empty() || offset == "Z" {
-        return Ok(0);
-    }
-    let (sign, rest) = match offset.split_at(1) {
-        ("+", r) => (1, r),
-        ("-", r) => (-1, r),
-        _ => return Err(unsupported_zone(z)),
-    };
-    let mut parts = rest.split(':');
-    let num = |p: Option<&str>| p.map_or(Some(0), |t| t.parse::<i64>().ok());
-    let (h, m, sec) = (num(parts.next()), num(parts.next()), num(parts.next()));
-    match (h, m, sec, parts.next()) {
-        (Some(h @ 0..=18), Some(m @ 0..=59), Some(sec @ 0..=59), None) if !rest.is_empty() => {
-            Ok(sign * (h * 3600 + m * 60 + sec) * 1_000_000)
-        }
-        _ => Err(unsupported_zone(z)),
-    }
-}
-
-fn unsupported_zone(z: &str) -> String {
-    format!(
-        "spark.sql.session.timeZone `{z}` is not supported: only UTC and fixed offsets (+HH:MM)"
-    )
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use krishiv::arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float64Array,
-        Int32Array, ListArray, NullArray, RecordBatch, StringArray, StructArray,
-        TimestampMicrosecondArray, UInt8Array,
+        ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
     };
     use krishiv::arrow::datatypes::{DataType, Field, Schema};
 
@@ -582,72 +668,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn csv_and_json_escaping() {
-        assert_eq!(csv_field("plain"), "plain");
-        assert_eq!(csv_field(""), "\"\"");
-        assert_eq!(csv_field("a\nb"), "\"a\nb\"");
-        assert_eq!(
-            json_string("a\\b\n\r\t\u{1}\""),
-            "\"a\\\\b\\n\\r\\t\\u0001\\\"\""
-        );
-        assert_eq!(hex(&[0, 255, 16]), "00ff10");
-    }
-
     fn arr<A: Array + 'static>(a: A) -> ArrayRef {
-        Arc::new(a)
+        std::sync::Arc::new(a)
     }
 
-    #[test]
-    fn cell_renders_every_supported_type() {
-        let dec = Decimal128Array::from(vec![Some(12345), None])
-            .with_precision_and_scale(10, 2)
-            .expect("decimal");
-        let list =
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1), Some(2)])]);
-        let st = StructArray::from(vec![(
-            Arc::new(Field::new("x", DataType::Int32, true)),
-            arr(Int32Array::from(vec![7])),
-        )]);
-        let mut mb = krishiv::arrow::array::builder::MapBuilder::new(
-            None,
-            krishiv::arrow::array::builder::StringBuilder::new(),
-            krishiv::arrow::array::builder::Int32Builder::new(),
-        );
-        mb.keys().append_value("a");
-        mb.values().append_value(1);
-        mb.keys().append_value("b");
-        mb.values().append_null();
-        mb.append(true).expect("map entry");
-        mb.append(true).expect("empty map");
-        let map = mb.finish();
-        assert_eq!(cell(&map, 0, "NULL", 0), "{a -> 1, b -> NULL}");
-        assert_eq!(cell(&map, 1, "NULL", 0), "{}");
-        let cases: Vec<(ArrayRef, &str)> = vec![
-            (arr(BooleanArray::from(vec![true])), "true"),
-            (arr(UInt8Array::from(vec![5])), "5"),
-            (arr(Float64Array::from(vec![1.0])), "1.0"),
-            (arr(dec), "123.45"),
-            (arr(StringArray::from(vec!["s"])), "s"),
-            (arr(BinaryArray::from(vec![&[1_u8, 171][..]])), "01ab"),
-            (arr(Date32Array::from(vec![0])), "1970-01-01"),
-            (
-                arr(TimestampMicrosecondArray::from(vec![1_000_000])),
-                "1970-01-01 00:00:01",
-            ),
-            (arr(list), "[1, 2]"),
-            (arr(st), "{x: 7}"),
-            (arr(NullArray::new(1)), "NULL"),
-        ];
-        for (a, want) in cases {
-            assert_eq!(cell(a.as_ref(), 0, "NULL", 0), want, "{:?}", a.data_type());
-        }
-        let d = Decimal128Array::from(vec![None::<i128>]);
-        assert_eq!(cell(&d, 0, "-", 0), "-");
-        assert_eq!(cell(&arr(NullArray::new(1)), 0, "-", 0), "-");
-    }
-
-    fn batch() -> (Vec<String>, Vec<RecordBatch>) {
+    fn batch_rows() -> Collected {
         let schema = Arc::new(Schema::new(vec![
             Field::new("i", DataType::Int32, true),
             Field::new("f", DataType::Float64, true),
@@ -664,34 +689,78 @@ mod tests {
             ],
         )
         .expect("batch");
-        (
-            vec!["i".into(), "f".into(), "s".into(), "b".into()],
-            vec![b],
-        )
+        let names = vec!["i".into(), "f".into(), "s".into(), "b".into()];
+        let numeric = vec![true, false, false, false];
+        let float = vec![false, true, false, false];
+        let bools = vec![false, false, false, true];
+        let mut rows = Vec::new();
+        let mut nulls = Vec::new();
+        for r in 0..b.num_rows() {
+            rows.push(
+                b.columns()
+                    .iter()
+                    .map(|c| cell(c.as_ref(), r, "NULL", 0))
+                    .collect(),
+            );
+            nulls.push(b.columns().iter().map(|c| c.is_null(r)).collect());
+        }
+        Collected {
+            names,
+            rows,
+            numeric,
+            float,
+            bools,
+            nulls,
+        }
     }
 
     #[test]
-    fn writers_format_nulls_nan_and_widths() {
-        let (names, batches) = batch();
-        let numeric = [true, false, false, false];
-        let mut o = Vec::new();
-        write_json(&mut o, &names, &numeric, &batches, 0).expect("json");
-        let t = String::from_utf8(o).expect("utf-8");
+    fn modes_format_nulls_nan_and_widths() {
+        let c = batch_rows();
+        let json = render_mode(
+            OutputMode::Json,
+            &c.names,
+            &c.rows,
+            &c.numeric,
+            &c.float,
+            &c.bools,
+            &c.nulls,
+        );
         assert_eq!(
-            t,
+            json,
             "{\"i\":1,\"f\":\"NaN\",\"s\":\"a\\\"b\",\"b\":true}\n{\"i\":null,\"f\":2.5,\"s\":null,\"b\":null}\n"
         );
-        let mut o = Vec::new();
-        write_csv(&mut o, &names, &batches, 0).expect("csv");
-        assert_eq!(
-            String::from_utf8(o).expect("utf-8"),
-            "i,f,s,b\n1,NaN,\"a\"\"b\",true\n,2.5,,\n"
+        let csv = render_mode(
+            OutputMode::Csv,
+            &c.names,
+            &c.rows,
+            &c.numeric,
+            &c.float,
+            &c.bools,
+            &c.nulls,
         );
-        let mut o = Vec::new();
-        write_table(&mut o, &names, &batches, 0).expect("table");
-        let t = String::from_utf8(o).expect("utf-8");
-        assert!(t.contains("| NULL | 2.5 | NULL | NULL |"), "{t}");
-        assert!(t.ends_with("2 rows\n"), "{t}");
+        assert_eq!(csv, "i,f,s,b\n1,NaN,\"a\"\"b\",true\n,2.5,,\n");
+        let tsv = render_mode(
+            OutputMode::Tsv,
+            &c.names,
+            &c.rows,
+            &c.numeric,
+            &c.float,
+            &c.bools,
+            &c.nulls,
+        );
+        assert_eq!(tsv, "i\tf\ts\tb\n1\tNaN\ta\"b\ttrue\n\t2.5\t\t\n");
+        let table = render_mode(
+            OutputMode::Table,
+            &c.names,
+            &c.rows,
+            &c.numeric,
+            &c.float,
+            &c.bools,
+            &c.nulls,
+        );
+        assert!(table.contains("| NULL | 2.5 | NULL | NULL |"), "{table}");
+        assert!(table.ends_with("2 rows\n"), "{table}");
     }
 
     #[test]
@@ -739,24 +808,6 @@ mod tests {
             "{shown}"
         );
         assert_eq!(shown.matches("== SQL").count(), 1, "{shown}");
-    }
-
-    #[test]
-    fn session_zone_parsing_and_timestamp_shift() {
-        assert_eq!(session_tz_micros(None), Ok(0));
-        assert_eq!(session_tz_micros(Some("UTC")), Ok(0));
-        assert_eq!(session_tz_micros(Some("Z")), Ok(0));
-        assert_eq!(session_tz_micros(Some("+05:30")), Ok(19_800_000_000));
-        assert_eq!(session_tz_micros(Some("UTC-08:00")), Ok(-28_800_000_000));
-        assert_eq!(session_tz_micros(Some("-8")), Ok(-28_800_000_000));
-        for bad in ["America/Los_Angeles", "+25:00", "+", "+1:2:3:4", "+aa"] {
-            assert!(session_tz_micros(Some(bad)).is_err(), "{bad}");
-        }
-        let with_zone = TimestampMicrosecondArray::from(vec![1_000_000]).with_timezone("UTC");
-        let ntz = TimestampMicrosecondArray::from(vec![1_000_000]);
-        let east = 3_600_000_000;
-        assert_eq!(cell(&with_zone, 0, "", east), "1970-01-01 01:00:01");
-        assert_eq!(cell(&ntz, 0, "", east), "1970-01-01 00:00:01");
     }
 
     #[test]

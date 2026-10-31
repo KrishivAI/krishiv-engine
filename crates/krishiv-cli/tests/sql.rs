@@ -38,7 +38,10 @@ const LINEITEM: &str = concat!(
 
 #[test]
 fn execute_prints_a_table() {
-    let o = krishiv(&["sql", "-e", "select 1 as a, 'x' as b"], None);
+    let o = krishiv(
+        &["sql", "-o", "table", "-e", "select 1 as a, 'x' as b"],
+        None,
+    );
     assert!(o.status.success(), "{}", err(&o));
     let t = out(&o);
     assert!(t.contains("| a | b |"), "{t}");
@@ -110,7 +113,7 @@ fn conf_is_applied() {
 
 #[test]
 fn syntax_error_exits_1_with_class_sqlstate_and_caret() {
-    let o = krishiv(&["sql", "-e", "xyz 1"], None);
+    let o = krishiv(&["sql", "-o", "table", "-e", "xyz 1"], None);
     assert_eq!(o.status.code(), Some(1));
     assert!(out(&o).is_empty());
     let e = err(&o);
