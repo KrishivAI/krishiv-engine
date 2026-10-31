@@ -1234,4 +1234,9 @@ fn a_struct_parameter_has_fields() {
         "CREATE FUNCTION bad_base(x INT) RETURNS INT RETURN x.a",
     ));
     assert_eq!(class, "INVALID_EXTRACT_BASE_FIELD_TYPE");
+    let (_, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION bad_deep(x STRUCT<a: INT>) RETURNS INT RETURN x.a.b",
+    ));
+    assert_eq!(params["base"], "\"a\"");
 }

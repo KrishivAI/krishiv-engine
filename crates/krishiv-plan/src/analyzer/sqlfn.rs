@@ -716,8 +716,8 @@ impl Resolver<'_> {
                 let Some(mut b) = self.parameter(&parts[..split], origin, depth)? else {
                     return Ok(None);
                 };
-                for part in &parts[split..] {
-                    b = self.field_of(b, part, parts, origin)?;
+                for (i, part) in parts[split..].iter().enumerate() {
+                    b = self.field_of(b, part, &parts[split + i - 1], parts, origin)?;
                 }
                 return Ok(Some(b));
             }
@@ -778,12 +778,13 @@ impl Resolver<'_> {
         }))
     }
 
-    /// The field `part` of the struct `base`; `parts` is the whole name, for
-    /// the errors.
+    /// The field `part` of the struct `base`, read from `parent`; `parts` is
+    /// the whole name, for the errors.
     fn field_of(
         &self,
         base: Bound,
         part: &str,
+        parent: &str,
         parts: &[String],
         origin: Origin,
     ) -> Result<Bound, AnalysisError> {
@@ -795,7 +796,7 @@ impl Resolver<'_> {
                 .map_or_else(|| "VOID".to_owned(), DataType::sql);
             return Err(AnalysisError::new(
                 InvalidExtractBaseFieldType {
-                    base: format!("\"{}\"", parts[0]),
+                    base: format!("\"{parent}\""),
                     other: format!("\"{other}\""),
                 },
                 origin,
