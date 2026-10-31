@@ -251,8 +251,10 @@ pub(super) fn doubles(
 /// descending into a one-row list for an array of percentages.
 fn doubles_of(a: &ArrayRef) -> Result<Vec<Option<f64>>, KrishivError> {
     match a.data_type() {
-        ArrowType::List(_) | ArrowType::LargeList(_) | ArrowType::FixedSizeList(..) => {
-            let list = arrow_array::cast::as_list_array(a);
+        ArrowType::List(_) => {
+            let Some(list) = a.as_list_opt::<i32>() else {
+                return scalar_double(a).map(|v| vec![v]);
+            };
             if list.null_count() > 0 || list.len() != 1 {
                 return scalar_double(a).map(|v| vec![v]);
             }

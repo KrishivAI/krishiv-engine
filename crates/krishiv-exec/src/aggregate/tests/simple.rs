@@ -802,8 +802,26 @@ async fn quantile_aggregates_merge_their_partial_states() {
             },
             vec![1],
         ),
-        with(F::ApproxCountDistinct { p: 10 }, vec![1]),
+        with(F::ApproxCountDistinct { p: 11 }, vec![1]),
     ];
+    // The columns a Spark 4.2.0 run answers exactly (the approximate
+    // percentile depends on how Spark splits the input): pinned to its rows.
+    let exact_only = [0, 1, 2, 4].map(|i| aggs[i].clone()).to_vec();
+    let pinned = run_one(node(
+        scan(&s, vec![batch.clone()]),
+        spec(&s, vec![0], exact_only),
+    ))
+    .await;
+    let list =
+        |a: &str, b: &str| format!("ListArray [   PrimitiveArray<Float64> [   {a},   {b}, ], ]");
+    assert_eq!(
+        pinned,
+        vec![
+            format!("0|{}|10.0|49.0|101", list("25.0", "49.5")),
+            format!("1|{}|9.699999999999989|49.0|101", list("25.0", "49.5")),
+            format!("2|{}|9.699999999999989|49.0|101", list("24.0", "49.5")),
+        ]
+    );
     let sp = spec(&s, vec![0], aggs);
     let single = node(scan(&s, vec![batch.clone()]), sp.clone());
     let expected = run_one(single).await;

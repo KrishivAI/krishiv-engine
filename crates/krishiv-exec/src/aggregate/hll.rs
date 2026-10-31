@@ -205,6 +205,36 @@ fn alpha_m2(p: u32, m: usize) -> f64 {
     }
 }
 
+/// `java.util.Arrays.binarySearch(double[], double)`: the index of a match,
+/// else the insertion point. Spark's raw-estimate rows are not all sorted
+/// (precision 5 holds `128.3464, 128.3462`), and on such rows the index a
+/// search returns depends on the exact bisection, so Java's is ported as it
+/// is.
+fn java_binary_search(a: &[f64], key: f64) -> usize {
+    let (mut low, mut high) = (0_usize, a.len());
+    // `[low, high)` is the window still to search.
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let mid_val = a[mid];
+        if mid_val < key {
+            low = mid + 1;
+        } else if mid_val > key {
+            high = mid;
+        } else {
+            let (mid_bits, key_bits) =
+                (mid_val.to_bits().cast_signed(), key.to_bits().cast_signed());
+            if mid_bits == key_bits {
+                return mid;
+            } else if mid_bits < key_bits {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+    }
+    low
+}
+
 /// Spark's `estimateBias`: KNN (`K = 6`) interpolation over the bias
 /// table of precision `p`.
 fn estimate_bias(p: u32, e: f64) -> f64 {
@@ -212,9 +242,7 @@ fn estimate_bias(p: u32, e: f64) -> f64 {
     let estimates = RAW_ESTIMATE_DATA[(p - 4) as usize];
     let biases = BIAS_DATA[(p - 4) as usize];
     let n = estimates.len();
-    let nearest = match estimates.binary_search_by(|x| x.total_cmp(&e)) {
-        Ok(ix) | Err(ix) => ix,
-    };
+    let nearest = java_binary_search(estimates, e);
     let dist = |i: usize| {
         let d = e - estimates[i.min(n - 1)];
         d * d

@@ -538,6 +538,18 @@ const ERRORS: &[(&str, &str)] = &[
         "SELECT approx_count_distinct(v, 0.05, 1) FROM VALUES (1),(2),(3),(4),(5),(CAST(NULL AS INT)),(7),(8),(9),(10) t(v)",
         "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
     ),
+    (
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY sum(v) OVER ()) FROM VALUES (1,true),(2,false) t(v,p)",
+        "_LEGACY_ERROR_TEMP_1031",
+    ),
+    (
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY sum(v) OVER ()) FILTER (WHERE p) FROM VALUES (1,true),(2,false) t(v,p)",
+        "_LEGACY_ERROR_TEMP_1031",
+    ),
+    (
+        "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY sum(v) OVER ()) FILTER (WHERE p) FROM VALUES (1,true),(2,false) t(v,p)",
+        "_LEGACY_ERROR_TEMP_1031",
+    ),
 ];
 
 /// Window percentile aggregates are not supported here (Spark evaluates them

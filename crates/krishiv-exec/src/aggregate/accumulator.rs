@@ -1285,8 +1285,8 @@ impl Accumulator {
                 heap + bytes(values, arg) + bytes(keys, key)
             }
             Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } => *heap,
-            Kind::Exact(e) => e.projected(new),
-            Kind::Approx(g) => g.size() + new.saturating_mul(64),
+            Kind::Exact(e) => e.projected(new, arg.map_or(0, arrow_array::Array::len)),
+            Kind::Approx(g) => g.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Hll(h) => h.projected(new),
             _ => 0,
         };

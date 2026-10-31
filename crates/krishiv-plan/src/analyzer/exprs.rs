@@ -5039,9 +5039,9 @@ impl Resolver<'_> {
                 ));
             }
         }
-        // The nesting and filter checks see the ordering key too.
-        let check_n = kids.len() - usize::from(f.filter.is_some());
-        call_checks(entry, e, kids, check_n)?;
+        // The nesting and window checks see the filter and the ordering key
+        // too (a filter sits between the arguments and the ordering keys).
+        call_checks(entry, e, kids, kids.len())?;
         let filter = kids.get(n).filter(|_| f.filter.is_some());
         let wstart = kids.len() - f.within_group.len();
         // The lowered call's SQL as Spark quotes it in errors: `name(args)`

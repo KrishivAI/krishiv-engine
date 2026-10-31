@@ -781,6 +781,28 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
+    // The decoder refuses what the analyzer and planner never produce, so the
+    // encoder refuses it too instead of writing a plan that cannot be read.
+    let bad_percentages = |ps: &[f64]| {
+        ps.iter()
+            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
+    };
+    let invalid = match &a.function {
+        AggregateFunction::Percentile { percentages, .. }
+        | AggregateFunction::PercentileDisc { percentages, .. } => bad_percentages(percentages),
+        AggregateFunction::PercentileApprox {
+            percentages,
+            accuracy,
+            ..
+        } => *accuracy <= 0 || bad_percentages(percentages),
+        AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
+        _ => false,
+    };
+    if invalid {
+        return Err(CodecError::Unsupported(
+            "a percentile aggregate with parameters out of range".to_owned(),
+        ));
+    }
     let (function, ignore_nulls) = match &a.function {
         AggregateFunction::Count => (pb::AggregateFunction::Count, false),
         AggregateFunction::Sum => (pb::AggregateFunction::Sum, false),

@@ -132,7 +132,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 COLUMN_ANNOTATIONS = {"ColumnOrName", "Column", "ColumnOrName | float", "ColumnOrName | int"}
-LITERALS = {"int": 7, "str": "s_x", "bool": True, "Any": 3}
+LITERALS = {"int": 7, "str": "s_x", "bool": True, "Any": 3, "float": 0.5}
 
 
 def _sample(name: str, p: inspect.Parameter) -> tuple[list[Any], list[tuple[str, Any]]]:
@@ -304,6 +304,12 @@ PYSPARK_CALLS = [
         ("call", "approx_percentile", (("col", "v"), ("lit", 0.9), ("lit", 100))),
     ),
     (lambda: F.approx_count_distinct("v"), ("call", "approx_count_distinct", (("col", "v"),))),
+    # `percentage` and `rsd` are literals as PySpark writes `lit(...)`; a Column stays a column.
+    (
+        lambda: F.percentile_approx("v", F.col("p")),
+        ("call", "percentile_approx", (("col", "v"), ("col", "p"), ("lit", 10000))),
+    ),
+    (lambda: F.approx_count_distinct("v", F.col("r")), ("call", "approx_count_distinct", (("col", "v"), ("col", "r")))),
     (
         lambda: F.approx_count_distinct("v", 0.05),
         ("call", "approx_count_distinct", (("col", "v"), ("lit", 0.05))),

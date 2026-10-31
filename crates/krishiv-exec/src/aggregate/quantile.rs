@@ -135,9 +135,16 @@ impl ExactAcc {
             + self.totals.capacity().saturating_mul(8)
     }
 
-    /// The projected size after adding groups (empty maps).
-    pub(crate) fn projected(&self, new: usize) -> usize {
-        self.size() + new.saturating_mul(32 + 8)
+    /// The projected size after adding `new` groups (empty maps) and folding
+    /// `rows` more values. Each row adds at most one entry, and a hash table
+    /// that grows to hold it can double its slots (an entry is 16 bytes, two
+    /// words: 32 bytes a slot with the table's spare room). The momentary
+    /// peak of a rehash, which holds the old and the new table together, is
+    /// not counted.
+    pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
+        self.size()
+            .saturating_add(new.saturating_mul(32 + 8))
+            .saturating_add(rows.saturating_mul(2 * 32))
     }
 
     /// Folds `count` of `v` into `g`.
@@ -335,6 +342,16 @@ impl GkAcc {
         self.sampled.reserve(new);
         self.heads.reserve(new);
         self.counts.reserve(new);
+    }
+
+    /// The projected size after adding `new` groups and folding `rows` more
+    /// values: a head buffer takes the value (8 bytes, doubling when it
+    /// grows), and a head that fills compresses into the sampled list, which
+    /// takes up to a sampled entry (24 bytes) for each value of the head.
+    pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
+        self.size()
+            .saturating_add(new.saturating_mul(64))
+            .saturating_add(rows.saturating_mul(2 * 8 + 24))
     }
 
     /// Bytes held.
@@ -722,6 +739,19 @@ pub(crate) fn double_of(a: &ArrayRef, i: usize) -> Result<Option<f64>> {
 /// Java's `BigDecimal.doubleValue` gives it (correctly rounded, through
 /// the decimal text).
 pub(crate) fn decimal_to_double(unscaled: i128, scale: i8) -> f64 {
+    const POW10: [f64; 23] = [
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+        1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+    ];
+    // Both operands are exact `f64`s and IEEE division rounds correctly, so
+    // this is the correctly rounded value the text path gives.
+    if let Ok(s) = usize::try_from(scale)
+        && s < POW10.len()
+        && unscaled.unsigned_abs() <= 1_u128 << 53
+    {
+        #[expect(clippy::cast_precision_loss, reason = "|unscaled| <= 2^53 is exact")]
+        return unscaled as f64 / POW10[s];
+    }
     let digits = unscaled.unsigned_abs().to_string();
     let scale = usize::try_from(scale).unwrap_or(0);
     let padded = format!("{digits:0>width$}", width = scale + 1);
