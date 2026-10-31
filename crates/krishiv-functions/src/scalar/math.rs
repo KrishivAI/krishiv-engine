@@ -14,7 +14,7 @@ use arrow_array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
     Int64Type, TimestampMicrosecondType,
 };
-use arrow_array::{ArrayRef, Float64Array, new_null_array};
+use arrow_array::{Array, ArrayRef, Float64Array, Int64Array, new_null_array};
 use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::OverflowMode;
@@ -27,10 +27,50 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
 pub(super) const NAMES: &[&str] = &[
-    "sqrt", "cbrt", "exp", "expm1", "ln", "log10", "log2", "log1p", "sin", "cos", "tan", "asin",
-    "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cot", "csc", "sec",
-    "degrees", "radians", "rint", "sign", "signum", "log", "pow", "power", "atan2", "hypot", "pi",
-    "e", "round", "bround", "ceil", "ceiling", "floor", "pmod", "greatest", "least",
+    "sqrt",
+    "cbrt",
+    "exp",
+    "expm1",
+    "ln",
+    "log10",
+    "log2",
+    "log1p",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "sinh",
+    "cosh",
+    "tanh",
+    "asinh",
+    "acosh",
+    "atanh",
+    "cot",
+    "csc",
+    "sec",
+    "degrees",
+    "radians",
+    "rint",
+    "sign",
+    "signum",
+    "log",
+    "pow",
+    "power",
+    "atan2",
+    "hypot",
+    "pi",
+    "e",
+    "round",
+    "bround",
+    "ceil",
+    "ceiling",
+    "floor",
+    "pmod",
+    "greatest",
+    "least",
+    "width_bucket",
 ];
 
 fn unary_fn(name: &str) -> Option<UnaryFn> {
@@ -96,6 +136,43 @@ fn scale_of(arg: Option<&BindArg>, function: &str) -> Result<Option<i32>, Krishi
 fn constant(v: f64) -> Binding {
     Binding::new(DataType::Float64, move |x: &Inputs<'_>| {
         Ok(Arc::new(Float64Array::from(vec![v; x.rows()])) as ArrayRef)
+    })
+}
+
+/// Spark's `WidthBucket.computeBucketNumber`: NULL for a bad bucket count,
+/// a NaN value or a NaN, infinite or empty range.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "Spark converts the bucket count and the position with JVM casts"
+)]
+fn width_bucket(value: f64, min: f64, max: f64, buckets: i64) -> Option<i64> {
+    if buckets <= 0
+        || buckets == i64::MAX
+        || value.is_nan()
+        || min == max
+        || !min.is_finite()
+        || !max.is_finite()
+    {
+        return None;
+    }
+    let (lower, upper) = (min.min(max), min.max(max));
+    // `as i64` saturates like the JVM's `toLong`.
+    let scaled = |num: f64| (buckets as f64 * num / (upper - lower)) as i64 + 1;
+    Some(if min < max {
+        if value < lower {
+            0
+        } else if value >= upper {
+            buckets + 1
+        } else {
+            scaled(value - lower)
+        }
+    } else if value > upper {
+        0
+    } else if value <= lower {
+        buckets + 1
+    } else {
+        scaled(upper - value)
     })
 }
 
@@ -336,6 +413,29 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(math::binary(f, l.operand(), r.operand())?) as ArrayRef)
             })
         }
+        (
+            "width_bucket",
+            [
+                DataType::Float64,
+                DataType::Float64,
+                DataType::Float64,
+                DataType::Int64,
+            ],
+        ) => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+            let v = x.array::<Float64Type>(0)?;
+            let lo = x.array::<Float64Type>(1)?;
+            let hi = x.array::<Float64Type>(2)?;
+            let n = x.array::<Int64Type>(3)?;
+            let out: Int64Array = (0..x.rows())
+                .map(|i| {
+                    if v.is_null(i) || lo.is_null(i) || hi.is_null(i) || n.is_null(i) {
+                        return None;
+                    }
+                    width_bucket(v.value(i), lo.value(i), hi.value(i), n.value(i))
+                })
+                .collect();
+            Ok(Arc::new(out) as ArrayRef)
+        }),
         ("pi", []) => constant(std::f64::consts::PI),
         ("e", []) => constant(std::f64::consts::E),
         ("round" | "bround", [t] | [t, _]) => {

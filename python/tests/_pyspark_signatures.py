@@ -32,6 +32,7 @@ PYSPARK_SIGNATURES = {
     "assert_true": "col, errMsg=None",
     "atan": "col",
     "atan2": "col1, col2",
+    "width_bucket": "v, min, max, numBucket",
     "atanh": "col",
     "avg": "col",
     "base64": "col",
