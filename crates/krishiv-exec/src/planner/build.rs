@@ -95,17 +95,17 @@ fn plan_once(
     planner.share_groups = share;
     let planned = planner.plan(root)?;
     let mut planned = select(planned, output, "Project")?;
-    // A group is shareable when none of its copies' scans receives a filter.
-    let filtered: HashSet<u64> = planner.scan_filters.keys().map(|s| s.0).collect();
+    // A group is shareable when no copy's scan receives a filter from outside the copy: a join inside the body
+    // keeps filtering the body's own scans when the body is shared (design 3.1, 6.1).
+    let reached = |copy: &Copy| {
+        planner.scan_filters.iter().any(|(scan, filters)| {
+            copy.scans.contains(&scan.0) && filters.iter().any(|f| !copy.filters.contains(&f.id.0))
+        })
+    };
     let shareable: HashSet<Vec<AttrId>> = planner
         .copies
         .iter()
-        .filter(|(_, copies)| {
-            copies.len() >= 2
-                && copies
-                    .iter()
-                    .all(|r| !filtered.iter().any(|f| r.contains(f)))
-        })
+        .filter(|(_, copies)| copies.len() >= 2 && !copies.iter().any(reached))
         .map(|(key, _)| key.clone())
         .collect();
     let mut shared = std::mem::take(&mut planner.shared);
@@ -150,10 +150,19 @@ fn ends_in_sort(n: &PhysNode) -> bool {
     loop {
         match n {
             PhysNode::Sort { .. } | PhysNode::TopN { .. } => return true,
-            PhysNode::Project { input, .. } | PhysNode::Filter { input, .. } => n = input,
+            PhysNode::Project { input, .. }
+            | PhysNode::Filter { input, .. }
+            | PhysNode::Limit { input, .. } => n = input,
             _ => return false,
         }
     }
+}
+
+/// What planning one unshared copy of a definition made: its scans and the runtime filters its own joins publish.
+#[derive(Debug)]
+struct Copy {
+    scans: std::ops::Range<u64>,
+    filters: std::ops::Range<u64>,
 }
 
 /// A planned relation.
@@ -238,8 +247,8 @@ pub(crate) struct Planner<'a> {
     /// The deterministic definitions to share (design P2-T198 kind 2); `None` shares none of them, which is how
     /// the first pass plans.
     share_groups: Option<HashSet<Vec<AttrId>>>,
-    /// The scans of each unshared deterministic reference's copy, by definition.
-    copies: HashMap<Vec<AttrId>, Vec<std::ops::Range<u64>>>,
+    /// The scans and runtime filters of each unshared deterministic reference's copy, by definition.
+    copies: HashMap<Vec<AttrId>, Vec<Copy>>,
     /// The join hints a join read, by address.
     pub(crate) consumed_hints: HashSet<usize>,
     next_id: u64,
@@ -434,12 +443,12 @@ impl<'a> Planner<'a> {
                 if share {
                     return self.shared_read(r);
                 }
-                let scans_from = self.next_scan;
+                let (scans_from, filters_from) = (self.next_scan, self.next_filter);
                 let planned = self.plan(&def)?;
-                self.copies
-                    .entry(r.source.clone())
-                    .or_default()
-                    .push(scans_from..self.next_scan);
+                self.copies.entry(r.source.clone()).or_default().push(Copy {
+                    scans: scans_from..self.next_scan,
+                    filters: filters_from..self.next_filter,
+                });
                 // Exactly the definition's columns, under this reference's
                 // attributes.
                 let source: Vec<BoundColumn> = r

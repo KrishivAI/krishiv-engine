@@ -145,7 +145,10 @@ fn has_outer(plan: &Arc<LogicalPlan>) -> bool {
         if !seen.insert(Arc::as_ptr(&p)) {
             continue;
         }
-        p.for_each_expr(&mut |e| found |= has_outer_reference(e));
+        p.for_each_expr(&mut |e| {
+            found |= has_outer_reference(e);
+            stack.extend(subquery_plans(e));
+        });
         p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
     }
     found

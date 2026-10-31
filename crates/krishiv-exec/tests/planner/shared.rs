@@ -43,21 +43,22 @@ fn a_subquery_and_the_main_query_read_one_body() {
     assert_eq!(rows, vec!["10"]);
 }
 
-/// An ordered body keeps its order for the reader.
+/// An ordered body keeps its order for the reader: both references see the same rows, each in the body's order.
 #[test]
 fn an_ordered_body_is_read_in_order() {
     let env = env();
     let (_, rows) = env.rows(
-        "WITH c AS (SELECT a, rand() AS r FROM t ORDER BY a DESC LIMIT 4) \
-         SELECT a FROM c UNION ALL SELECT a FROM c",
+        "WITH c AS (SELECT rand() AS r FROM t ORDER BY r LIMIT 5) \
+         SELECT CAST(r AS STRING) FROM c UNION ALL SELECT CAST(r AS STRING) FROM c",
     );
-    let mut sorted = rows.clone();
-    sorted.sort();
-    assert_eq!(sorted.len(), 8, "{rows:?}");
-    // Each half (one reference's rows) is in the body's descending order.
-    let firsts: Vec<i64> = rows.iter().map(|r| r.parse().unwrap()).collect();
-    let runs = firsts.windows(2).filter(|w| w[0] < w[1]).count();
-    assert!(runs <= 1, "{rows:?}");
+    assert_eq!(rows.len(), 10, "{rows:?}");
+    let values: Vec<f64> = rows.iter().map(|r| r.parse().unwrap()).collect();
+    let (first, second) = values.split_at(5);
+    assert_eq!(
+        first, second,
+        "both references read the same list: {rows:?}"
+    );
+    assert!(first.windows(2).all(|w| w[0] <= w[1]), "{rows:?}");
 }
 
 /// Under a small memory limit the shared list spills (the readers continue from the files) and every reader
@@ -174,21 +175,39 @@ fn equal_instances_with_a_breaker_are_shared() {
     assert_eq!(rows, same, "sharing changes no result");
 }
 
-/// A group whose member receives a runtime filter keeps its copies.
+/// A group whose member receives a runtime filter from a join outside it keeps its copies.
 #[test]
 fn a_member_that_receives_a_runtime_filter_is_not_shared() {
     let env = env();
-    let sql = format!("{GROUPED} SELECT x.k, y.n FROM c x JOIN c y ON x.k = y.k WHERE x.n > 1");
-    let (shared, rows) = sharing(&env, &sql, &[]);
+    let sql = "WITH c AS (SELECT a AS k, count(*) AS n FROM t GROUP BY a) \
+               SELECT s.a, c1.n FROM (SELECT a FROM t WHERE a = 1) s JOIN c c1 ON s.a = c1.k \
+               UNION ALL SELECT k, n FROM c";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (copies, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(copies, 0);
+    assert_eq!(rows, same);
+    assert_eq!(shared, 0, "a filter from the join reaches a copy");
+}
+
+/// Groups nested in another group's body are found too.
+#[test]
+fn nested_groups_are_shared_inside_the_outer_definition() {
+    let env = env();
+    let sql = "WITH a AS (SELECT a % 3 AS k, count(*) AS n FROM t GROUP BY a % 3), \
+                    b AS (SELECT k, sum(n) AS s FROM a GROUP BY k) \
+               SELECT k, s FROM b UNION ALL SELECT k, s FROM b UNION ALL SELECT k, n FROM a";
+    let (shared, rows) = sharing(&env, sql, &[]);
     let (_, same) = sharing(
         &env,
-        &sql,
+        sql,
         &[("krishiv.sql.optimizer.shareCteInstances", "false")],
     );
     assert_eq!(rows, same);
-    // Whether a filter reaches this self-join depends on the cost model; either way the rows are the same,
-    // and a shared plan appears only when no member is filtered.
-    assert!(shared <= 1);
+    assert!(shared >= 1);
 }
 
 /// A body without a pipeline breaker is not shared (rescanning is cheaper than buffering).

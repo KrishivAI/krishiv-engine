@@ -20,9 +20,9 @@
 //!
 //! The rewrite replaces each member `Shift` alone by a `CteRef` that
 //! produces exactly the ids the shift produced, so no parent changes, and
-//! wraps the root in one `WithCte` holding the definitions. A member nested
-//! inside another group's body is left as it is (the definition is that
-//! body, unchanged). Whether a group is really shared is decided last by the
+//! wraps the root in one `WithCte` holding the definitions. Members nested
+//! inside another group's body are found too, and shared inside that body's
+//! definition. Whether a group is really shared is decided last by the
 //! physical planner, which keeps the copies when a runtime filter reaches
 //! one of them.
 
@@ -63,7 +63,7 @@ pub(crate) fn share(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivE
         return Ok(root);
     }
     let mut replace: HashMap<*const LogicalPlan, Arc<LogicalPlan>> = HashMap::new();
-    let mut ctes = Vec::new();
+    let mut bodies: Vec<(String, Arc<LogicalPlan>)> = Vec::new();
     let mut keys: HashSet<Vec<AttrId>> = HashSet::new();
     for group in groups {
         let first = &members[group[0]];
@@ -74,11 +74,8 @@ pub(crate) fn share(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivE
         if !keys.insert(source.clone()) {
             continue;
         }
-        let name = format!("{SHARED_PREFIX}{}", ctes.len());
-        ctes.push(Cte {
-            name: name.clone(),
-            plan: Arc::clone(&first.body),
-        });
+        let name = format!("{SHARED_PREFIX}{}", bodies.len());
+        bodies.push((name.clone(), Arc::clone(&first.body)));
         for &i in &group {
             let m = &members[i];
             let shifted: Option<Vec<BoundColumn>> = output
@@ -111,6 +108,14 @@ pub(crate) fn share(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivE
         done: HashMap::new(),
     };
     let input = sharer.go(Arc::clone(&root))?;
+    // Each definition is its body with the groups nested inside it shared too.
+    let mut ctes = Vec::with_capacity(bodies.len());
+    for (name, body) in bodies {
+        ctes.push(Cte {
+            name,
+            plan: sharer.go(body)?,
+        });
+    }
     // A group none of whose members was replaced (an id overflow) leaves an
     // unused definition; the planner never plans it.
     Ok(Arc::new(LogicalPlan::new(PlanNode::WithCte {
@@ -157,9 +162,8 @@ fn shifts(root: &Arc<LogicalPlan>) -> Vec<Member> {
                 offset: *offset,
                 uses: n,
             });
-            // The body is the definition: an instance inside it is not a
-            // member of its own.
-            continue;
+            // Instances inside the body are members too (nested groups); a
+            // group shared from inside a shared body is rewritten there.
         }
         for c in kids.get(&Arc::as_ptr(p)).into_iter().flatten() {
             let slot = paths.entry(Arc::as_ptr(c)).or_insert(0);

@@ -362,9 +362,12 @@ impl SharedSource {
 struct ReaderGlobal {
     output: Arc<Output>,
     cursor: tokio::sync::Mutex<Cursor>,
-    /// The consumer this reader's spill files are read through.
-    consumer: Arc<ConsumerHandle>,
     batches: u64,
+}
+
+/// One driver of a reader.
+struct ReaderLocal {
+    consumer: Arc<ConsumerHandle>,
 }
 
 struct Cursor {
@@ -398,7 +401,6 @@ impl Source for SharedSource {
                 index: 0,
                 file: None,
             }),
-            consumer: Arc::clone(ctx.consumer().consumer()),
             batches,
         }))
     }
@@ -409,17 +411,21 @@ impl Source for SharedSource {
         })
     }
 
-    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
-        Ok(Box::new(()))
+    fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+        // A spill file this driver opens is read through the driver's own consumer.
+        Ok(Box::new(ReaderLocal {
+            consumer: Arc::clone(ctx.consumer().consumer()),
+        }))
     }
 
     fn get_data<'a>(
         &'a self,
-        _local: &'a mut LocalState,
+        local: &'a mut LocalState,
         global: &'a GlobalState,
     ) -> BoxFuture<'a, Result<Option<Batch>>> {
         Box::pin(async move {
             let g = global_ref::<ReaderGlobal>(global, "SharedSource")?;
+            let consumer = Arc::clone(&local_mut::<ReaderLocal>(local, "SharedSource")?.consumer);
             let mut c = g.cursor.lock().await;
             loop {
                 g.output.query.check_cancelled()?;
@@ -437,7 +443,7 @@ impl Source for SharedSource {
                     Place::File(file) => {
                         let want = c.index;
                         let reader = c.file.take();
-                        let reservation = g.consumer.reservation();
+                        let reservation = consumer.reservation();
                         let (batch, reader) = run_blocking(&*g.output.executor, move || {
                             let mut reader = match reader {
                                 Some(r) => r,
