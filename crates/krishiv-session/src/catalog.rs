@@ -343,6 +343,11 @@ pub(crate) struct QueryCatalog {
 }
 
 impl QueryCatalog {
+    /// The query's SQL path snapshot.
+    pub(crate) fn sql_path_snapshot(&self) -> Vec<Vec<String>> {
+        self.path.clone()
+    }
+
     /// The query's namespace snapshot.
     pub(crate) fn namespace(&self) -> &[String] {
         &self.namespace

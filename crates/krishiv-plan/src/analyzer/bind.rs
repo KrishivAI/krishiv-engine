@@ -485,13 +485,9 @@ pub(super) fn qualified_parts(
     Ok((parts, Some(f.name.clone())))
 }
 
-fn search_path(ctx: &AnalysisContext) -> String {
-    let mut current = vec![ctx.catalogs.current_catalog().to_owned()];
-    current.extend(ctx.catalogs.current_namespace().iter().cloned());
-    format!(
-        "[`system`.`builtin`, `system`.`session`, {}]",
-        quoted(&current)
-    )
+pub(super) fn search_path(ctx: &AnalysisContext) -> String {
+    let entries: Vec<String> = ctx.catalogs.sql_path().iter().map(|e| quoted(e)).collect();
+    format!("[{}]", entries.join(", "))
 }
 
 fn lower_sql(
@@ -678,38 +674,67 @@ async fn load(
                 origin,
             ));
         }
-        // Asked as written, and folded the way a case-insensitive catalog
-        // folds, so no spelling of a name dodges a rule on another (the
-        // catalog's own identifier is asked below once the table is loaded).
-        for first in [ident.clone(), fold(&ident, cs)] {
-            authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
-        }
-        let failed = |_| {
-            AnalysisError::new(
-                KrishivCatalogFailure {
-                    catalog: quoted(std::slice::from_ref(&ident.catalog)),
-                    relation_name: quoted(name),
-                },
-                origin,
-            )
-        };
-        b.epochs.insert(catalog.name().to_owned(), catalog.epoch());
-        let mut meta = catalog
-            .load_table(&ident, version, form(name, cs))
-            .await
-            .map_err(failed)?;
-        if let Some(m) = &meta
-            && let Some(&pinned) = b.pins.get(&m.ident)
-            && m.version != Some(pinned)
-        {
-            if version.is_some() {
-                return Err(unsupported("two versions of one table in a query", origin));
+        // A bare name tries each schema of the SQL path in order (the
+        // current namespace when the path names none of this catalog's).
+        let mut candidates: Vec<TableIdent> = Vec::new();
+        if name.len() == 1 && !scan {
+            for entry in ctx.catalogs.sql_path() {
+                if let [c, n] = entry.as_slice()
+                    && c.eq_ignore_ascii_case(catalog.name())
+                {
+                    candidates.push(TableIdent {
+                        catalog: ident.catalog.clone(),
+                        namespace: vec![n.clone()],
+                        name: ident.name.clone(),
+                    });
+                }
             }
-            // Another spelling of a table already pinned: read the pin.
+        }
+        if candidates.is_empty() {
+            candidates.push(ident.clone());
+        }
+        let mut meta = None;
+        let mut ident = candidates[0].clone();
+        for (i, candidate) in candidates.into_iter().enumerate() {
+            if i > 0 {
+                ident = candidate;
+            }
+            // Asked as written, and folded the way a case-insensitive catalog
+            // folds, so no spelling of a name dodges a rule on another (the
+            // catalog's own identifier is asked below once the table is loaded).
+            for first in [ident.clone(), fold(&ident, cs)] {
+                authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
+            }
+            let failed = |_| {
+                AnalysisError::new(
+                    KrishivCatalogFailure {
+                        catalog: quoted(std::slice::from_ref(&ident.catalog)),
+                        relation_name: quoted(name),
+                    },
+                    origin,
+                )
+            };
+            b.epochs.insert(catalog.name().to_owned(), catalog.epoch());
             meta = catalog
-                .load_table(&ident, Some(pinned), form(name, cs))
+                .load_table(&ident, version, form(name, cs))
                 .await
                 .map_err(failed)?;
+            if let Some(m) = &meta
+                && let Some(&pinned) = b.pins.get(&m.ident)
+                && m.version != Some(pinned)
+            {
+                if version.is_some() {
+                    return Err(unsupported("two versions of one table in a query", origin));
+                }
+                // Another spelling of a table already pinned: read the pin.
+                meta = catalog
+                    .load_table(&ident, Some(pinned), form(name, cs))
+                    .await
+                    .map_err(failed)?;
+            }
+            if meta.is_some() {
+                break;
+            }
         }
         let Some(meta) = meta else {
             if scan {
