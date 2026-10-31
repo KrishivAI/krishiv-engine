@@ -336,7 +336,7 @@ async fn run_pipelines(
             .filter(|g| g.iter().all(|&m| deps[m].iter().all(|&d| done[d])))
             .collect();
         if ready.is_empty() {
-            // Unreachable: dependencies form a tree.
+            // Unreachable: dependencies form a DAG (a shared plan is read by several pipelines).
             return Err(internal("pipeline dependencies form a cycle".to_owned()));
         }
         let mut handles = Drivers(FuturesUnordered::new());

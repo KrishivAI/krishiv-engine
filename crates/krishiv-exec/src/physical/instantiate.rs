@@ -72,6 +72,7 @@ use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, OrderedNode, SourceNode};
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
+use crate::shared::{SharedSink, SharedSource};
 use crate::values::{
     BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
 };
@@ -303,9 +304,21 @@ pub fn instantiate_task(
                 .clone()
                 .unwrap_or_else(|| Arc::new(LocalValues::new())),
             ids: node_ids(plan.roots()),
+            shared: HashMap::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
+        }
+        // Inner first: a shared plan reads only earlier ones.
+        for sp in plan.shared() {
+            let body = cx.node(&sp.plan)?;
+            let producer = Arc::new(SharedProducer {
+                sink: SharedSink::new(Arc::clone(&body.schema), cx.spill.clone()),
+                schema: Arc::clone(&body.schema),
+                node: body.node,
+                ordered: sp.ordered,
+            });
+            cx.shared.insert(sp.id, producer);
         }
         let built = cx.node(plan.root())?;
         if built.schema.fields() != plan.schema().fields() {
@@ -352,6 +365,40 @@ struct Instantiation<'a> {
     /// Each node's pre-order index, by address (the plan is borrowed for
     /// the whole instantiation, so addresses are stable).
     ids: HashMap<usize, u32>,
+    /// The shared plans built so far (a shared plan reads only earlier ones).
+    shared: HashMap<super::SharedId, Arc<SharedProducer>>,
+}
+
+/// A shared plan's body and the sink that keeps its rows; every reader's pipeline depends on this one.
+struct SharedProducer {
+    node: Arc<dyn ExecNode>,
+    sink: Arc<SharedSink>,
+    schema: SchemaRef,
+    /// The body ends in a sort: readers keep the list's order.
+    ordered: bool,
+}
+
+/// One `SharedRead`: its own source over the shared plan's list.
+struct SharedReadNode {
+    id: u64,
+    producer: Arc<SharedProducer>,
+    source: Arc<SharedSource>,
+}
+
+impl ExecNode for SharedReadNode {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        let sink = b.shared_pipeline(
+            self.id,
+            Arc::clone(&self.producer.sink) as Arc<dyn Sink>,
+            Arc::clone(&self.producer.node),
+        )?;
+        b.set_breaker_source(Arc::clone(&self.source) as Arc<dyn Source>, sink)?;
+        if self.producer.ordered {
+            // One driver reads the list in the order it was produced.
+            b.preserve_order();
+        }
+        Ok(())
+    }
 }
 
 /// The pre-order index of every node under `roots`, numbered on from one
@@ -443,10 +490,19 @@ impl Instantiation<'_> {
                     node: Arc::new(SourceNode(source)),
                 })
             }
-            PhysNode::SharedRead { id, .. } => Err(internal(format!(
-                "shared plan {} cannot be read: this executor does not run shared plans",
-                id.0
-            ))),
+            PhysNode::SharedRead { id, .. } => {
+                let producer = self.shared.get(id).cloned().ok_or_else(|| {
+                    internal(format!("shared plan {} is read before it is built", id.0))
+                })?;
+                Ok(Built {
+                    schema: Arc::clone(&producer.schema),
+                    node: Arc::new(SharedReadNode {
+                        id: id.0,
+                        source: SharedSource::new(Arc::clone(&producer.schema)),
+                        producer,
+                    }),
+                })
+            }
             PhysNode::OneRow => {
                 let source = one_row()?;
                 Ok(Built {

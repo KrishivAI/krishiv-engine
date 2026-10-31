@@ -71,10 +71,13 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &LEGACY_VIEW_SCHEMA_BINDING_MODE,
+    &LEGACY_VIEW_SCHEMA_COMPENSATION,
     &METRICS_ENABLED,
     &AVRO_COMPRESSION_CODEC,
     &AVRO_DATETIME_REBASE_MODE_IN_READ,
     &AGENT_GATE_BYTES,
+    &SHARE_CTE_INSTANCES,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -222,6 +225,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CTE_PRECEDENCE_POLICY,
     ),
     (
+        "spark.sql.legacy.viewSchemaBindingMode",
+        &LEGACY_VIEW_SCHEMA_BINDING_MODE,
+    ),
+    (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
     ),
@@ -230,12 +237,24 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_STATISTICAL_AGGREGATE,
     ),
     (
+        "krishiv.sql.optimizer.shareCteInstances",
+        &SHARE_CTE_INSTANCES,
+    ),
+    (
         "spark.sql.avro.datetimeRebaseModeInRead",
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
+        "spark.sql.legacy.viewSchemaCompensation",
+        &LEGACY_VIEW_SCHEMA_COMPENSATION,
+    ),
+    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
+    ),
+    (
+        "krishiv.sql.legacy.viewSchemaBindingMode",
+        &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     ),
     (
         "krishiv.sql.sources.bucketing.maxBuckets",
@@ -252,6 +271,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.avro.datetimeRebaseModeInRead",
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
+    ),
+    (
+        "krishiv.sql.legacy.viewSchemaCompensation",
+        &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
     (
         "krishiv.sql.sources.partitionOverwriteMode",
@@ -1052,6 +1075,35 @@ pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
 };
 
+/// `spark.sql.legacy.viewSchemaBindingMode`.
+pub static LEGACY_VIEW_SCHEMA_BINDING_MODE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.viewSchemaBindingMode",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "When true, a permanent view may take `WITH SCHEMA BINDING | COMPENSATION | TYPE \
+          EVOLUTION | EVOLUTION`, records its schema binding mode (shown by `DESCRIBE EXTENDED` \
+          and `SHOW CREATE TABLE`) and reads by it; a view stored without a mode reads as \
+          `BINDING`. When false, the clause is `FEATURE_NOT_ENABLED` and every view reads as \
+          before the modes existed (see `viewSchemaCompensation`).",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.viewSchemaBindingMode"),
+};
+
+/// `spark.sql.legacy.viewSchemaCompensation`.
+pub static LEGACY_VIEW_SCHEMA_COMPENSATION: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.viewSchemaCompensation",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "When true, a view created without `WITH SCHEMA` is `COMPENSATION` (a changed column \
+          type is cast to the stored one with an ANSI cast) and a view without a mode casts so \
+          when `viewSchemaBindingMode` is false; when false, such views are `BINDING` (only \
+          up-casts are allowed).",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.viewSchemaCompensation"),
+};
+
 /// `krishiv.metrics.enabled`.
 pub static METRICS_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.metrics.enabled",
@@ -1121,6 +1173,22 @@ pub static AGENT_GATE_BYTES: ConfigEntry = ConfigEntry {
           table scans reach this many bytes is not run; the answer is the estimate and the plan \
           outline, and the caller repeats it with `--allow-heavy` to run it anyway. A statement whose \
           tables report no statistics runs. 0 turns the gate off.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.sql.optimizer.shareCteInstances`.
+pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.optimizer.shareCteInstances",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Compute a deterministic CTE body once per query when two or more references to it are \
+          identical after optimization and the body holds a pipeline breaker (an aggregate, join, \
+          window, sort, distinct or set operation); every reference reads the one result. A group \
+          is kept as separate copies when a runtime filter reaches one of its members. Results \
+          are the same either way. Nondeterministic CTE bodies referenced twice or more are \
+          always computed once, as Spark does: this switch does not affect them.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

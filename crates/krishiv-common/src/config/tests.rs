@@ -626,3 +626,22 @@ fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
     );
     assert!(c.set("krishiv.agent.gateBytes", "lots").is_err());
 }
+
+#[test]
+fn share_cte_instances_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&SHARE_CTE_INSTANCES).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.sql.optimizer.shareCteInstances", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&SHARE_CTE_INSTANCES).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(
+        c.set("krishiv.sql.optimizer.shareCteInstances", "maybe")
+            .is_err()
+    );
+}
