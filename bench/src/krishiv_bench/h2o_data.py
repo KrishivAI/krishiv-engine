@@ -28,6 +28,7 @@ Memory: groupby is chunked (a few hundred MB). Join holds the key arrays of the 
 from __future__ import annotations
 
 import contextlib
+import decimal
 import hashlib
 import json
 import os
@@ -149,6 +150,10 @@ class ColumnDigest:
             self.values.update(arr.fill_null(0).to_numpy(zero_copy_only=False).astype("<i8").tobytes())
         elif pa.types.is_floating(arr.type):
             self.values.update(arr.fill_null(0.0).to_numpy(zero_copy_only=False).astype("<f8").tobytes())
+        elif pa.types.is_decimal128(arr.type):  # the unscaled 128-bit integers, nulls as zero
+            a = arr.fill_null(pa.scalar(decimal.Decimal(0), arr.type))
+            words = np.frombuffer(a.buffers()[1], dtype="<u8")
+            self.values.update(words[2 * a.offset : 2 * (a.offset + len(a))].tobytes())
         else:
             raise TypeError(f"unsupported column type {arr.type}")
 
