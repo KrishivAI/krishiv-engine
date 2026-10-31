@@ -254,6 +254,19 @@ fn the_spark_probe_rows_match() {
             format!("SELECT ck FROM c GROUP BY ck HAVING {es} OR ck = 3"),
             vec!["1", "2", "3"],
         ),
+        // A global aggregate always yields a row: EXISTS is true for every row.
+        (
+            "SELECT ck FROM c WHERE EXISTS (SELECT max(v) FROM s WHERE s.sk = c.ck) OR g = 'zz'"
+                .to_owned(),
+            vec!["1", "2", "3", "4", "NULL"],
+        ),
+        // A grouped aggregate with HAVING keeps its groups per outer row.
+        (
+            "SELECT ck FROM c WHERE EXISTS (SELECT sk FROM s WHERE s.sk = c.ck GROUP BY sk \
+             HAVING count(*) > 1) OR g = 'c'"
+                .to_owned(),
+            vec!["1", "3"],
+        ),
         // A join condition: the existence join sits under the side it reads.
         (
             "SELECT c.ck FROM c JOIN w ON c.ck = w.wk AND (EXISTS (SELECT 1 FROM s WHERE \
@@ -279,10 +292,6 @@ fn the_spark_probe_rows_match() {
 fn shapes_that_need_unnesting_stay_refused() {
     let env = env();
     for body in [
-        // Correlation below an aggregate (T115 units 2 and 3).
-        "SELECT ck FROM c WHERE EXISTS (SELECT max(v) FROM s WHERE s.sk = c.ck) OR g = 'zz'",
-        "SELECT ck FROM c WHERE EXISTS (SELECT sk FROM s WHERE s.sk = c.ck GROUP BY sk \
-         HAVING count(*) > 1) OR g = 'c'",
         // A join condition that reads both sides.
         "SELECT c.ck FROM c JOIN w ON c.ck = w.wk AND EXISTS (SELECT 1 FROM s WHERE s.sk = c.ck \
          AND s.v = w.v)",
