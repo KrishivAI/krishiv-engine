@@ -192,7 +192,7 @@ fn agent_errors_are_json_with_class_state_and_position() {
 /// with headroom: a format change that loses the saving fails here).
 const PINNED_TOKEN_RATIO_PERCENT: usize = 60;
 
-/// A tokenizer-free proxy for an LLM's token count: each run of letters and digits is one token, and so is each
+/// A tokenizer-free proxy for an LLM's token count: each run of letters, digits and underscores is one token, and so is each
 /// other non-space character (table borders and separators cost a token each).
 fn proxy_tokens(text: &str) -> usize {
     let mut count = 0;

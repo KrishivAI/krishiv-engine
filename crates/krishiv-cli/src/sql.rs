@@ -255,7 +255,7 @@ pub(crate) fn run_one(
         describe(stmt, statement.line_offset, &e)
     })?;
     if args.explain_analyze || args.explain_verbose {
-        print_explain(&df, args)
+        print_explain(out, &df, args)
     } else if agent {
         print_agent_result(out, statement, &df, session, args)
     } else {
@@ -275,7 +275,7 @@ fn explain_format(args: &SqlArgs) -> ExplainFormat {
 
 /// Prints the profile (`--explain-analyze`) or the optimizer's stages
 /// (`--explain-verbose`) of the query `df`, in the requested format.
-fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
+fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
     // One run per branch: the `Json`/`Mermaid`/`Dot` arms share
     // `explain_*_with`, so there is a single route to each document and no
     // second rendering that can drift.
@@ -301,7 +301,6 @@ fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
                 .map_err(|e| e.to_string())?,
         }
     };
-    let mut out = io::stdout().lock();
     writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
 }
 

@@ -113,6 +113,8 @@ impl Repl {
                 match parse_mode(words.next().unwrap_or("")) {
                     Some(mode) => {
                         self.mode = mode;
+                        // Choosing a format means plain rows: agent output would hide it.
+                        self.agent = false;
                         let _ = writeln!(out, "format {}", self.mode.name());
                     }
                     None => {
@@ -522,6 +524,9 @@ mod tests {
         assert!(r.agent);
         assert_eq!(r.handle_dot(".agent off", &ctx, &mut out), Some(false));
         assert!(!r.agent);
+        assert_eq!(r.handle_dot(".agent on", &ctx, &mut out), Some(false));
+        assert_eq!(r.handle_dot(".format csv", &ctx, &mut out), Some(false));
+        assert!(!r.agent, "choosing a format leaves agent output");
         assert_eq!(r.handle_dot(".agent maybe", &ctx, &mut out), Some(false));
         let text = String::from_utf8(out).expect("utf-8");
         assert!(
