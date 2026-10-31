@@ -197,3 +197,40 @@ fn a_stored_function_keeps_the_path_it_was_created_under() {
     assert_eq!(first(&s, "SELECT default.frozen_fn()"), "10");
     assert_eq!(first(&s, "SELECT * FROM default.frozen_tvf()"), "10");
 }
+
+#[test]
+fn alter_view_as_takes_the_path_current_at_the_alter() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA va",
+        "CREATE SCHEMA vb",
+        "CREATE TABLE va.alter_t USING parquet AS SELECT 1 AS id",
+        "CREATE TABLE vb.alter_t USING parquet AS SELECT 2 AS id",
+        "SET PATH = spark_catalog.va, system.builtin",
+        "CREATE VIEW default.v_alter AS SELECT id FROM alter_t",
+        "SET PATH = spark_catalog.vb, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT id FROM default.v_alter"), "1");
+    run(&s, "ALTER VIEW default.v_alter AS SELECT id FROM alter_t");
+    run(&s, "SET PATH = spark_catalog.va, system.builtin");
+    assert_eq!(first(&s, "SELECT id FROM default.v_alter"), "2");
+}
+
+#[test]
+fn a_temporary_function_keeps_the_path_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA ta",
+        "CREATE SCHEMA tb",
+        "CREATE TABLE ta.tmpf_t USING parquet AS SELECT 10 AS id",
+        "CREATE TABLE tb.tmpf_t USING parquet AS SELECT 20 AS id",
+        "SET PATH = spark_catalog.ta, system.builtin, system.session",
+        "CREATE TEMPORARY FUNCTION tmp_fn() RETURNS INT RETURN (SELECT MAX(id) FROM tmpf_t)",
+        "SET PATH = spark_catalog.tb, system.builtin, system.session",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT tmp_fn()"), "10");
+}
