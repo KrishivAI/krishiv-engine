@@ -155,13 +155,16 @@ async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
 /// Times every poll of a driver: the stall detector. A poll is a
 /// non-yielding slice of a worker thread.
 ///
-/// In fail-on-stall mode (tests and CI) a slice is measured without the
-/// time its thread waited on a run queue (runnable, but another thread had
-/// the core): that time is the machine's load, not the driver's work, and
-/// counting it failed queries on loaded machines. Running and blocking
-/// (a sleep or blocking I/O inside a poll) both still count. Where the
-/// kernel does not report run-queue waits, and when stalls are only
-/// counted, the slice is wall time.
+/// In fail-on-stall mode (tests and CI) a slice is the time its thread
+/// spent on a CPU during the poll, not wall time: waiting on a run queue
+/// (another thread had the core) and being throttled (a cgroup CPU quota)
+/// are the machine's load, not the driver's work, and counting them failed
+/// queries on loaded machines. The run-queue wait alone was not enough: a
+/// throttled thread is off the run queue, so a 40% quota failed
+/// `tpch_suite_counts_no_stalls` with 60 ms "stalls". A blocking call inside
+/// a poll no longer counts here; `disallowed_methods` keeps those out of
+/// workers. Where the kernel does not report the thread's CPU time, and when
+/// stalls are only counted, the slice is wall time.
 struct Timed {
     inner: BoxFuture<'static, ()>,
     stats: DriverStats,
@@ -179,8 +182,8 @@ impl Future for Timed {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let queued = if self.query.config().fail_on_stall {
-            runqueue_wait()
+        let on_cpu_before = if self.query.config().fail_on_stall {
+            thread_cpu_time()
         } else {
             None
         };
@@ -200,8 +203,8 @@ impl Future for Timed {
         // Only a slice longer than the threshold can be a stall, so the
         // second sample is taken for those alone.
         let held = if slice > config.stall_threshold {
-            match queued.zip(runqueue_wait()) {
-                Some((before, after)) => slice.saturating_sub(after.saturating_sub(before)),
+            match on_cpu_before.zip(thread_cpu_time()) {
+                Some((before, after)) => after.saturating_sub(before).min(slice),
                 None => slice,
             }
         } else {
@@ -220,8 +223,8 @@ impl Future for Timed {
     }
 }
 
-/// The time this thread has waited on a run queue so far, from
-/// `/proc/thread-self/schedstat` (its second field, in nanoseconds); `None`
+/// The time this thread has run on a CPU so far, from
+/// `/proc/thread-self/schedstat` (its first field, in nanoseconds); `None`
 /// where the kernel does not report it.
 ///
 /// The file is opened once per thread and read with `pread`: a poll costs
@@ -231,7 +234,7 @@ impl Future for Timed {
     clippy::disallowed_methods,
     reason = "reading a pseudo-file served from memory with one pread per poll never blocks: the only deliberate sync read on a worker"
 )]
-fn runqueue_wait() -> Option<Duration> {
+fn thread_cpu_time() -> Option<Duration> {
     use std::os::unix::fs::FileExt;
     thread_local! {
         /// Opened by the thread it describes (`thread-self` is resolved at
@@ -245,17 +248,17 @@ fn runqueue_wait() -> Option<Duration> {
         let nanos = std::str::from_utf8(&buf[..n])
             .ok()?
             .split_whitespace()
-            .nth(1)?
+            .next()?
             .parse()
             .ok()?;
         Some(Duration::from_nanos(nanos))
     })
 }
 
-/// Non-Unix targets have no `/proc/thread-self/schedstat`: there is no
-/// run-queue wait to subtract, so slices are wall time.
+/// Non-Unix targets have no `/proc/thread-self/schedstat`: slices are wall
+/// time.
 #[cfg(not(unix))]
-fn runqueue_wait() -> Option<Duration> {
+fn thread_cpu_time() -> Option<Duration> {
     None
 }
 
