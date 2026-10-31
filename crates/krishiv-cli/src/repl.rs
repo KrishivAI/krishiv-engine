@@ -585,7 +585,7 @@ mod tests {
             &r,
             &mut args,
             4,
-            "SELEC nope",
+            "NOT SQL AT ALL",
             &mut out
         ));
         let mut args = flags(&["--explain-verbose"]);
