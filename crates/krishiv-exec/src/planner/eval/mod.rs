@@ -42,7 +42,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, LEGACY_STATISTICAL_AGGREGATE, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE,
+    ANSI_ENABLED, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
+    LEGACY_STATISTICAL_AGGREGATE, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE,
 };
 use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_kernels::KernelCtx;
@@ -198,6 +199,10 @@ pub(crate) struct EvalEnv {
     /// the value inserted last. It travels in the plan (`ExprEnv`), so a
     /// worker instantiating a plan without the feature refuses it.
     pub(crate) map_key_dedup_last_win: bool,
+    /// `spark.sql.legacy.javaCharsets`; plan data, like the dedup policy.
+    pub(crate) legacy_java_charsets: bool,
+    /// `spark.sql.legacy.codingErrorAction`; plan data, like the dedup policy.
+    pub(crate) legacy_coding_error_action: bool,
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
@@ -238,6 +243,14 @@ impl EvalEnv {
             .get(&MAP_KEY_DEDUP_POLICY)
             .and_then(|v| v.as_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("LAST_WIN"));
+        let flag = |entry| {
+            config
+                .get(entry)
+                .and_then(krishiv_common::config::ConfigValue::as_bool)
+                .unwrap_or(false)
+        };
+        let legacy_java_charsets = flag(&LEGACY_JAVA_CHARSETS);
+        let legacy_coding_error_action = flag(&LEGACY_CODING_ERROR_ACTION);
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -253,6 +266,8 @@ impl EvalEnv {
             user,
             udfs: None,
             map_key_dedup_last_win,
+            legacy_java_charsets,
+            legacy_coding_error_action,
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -272,6 +287,8 @@ impl EvalEnv {
             user: Arc::clone(&env.user),
             udfs: None,
             map_key_dedup_last_win: env.map_key_dedup_last_win,
+            legacy_java_charsets: env.legacy_java_charsets,
+            legacy_coding_error_action: env.legacy_coding_error_action,
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -286,6 +303,8 @@ impl EvalEnv {
             query_start_micros: self.query_start_micros,
             user: Arc::clone(&self.user),
             map_key_dedup_last_win: self.map_key_dedup_last_win,
+            legacy_java_charsets: self.legacy_java_charsets,
+            legacy_coding_error_action: self.legacy_coding_error_action,
         }
     }
 }
@@ -834,6 +853,8 @@ mod tests {
             user: Arc::from("test"),
             udfs,
             map_key_dedup_last_win: false,
+            legacy_java_charsets: false,
+            legacy_coding_error_action: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }

@@ -9,6 +9,7 @@ use arrow_array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
 use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::map::DedupPolicy;
+use krishiv_kernels::string::CharsetOptions;
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
 use krishiv_udf_sdk::ScalarUdf;
 
@@ -160,6 +161,10 @@ pub(super) fn compile(
             DedupPolicy::LastWin
         } else {
             DedupPolicy::Exception
+        })
+        .with_charset_options(CharsetOptions {
+            java_charsets: input.env.legacy_java_charsets,
+            replace_malformed: input.env.legacy_coding_error_action,
         })
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
