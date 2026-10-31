@@ -478,6 +478,8 @@ pub fn krishiv_session::Session::table(&self, &str) -> krishiv_session::DataFram
 pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn krishiv_session::Session::uncache_table(&self, &str)
 impl krishiv_session::Session
+pub async fn krishiv_session::Session::estimate_sql(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::Estimate>, krishiv_common::error::KrishivError>
+impl krishiv_session::Session
 pub async fn krishiv_session::Session::statement_info(&self, &str) -> core::result::Result<krishiv_session::StatementInfo, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::Session
 pub fn krishiv_session::Session::clone(&self) -> krishiv_session::Session
