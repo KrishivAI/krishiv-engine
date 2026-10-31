@@ -1513,6 +1513,16 @@ mod tests {
         super::implicit(from, want, true)
     }
 
+    #[test]
+    fn a_string_reaches_a_boolean_parameter_only_under_ansi() {
+        let want = InputType::Exact(T::Boolean);
+        assert_eq!(
+            super::implicit(Some(&T::String), &want, true),
+            Some(Some(T::Boolean))
+        );
+        assert_eq!(super::implicit(Some(&T::String), &want, false), None);
+    }
+
     /// ANSI implicit casts of function arguments (`AnsiTypeCoercion
     /// .implicitCast`), as Spark 4.2 inserts them, e.g. `date_add('2020-01-01',
     /// 1)` casts its string to a date and `upper(dt)` its date to a string.
