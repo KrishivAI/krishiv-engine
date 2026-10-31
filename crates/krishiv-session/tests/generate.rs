@@ -329,3 +329,29 @@ fn a_generator_beside_group_by_runs_above_the_aggregate() {
         table(&[&["a"]])
     );
 }
+
+#[test]
+fn stack_generates_rows_of_columns() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(&s, "select stack(2, 1, 2, 3)"),
+        table(&[&["1", "2"], &["3", "NULL"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select * from stack(2, 1, 'a', 2, 'b') t(n, c) order by n"
+        ),
+        table(&[&["1", "a"], &["2", "b"]])
+    );
+    // The columns are named `col0`, `col1`, ...
+    assert_eq!(
+        rows(
+            &s,
+            "select col1 from stack(2, 1, 'a', 2, 'b') order by col1"
+        ),
+        table(&[&["a"], &["b"]])
+    );
+    let e = error_of(&s, "select stack()");
+    assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+}

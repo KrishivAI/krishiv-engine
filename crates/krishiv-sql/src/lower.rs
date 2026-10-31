@@ -916,6 +916,8 @@ impl Lowerer {
             "explode" => krishiv_plan::GeneratorKind::Explode,
             "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
             "inline" => krishiv_plan::GeneratorKind::Inline,
+            // `stack` is `inline` over an array of structs ([`Self::generator_arg`]).
+            "stack" if !outer => krishiv_plan::GeneratorKind::Inline,
             _ => return None,
         };
         // A window, a filter or DISTINCT makes it no generator call.
@@ -925,6 +927,75 @@ impl Lowerer {
             f.args.as_slice(),
             name,
         ))
+    }
+
+    /// The one argument a generator call reads: the argument of `explode`,
+    /// `posexplode` and `inline`, or for `stack(n, e1, ..., ek)` the array
+    /// of `n` structs `inline` generates the rows from (`col0`, `col1`, ...
+    /// the fields; a short last row is padded with NULL), as Spark's
+    /// `Stack` generates them.
+    fn generator_arg(
+        &mut self,
+        name: &Ident,
+        args: &[crate::ast::FunctionArg],
+        span: Span,
+    ) -> R<Arc<IrExpr>> {
+        let wrong = |expected: &str, actual: usize| {
+            err(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: format!("`{}`", name.value),
+                    expected_num: expected.to_owned(),
+                    actual_num: actual.to_string(),
+                    docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                },
+                span,
+            )
+        };
+        if !name.value.eq_ignore_ascii_case("stack") {
+            let [arg] = args else {
+                return Err(wrong("1", args.len()));
+            };
+            return self.arg(&arg.expr);
+        }
+        let Some((first, values)) = args.split_first().filter(|(_, v)| !v.is_empty()) else {
+            return Err(wrong("> 1", args.len()));
+        };
+        let rows = match &first.expr.kind {
+            ExprKind::Literal(Literal::Number { text, .. }) => {
+                text.parse::<usize>().ok().filter(|n| *n > 0)
+            }
+            _ => None,
+        };
+        let Some(rows) = rows else {
+            return Err(unsupported(
+                "stack with a row count that is no positive integer literal",
+                first.span,
+            ));
+        };
+        let width = values.len().div_ceil(rows);
+        let lowered = values
+            .iter()
+            .map(|a| self.arg(&a.expr))
+            .collect::<R<Vec<_>>>()?;
+        let mut structs = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let mut fields = Vec::with_capacity(2 * width);
+            for col in 0..width {
+                let name = self.ex(
+                    ExprNode::Literal(krishiv_plan::Literal::String(format!("col{col}"))),
+                    span,
+                );
+                fields.push(arc(name));
+                fields.push(match lowered.get(row * width + col) {
+                    Some(v) => Arc::clone(v),
+                    None => {
+                        arc(self.ex(ExprNode::Literal(krishiv_plan::Literal::Null(None)), span))
+                    }
+                });
+            }
+            structs.push(arc(self.call("named_struct", fields, span)));
+        }
+        Ok(arc(self.call("array", structs, span)))
     }
 
     /// `generator(arg)` over `plan` (a [`PlanNode::Generate`]) and the
@@ -939,17 +1010,7 @@ impl Lowerer {
         let Some((kind, outer, args, name)) = Self::generator_of(&item.expr) else {
             return Err(unsupported("a select item that is no generator", item.span));
         };
-        let [arg] = args else {
-            return Err(err(
-                WrongNumArgsWithoutSuggestion {
-                    function_name: format!("`{}`", name.value),
-                    expected_num: "1".to_owned(),
-                    actual_num: args.len().to_string(),
-                    docroot: "https://spark.apache.org/docs/latest".to_owned(),
-                },
-                item.span,
-            ));
-        };
+        let arg = self.generator_arg(name, args, item.span)?;
         let names = match &item.alias {
             None => Vec::new(),
             Some(Alias::Name(n)) => vec![n.value.clone()],
@@ -958,7 +1019,6 @@ impl Lowerer {
         // A reserved qualifier the generated columns are read through; no
         // user table can have it.
         let qualifier = format!("{}{index}", krishiv_plan::GENERATE_QUALIFIER_PREFIX);
-        let arg = self.arg(&arg.expr)?;
         let plan = self.node(
             PlanNode::Generate {
                 input: arc(plan),
@@ -1546,20 +1606,11 @@ impl Lowerer {
                     "explode" => Some(krishiv_plan::GeneratorKind::Explode),
                     "posexplode" => Some(krishiv_plan::GeneratorKind::PosExplode),
                     "inline" => Some(krishiv_plan::GeneratorKind::Inline),
+                    "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
                     _ => None,
                 };
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
-                    let [arg] = &lowered[..] else {
-                        return Err(err(
-                            WrongNumArgsWithoutSuggestion {
-                                function_name: format!("`{}`", name.parts[0].value),
-                                expected_num: "1".to_owned(),
-                                actual_num: lowered.len().to_string(),
-                                docroot: "https://spark.apache.org/docs/latest".to_owned(),
-                            },
-                            tf.span,
-                        ));
-                    };
+                    let arg = &self.generator_arg(&name.parts[0], args, tf.span)?;
                     let one_row = self.node(PlanNode::OneRowRelation, tf.span);
                     self.node(
                         PlanNode::Generate {
