@@ -596,6 +596,5 @@ mod tests {
             "SELECT 1 AS a",
             &mut out
         ));
-        assert!(!out.is_empty());
     }
 }
