@@ -6,8 +6,9 @@
 //! a negative one counts from the end (`-1` appends), padding the front with
 //! NULLs when it reaches past it. Position 0 is `INVALID_INDEX_OF_ZERO`. A
 //! NULL array or position is NULL, and a NULL item is inserted as an element.
-//! (`spark.sql.legacy.negativeIndexInArrayInsert` is not read: a negative
-//! position always follows the default rule.)
+//! Under `spark.sql.legacy.negativeIndexInArrayInsert` the analyzer adds a
+//! trailing `true` and a negative position counts one place further from
+//! the end (`-1` inserts before the last element).
 
 use std::sync::Arc;
 
@@ -54,12 +55,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         "array_insert" => Edit::Insert,
         _ => Edit::Compact,
     };
+    let legacy = edit == Edit::Insert && args.len() == 4;
     let typed = match (edit, types.as_slice()) {
         (Edit::Compact, [DataType::List(f)]) => Some(compact_type(&DataType::List(Arc::clone(f)))),
         (Edit::Append | Edit::Prepend, [DataType::List(f), item]) if f.data_type() == item => {
             Some(grown_type(f))
         }
         (Edit::Insert, [DataType::List(f), DataType::Int32, item]) if f.data_type() == item => {
+            Some(grown_type(f))
+        }
+        // The session's legacy negative-index switch, appended by the
+        // analyzer only when it is on.
+        (Edit::Insert, [DataType::List(f), DataType::Int32, item, DataType::Boolean])
+            if f.data_type() == item && matches!(args.get(3), Some(BindArg::Literal(_))) =>
+        {
             Some(grown_type(f))
         }
         _ => None,
@@ -69,7 +78,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             Ok(Binding::new(ty, move |x: &Inputs<'_>| compact(x, &field)))
         }
         Some(Ok((ty, field))) => Ok(Binding::new(ty, move |x: &Inputs<'_>| {
-            edit_rows(x, edit, listed, &field)
+            edit_rows(x, edit, listed, &field, legacy)
         })),
         Some(Err(e)) => Err(e),
         None => Err(bad_types(listed, args)),
@@ -195,6 +204,7 @@ fn edit_rows(
     edit: Edit,
     name: &str,
     field: &arrow_schema::FieldRef,
+    legacy: bool,
 ) -> Result<ArrayRef, KrishivError> {
     let c = x.column(0)?;
     let list = list_of(&c, name)?;
@@ -228,7 +238,13 @@ fn edit_rows(
                     return Err(InvalidIndexOfZero {}.into());
                 }
                 let len = i64::try_from(len).unwrap_or(i64::MAX);
-                let at = if p > 0 { p - 1 } else { len + p + 1 };
+                let at = if p > 0 {
+                    p - 1
+                } else if legacy {
+                    len + p
+                } else {
+                    len + p + 1
+                };
                 // The result length, known before any padding is allocated.
                 let total = if at < 0 {
                     len + 1 - at
