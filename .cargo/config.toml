@@ -10,3 +10,7 @@ PYO3_BUILD_EXTENSION_MODULE = "1"
 # NOTE: with this set, no crate in the workspace may link a test binary that
 # embeds Python (e.g. pyo3 `auto-initialize` tests); put such tests in a
 # separate crate or Cargo profile with the variable unset.
+# An unset `spark.sql.session.timeZone` is the machine's zone, as in Spark, so
+# tests run in one zone on every machine. Set `TZ` to run them in another; a
+# test about the default sets `TZ` on the process it starts.
+TZ = "UTC"

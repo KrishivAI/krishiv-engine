@@ -3,8 +3,10 @@
 
 use std::sync::{Arc, PoisonError, RwLock};
 
-use krishiv_common::config::{Config, Scope, ValueType, lookup};
+use krishiv_common::config::{Config, SESSION_TIME_ZONE, Scope, ValueType, lookup};
 use krishiv_common::error::{CannotModifyStaticConfig, InvalidConfValueTimeZone, KrishivError};
+use krishiv_kernels::cast::FixedOffset;
+use krishiv_kernels::datetime::{resolve_zone, zone_id};
 
 /// Prefixes of entries read once, when the session is built (memory pool,
 /// spill directory, I/O scheduler): setting them later would not apply,
@@ -23,13 +25,43 @@ pub(crate) struct ConfStore {
     /// so values from the builder survive resets as Spark's startup values
     /// do (static entries never change at runtime either way).
     initial: Config,
+    /// The default of `spark.sql.session.timeZone`, read once when the
+    /// session is built (see [`local_zone`]).
+    local_zone: Arc<str>,
 }
 
 impl ConfStore {
     pub(crate) fn new(config: Config) -> Self {
+        Self::with_local_zone(config, &local_zone())
+    }
+
+    fn with_local_zone(config: Config, local_zone: &str) -> Self {
         Self {
             current: RwLock::new((Arc::new(config.clone()), 0)),
             initial: config,
+            local_zone: Arc::from(local_zone),
+        }
+    }
+
+    /// The zone an unset `spark.sql.session.timeZone` means.
+    pub(crate) fn local_zone(&self) -> &str {
+        &self.local_zone
+    }
+
+    /// The configuration one query reads, and its version: an unset session
+    /// time zone is the local zone here, so plans, casts and functions
+    /// never see it unset. The stored configuration keeps it unset, so `SET`
+    /// does not list it (as in Spark).
+    pub(crate) fn query_snapshot(&self) -> (Arc<Config>, u64) {
+        let (config, version) = self.versioned_snapshot();
+        if config.get(&SESSION_TIME_ZONE).is_some() {
+            return (config, version);
+        }
+        let mut effective = Config::clone(&config);
+        match effective.set(SESSION_TIME_ZONE.key, &self.local_zone) {
+            Ok(_) => (Arc::new(effective), version),
+            // Not reached: `local_zone` only returns zones the entry accepts.
+            Err(_) => (config, version),
         }
     }
 
@@ -54,6 +86,16 @@ impl ConfStore {
         Ok(())
     }
 
+    /// The value of `key` as `spark.conf.get` and `SET key` show it: an
+    /// unset session time zone shows the local zone.
+    pub(crate) fn value(&self, key: &str) -> Option<String> {
+        get(&self.snapshot(), key).or_else(|| {
+            lookup(key)
+                .is_some_and(|entry| entry.key == SESSION_TIME_ZONE.key)
+                .then(|| self.local_zone.to_string())
+        })
+    }
+
     /// Restores the configuration the session was built with, bumping the
     /// version so running analyses are redone (`RESET` with no key).
     pub(crate) fn reset(&self) {
@@ -69,6 +111,56 @@ impl ConfStore {
         next.reset_key(key, &self.initial);
         *current = (Arc::new(next), current.1.wrapping_add(1));
     }
+}
+
+/// The zone Java's `TimeZone.getDefault` gives on this host, which is the
+/// default of `spark.sql.session.timeZone`.
+pub(crate) fn local_zone() -> String {
+    let tz = std::env::var("TZ").ok();
+    let link = std::fs::read_link("/etc/localtime").ok();
+    let file = std::fs::read_to_string("/etc/timezone").ok();
+    local_zone_from(
+        tz.as_deref(),
+        link.as_deref().and_then(std::path::Path::to_str),
+        file.as_deref(),
+    )
+}
+
+/// [`local_zone`] with its inputs as arguments. Checked against Spark 4.2.0
+/// runs: a non-empty `TZ` decides alone (without a leading `:` or `posix/`)
+/// and is `GMT` when Java does not know it; else the zone `/etc/localtime`
+/// links to. Java compares a non-link `/etc/localtime` with the zoneinfo
+/// files; this reads `/etc/timezone` instead, else `UTC`. Java also asks libc
+/// for the offset of a `TZ` it does not know, so a POSIX `UTC+5` is
+/// `GMT-05:00` in Spark and `GMT` here.
+fn local_zone_from(tz: Option<&str>, link: Option<&str>, file: Option<&str>) -> String {
+    if let Some(tz) = tz.filter(|tz| !tz.is_empty()) {
+        let name = tz.strip_prefix(':').unwrap_or(tz);
+        let name = name.strip_prefix("posix/").unwrap_or(name);
+        return java_zone_id(name).unwrap_or_else(|| "GMT".to_owned());
+    }
+    link.and_then(|link| link.rsplit_once("zoneinfo/"))
+        .map(|(_, zone)| zone)
+        .or_else(|| file.map(str::trim))
+        .and_then(java_zone_id)
+        .unwrap_or_else(|| "UTC".to_owned())
+}
+
+/// The id Java's `TimeZone` gives `name`, when it knows it: a region or
+/// short id of the database as written (case matters), or `GMT` with an
+/// offset. Java reads no other offset spelling, unlike
+/// `spark.sql.session.timeZone`.
+fn java_zone_id(name: &str) -> Option<String> {
+    let accepted = SESSION_TIME_ZONE.parse(SESSION_TIME_ZONE.key, name).is_ok();
+    if !accepted || resolve_zone(name).is_err() {
+        return None;
+    }
+    let is_offset =
+        name == "Z" || (FixedOffset::parse(name).is_some() && name.contains(['+', '-']));
+    if !is_offset {
+        return Some(name.to_owned());
+    }
+    name.starts_with("GMT").then(|| zone_id(name))
 }
 
 /// The value of `key` in `config` as text: a registered entry (by its
@@ -121,7 +213,7 @@ impl RuntimeConf {
     /// ```
     #[must_use]
     pub fn get(&self, key: &str) -> Option<String> {
-        get(&self.store.snapshot(), key)
+        self.store.value(key)
     }
 
     /// Sets `key` to `value` for queries that start afterwards.
@@ -207,7 +299,7 @@ mod tests {
 
     use krishiv_common::config::Config;
 
-    use super::{ConfStore, get};
+    use super::{ConfStore, get, local_zone_from};
 
     #[test]
     fn a_snapshot_pairs_a_configuration_with_its_own_version() {
@@ -231,5 +323,73 @@ mod tests {
         }
         writer.join().unwrap();
         assert_eq!(store.versioned_snapshot().1, 2_000);
+    }
+
+    /// Every expected value comes from a Spark 4.2.0 run with that `TZ`.
+    #[test]
+    fn the_local_zone_is_the_one_java_picks() {
+        let tz = |tz| local_zone_from(Some(tz), Some("/x/zoneinfo/Asia/Dubai"), None);
+        for (input, expected) in [
+            ("Asia/Kolkata", "Asia/Kolkata"),
+            (":Asia/Tokyo", "Asia/Tokyo"),
+            ("posix/Asia/Tokyo", "Asia/Tokyo"),
+            ("UTC", "UTC"),
+            ("Etc/UTC", "Etc/UTC"),
+            ("PST", "PST"),
+            ("EST5EDT", "EST5EDT"),
+            ("GMT+5", "GMT+05:00"),
+            // Unknown to Java: `GMT`, never the system zone.
+            ("Mars/Base", "GMT"),
+            ("+05:30", "GMT"),
+            ("Z", "GMT"),
+            ("utc", "GMT"),
+            ("Asia/kolkata", "GMT"),
+            // An empty `TZ` is no `TZ`.
+            ("", "Asia/Dubai"),
+        ] {
+            assert_eq!(tz(input), expected, "TZ={input:?}");
+        }
+    }
+
+    #[test]
+    fn without_tz_the_local_zone_comes_from_the_system() {
+        let link = "/usr/share/zoneinfo/Europe/Berlin";
+        assert_eq!(local_zone_from(None, Some(link), None), "Europe/Berlin");
+        assert_eq!(
+            local_zone_from(None, Some("../usr/share/zoneinfo/Etc/UTC"), None),
+            "Etc/UTC"
+        );
+        assert_eq!(
+            local_zone_from(None, None, Some("Asia/Tokyo\n")),
+            "Asia/Tokyo"
+        );
+        assert_eq!(local_zone_from(None, Some("/opt/oddity"), None), "UTC");
+        assert_eq!(local_zone_from(None, None, Some("Mars/Base\n")), "UTC");
+        assert_eq!(local_zone_from(None, None, None), "UTC");
+    }
+
+    #[test]
+    fn an_unset_zone_is_local_for_queries_and_stays_unset_in_the_store() {
+        let store = ConfStore::with_local_zone(Config::default(), "Asia/Kolkata");
+        let key = "spark.sql.session.timeZone";
+        assert_eq!(store.value(key).as_deref(), Some("Asia/Kolkata"));
+        assert_eq!(
+            store.value("krishiv.sql.session.timeZone").as_deref(),
+            Some("Asia/Kolkata")
+        );
+        assert_eq!(get(&store.snapshot(), key), None);
+        assert_eq!(
+            get(&store.query_snapshot().0, key).as_deref(),
+            Some("Asia/Kolkata")
+        );
+        // A set zone wins, and `RESET` goes back to local.
+        store.update(|c| c.set(key, "+05:30").map(drop)).unwrap();
+        assert_eq!(store.value(key).as_deref(), Some("+05:30"));
+        assert_eq!(
+            get(&store.query_snapshot().0, key).as_deref(),
+            Some("+05:30")
+        );
+        store.reset_key(key);
+        assert_eq!(store.value(key).as_deref(), Some("Asia/Kolkata"));
     }
 }

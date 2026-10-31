@@ -285,7 +285,7 @@ fn csv_distinguishes_null_from_empty_and_zone_is_checked() {
         None,
     );
     assert_eq!(o.status.code(), Some(1));
-    assert!(err(&o).contains("not supported"), "{}", err(&o));
+    assert!(err(&o).contains("INVALID_TIMEZONE"), "{}", err(&o));
     let o = krishiv(
         &[
             "sql",
@@ -512,4 +512,54 @@ fn explain_flags_are_checked() {
     );
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("cannot be used with"), "{}", err(&o));
+}
+
+/// `krishiv sql` with `TZ` set on the process and an ordinary environment
+/// otherwise: the session default is read once per process.
+fn krishiv_in_zone(tz: &str, sql: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_krishiv"))
+        .args(["sql", "-o", "csv", "-e", sql])
+        .env("TZ", tz)
+        .output()
+        .expect("run krishiv")
+}
+
+/// An unset session zone is the machine's zone, as in Spark: `current_timezone`,
+/// `SET`, casts and printed timestamps agree, at each instant's own offset.
+#[test]
+fn the_default_session_zone_is_the_machines() {
+    let o = krishiv_in_zone(
+        "Europe/Berlin",
+        "select current_timezone() as z, \
+                cast('2024-01-01 10:00:00' as timestamp) as winter, \
+                cast('2024-07-01 10:00:00' as timestamp) as summer, \
+                unix_timestamp(timestamp'2024-07-01 10:00:00') as u",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    // 1719820800 is what Spark 4.2.0 gives in this zone.
+    assert_eq!(
+        out(&o),
+        "z,winter,summer,u\nEurope/Berlin,2024-01-01 10:00:00,2024-07-01 10:00:00,1719820800\n"
+    );
+
+    let o = krishiv_in_zone("Asia/Kolkata", "set spark.sql.session.timeZone");
+    assert_eq!(
+        out(&o),
+        "key,value\nspark.sql.session.timeZone,Asia/Kolkata\n"
+    );
+    let o = krishiv_in_zone("Mars/Base", "select current_timezone() as z");
+    assert_eq!(out(&o), "z\nGMT\n");
+
+    // A set zone wins, and `SET TIME ZONE LOCAL` and `RESET` return to the default.
+    let o = krishiv_in_zone(
+        "Asia/Kolkata",
+        "set time zone '+01:00'; \
+         select timestamp'2024-01-01 10:00:00' as a, current_timezone() as z; \
+         set time zone local; \
+         select current_timezone() as z",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let text = out(&o);
+    assert!(text.contains("2024-01-01 10:00:00,+01:00"), "{text}");
+    assert!(text.ends_with("z\nAsia/Kolkata\n"), "{text}");
 }
