@@ -12,7 +12,8 @@ re-exports it; the Python facade and the Connect and Flight SQL servers (L6) wra
 Paths are relative to this crate.
 - `src/lib.rs` public entry and re-exports; `public-api.txt` the reviewed public surface
 - `src/session.rs` `Session` and the query pipeline entry
-- `src/conf.rs` configuration snapshot taken per query
+- `src/conf.rs` configuration snapshot taken per query (`query_snapshot`, where an unset session time zone is the local zone;
+  `snapshot` is the stored configuration, which `SET` lists); `local_zone` reads the machine's zone as Java does
 - `src/catalog.rs` session catalog (temporary tables and views)
 - `src/view_schema.rs` schema binding modes of permanent views (`WITH SCHEMA BINDING|COMPENSATION|TYPE EVOLUTION|EVOLUTION`, Spark's `ViewSchemaMode`): the read projection per mode, the checks against the analyzed view query, the evolved schema stored after analysis; `tests/views_schema_binding.rs`
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API

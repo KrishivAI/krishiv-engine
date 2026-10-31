@@ -155,6 +155,8 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         user: env.user.to_string(),
         legacy_statistical_aggregate: env.legacy_statistical_aggregate,
         map_key_dedup_last_win: env.map_key_dedup_last_win.then_some(true),
+        legacy_java_charsets: env.legacy_java_charsets.then_some(true),
+        legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
     }
 }
 

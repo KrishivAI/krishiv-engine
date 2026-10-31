@@ -235,6 +235,24 @@ fn avro_entries_parse_and_default() {
 }
 
 #[test]
+fn legacy_charset_switches_parse_and_default() {
+    for (alias, entry) in [
+        ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+        (
+            "spark.sql.legacy.codingErrorAction",
+            &LEGACY_CODING_ERROR_ACTION,
+        ),
+    ] {
+        let mut c = Config::default();
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
+        c.set(alias, "true").unwrap();
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(true));
+        assert!(c.set(alias, "sometimes").is_err());
+        assert_eq!(lookup(alias).map(|e| e.key), Some(entry.key));
+    }
+}
+
+#[test]
 fn map_key_dedup_policy_parses_and_defaults() {
     let mut c = Config::new();
     assert_eq!(
