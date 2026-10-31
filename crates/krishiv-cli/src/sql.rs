@@ -10,7 +10,7 @@ use crate::deadline::Deadline;
 use crate::format::{OutputMode, render_mode};
 use clap::{Args, ValueEnum};
 use krishiv::DataFrame;
-use krishiv::agent::{cell, session_tz_micros};
+use krishiv::agent::{cell, session_zone};
 use krishiv::arrow::array::Array;
 use krishiv::arrow::datatypes::DataType;
 
@@ -523,7 +523,7 @@ fn print_agent_result(
         let _ = out.flush();
         describe(stmt.text, stmt.line_offset, e)
     };
-    let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
+    let zone = session_zone(session.conf().get("spark.sql.session.timeZone").as_deref())?;
     let max_rows = args.max_rows.unwrap_or(DEFAULT_MAX_ROWS);
     let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| fail(out, &e))?;
     let schema = futures::executor::block_on(df.schema()).map_err(|e| fail(out, &e))?;
@@ -556,7 +556,7 @@ fn print_agent_result(
             limits: &limits,
             elapsed_ms,
             query_id: Some(stmt.query_id),
-            tz_micros: tz,
+            zone: &zone,
             stop,
         },
     );
@@ -605,7 +605,7 @@ fn collect_rows(
 ) -> Result<Collected, String> {
     use futures::StreamExt as _;
 
-    let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
+    let zone = session_zone(session.conf().get("spark.sql.session.timeZone").as_deref())?;
     let schema = futures::executor::block_on(df.schema()).map_err(|e| e.to_string())?;
     // Streams and stops at the cap, so a huge result is never buffered: dropping the stream cancels the query.
     let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| e.to_string())?;
@@ -651,7 +651,7 @@ fn collect_rows(
             rows.push(
                 b.columns()
                     .iter()
-                    .map(|c| cell(c.as_ref(), r, "NULL", tz))
+                    .map(|c| cell(c.as_ref(), r, "NULL", &zone))
                     .collect(),
             );
             nulls.push(b.columns().iter().map(|c| c.is_null(r)).collect());
@@ -782,7 +782,7 @@ mod tests {
             rows.push(
                 b.columns()
                     .iter()
-                    .map(|c| cell(c.as_ref(), r, "NULL", 0))
+                    .map(|c| cell(c.as_ref(), r, "NULL", &session_zone(None).unwrap()))
                     .collect(),
             );
             nulls.push(b.columns().iter().map(|c| c.is_null(r)).collect());

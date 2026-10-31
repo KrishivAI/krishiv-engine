@@ -57,7 +57,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
-use krishiv_common::config::Config;
+use krishiv_common::config::{Config, SESSION_TIME_ZONE};
 use krishiv_common::error::KrishivError;
 use krishiv_exec::{ExecutorConfig, Metric, QueryMetrics, TokioExecutor};
 use krishiv_session::{DataFrame, Session};
@@ -265,9 +265,11 @@ impl Runner {
         if let Some(w) = warnings.first() {
             return Err(RunnerError::Config(format!("--conf not applied: {w}")));
         }
+        // A fixed zone: results and timings must not depend on the machine's zone.
         let mut builder = Session::builder()
             .executor(executor)
-            .config("krishiv.memory.limit", config.memory_limit.as_str());
+            .config("krishiv.memory.limit", config.memory_limit.as_str())
+            .config(SESSION_TIME_ZONE.key, "UTC");
         for (k, v) in &config.conf {
             builder = builder.config(k.as_str(), v.as_str());
         }

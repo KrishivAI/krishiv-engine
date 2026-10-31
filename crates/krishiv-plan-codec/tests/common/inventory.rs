@@ -39,6 +39,8 @@ pub(crate) fn env() -> ExprEnv {
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
         map_key_dedup_last_win: false,
+        legacy_java_charsets: false,
+        legacy_coding_error_action: false,
     }
 }
 
@@ -1406,6 +1408,10 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
+    out.push((
+        "legacy_charset_switches".to_owned(),
+        legacy_charset_switches(),
+    ));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
@@ -1420,6 +1426,17 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
 fn map_key_dedup_policy() -> PhysicalPlan {
     let env = ExprEnv {
         map_key_dedup_last_win: true,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose environment turns on both legacy charset switches.
+fn legacy_charset_switches() -> PhysicalPlan {
+    let env = ExprEnv {
+        legacy_java_charsets: true,
+        legacy_coding_error_action: true,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);

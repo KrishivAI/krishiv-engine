@@ -1326,6 +1326,8 @@ mod tests {
                 query_start_micros: 0,
                 user: Arc::from("u"),
                 map_key_dedup_last_win: false,
+                legacy_java_charsets: false,
+                legacy_coding_error_action: false,
             },
         );
         let worker = super::WorkerContext::new(Arc::new(crate::planner::MemoryTables::new()));
