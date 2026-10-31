@@ -587,6 +587,13 @@ pub(super) fn rows() -> Vec<Row> {
             "make_date",
             "year: ColumnOrName, month: ColumnOrName, day: ColumnOrName",
         ),
+        Row::new("timestamp_seconds", "col: ColumnOrName"),
+        Row::new("timestamp_millis", "col: ColumnOrName"),
+        Row::new("timestamp_micros", "col: ColumnOrName"),
+        Row::new("unix_seconds", "col: ColumnOrName"),
+        Row::new("unix_millis", "col: ColumnOrName"),
+        Row::new("unix_micros", "col: ColumnOrName"),
+        Row::new("date_from_unix_date", "col: ColumnOrName"),
         Row::new(
             "months_between",
             "date1: ColumnOrName, date2: ColumnOrName, roundOff: bool = True",

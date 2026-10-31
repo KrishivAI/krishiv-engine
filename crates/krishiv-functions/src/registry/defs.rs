@@ -215,6 +215,11 @@ fn make_date_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Date, !c.ansi() || c.any_nullable()))
 }
 
+/// A `DATE` that is NULL when an argument is.
+fn date_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Date, c)
+}
+
 fn clock_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Date, false))
 }
@@ -455,6 +460,13 @@ fn convert_timezone_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     }
 }
 
+/// `timestamp_seconds`: a float or double NaN or infinity is NULL, so the
+/// result may be null whatever the arguments.
+fn timestamp_seconds_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let float = matches!(c.data_type(0), Some(DataType::Float | DataType::Double));
+    Ok(ArgType::new(DataType::Timestamp, float || c.any_nullable()))
+}
+
 fn timestamp_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Timestamp, c)
 }
@@ -691,6 +703,34 @@ fn datetime() -> Vec<Spec> {
         int,
     ));
     // `UnixDate` expects a date and casts nothing else to one.
+    // `timestamp_seconds` takes any number; `timestamp_millis` and
+    // `timestamp_micros` an integral type, nothing implicit (a string or a
+    // decimal is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`).
+    out.extend(scalar(
+        &["timestamp_seconds"],
+        &Inputs::Expects(vec![InputType::Numeric { intervals: false }]),
+        timestamp_seconds_result,
+    ));
+    out.extend(scalar(
+        &["timestamp_millis", "timestamp_micros"],
+        &Inputs::Expects(vec![InputType::StrictOneOf(vec![
+            DataType::Byte,
+            DataType::Short,
+            DataType::Integer,
+            DataType::Long,
+        ])]),
+        timestamp_result,
+    ));
+    out.extend(scalar(
+        &["unix_seconds", "unix_millis", "unix_micros"],
+        &Inputs::Expects(vec![InputType::Strict(DataType::Timestamp)]),
+        long,
+    ));
+    out.extend(scalar(
+        &["date_from_unix_date"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        date_result,
+    ));
     out.extend(scalar(
         &["unix_date"],
         &Inputs::Expects(vec![InputType::Strict(DataType::Date)]),
