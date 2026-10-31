@@ -35,9 +35,13 @@ __all__ = [
     "array",
     "array_append",
     "array_compact",
+    "array_contains",
+    "array_distinct",
     "array_insert",
     "array_prepend",
     "array_size",
+    "array_union",
+    "arrays_zip",
     "ascii",
     "asin",
     "asinh",
@@ -267,6 +271,7 @@ __all__ = [
     "sinh",
     "size",
     "skewness",
+    "sort_array",
     "soundex",
     "spark_partition_id",
     "split",
@@ -394,6 +399,16 @@ def array_compact(col: ColumnOrName) -> Column:
     return _call("array_compact", _named(col, "col"))
 
 
+def array_contains(col: ColumnOrName, value: Any) -> Column:
+    """Calls the registry function ``array_contains``."""
+    return _call("array_contains", _named(col, "col"), _lit(value, "value"))
+
+
+def array_distinct(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_distinct``."""
+    return _call("array_distinct", _named(col, "col"))
+
+
 def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column:
     """Calls the registry function ``array_insert``."""
     return _call("array_insert", _named(arr, "arr"), _int_or_col(pos, "pos"), _lit(value, "value"))
@@ -407,6 +422,16 @@ def array_prepend(col: ColumnOrName, value: Any) -> Column:
 def array_size(col: ColumnOrName) -> Column:
     """Calls the registry function ``array_size``."""
     return _call("array_size", _named(col, "col"))
+
+
+def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``array_union``."""
+    return _call("array_union", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def arrays_zip(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``arrays_zip``."""
+    return _call("arrays_zip", *_cols(cols))
 
 
 def ascii(col: ColumnOrName) -> Column:
@@ -1623,6 +1648,11 @@ def size(col: ColumnOrName) -> Column:
 def skewness(col: ColumnOrName) -> Column:
     """Calls the registry function ``skewness``."""
     return _call("skewness", _named(col, "col"))
+
+
+def sort_array(col: ColumnOrName, asc: bool = True) -> Column:
+    """Calls the registry function ``sort_array``."""
+    return _call("sort_array", _named(col, "col"), _lit(asc, "asc"))
 
 
 def soundex(col: ColumnOrName) -> Column:

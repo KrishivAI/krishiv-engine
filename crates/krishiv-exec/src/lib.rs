@@ -133,10 +133,10 @@ pub use operator::{
 };
 pub use operators::{
     DEFAULT_MAX_MERGE_FAN_IN, Expand, FileScan, FileScanMetrics, FileScanSource, FileSelections,
-    FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN,
-    MemoryScan, NullOf, Predicate, Project, ProjectItem, PushedFilter, ReplicateRows,
-    RowStageSettings, RuntimeFilters, ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey,
-    SortMetrics, TopN, UnionAlign,
+    FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Generate, Limit,
+    METADATA_COLUMN, MemoryScan, NullOf, Predicate, Project, ProjectItem, PushedFilter,
+    ReplicateRows, RowStageSettings, RuntimeFilters, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
+    SortKey, SortMetrics, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

@@ -718,9 +718,9 @@ fn set_time_zone_sets_the_session_zone() {
         s.conf().get("spark.sql.session.timeZone").as_deref(),
         Some(found[0][1].as_str())
     );
-    // An invalid zone fails through the session configuration.
+    // An invalid zone fails as Spark's time zone check does.
     let e = block_on(s.sql("SET TIME ZONE 'not a zone!'")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    assert_eq!(e.error_class(), ErrorClass::InvalidConfValueTimeZone);
     // `INTERVAL` zones name their unsupported form.
     let e = block_on(s.sql("SET TIME ZONE INTERVAL '1' DAY")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);

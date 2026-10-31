@@ -278,6 +278,26 @@ impl Encoder {
                 count: self.expr(count)?,
                 subqueries: self.subqueries(subqueries)?,
             }),
+            PhysNode::Generate {
+                input,
+                layout: l,
+                kind,
+                outer,
+                arg,
+                subqueries,
+            } => Kind::Generate(pb::GenerateNode {
+                input: self.node_index(input)?,
+                layout: layout(l),
+                kind: match kind {
+                    krishiv_plan::GeneratorKind::Explode => pb::GeneratorKind::Explode,
+                    krishiv_plan::GeneratorKind::PosExplode => pb::GeneratorKind::PosExplode,
+                    krishiv_plan::GeneratorKind::Inline => pb::GeneratorKind::Inline,
+                }
+                .into(),
+                outer: *outer,
+                arg: self.expr(arg)?,
+                subqueries: self.subqueries(subqueries)?,
+            }),
             PhysNode::Sort { input, keys } => Kind::Sort(pb::SortNode {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),

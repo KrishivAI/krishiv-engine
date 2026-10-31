@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "sort_array#6c65e4a78522/ansi_on",
+      "reason": "SELECT sort_array(array('b', 'd', null, 'c', 'a'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "sort_array#6c65e4a78522/ansi_off",
+      "reason": "SELECT sort_array(array('b', 'd', null, 'c', 'a'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "sort_array#77c94c888b83/ansi_on",
+      "reason": "SELECT sort_array(INTERVAL '1-2' YEAR TO MONTH, true) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "sort_array#77c94c888b83/ansi_off",
+      "reason": "SELECT sort_array(INTERVAL '1-2' YEAR TO MONTH, true) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "sort_array#9df0a24b2a17/ansi_on",
+      "reason": "SELECT sort_array(array('b', 'd', null, 'c', 'a'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "sort_array#9df0a24b2a17/ansi_off",
+      "reason": "SELECT sort_array(array('b', 'd', null, 'c', 'a'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "sort_array#e07d775c6a44/ansi_on",
+      "reason": "SELECT sort_array(INTERVAL '1 02:03:04' DAY TO SECOND, true) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "sort_array#e07d775c6a44/ansi_off",
+      "reason": "SELECT sort_array(INTERVAL '1 02:03:04' DAY TO SECOND, true) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "sort_array"
+}

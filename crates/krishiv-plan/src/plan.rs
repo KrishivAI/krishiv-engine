@@ -372,6 +372,36 @@ pub enum PlanNode {
         /// The argument expressions.
         args: Vec<Arc<Expr>>,
     },
+    /// A generator over `input` (Spark's `Generate`): every input row, with
+    /// the generator's columns after the input's, once per element of
+    /// `arg` (an array, or a map for `explode` and `posexplode`). Resolved,
+    /// `arg` is a column of `input` that is not part of the output (see
+    /// [`generator_arg`]); the analyzer computes the argument in a projection
+    /// below when it is an expression. With
+    /// `outer`, a row whose argument is NULL or empty is kept once, with
+    /// NULL generated columns; without, it is dropped. Resolved plans only.
+    Generate {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// What is generated.
+        kind: GeneratorKind,
+        /// Keep a row whose argument produces no element (`explode_outer`).
+        outer: bool,
+        /// The argument, evaluated over the input.
+        arg: Arc<Expr>,
+        /// The generated columns, in order, with analyzer-assigned ids.
+        /// Empty in the unresolved form that lowering builds (see
+        /// [`Self::names`](PlanNode::Generate)); the analyzer fills it.
+        output: Vec<BoundColumn>,
+        /// Unresolved form only: the column names written after `AS`
+        /// (`LATERAL VIEW explode(a) t AS x`), empty for the generator's
+        /// default names (`col`, `pos`, `key`, `value`, the struct's field
+        /// names).
+        names: Vec<String>,
+        /// Unresolved form only: the alias that qualifies the generated
+        /// columns (`t` in `LATERAL VIEW explode(a) t AS x`).
+        qualifier: Option<String>,
+    },
     /// `range(start, end, step, numSlices)` (Spark's `Range`): the
     /// `id BIGINT NOT NULL` values `start, start + step, ...` below
     /// `end` (above for a negative step). Resolved plans only. `start`
@@ -392,6 +422,44 @@ pub enum PlanNode {
         /// analyzer-assigned id.
         output: BoundColumn,
     },
+}
+
+/// The attribute a resolved generator reads: its argument is always a
+/// column of its input, which the generator does not carry to its output
+/// (so an exploded array is not copied once per element).
+#[must_use]
+pub fn generator_arg(arg: &Expr) -> Option<AttrId> {
+    match &arg.node {
+        crate::ExprNode::Resolved(crate::ResolvedExpr::Column(c)) => Some(c.id),
+        _ => None,
+    }
+}
+
+/// What a [`PlanNode::Generate`] produces for each element of its argument
+/// (Spark's `Explode`, `PosExplode` and `Inline` generators).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GeneratorKind {
+    /// `explode`: a row per array element (`col`), or per map entry (`key`,
+    /// `value`).
+    Explode,
+    /// `posexplode`: as `explode` with the 0-based position first (`pos`).
+    PosExplode,
+    /// `inline`: a row per struct of an array of structs, one column per
+    /// field.
+    Inline,
+}
+
+impl GeneratorKind {
+    /// The function name Spark shows for the generator (`explode`,
+    /// `posexplode`, `inline`; `_outer` is added by the caller).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Explode => "explode",
+            Self::PosExplode => "posexplode",
+            Self::Inline => "inline",
+        }
+    }
 }
 
 /// One value of a [`PlanNode::Pivot`]: one expression per pivot column,
@@ -759,6 +827,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
+            | PlanNode::Generate { input, .. }
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
@@ -799,6 +868,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
+            | PlanNode::Generate { input, .. }
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
@@ -867,6 +937,7 @@ impl LogicalPlan {
             },
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
+            PlanNode::Generate { arg, .. } => f(arg),
             PlanNode::Pivot {
                 pivot_columns,
                 values,
@@ -947,6 +1018,7 @@ impl LogicalPlan {
                 JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
+            PlanNode::Generate { arg, .. } => f(arg),
             PlanNode::Expand { projections, .. } => {
                 projections.iter_mut().flatten().for_each(f);
             }
@@ -1038,6 +1110,17 @@ impl LogicalPlan {
                 }
                 PlanNode::OneRowRelation => return Some(Vec::new()),
                 PlanNode::Expand { output, .. } => return Some(output.clone()),
+                PlanNode::Generate {
+                    input, arg, output, ..
+                } => {
+                    let mut out = input.resolved_output()?;
+                    // The argument column is read, not carried.
+                    if let Some(id) = generator_arg(arg) {
+                        out.retain(|c| c.id != id);
+                    }
+                    out.extend(output.iter().cloned());
+                    return Some(out);
+                }
                 PlanNode::Range { output, .. } => return Some(vec![output.clone()]),
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),

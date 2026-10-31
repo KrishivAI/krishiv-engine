@@ -17,7 +17,7 @@ SELECT * FROM VALUES (1) AS v(a)
 SELECT * FROM range(3)
   => Project [*] | +- TableFunction range [3] | 
 SELECT a FROM t LATERAL VIEW explode(b) x AS y
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL VIEW is not supported by Krishiv yet. SQLSTATE: 0A000 @ 9..46
+  => Project [a] | +- Generate explode(b), false, [] |    +- Read t | 
 SELECT row_number() OVER (ORDER BY a) FROM t
   => Project [row_number() OVER (ORDER BY a ASC NULLS FIRST)] | +- Read t | 
 SELECT a FROM t GROUP BY ROLLUP (a)
@@ -121,7 +121,7 @@ FROM t SELECT a UNION SELECT b
 WITH RECURSIVE c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature recursive CTEs is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..59
 SELECT explode(a) AS (x, y) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature multi-name aliases is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..27
+  => Project [__krishiv_generate_0.*] | +- Generate explode(a), false, [] |    +- Read t | 
 SELECT * FROM t JOIN LATERAL (SELECT a) s
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL joins is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..41
 SELECT * FROM t WITH (k = true, n = 2) RIGHT JOIN (SELECT a FROM u) USING (a)

@@ -32,7 +32,7 @@ fn set(s: &Session, on: bool) {
 fn a_negative_position_follows_the_switch() {
     let s = Session::new().unwrap();
     type Items = &'static [Option<i32>];
-    let cases: [(&str, Items, Items); 6] = [
+    let cases: [(&str, Items, Items); 8] = [
         (
             "array_insert(array(1,3,4), -1, 9)",
             &[Some(1), Some(3), Some(9), Some(4)],
@@ -59,6 +59,16 @@ fn a_negative_position_follows_the_switch() {
             &[Some(1), Some(2), Some(3), None, Some(4)],
         ),
         ("array_insert(array(), -1, 9)", &[Some(9), None], &[Some(9)]),
+        (
+            "array_insert(array(), -3, 9)",
+            &[Some(9), None, None, None],
+            &[Some(9), None, None],
+        ),
+        (
+            "array_insert(array(1), -3, 9)",
+            &[Some(9), None, None, Some(1)],
+            &[Some(9), None, Some(1)],
+        ),
     ];
     for on in [true, false] {
         set(&s, on);
