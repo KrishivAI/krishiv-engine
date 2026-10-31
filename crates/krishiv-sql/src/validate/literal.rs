@@ -313,9 +313,7 @@ fn time(s: &str) -> bool {
         None => true,
         Some(sec) => {
             let (whole, fraction) = sec.split_once('.').unwrap_or((sec, ""));
-            number(whole).is_some_and(|s| s < 60)
-                && fraction.len() <= 9
-                && fraction.bytes().all(|b| b.is_ascii_digit())
+            number(whole).is_some_and(|s| s < 60) && fraction.bytes().all(|b| b.is_ascii_digit())
         }
     };
     let hour_ok = if meridiem {

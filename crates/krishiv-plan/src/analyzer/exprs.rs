@@ -2944,6 +2944,7 @@ impl Resolver<'_> {
                 | DataType::Long
                 | DataType::Decimal(_)
                 | DataType::Date
+                | DataType::Time { .. }
                 | DataType::TimestampNtz
                 | DataType::Boolean
                 | DataType::Binary
