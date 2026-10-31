@@ -1522,16 +1522,28 @@ impl Lowerer {
                     return Err(unsupported("table-valued functions", tf.span));
                 }
                 for a in args {
-                    if a.name.is_some() {
-                        return Err(unsupported("table-valued functions", a.span));
-                    }
                     if matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)) {
                         return Err(unsupported("table-valued functions", a.span));
                     }
                 }
+                // A named argument (`f(x => 1)`) travels as an `Alias`; the
+                // analyzer binds it for a SQL-bodied function and refuses it
+                // for any other table function.
                 let lowered = args
                     .iter()
-                    .map(|a| self.arg(&a.expr))
+                    .map(|a| {
+                        let value = self.arg(&a.expr)?;
+                        Ok(match &a.name {
+                            Some(n) => Arc::new(self.ex(
+                                ExprNode::Alias {
+                                    expr: value,
+                                    name: n.value.clone(),
+                                },
+                                a.span,
+                            )),
+                            None => value,
+                        })
+                    })
                     .collect::<R<Vec<_>>>()?;
                 // A generator as a table: `FROM explode(array(1, 2))`
                 // generates from one empty row.
@@ -1547,6 +1559,9 @@ impl Lowerer {
                     _ => None,
                 };
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
+                    if let Some(a) = args.iter().find(|a| a.name.is_some()) {
+                        return Err(unsupported("table-valued functions", a.span));
+                    }
                     let [arg] = &lowered[..] else {
                         return Err(err(
                             WrongNumArgsWithoutSuggestion {

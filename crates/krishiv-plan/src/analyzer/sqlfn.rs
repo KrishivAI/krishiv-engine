@@ -404,8 +404,23 @@ impl Resolver<'_> {
             return Err(AnalysisError::new(FailedToParseTooComplex {}, o));
         }
         self.sql_calls += 1;
+        // Named arguments arrive as aliases (see the SQL lowering).
+        let mut arg_names = Vec::with_capacity(args.len());
+        let args: Vec<Arc<Expr>> = args
+            .iter()
+            .map(|a| match &a.node {
+                ExprNode::Alias { expr, name } => {
+                    arg_names.push(Some(name.clone()));
+                    Arc::clone(expr)
+                }
+                _ => {
+                    arg_names.push(None);
+                    Arc::clone(a)
+                }
+            })
+            .collect();
         let mut kids = Vec::with_capacity(args.len());
-        for a in args {
+        for a in &args {
             let mut cx = Self::cx(&[], &[], env, "Project");
             cx.outer = false;
             kids.push(self.bind(a, &cx)?);
@@ -414,8 +429,8 @@ impl Resolver<'_> {
             within_group: Vec::new(),
             name: def.name.clone(),
             qualifier: def.qualifier.clone(),
-            args: args.to_vec(),
-            arg_names: vec![None; args.len()],
+            args,
+            arg_names,
             distinct: false,
             filter: None,
         };
