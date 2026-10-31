@@ -303,13 +303,17 @@ enum Conditional {
     ZeroIfNull,
     /// `nanvl(a, b)`: both sides are `float`/`double` already.
     Nanvl,
+    /// `decode(expr, search, result, ...)`: a `CASE` over null-safe
+    /// equality (the two-argument form is the charset decoder, a function).
+    Decode,
 }
 
 impl Conditional {
     /// Which conditional `name` is, ASCII case-insensitively (function
     /// names are); `None` for any other function, `coalesce` included.
-    fn of(name: &str) -> Option<Self> {
+    fn of(name: &str, args: usize) -> Option<Self> {
         Some(match name.to_ascii_lowercase().as_str() {
+            "decode" if args >= 3 => Self::Decode,
             "if" => Self::If,
             "nvl" | "ifnull" => Self::Coalesce,
             "nvl2" => Self::Nvl2,
@@ -2006,18 +2010,8 @@ impl Resolver<'_> {
                 // conditional (`session.nvl`, `system.session.nvl`, ...) runs
                 // the UDF, while a bare `nvl` runs the built-in (which wins
                 // the search path).
-                // `decode(expr, search, result, ...)` is a CASE; the two-argument
-                // form is the charset decoder and stays a function.
                 if is_builtin_entry(&entry)
-                    && lookup_name.eq_ignore_ascii_case("decode")
-                    && n >= 3
-                    && kids.len() == n
-                    && !f.distinct
-                {
-                    return self.decode_case(e, kids);
-                }
-                if is_builtin_entry(&entry)
-                    && let Some(which) = Conditional::of(lookup_name)
+                    && let Some(which) = Conditional::of(lookup_name, n)
                 {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
@@ -3834,6 +3828,9 @@ impl Resolver<'_> {
         kids: &[Bound],
     ) -> Result<Bound, AnalysisError> {
         let n = f.args.len();
+        if matches!(which, Conditional::Decode) {
+            return self.decode_case(e, &kids[..n]);
+        }
         // The arity and the input checks quote the call as written.
         let (mut call_kids, ty) = self.typed_call(entry, e, &kids[..n])?;
         call_kids.extend(kids.get(n).cloned());
@@ -3967,6 +3964,7 @@ impl Resolver<'_> {
                     call_kids.get(n).map(|k| Arc::clone(&k.expr)),
                 )
             }
+            Conditional::Decode => return self.decode_case(e, &kids[..n]),
         };
         let mut lateral: Vec<AttrId> = Vec::new();
         for id in kids.iter().flat_map(|k| k.lateral.iter()) {
