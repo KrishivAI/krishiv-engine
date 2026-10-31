@@ -230,6 +230,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-ord"
+version = "60.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a7ac2c6a9cdc782fa9548d3763461eaec8c93347e297fddbaa44807e70a3698"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cmp",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select",
+]
+
+[[package]]
 name = "arrow-row"
 version = "60.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -264,6 +278,23 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "num-traits",
+]
+
+[[package]]
+name = "arrow-string"
+version = "60.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f300b4400b1e7cd58f7cbbd5dd2a0072cc59e73bfaee2a152b3ac660e46d9dd1"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select",
+ "memchr",
+ "num-traits",
+ "regex",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -1858,6 +1889,7 @@ dependencies = [
  "krishiv",
  "krishiv-alloc",
  "krishiv-common",
+ "krishiv-functions",
  "krishiv-memory",
  "krishiv-server",
  "krishiv-sql",
@@ -1998,7 +2030,9 @@ dependencies = [
  "object_store",
  "parquet",
  "proptest",
+ "rustix",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "twox-hash",
@@ -2010,8 +2044,10 @@ version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-ord",
  "arrow-schema",
  "arrow-select",
+ "arrow-string",
  "codspeed-criterion-compat",
  "jiff",
  "krishiv-common",
@@ -2170,6 +2206,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "twox-hash",
 ]
 
 [[package]]

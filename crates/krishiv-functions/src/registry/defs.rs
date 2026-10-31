@@ -4,13 +4,14 @@
 //! Arity, determinism and availability come from Spark's catalog.
 
 use krishiv_common::error::{
-    DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchUnexpectedInputType, DatatypeMismatchValueOutOfRange, InvalidExtractField,
+    DatatypeMismatchDataDiffTypes, DatatypeMismatchInvalidOrderingType,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
+    DatatypeMismatchUnsupportedInputType, DatatypeMismatchValueOutOfRange, InvalidExtractField,
     InvalidParameterValueBoolean, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210,
     NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DecimalType};
 
 use super::{Aggregate, Execution};
 use crate::signature::{
@@ -965,10 +966,238 @@ fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     min_max(c)
 }
 
+/// `collect_list(x)`, `collect_set(x)`, `array_agg(x)`: an array of the
+/// input's type, never NULL (an empty group is `[]`; NULL elements are
+/// skipped by the executor). Spark names `array_agg`'s column
+/// `collect_list(...)`, so the analyzer resolves it as `collect_list`
+/// (see `krishiv_plan::analyzer`).
+fn collect(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let element = c.data_type(0).cloned().unwrap_or(DataType::Null);
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(element, false).into()),
+        false,
+    ))
+}
+
+/// Whether `t` is or contains a map at any depth.
+fn has_map(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => true,
+        DataType::Array(a) => has_map(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| has_map(f.data_type())),
+        _ => false,
+    }
+}
+
+/// `collect_set(x)`: as [`collect`], but Spark refuses an input that
+/// contains a map at any depth (`DATATYPE_MISMATCH.UNSUPPORTED_INPUT_TYPE`),
+/// as a map has no equality to deduplicate by.
+fn collect_set(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if let Some(t) = c.data_type(0).filter(|t| has_map(t)) {
+        return Err(DatatypeMismatchUnsupportedInputType {
+            sql_expr: format!("\"collect_set({})\"", c.sql(0).unwrap_or_default()),
+            function_name: "`collect_set`".to_owned(),
+            data_type: format!("\"{}\"", t.sql()),
+        }
+        .into());
+    }
+    collect(c)
+}
+
+/// `vector_sum(x)` / `vector_avg(x)`: element-wise aggregates over
+/// `ARRAY<FLOAT>` only. Any other type is Spark's
+/// `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (no implicit cast is
+/// declared, so the check below sees the written type, as `ntile`'s
+/// bucket check does). The result is an array of `float`, NULL for no
+/// non-NULL vector.
+fn vector(c: &CallTypes<'_>, name: &str) -> Result<ArgType, KrishivError> {
+    let is_floats = matches!(
+        c.data_type(0),
+        Some(DataType::Array(a)) if *a.element_type() == DataType::Float
+    );
+    if !is_floats {
+        let input = c
+            .data_type(0)
+            .map_or_else(|| "VOID".to_owned(), DataType::sql);
+        let sql = |i: usize| c.sql(i).unwrap_or_default();
+        return Err(DatatypeMismatchUnexpectedInputType {
+            sql_expr: format!("\"{name}({})\"", sql(0)),
+            param_index: "first".to_owned(),
+            required_type: "\"ARRAY<FLOAT>\"".to_owned(),
+            input_sql: format!("\"{}\"", sql(0)),
+            input_type: format!("\"{input}\""),
+        }
+        .into());
+    }
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(DataType::Float, false).into()),
+        true,
+    ))
+}
+
+fn vector_sum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    vector(c, "vector_sum")
+}
+
+fn vector_avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    vector(c, "vector_avg")
+}
+
+/// `bit_and`, `bit_or`, `bit_xor` over `TINYINT` .. `BIGINT`: the result
+/// is the input type (NULL for no input). Any other type is Spark's
+/// `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (no implicit cast is
+/// declared, so the check below sees the written type, as `ntile`'s
+/// bucket check and `vector` do). The analyzer calls this for aggregate
+/// bit operations only; the scalar bitwise operators live in
+/// `bitwise.rs`.
+fn bit(c: &CallTypes<'_>, name: &str) -> Result<ArgType, KrishivError> {
+    let integral = matches!(
+        c.data_type(0),
+        Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long,)
+    );
+    if !integral {
+        let input = c
+            .data_type(0)
+            .map_or_else(|| "VOID".to_owned(), DataType::sql);
+        let sql = |i: usize| c.sql(i).unwrap_or_default();
+        return Err(DatatypeMismatchUnexpectedInputType {
+            sql_expr: format!("\"{name}({})\"", sql(0)),
+            param_index: "first".to_owned(),
+            required_type: "\"BYTE\", \"SHORT\", \"INT\" or \"BIGINT\"".to_owned(),
+            input_sql: format!("\"{}\"", sql(0)),
+            input_type: format!("\"{input}\""),
+        }
+        .into());
+    }
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Integer),
+        true,
+    ))
+}
+
+fn bit_and(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    bit(c, "bit_and")
+}
+
+fn bit_or(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    bit(c, "bit_or")
+}
+
+fn bit_xor(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    bit(c, "bit_xor")
+}
+
+/// `mode(col)`: the most frequent non-NULL value, of the input's type.
+/// The analyzer types the `mode(col, deterministic)` and
+/// `mode() WITHIN GROUP (ORDER BY col)` forms itself (this rule only
+/// types the plain call, where the argument is the value); the executor
+/// breaks ties as Spark does.
+fn mode(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    min_max(c)
+}
+
+/// `regr_count(y, x)`: the number of non-NULL pairs, a non-NULL `BIGINT`.
+fn regr_count(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, false))
+}
+
+/// `listagg(expr[, delimiter])` / `string_agg`: the concatenation of the
+/// non-NULL values, of the value's type (`STRING` or `BINARY`; NULL for
+/// no input). The delimiter is implicitly cast to the value's type by the
+/// declared inputs; a non-foldable delimiter is Spark's
+/// `NON_FOLDABLE_INPUT`, and one that cannot cast to the value's type (a
+/// string delimiter for binary values) Spark's `DATA_DIFF_TYPES`, after
+/// Spark's `checkForSameTypeInputExpr`. A NULL delimiter reads as empty;
+/// the analyzer fills a missing one with NULL, so the call always shows
+/// it.
+fn listagg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let sql = |i: usize| c.sql(i).unwrap_or_default();
+    // The delimiter must fold (a column does not); a missing one is the
+    // NULL default. A delimiter that raises while folding raises here.
+    // (`is_plain_literal` covers the literals the constant folder has no
+    // value for, like binary ones.)
+    if c.args().len() > 1 && !c.is_plain_literal(1) && c.constant(1).is_none() {
+        let input = c
+            .data_type(1)
+            .map_or_else(|| "VOID".to_owned(), DataType::sql);
+        return Err(DatatypeMismatchNonFoldableInput {
+            sql_expr: format!("\"listagg({}, {})\"", sql(0), sql(1)),
+            input_name: "`delimiter`".to_owned(),
+            input_type: format!("\"{input}\""),
+            input_expr: format!("\"{}\"", sql(1)),
+        }
+        .into());
+    }
+    if c.args().len() > 1
+        && let Some(Constant::Error(err)) = c.constant(1)
+    {
+        return Err(err.clone());
+    }
+    let (Some(value), mut delimiter) = (c.data_type(0), c.data_type(1).cloned()) else {
+        return typed(DataType::String, c);
+    };
+    // A written NULL delimiter stays NULL (it reads as empty): the
+    // implicit cast must not give it a type for the check below. This
+    // matches the call as written (an explicit `CAST(NULL AS STRING)`
+    // keeps its type, as Spark's check sees it; the SQL layer fills a
+    // missing delimiter with NULL, which shows the same way).
+    if c.sql(1).is_some_and(|s| s == "NULL") {
+        delimiter = Some(DataType::Null);
+    }
+    // Spark renders the failing delimiter by value, not as SQL: the
+    // golden quotes `listagg(c1, , )` for a `', '` delimiter (and `NULL`
+    // for a NULL one, as SQL renders it too).
+    let delim = match &delimiter {
+        None | Some(DataType::Null) => "NULL".to_owned(),
+        Some(DataType::String) if matches!(c.constant(1), Some(Constant::String(_))) => {
+            match c.constant(1) {
+                Some(Constant::String(s)) => s.clone(),
+                _ => sql(1),
+            }
+        }
+        Some(_) => sql(1),
+    };
+    if !matches!(delimiter, None | Some(DataType::Null)) && Some(value) != c.data_type(1) {
+        let delim_type = c.data_type(1).cloned().unwrap_or(DataType::Null);
+        return Err(DatatypeMismatchDataDiffTypes {
+            sql_expr: format!("\"listagg({}, {delim})\"", sql(0)),
+            function_name: "`listagg`".to_owned(),
+            data_type: format!("(\"{}\" or \"{}\")", value.sql(), delim_type.sql()),
+        }
+        .into());
+    }
+    // NULL for no input: always nullable.
+    Ok(ArgType::new(value.clone(), true))
+}
+
+/// `try_sum(x)`: as `sum` (NULL on overflow, ANSI on or off).
+fn try_sum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    sum(c)
+}
+
+/// `try_avg(x)`: as `avg` (NULL on overflow, ANSI on or off).
+fn try_avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    avg(c)
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
     let doubles = || Inputs::Expects(vec![exact(DataType::Double)]);
+    let integrals = || {
+        Inputs::Expects(vec![InputType::OneOf(vec![
+            DataType::Byte,
+            DataType::Short,
+            DataType::Integer,
+            DataType::Long,
+        ])])
+    };
+    let string_or_bytes = || {
+        Inputs::Expects(vec![
+            InputType::OneOf(vec![DataType::String, DataType::Binary]),
+            InputType::OneOf(vec![DataType::String, DataType::Binary, DataType::Null]),
+        ])
+    };
     vec![
         aggregate("count", Inputs::Any, count, Aggregate::Count),
         aggregate("sum", numeric(), sum, Aggregate::Sum),
@@ -1002,6 +1231,53 @@ fn aggregates() -> Vec<Spec> {
         aggregate("any", boolean_arg(), nullable_boolean, Aggregate::Max),
         aggregate("max_by", Inputs::Any, by, Aggregate::MaxBy),
         aggregate("min_by", Inputs::Any, by, Aggregate::MinBy),
+        // The collect and vector aggregates take any single argument with
+        // no implicit casts (the vector ones check the type themselves);
+        // `array_agg` is `collect_list` under Spark's display name.
+        aggregate("collect_list", Inputs::Any, collect, Aggregate::CollectList),
+        aggregate(
+            "collect_set",
+            Inputs::Any,
+            collect_set,
+            Aggregate::CollectSet,
+        ),
+        aggregate("array_agg", Inputs::Any, collect, Aggregate::CollectList),
+        aggregate("vector_sum", Inputs::Any, vector_sum, Aggregate::VectorSum),
+        aggregate("vector_avg", Inputs::Any, vector_avg, Aggregate::VectorAvg),
+        // Bitwise aggregates over `TINYINT` .. `BIGINT`.
+        aggregate("bit_and", integrals(), bit_and, Aggregate::BitAnd),
+        aggregate("bit_or", integrals(), bit_or, Aggregate::BitOr),
+        aggregate("bit_xor", integrals(), bit_xor, Aggregate::BitXor),
+        // The linear-regression aggregates read both arguments as
+        // `DOUBLE`, like the other moment aggregates.
+        aggregate("regr_count", doubles(), regr_count, Aggregate::RegrCount),
+        aggregate("regr_avgx", doubles(), moment, Aggregate::RegrAvgx),
+        aggregate("regr_avgy", doubles(), moment, Aggregate::RegrAvgy),
+        aggregate("regr_sxx", doubles(), moment, Aggregate::RegrSxx),
+        aggregate("regr_syy", doubles(), moment, Aggregate::RegrSyy),
+        aggregate("regr_sxy", doubles(), moment, Aggregate::RegrSxy),
+        aggregate("regr_slope", doubles(), moment, Aggregate::RegrSlope),
+        aggregate(
+            "regr_intercept",
+            doubles(),
+            moment,
+            Aggregate::RegrIntercept,
+        ),
+        aggregate("regr_r2", doubles(), moment, Aggregate::RegrR2),
+        // `mode(col)`: the analyzer types the deterministic and
+        // `WITHIN GROUP` forms itself (see `mode_call`); the plain call
+        // takes any single value.
+        aggregate("mode", Inputs::Any, mode, Aggregate::Mode),
+        // `listagg(expr[, delimiter])`: the analyzer fills a missing
+        // delimiter with NULL and lowers `WITHIN GROUP` into the ordering
+        // keys (see `listagg_call`); `string_agg` is its alias, resolved
+        // as `listagg` throughout for Spark's display name.
+        aggregate("listagg", string_or_bytes(), listagg, Aggregate::ListAgg),
+        aggregate("string_agg", string_or_bytes(), listagg, Aggregate::ListAgg),
+        // `try_sum` / `try_avg`: `sum` / `avg` that give NULL instead of
+        // an overflow error, ANSI on or off.
+        aggregate("try_sum", numeric(), try_sum, Aggregate::TrySum),
+        aggregate("try_avg", numeric(), try_avg, Aggregate::TryAvg),
     ]
 }
 
@@ -1181,6 +1457,9 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::url::specs());
     out.extend(super::csv::specs());
     out.extend(super::xml::specs());
+    out.extend(super::vector::specs());
+    out.extend(super::element::specs());
+    out.extend(super::array_edit::specs());
     out.extend(super::text::specs());
     out.extend(super::hof::specs());
     out.extend(super::collection::specs());

@@ -1,0 +1,18 @@
+{
+  "control_flow/if_condition_string": "INVALID_BOOLEAN_STATEMENT prints the condition as written ('true'); Spark prints the folded literal ('TRUE')",
+  "handlers/exit_handler_in_if_nested_compound": "declared divergence: Spark ends the whole script silently when the handler's compound is the last statement of an IF/WHILE body; this engine continues after the compound",
+  "handlers/exit_handler_in_loop_body_compound": "declared divergence: Spark ends the whole script silently when the handler's compound is the last statement of an IF/WHILE body; this engine continues after the compound",
+  "handlers/exit_handler_in_loop_body_trace": "declared divergence: Spark ends the whole script silently when the handler's compound is the last statement of an IF/WHILE body; this engine continues after the compound",
+  "structural/get_diagnostics": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/handler_body_if": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/qualified_label": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/reset": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/resignal": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/select_into": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/set_time_zone": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/set_variable_keyword": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "structural/signal": "PARSE_SYNTAX_ERROR position/hint differs: Spark consumes the first word of a statement it does not know before failing",
+  "variables/declare_default_cast_invalid": "CAST_INVALID_INPUT lacks the ansiConfig parameter (cast error parameters, not a scripting matter)",
+  "variables/declare_overflow": "CAST_INVALID_INPUT lacks the ansiConfig parameter (cast error parameters, not a scripting matter)",
+  "variables/set_cast_invalid": "CAST_INVALID_INPUT lacks the ansiConfig parameter (cast error parameters, not a scripting matter)"
+}

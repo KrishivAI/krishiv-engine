@@ -161,7 +161,7 @@ fn guarded_division_never_hoists_nor_raises() {
         let db = make_db(&rows(), 2, ansi);
         let (want, got, text) = db.both(sql);
         assert_eq!(got, want, "ansi={ansi}");
-        assert!(text.contains("AS cse_"), "{text}");
+        assert!(text.contains("AS krishiv_cse_"), "{text}");
         assert_eq!(text.matches("CASE WHEN").count(), 1, "{text}");
     }
 }
@@ -177,7 +177,7 @@ fn surely_evaluated_division_still_raises() {
     let (want, got, text) = db.both(sql);
     assert_eq!(want, Err(ErrorClass::DivideByZero), "ansi raises: {want:?}");
     assert_eq!(got, want, "ansi raises alike: {text}");
-    assert!(text.contains("AS cse_"), "{text}");
+    assert!(text.contains("AS krishiv_cse_"), "{text}");
     let db = make_db(&rows(), 2, false);
     let (want, got, _) = db.both(sql);
     assert_eq!(got, want, "legacy nulls alike");
@@ -196,7 +196,7 @@ fn try_divide_is_never_extracted() {
         let (want, got, text) = db.both(sql);
         assert_eq!(got, want, "ansi={ansi}");
         assert_eq!(text.matches("try_divide").count(), 2, "{text}");
-        assert!(text.contains("AS cse_"), "{text}");
+        assert!(text.contains("AS krishiv_cse_"), "{text}");
     }
 }
 
@@ -211,7 +211,7 @@ fn a_filtered_union_branch_plans_and_matches() {
         let (want, got, text) = db.both(sql);
         assert!(want.is_ok(), "{want:?}");
         assert_eq!(got, want, "ansi={ansi}: {text}");
-        assert!(text.contains("AS cse_"), "{text}");
+        assert!(text.contains("AS krishiv_cse_"), "{text}");
     }
 }
 
@@ -225,7 +225,7 @@ fn post_aggregation_scalars_plan_and_match() {
         let (want, got, text) = db.both(sql);
         assert!(want.is_ok(), "{want:?}");
         assert_eq!(got, want, "ansi={ansi}: {text}");
-        assert!(text.contains("AS cse_"), "{text}");
+        assert!(text.contains("AS krishiv_cse_"), "{text}");
     }
 }
 
@@ -247,11 +247,11 @@ fn in_items_never_hoist_a_division_that_raises() {
         let (want, got, text) = db.both(sql);
         assert!(want.is_ok(), "ansi={ansi}: {want:?}");
         assert_eq!(got, want, "ansi={ansi}: {text}");
-        assert!(text.contains("AS cse_"), "{text}");
+        assert!(text.contains("AS krishiv_cse_"), "{text}");
         assert!(
             !text
                 .lines()
-                .any(|l| l.contains("AS cse_") && l.contains(" / ")),
+                .any(|l| l.contains("AS krishiv_cse_") && l.contains(" / ")),
             "{text}"
         );
     }
@@ -267,6 +267,6 @@ fn an_extracted_grouping_key_is_swapped_in_the_outputs() {
         let (want, got, text) = db.both(sql);
         assert!(want.is_ok(), "{want:?}");
         assert_eq!(got, want, "ansi={ansi}: {text}");
-        assert!(text.contains("AS cse_"), "{text}");
+        assert!(text.contains("AS krishiv_cse_"), "{text}");
     }
 }

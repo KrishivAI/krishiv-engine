@@ -83,8 +83,11 @@ struct Fresh<'a> {
 impl Fresh<'_> {
     fn get(&mut self) -> &mut u64 {
         let root = self.root;
-        self.next
-            .get_or_insert_with(|| max_id(root, &mut HashMap::new()).saturating_add(1))
+        self.next.get_or_insert_with(|| {
+            max_id(root, &mut HashMap::new())
+                .saturating_add(1)
+                .max(CSE_BASE)
+        })
     }
 }
 
@@ -162,11 +165,28 @@ fn rewrite_node(node: Arc<LogicalPlan>, next: &mut Fresh<'_>) -> Arc<LogicalPlan
     }
 }
 
+/// The first attribute id CSE hands out. The analyzer numbers attributes
+/// from zero and a plan never holds billions of them, so an id from this
+/// band marks a column the pass made: a user alias spelled `cse_3` has a
+/// small id and is a user column.
+const CSE_BASE: u64 = 1 << 32;
+
+/// The name prefix of an extracted column. A user alias spelled `cse_3` is
+/// not one; a shifted copy of a user column keeps its name but must not
+/// pass for a CSE column, so the prefix is one no query writes.
+const CSE_PREFIX: &str = "krishiv_cse_";
+
 /// Whether `c` is a column CSE extracted (see `fresh_columns`).
+///
+/// It is named `cse_<n>`, created with the id `CSE_BASE + n`. A self-join's
+/// `Shift` renumbers the column upward and keeps its name, so the id may
+/// exceed `CSE_BASE + n`, never fall below it.
 pub(crate) fn is_cse_column(c: &BoundColumn) -> bool {
     c.name
-        .strip_prefix("cse_")
-        .is_some_and(|n| n.parse::<u64>().is_ok_and(|id| id == c.id.0))
+        .strip_prefix(CSE_PREFIX)
+        .and_then(|n| n.parse::<u64>().ok())
+        .and_then(|n| CSE_BASE.checked_add(n))
+        .is_some_and(|least| c.id.0 >= least)
 }
 
 /// `p` without the columns CSE extracted into its output: a filter passes
@@ -326,6 +346,7 @@ fn normalize(e: &Arc<Expr>) -> Arc<Expr> {
                                 args: vec![Arc::clone(a), Arc::clone(b)],
                                 distinct: false,
                                 filter: None,
+                                within_group: Vec::new(),
                                 data_type: f.data_type.clone(),
                                 nullable: f.nullable,
                                 deterministic: f.deterministic,
@@ -926,7 +947,7 @@ fn fresh_columns(extracted: &[Arc<Expr>], next: &mut u64) -> Option<Vec<BoundCol
         *next += 1;
         cols.push(BoundColumn {
             id,
-            name: format!("cse_{}", id.0),
+            name: format!("{CSE_PREFIX}{}", id.0 - CSE_BASE),
             data_type,
             nullable,
         });
@@ -1286,6 +1307,7 @@ mod tests {
                 args,
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type: DataType::Integer,
                 nullable: true,
                 deterministic: true,
@@ -1297,6 +1319,31 @@ mod tests {
     /// of `and`/`or`, non-first `coalesce`/`if`/`nanvl` arguments, every
     /// `WHEN` arm but the first condition, lambda bodies, and aggregate
     /// arguments under `FILTER (WHERE ...)`.
+    #[test]
+    fn cse_columns_survive_a_shift_and_user_names_do_not() {
+        let col = |name: &str, id: u64| BoundColumn {
+            id: AttrId(id),
+            name: name.to_owned(),
+            data_type: krishiv_types::DataType::Boolean,
+            nullable: true,
+        };
+        let base = CSE_BASE;
+        assert!(is_cse_column(&col("krishiv_cse_9", base + 9)));
+        // A self-join's `Shift` renumbers upward and keeps the name.
+        assert!(is_cse_column(&col("krishiv_cse_9", base + 11)));
+        assert!(!is_cse_column(&col("krishiv_cse_9", base + 3)));
+        // A user alias has a small id, whatever it is called.
+        assert!(!is_cse_column(&col("krishiv_cse_9", 9)));
+        assert!(!is_cse_column(&col("krishiv_cse_9", 11)));
+        // A user alias spelled like the old prefix, renumbered into the band
+        // by a `Shift` on re-optimisation, is still a user column.
+        assert!(!is_cse_column(&col("cse_0", base + 7)));
+        assert!(!is_cse_column(&col("cse_9", base + 11)));
+        assert!(!is_cse_column(&col("krishiv_cse_x", base + 9)));
+        assert!(!is_cse_column(&col("krishiv_cse_", base + 9)));
+        assert!(!is_cse_column(&col("total", base + 9)));
+    }
+
     #[test]
     fn conditional_positions() {
         let (a, b, c) = (col(0), col(1), col(2));
@@ -1340,6 +1387,7 @@ mod tests {
                 args: vec![Arc::clone(&a)],
                 distinct: false,
                 filter: Some(Arc::clone(&b)),
+                within_group: Vec::new(),
                 data_type: DataType::Long,
                 nullable: true,
                 deterministic: true,
@@ -1397,7 +1445,7 @@ mod tests {
             expr: Arc::clone(&a),
             output: BoundColumn {
                 id: AttrId(99),
-                name: "cse_99".to_owned(),
+                name: "krishiv_cse_99".to_owned(),
                 data_type: DataType::Integer,
                 nullable: true,
             },

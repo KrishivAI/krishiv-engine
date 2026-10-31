@@ -115,7 +115,7 @@ pub use catalog::{
     TableFunctionRegistry, TableIdent, TableKind, TableMeta,
 };
 pub use sqlfn::{SqlFunction, SqlParam};
-pub use variables::{SessionVariable, VariableSnapshot, variable_name};
+pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, variable_name};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 

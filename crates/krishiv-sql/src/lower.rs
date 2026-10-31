@@ -222,6 +222,7 @@ impl Lowerer {
                 args,
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
             }),
             span,
         )
@@ -703,6 +704,7 @@ impl Lowerer {
                     arg_names: Vec::new(),
                     distinct: false,
                     filter: None,
+                    within_group: Vec::new(),
                 }),
                 q.span,
             ));
@@ -1533,16 +1535,13 @@ impl Lowerer {
                     }
                     [] => return Err(unsupported("a function name", f.name.span)),
                 };
-                for (present, what) in [
-                    (!f.within_group.is_empty(), "WITHIN GROUP"),
-                    (
-                        f.null_treatment.is_some() && !takes_null_treatment(&name.value),
-                        "IGNORE NULLS and RESPECT NULLS",
-                    ),
-                ] {
-                    if present {
-                        return Err(unsupported(what, sp));
-                    }
+                // `WITHIN GROUP (ORDER BY ...)` rides along for the analyzer:
+                // the ordered-set aggregates lower it into their arguments,
+                // any other function keeps Spark's
+                // `FUNCTION_WITH_UNSUPPORTED_SYNTAX` error (raised during
+                // analysis, which quotes the call).
+                if f.null_treatment.is_some() && !takes_null_treatment(&name.value) {
+                    return Err(unsupported("IGNORE NULLS and RESPECT NULLS", sp));
                 }
                 let mut args = Vec::new();
                 let mut arg_names = Vec::new();
@@ -1562,6 +1561,18 @@ impl Lowerer {
                 // Spark's builder of `lag` and `lead`: `input` NULL, `offset`
                 // 1 and `default` NULL when not given.
                 let lname = name.value.to_ascii_lowercase();
+                // `datediff(unit, start, end)` (also `date_diff`) is `timestampdiff`; with two
+                // arguments it is the day difference of two dates.
+                let call_name = if matches!(lname.as_str(), "datediff" | "date_diff")
+                    && qualifier.is_empty()
+                    && matches!(
+                        f.args.as_slice(),
+                        [first, _, _] if matches!(first.expr.kind, ExprKind::Keyword(_))
+                    ) {
+                    "timestampdiff".to_owned()
+                } else {
+                    name.value.clone()
+                };
                 if matches!(lname.as_str(), "lag" | "lead") && args.len() < 3 {
                     let fill = [
                         IrLiteral::Null(None),
@@ -1573,6 +1584,15 @@ impl Lowerer {
                         if !arg_names.is_empty() {
                             arg_names.push(None);
                         }
+                    }
+                }
+                // `listagg(expr)` is `listagg(expr, NULL)` (and `string_agg`
+                // likewise): Spark's constructor writes the default
+                // delimiter, so names and errors show it.
+                if matches!(lname.as_str(), "listagg" | "string_agg") && args.len() == 1 {
+                    args.push(arc(self.ex(ExprNode::Literal(IrLiteral::Null(None)), sp)));
+                    if !arg_names.is_empty() {
+                        arg_names.push(None);
                     }
                 }
                 // `first(x) IGNORE NULLS` is `first(x, true)` and `RESPECT
@@ -1607,14 +1627,20 @@ impl Lowerer {
                     }
                 }
                 let filter = f.filter.as_ref().map(|x| self.arg(x)).transpose()?;
+                let within_group = f
+                    .within_group
+                    .iter()
+                    .map(|s| self.sort_item(s))
+                    .collect::<R<Vec<_>>>()?;
                 let call = self.ex(
                     ExprNode::Function(FunctionCall {
-                        name: name.value.clone(),
+                        name: call_name,
                         qualifier,
                         arg_names,
                         args,
                         distinct: f.quantifier == Some(SetQuantifier::Distinct),
                         filter,
+                        within_group,
                     }),
                     sp,
                 );

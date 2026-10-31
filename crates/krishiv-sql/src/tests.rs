@@ -3263,3 +3263,315 @@ fn identifier_clause_is_not_a_named_marker() {
     let e = parse_statement("SELECT :IDENTIFIER('param1') FROM t", &d).unwrap_err();
     assert_eq!(e.span.start, 19);
 }
+
+/// Scripts: compound statements, control flow, declarations and handlers.
+#[test]
+fn script_statements() {
+    use ast::{HandlerBody, HandlerCondition, ScriptStatement as S, Statement};
+    let d = ParserOptions::default();
+    let script =
+        |sql: &str| match parse_statement(sql, &d).unwrap_or_else(|e| panic!("{sql}: {e:?}")) {
+            Statement::Script(c) => *c,
+            other => panic!("{sql} is {other:?}"),
+        };
+    assert!(script("BEGIN END").body.is_empty());
+    assert!(script("BEGIN NOT ATOMIC SELECT 1; END;").body.len() == 1);
+    let c = script(
+        "BEGIN
+           DECLARE x INT DEFAULT 1;
+           DECLARE VARIABLE a, b STRING;
+           DECLARE oops CONDITION FOR SQLSTATE '22012';
+           DECLARE EXIT HANDLER FOR SQLSTATE VALUE '42000', oops
+             BEGIN SELECT 'e'; END;
+           SET x = x + 1;
+           SET (a, b) = (SELECT 'p', 'q');
+           IF x > 1 THEN SELECT 1; ELSEIF x = 1 THEN SELECT 2; ELSE SELECT 3; END IF;
+           CASE x WHEN 1 THEN SELECT 1; WHEN 2 THEN SELECT 2; ELSE SELECT 3; END CASE;
+           CASE WHEN x > 1 THEN SELECT 1; END CASE;
+           l1: WHILE x < 3 DO SET x = x + 1; ITERATE l1; END WHILE l1;
+           REPEAT SET x = x - 1; UNTIL x < 1 END REPEAT;
+           l2: LOOP LEAVE l2; END LOOP l2;
+           FOR r AS SELECT id FROM t DO SELECT r.id; END FOR;
+           FOR SELECT 1 DO SELECT 2; END FOR;
+           lbl: BEGIN SELECT 1; END lbl;
+           INSERT INTO t VALUES (1);
+         END",
+    );
+    let kinds: Vec<&str> = c
+        .body
+        .iter()
+        .map(|s| match s {
+            S::Declare(_) => "declare",
+            S::Condition(_) => "condition",
+            S::Handler(_) => "handler",
+            S::Assign(_) => "assign",
+            S::If(_) => "if",
+            S::Case(_) => "case",
+            S::While(_) => "while",
+            S::Repeat(_) => "repeat",
+            S::Loop(_) => "loop",
+            S::For(_) => "for",
+            S::Compound(_) => "compound",
+            S::Sql(_) => "sql",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "declare",
+            "declare",
+            "condition",
+            "handler",
+            "assign",
+            "assign",
+            "if",
+            "case",
+            "case",
+            "while",
+            "repeat",
+            "loop",
+            "for",
+            "for",
+            "compound",
+            "sql"
+        ]
+    );
+    let S::Handler(h) = &c.body[3] else { panic!() };
+    assert!(!h.continue_handler && h.conditions.len() == 2);
+    assert!(matches!(&h.conditions[0], HandlerCondition::SqlState(s, _) if s == "42000"));
+    assert!(matches!(&h.conditions[1], HandlerCondition::Name(n) if n.value == "oops"));
+    assert!(matches!(h.body, HandlerBody::Compound(_)));
+    let S::While(w) = &c.body[9] else { panic!() };
+    assert_eq!(w.label.as_ref().map(|l| l.value.as_str()), Some("l1"));
+    assert_eq!(w.end_label.as_ref().map(|l| l.value.as_str()), Some("l1"));
+    // Handlers take one statement or an assignment too.
+    for body in ["SELECT 1", "SET x = 1"] {
+        let c = script(&format!(
+            "BEGIN DECLARE x INT DEFAULT 0; DECLARE EXIT HANDLER FOR SQLEXCEPTION {body}; END"
+        ));
+        assert!(matches!(c.body[1], S::Handler(_)));
+    }
+}
+
+/// What a script never parses: Spark 4.2's syntax errors and the refusals the checks raise.
+#[test]
+fn script_syntax_errors_and_refusals() {
+    let d = ParserOptions::default();
+    let class = |sql: &str| parse_statement(sql, &d).unwrap_err().error.error_class();
+    for bad in [
+        "lbl: BEGIN END",
+        "EXPLAIN BEGIN END",
+        "BEGIN SELECT 1 END",
+        "BEGIN SIGNAL x; END",
+        "BEGIN RESIGNAL; END",
+        "BEGIN GET DIAGNOSTICS x = ROW_COUNT; END",
+        "BEGIN SELECT 1 INTO x; END",
+        "BEGIN SET; END",
+        "BEGIN SET spark.sql.ansi.enabled; END",
+        "BEGIN SET TIME ZONE 'UTC'; END",
+        "BEGIN RESET; END",
+        "BEGIN SET VAR x = 1; END",
+        "BEGIN IF 1 THEN SELECT 1; END; END",
+        "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION IF 1 THEN SELECT 1; END IF; END",
+        "BEGIN END trailing",
+    ] {
+        assert_eq!(class(bad), ErrorClass::ParseSyntaxError, "{bad}");
+    }
+    assert_eq!(
+        class("BEGIN DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SELECT 1; END"),
+        ErrorClass::UnsupportedFeatureContinueExceptionHandler
+    );
+    for cursor in [
+        "BEGIN DECLARE c CURSOR FOR SELECT 1; END",
+        "BEGIN OPEN c; END",
+        "BEGIN FETCH c INTO x; END",
+        "BEGIN CLOSE c; END",
+    ] {
+        assert_eq!(
+            class(cursor),
+            ErrorClass::UnsupportedFeatureSqlCursor,
+            "{cursor}"
+        );
+    }
+}
+
+/// The structural errors of a script (design note T196, section 2.5), by class and a parameter.
+#[test]
+fn script_structure_is_checked_before_anything_runs() {
+    let d = ParserOptions::default();
+    let fails = |sql: &str| {
+        let e = parse_statement(sql, &d).unwrap_err().error;
+        let params: Vec<String> = e
+            .message_parameters()
+            .iter()
+            .map(|(_, v)| v.clone())
+            .collect();
+        (e.error_class().name().to_owned(), e.to_string(), params)
+    };
+    let cases: &[(&str, &str, &str)] = &[
+        ("BEGIN a: BEGIN END b; END", "LABELS_MISMATCH", "`a`"),
+        (
+            "BEGIN BEGIN END b; END",
+            "END_LABEL_WITHOUT_BEGIN_LABEL",
+            "`b`",
+        ),
+        (
+            "BEGIN a: BEGIN a: BEGIN END; END; END",
+            "LABEL_OR_FOR_VARIABLE_ALREADY_EXISTS",
+            "`a`",
+        ),
+        (
+            "BEGIN a: BEGIN FOR a AS SELECT 1 DO SELECT 1; END FOR; END; END",
+            "LABEL_OR_FOR_VARIABLE_ALREADY_EXISTS",
+            "`a`",
+        ),
+        (
+            "BEGIN session: BEGIN END; END",
+            "LABEL_OR_FOR_VARIABLE_NAME_FORBIDDEN",
+            "`session`",
+        ),
+        (
+            "BEGIN FOR system AS SELECT 1 DO SELECT 1; END FOR; END",
+            "LABEL_OR_FOR_VARIABLE_NAME_FORBIDDEN",
+            "`system`",
+        ),
+        (
+            "BEGIN LEAVE nowhere; END",
+            "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
+            "NOWHERE",
+        ),
+        (
+            "BEGIN ITERATE nowhere; END",
+            "INVALID_LABEL_USAGE.DOES_NOT_EXIST",
+            "NOWHERE",
+        ),
+        (
+            "BEGIN c: BEGIN ITERATE c; END; END",
+            "INVALID_LABEL_USAGE.ITERATE_IN_COMPOUND",
+            "C",
+        ),
+        (
+            "BEGIN SELECT 1; DECLARE x INT; END",
+            "INVALID_VARIABLE_DECLARATION.ONLY_AT_BEGINNING",
+            "`x`",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; DECLARE x INT; END",
+            "INVALID_VARIABLE_DECLARATION.ONLY_AT_BEGINNING",
+            "`x`",
+        ),
+        (
+            "BEGIN IF 1 = 1 THEN DECLARE x INT; END IF; END",
+            "INVALID_VARIABLE_DECLARATION.NOT_ALLOWED_IN_SCOPE",
+            "`x`",
+        ),
+        (
+            "BEGIN SELECT 1; DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION",
+            "",
+        ),
+        (
+            "BEGIN IF 1 = 1 THEN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; END IF; END",
+            "INVALID_HANDLER_DECLARATION.WRONG_PLACE_OF_DECLARATION",
+            "",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR nosuch SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.CONDITION_NOT_FOUND",
+            "NOSUCH",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION, SQLSTATE '42000' SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.INVALID_CONDITION_COMBINATION",
+            "",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR NOT FOUND, DIVIDE_BY_ZERO SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.INVALID_CONDITION_COMBINATION",
+            "",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION; DECLARE EXIT HANDLER FOR c, c SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.DUPLICATE_CONDITION_IN_HANDLER_DECLARATION",
+            "C",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '42000', SQLSTATE '42000' SELECT 1; END",
+            "INVALID_HANDLER_DECLARATION.DUPLICATE_SQLSTATE_IN_HANDLER_DECLARATION",
+            "42000",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 1; DECLARE EXIT HANDLER FOR DIVIDE_BY_ZERO SELECT 2; END",
+            "DUPLICATE_EXCEPTION_HANDLER.CONDITION",
+            "DIVIDE_BY_ZERO",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '42000' SELECT 1; DECLARE EXIT HANDLER FOR SQLSTATE '42000' SELECT 2; END",
+            "DUPLICATE_EXCEPTION_HANDLER.SQLSTATE",
+            "42000",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION; DECLARE c CONDITION; END",
+            "DUPLICATE_CONDITION_IN_SCOPE",
+            "`C`",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION SELECT 1; DECLARE c CONDITION; END",
+            "INVALID_ERROR_CONDITION_DECLARATION.NOT_AT_START_OF_COMPOUND_STATEMENT",
+            "`c`",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION FOR SQLSTATE '0A000x'; END",
+            "INVALID_SQLSTATE",
+            "0A000x",
+        ),
+        (
+            "BEGIN DECLARE c CONDITION FOR SQLSTATE '01000'; END",
+            "INVALID_SQLSTATE",
+            "01000",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE 'XX000' SELECT 1; END",
+            "INVALID_SQLSTATE",
+            "XX000",
+        ),
+        (
+            "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE '4200' SELECT 1; END",
+            "INVALID_SQLSTATE",
+            "4200",
+        ),
+    ];
+    for (sql, class, mentions) in cases {
+        let (got, message, params) = fails(sql);
+        assert_eq!(got, *class, "{sql}: {message}");
+        // Exact: Spark's spelling of the parameter (quoting and case included), not a substring.
+        assert!(
+            mentions.is_empty() || params.iter().any(|p| p == mentions),
+            "{sql}: {params:?} lacks {mentions}"
+        );
+    }
+    // Names compare without case; a condition and an error class are both known to a handler.
+    for ok in [
+        "BEGIN Lbl: BEGIN LEAVE LBL; END LBL; END",
+        "BEGIN l: WHILE 1 = 1 DO ITERATE L; END WHILE; END",
+        "BEGIN DECLARE c CONDITION; DECLARE EXIT HANDLER FOR C SELECT 1; END",
+        "BEGIN DECLARE EXIT HANDLER FOR UNRESOLVED_COLUMN, DIVIDE_BY_ZERO SELECT 1; END",
+        "BEGIN DECLARE c CONDITION FOR SQLSTATE '42000'; DECLARE EXIT HANDLER FOR NOT FOUND SELECT 1; END",
+        "BEGIN a: BEGIN DECLARE c CONDITION; END; b: BEGIN DECLARE c CONDITION; END; END",
+        "BEGIN i: LOOP j: LOOP LEAVE i; END LOOP; END LOOP; END",
+        // Spark accepts these (design note T196, unit 0 record).
+        "BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION, NOT FOUND SELECT 1; END",
+        "BEGIN DECLARE EXIT HANDLER FOR SQLSTATE 'abc12' SELECT 1; END",
+        "BEGIN DECLARE OR REPLACE x INT; DECLARE a.y INT; END",
+    ] {
+        parse_statement(ok, &d).unwrap_or_else(|e| panic!("{ok}: {e:?}"));
+    }
+    // Case-sensitive names differ by case.
+    let strict = ParserOptions {
+        case_sensitive: true,
+        ..d
+    };
+    assert!(parse_statement("BEGIN a: BEGIN END A; END", &strict).is_err());
+    assert!(parse_statement("BEGIN a: BEGIN A: BEGIN END; END; END", &strict).is_ok());
+}

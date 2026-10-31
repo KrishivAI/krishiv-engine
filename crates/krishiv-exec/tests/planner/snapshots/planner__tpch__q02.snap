@@ -22,8 +22,8 @@ TopN 100, [s_acctbal#14 DESC NULLS LAST, n_name#22 ASC NULLS FIRST, s_name#10 AS
             :                          +- Project [p_partkey#0, p_mfgr#2, min(ps_supplycost)#47]
             :                             +- HashJoin Inner, [p_partkey#0] = [ps_partkey#28], RuntimeFilter #5: p_partkey#0 -> spark_catalog.default.part.p_partkey
             :                                :- Project [p_partkey#0, p_mfgr#2]
-            :                                :  +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
-            :                                :     +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_size#5 == 15) and (p_type#4 like '%BRASS'))]
+            :                                :  +- Filter ((p_type#4 like '%BRASS') and (p_size#5 == 15))
+            :                                :     +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_type#4 like '%BRASS') and (p_size#5 == 15))]
             :                                +- BroadcastExchange
             :                                   +- Project [min(ps_supplycost#31)#4611686018427387915 AS min(ps_supplycost)#47, ps_partkey#28]
             :                                      +- HashAggregate keys=[ps_partkey#28], functions=[min(ps_supplycost#31)]

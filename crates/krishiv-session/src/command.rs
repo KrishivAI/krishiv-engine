@@ -52,6 +52,7 @@ use crate::dataframe::DataFrame;
 use crate::functions::{col, lit, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::{Entry, one_row_project};
+use crate::store::CatalogStore;
 use crate::variables::{
     DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
     variable_key,
@@ -346,25 +347,49 @@ impl Session {
         self.empty_frame().await
     }
 
-    /// Whether the table or view `parts` names exists: temporary tables and
-    /// views have single-part names, so a qualified name never matches.
-    fn cache_target_exists(&self, parts: &[String]) -> bool {
+    /// The name the cache knows the table `parts` by: a temporary view or table by its name, a
+    /// permanent table as `namespace.name`. `None` when there is no such relation.
+    fn cache_key(&self, parts: &[String]) -> Option<String> {
         let env = self.query_env();
-        matches!(parts, [only] if self
-            .state
-            .catalog
-            .exists(only, env.analysis.conf.case_sensitive))
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let fold = |s: &str| {
+            if case_sensitive {
+                s.to_owned()
+            } else {
+                s.to_lowercase()
+            }
+        };
+        let store = &self.state.catalog.store;
+        match parts {
+            [only] => {
+                if self.state.catalog.exists(only, case_sensitive) {
+                    return Some(only.clone());
+                }
+                let namespace = self.state.catalog.current_namespace();
+                store
+                    .table(&namespace, &fold(only))
+                    .map(|_| format!("{namespace}.{}", fold(only)))
+            }
+            [namespace, name] => store
+                .table(&fold(namespace), &fold(name))
+                .map(|_| format!("{}.{}", fold(namespace), fold(name))),
+            _ => None,
+        }
     }
 
-    /// Runs `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`: both drop
-    /// cached relations and return an empty frame, as in Spark. `CACHE
-    /// TABLE ...` stays `KRISHIV_UNSUPPORTED_FEATURE`: caching through SQL
-    /// is not supported, only `DataFrame.cache` and `persist`.
+    /// Runs `CACHE [LAZY] TABLE name [AS query]`, `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`,
+    /// all returning an empty frame as in Spark. `CACHE TABLE` reads the relation once into the
+    /// cache (`LAZY` and `OPTIONS` change nothing observable here); with `AS query` it first creates
+    /// the temporary view `name`.
     ///
     /// # Errors
     /// `TABLE_OR_VIEW_NOT_FOUND` for `UNCACHE TABLE` of a missing table
     /// without `IF EXISTS`; `KRISHIV_UNSUPPORTED_FEATURE` for `CACHE TABLE`.
-    pub(crate) async fn exec_cache(&self, c: &Cache) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn exec_cache(
+        &self,
+        c: &Cache,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         match &c.kind {
             CacheKind::Clear => {
                 self.clear_cache();
@@ -378,17 +403,44 @@ impl Session {
                     }
                     .into());
                 };
-                if self.cache_target_exists(&parts) {
-                    self.uncache_table(&parts[0]);
+                if let Some(key) = self.cache_key(&parts) {
+                    self.uncache_table(&key);
                 } else if !if_exists {
                     return Err(table_not_found(&parts));
                 }
             }
-            CacheKind::Cache { .. } => {
-                return Err(KrishivUnsupportedFeature {
-                    feature: "CACHE TABLE in sessions".to_owned(),
+            CacheKind::Cache { name, query, .. } => {
+                let Some(parts) = ddl_table_parts(name) else {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: "CACHE TABLE with a dynamic table name".to_owned(),
+                    }
+                    .into());
+                };
+                // `CACHE TABLE t AS query` first makes the temporary view `t`.
+                if let Some(q) = query {
+                    let [view] = parts.as_slice() else {
+                        return Err(table_not_found(&parts));
+                    };
+                    let body = original.get(q.span.start..q.span.end).unwrap_or_default();
+                    let create = format!(
+                        "CREATE TEMPORARY VIEW `{}` AS {body}",
+                        view.replace('`', "``")
+                    );
+                    Box::pin(self.sql_here(&create)).await?;
                 }
-                .into());
+                // The relation is cached by reading it once: `LAZY` is the same here, since a
+                // snapshot is taken the first time anything reads it either way.
+                let frame = self
+                    .table(
+                        &parts
+                            .iter()
+                            .map(|p| format!("`{}`", p.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join("."),
+                    )
+                    .cache();
+                // Counting reads every batch into the cache without keeping the rows.
+                frame.count().await?;
             }
             _ => {
                 return Err(crate::session::internal("unknown CACHE form".to_owned()));
@@ -415,10 +467,10 @@ impl Session {
                     }
                     .into());
                 };
-                if !self.cache_target_exists(&parts) {
+                let Some(key) = self.cache_key(&parts) else {
                     return Err(table_not_found(&parts));
-                }
-                self.refresh_table(&parts[0]);
+                };
+                self.refresh_table(&key);
             }
             RefreshKind::Function { .. } => {}
             RefreshKind::Path { .. } => {
@@ -1280,7 +1332,7 @@ pub(crate) fn unresolved_variable(
 
 /// The duplicate targets of one assignment, as Spark reports them: the
 /// lower-case name quoted, like `` `var1` ``.
-fn duplicate_targets(keys: &[String]) -> Result<(), KrishivError> {
+pub(crate) fn duplicate_targets(keys: &[String]) -> Result<(), KrishivError> {
     let mut seen = HashSet::new();
     for key in keys {
         if !seen.insert(key) {
@@ -1329,7 +1381,7 @@ impl Session {
     /// The analysis of `sql` (a synthesized variable query): the row
     /// assignment's arity check needs the static output even when the
     /// query returns no rows.
-    async fn analyze_variable_query(
+    pub(crate) async fn analyze_variable_query(
         &self,
         sql: &str,
     ) -> Result<Arc<crate::dataframe::Analysis>, KrishivError> {
@@ -1348,7 +1400,7 @@ impl Session {
     /// Runs analyzed `analysis` (from [`Self::analyze_variable_query`])
     /// through the physical planner and the executor, collecting its
     /// batches.
-    async fn run_analyzed_variable_query(
+    pub(crate) async fn run_analyzed_variable_query(
         &self,
         analysis: &Arc<crate::dataframe::Analysis>,
     ) -> Result<Vec<RecordBatch>, KrishivError> {
@@ -1359,6 +1411,27 @@ impl Session {
             out.push(batch?);
         }
         Ok(out)
+    }
+
+    /// As [`Self::run_analyzed_variable_query`], but stops reading at the first row beyond
+    /// `max_rows` and returns `None`: a caller that holds the rows never holds more.
+    pub(crate) async fn run_analyzed_variable_query_capped(
+        &self,
+        analysis: &Arc<crate::dataframe::Analysis>,
+        max_rows: usize,
+    ) -> Result<Option<Vec<RecordBatch>>, KrishivError> {
+        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
+        let mut stream = self.run(&physical, &analysis.env).await?;
+        let (mut out, mut rows) = (Vec::new(), 0_usize);
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            rows = rows.saturating_add(batch.num_rows());
+            if rows > max_rows {
+                return Ok(None);
+            }
+            out.push(batch);
+        }
+        Ok(Some(out))
     }
 
     /// The value of `sql` (a synthesized one-row `SELECT`): its single
@@ -1510,7 +1583,7 @@ pub(crate) fn arrow_value(
 
 /// The Krishiv type of Arrow `data_type`: the single Arrow-to-Krishiv
 /// type map [`arrow_value`] reads, so NULL slots and values agree.
-fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, KrishivError> {
+pub(crate) fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, KrishivError> {
     match data_type {
         ArrowType::Null => Ok(DataType::Null),
         ArrowType::Boolean => Ok(DataType::Boolean),
@@ -1552,7 +1625,7 @@ fn decimal_type(precision: u8, scale: i8) -> Result<DecimalType, KrishivError> {
 
 /// Whether `e` is exactly the bare `DEFAULT` keyword (through
 /// parentheses): `SET var = DEFAULT` reads the variable's default.
-fn is_bare_default(e: &Expr) -> bool {
+pub(crate) fn is_bare_default(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Nested(inner) => is_bare_default(inner),
         ExprKind::Column(parts) => {
@@ -1580,13 +1653,13 @@ fn expr_any(e: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
 
 /// Whether the top-level expression tree holds a bare `DEFAULT` that is
 /// not the whole value: there it cannot read a default, as in Spark.
-fn contains_default(e: &Expr) -> bool {
+pub(crate) fn contains_default(e: &Expr) -> bool {
     expr_any(e, &is_bare_default)
 }
 
 /// Whether the top-level expression tree holds a subquery: a default
 /// cannot hold one, as in Spark.
-fn contains_subquery(e: &Expr) -> bool {
+pub(crate) fn contains_subquery(e: &Expr) -> bool {
     expr_any(e, &|node| {
         matches!(
             node.kind,

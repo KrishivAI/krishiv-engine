@@ -735,6 +735,9 @@ impl Decoder {
             args: self.exprs_of(&f.args)?,
             distinct: f.distinct,
             filter: f.filter.map(|i| self.expr_ref(i)).transpose()?,
+            // The format carries no `WITHIN GROUP` ordering: the analyzer
+            // lowers a valid one into the aggregate before planning.
+            within_group: Vec::new(),
             data_type: spark_type(required(&f.data_type, "a function type")?)?,
             nullable: f.nullable,
             deterministic: f.deterministic,
@@ -881,6 +884,8 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
 fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
     use pb::AggregateFunction as F;
     let ignore = a.ignore_nulls;
+    // `listagg` carries its delimiter and ordering directions as
+    // payload, built inline (the map below cannot fail a single arm).
     let function = enum_map!(F, a.function, "aggregate function", {
         Count => AggregateFunction::Count,
         Sum => AggregateFunction::Sum,
@@ -889,7 +894,48 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         Max => AggregateFunction::Max,
         First => AggregateFunction::First { ignore_nulls: ignore },
         Last => AggregateFunction::Last { ignore_nulls: ignore },
+        CollectList => AggregateFunction::CollectList,
+        CollectSet => AggregateFunction::CollectSet,
+        VectorSum => AggregateFunction::VectorSum,
+        VectorAvg => AggregateFunction::VectorAvg,
+        BitAnd => AggregateFunction::BitAnd,
+        BitOr => AggregateFunction::BitOr,
+        BitXor => AggregateFunction::BitXor,
+        RegrCount => AggregateFunction::RegrCount,
+        RegrAvgx => AggregateFunction::RegrAvgx,
+        RegrAvgy => AggregateFunction::RegrAvgy,
+        RegrSxx => AggregateFunction::RegrSxx,
+        RegrSyy => AggregateFunction::RegrSyy,
+        RegrSxy => AggregateFunction::RegrSxy,
+        RegrSlope => AggregateFunction::RegrSlope,
+        RegrIntercept => AggregateFunction::RegrIntercept,
+        RegrR2 => AggregateFunction::RegrR2,
+        Mode => AggregateFunction::Mode,
+        ModeMin => AggregateFunction::ModeMin,
+        ModeMax => AggregateFunction::ModeMax,
+        TrySum => AggregateFunction::TrySum,
+        TryAvg => AggregateFunction::TryAvg,
+        Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
+            return Err(corrupt("a listagg state of another shape than its orders"));
+        } else {
+            AggregateFunction::ListAgg {
+                delimiter: a.listagg_delimiter.clone(),
+                orders: a
+                    .listagg_desc
+                    .iter()
+                    .zip(&a.listagg_nulls_first)
+                    .map(|(&desc, &nulls)| (desc, nulls))
+                    .collect(),
+            }
+        },
     })?;
+    if !matches!(function, AggregateFunction::ListAgg { .. })
+        && (!a.listagg_delimiter.is_empty()
+            || !a.listagg_desc.is_empty()
+            || !a.listagg_nulls_first.is_empty())
+    {
+        return Err(corrupt("a listagg payload on another function"));
+    }
     let takes_ignore = matches!(
         function,
         AggregateFunction::First { .. } | AggregateFunction::Last { .. }
@@ -897,9 +943,17 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
     if ignore && !takes_ignore {
         return Err(corrupt("`ignore_nulls` on a function without it"));
     }
+    let args = usizes(&a.args)?;
+    if let AggregateFunction::ListAgg { orders, .. } = &function
+        && args.len() != orders.len() + 1
+    {
+        return Err(corrupt(
+            "a listagg with another argument count than its orders",
+        ));
+    }
     Ok(AggregateExpr {
         function,
-        args: usizes(&a.args)?,
+        args,
         input: enum_map!(pb::AggregateInput, a.input, "aggregate input", {
             Raw => AggInput::Raw,
             State => AggInput::State,
@@ -968,6 +1022,7 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             max_values: usize_of(o.max_values)?,
             exact_max_values: usize_of(o.exact_max_values)?,
             bloom: o.bloom,
+            scan_waits: o.scan_waits,
             bloom_max_items: o.bloom_max_items,
             bloom_max_bytes: usize_of(o.bloom_max_bytes)?,
             bloom_fpp: o.bloom_fpp,

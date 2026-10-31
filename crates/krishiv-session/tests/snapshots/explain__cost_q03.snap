@@ -1,0 +1,40 @@
+---
+source: crates/krishiv-session/tests/explain.rs
+expression: "explain_sql(&s, &format!(\"EXPLAIN COST {}\", query(3)))"
+---
+== Optimized Logical Plan ==
+Limit 10, Statistics(sizeInBytes=40.0 B, rowCount=1)
++- Sort [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST], true, Statistics(sizeInBytes=40.0 B, rowCount=1)
+   +- Aggregate [l_orderkey#17, o_orderdate#12, o_shippriority#15], [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#33, o_orderdate#12, o_shippriority#15], Statistics(sizeInBytes=40.0 B, rowCount=1)
+      +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23, o_orderdate#12, o_shippriority#15], Statistics(sizeInBytes=40.0 B, rowCount=1)
+         +- Join Inner, (l_orderkey#17 == o_orderkey#8), Statistics(sizeInBytes=48.0 B, rowCount=1)
+            :- Project [l_orderkey#17, l_extendedprice#22, l_discount#23], Statistics(sizeInBytes=352.0 B, rowCount=11)
+            :  +- Filter (l_shipdate#27 > DATE '1995-03-15'), Statistics(sizeInBytes=396.0 B, rowCount=11)
+            :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27], Statistics(sizeInBytes=1152.0 B, rowCount=32)
+            +- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15], Statistics(sizeInBytes=24.0 B, rowCount=1)
+               +- Join Inner, (c_custkey#0 == o_custkey#9), Statistics(sizeInBytes=40.0 B, rowCount=1)
+                  :- Filter (o_orderdate#12 < DATE '1995-03-15'), Statistics(sizeInBytes=96.0 B, rowCount=3)
+                  :  +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15], Statistics(sizeInBytes=256.0 B, rowCount=8)
+                  +- Project [c_custkey#0], Statistics(sizeInBytes=16.0 B, rowCount=1)
+                     +- Filter (c_mktsegment#6 == 'BUILDING'), Statistics(sizeInBytes=36.0 B, rowCount=1)
+                        +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6], Statistics(sizeInBytes=144.0 B, rowCount=4)
+
+== Physical Plan ==
+TopN 10, [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
++- Exchange SinglePartition
+   +- LocalTopN 10, [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
+      +- Project [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23)))#4611686018427387927 AS revenue#33, o_orderdate#12, o_shippriority#15]
+         +- HashAggregate keys=[l_orderkey#17, o_orderdate#12, o_shippriority#15], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
+            +- Exchange hashpartitioning(l_orderkey#17, o_orderdate#12, o_shippriority#15)
+               +- Project [l_orderkey#17, o_orderdate#12, o_shippriority#15, (l_extendedprice#22 * (1 - l_discount#23))]
+                  +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23, o_orderdate#12, o_shippriority#15]
+                     +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8], RuntimeFilter #2: l_orderkey#17 -> spark_catalog.default.lineitem.l_orderkey
+                        :- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
+                        :  +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27], PushedFilters: [(l_shipdate#27 > DATE '1995-03-15')]
+                        +- BroadcastExchange
+                           +- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15]
+                              +- HashJoin Inner, [o_custkey#9] = [c_custkey#0], RuntimeFilter #1: o_custkey#9 -> spark_catalog.default.orders.o_custkey
+                                 :- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15], PushedFilters: [(o_orderdate#12 < DATE '1995-03-15')]
+                                 +- BroadcastExchange
+                                    +- Project [c_custkey#0]
+                                       +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6], PushedFilters: [(c_mktsegment#6 == 'BUILDING')]

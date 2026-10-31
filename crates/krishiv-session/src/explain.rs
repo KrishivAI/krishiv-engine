@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{ExplainNode, ProviderStatistics, TableProviderResolver};
-use krishiv_optimizer::estimated_rows;
-use krishiv_plan::Plan;
+use krishiv_optimizer::PlanStats;
+use krishiv_plan::{LogicalPlan, Plan};
 use krishiv_sql::ast::{Explain, SetKind, Statement, TimeZone};
 
 use crate::dataframe::{Analysis, DataFrame, ExplainMode};
@@ -255,13 +255,14 @@ fn analyzed_section(parsed_analysis: &Analysis) -> String {
     )
 }
 
-/// The optimized plan with the estimated row count of its root
-/// (`Statistics(rowCount=..)`; byte sizes are not estimated).
+/// The optimized plan with `Statistics(sizeInBytes=.., rowCount=..)` after
+/// each node, as Spark's `EXPLAIN COST` prints it: the estimates of one
+/// pass over the plan (`PlanStats`), rows scaled by the optimizer's
+/// selectivities and sizes by Spark's default column widths.
 fn costed(optimized: &Plan, stats: &ProviderStatistics) -> String {
-    let rows = estimated_rows(optimized.root(), stats);
-    let text = optimized.root().to_string();
-    let (first, rest) = text.split_once('\n').unwrap_or((&text, ""));
-    format!("{first}, Statistics(rowCount={rows:.0})\n{rest}")
+    let estimates = PlanStats::compute(optimized.root(), stats);
+    let note = |p: &LogicalPlan| estimates.describe(p);
+    optimized.root().display_with(&note).to_string()
 }
 
 fn render(mode: ExplainMode, parsed: &str, p: &Planned, stats: &ProviderStatistics) -> String {

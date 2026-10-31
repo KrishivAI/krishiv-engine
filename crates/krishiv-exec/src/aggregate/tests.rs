@@ -232,9 +232,10 @@ fn scan(s: &SchemaRef, batches: Vec<Vec<ArrayRef>>) -> Arc<dyn ExecNode> {
     Arc::new(Scan(Batches::new(Arc::clone(s), b)))
 }
 
-fn agg(f: AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {
+fn agg(f: impl std::borrow::Borrow<AggregateFunction>, col: usize, s: &SchemaRef) -> AggregateExpr {
+    let f = f.borrow();
     let t = s.field(col).data_type().clone();
-    AggregateExpr::new(f, col, t, format!("{f:?}_{col}"))
+    AggregateExpr::new(f.clone(), col, t, format!("{f:?}_{col}"))
 }
 
 fn spec(s: &SchemaRef, group_by: Vec<usize>, aggregates: Vec<AggregateExpr>) -> AggregateSpec {
@@ -341,11 +342,11 @@ async fn empty_input() {
     let aggs = || {
         vec![
             AggregateExpr::count_star("c"),
-            agg(Count, 1, &s),
-            agg(Sum, 1, &s),
-            agg(Avg, 1, &s),
-            agg(Min, 1, &s),
-            agg(Max, 1, &s),
+            agg(&Count, 1, &s),
+            agg(&Sum, 1, &s),
+            agg(&Avg, 1, &s),
+            agg(&Min, 1, &s),
+            agg(&Max, 1, &s),
         ]
     };
     let empty = || scan(&s, vec![vec![i64s(&[]), i64s(&[])]]);
@@ -375,9 +376,9 @@ async fn null_keys_group_together_and_all_null_groups() {
     );
     let aggs = vec![
         AggregateExpr::count_star("c"),
-        agg(Count, 1, &s),
-        agg(Sum, 1, &s),
-        agg(Min, 1, &s),
+        agg(&Count, 1, &s),
+        agg(&Sum, 1, &s),
+        agg(&Min, 1, &s),
     ];
     let out = run_rows(node(input, spec(&s, vec![0], aggs))).await;
     assert_eq!(out, ["1|2|0|NULL|NULL", "NULL|2|2|3|1"]);
@@ -395,7 +396,7 @@ async fn float_string_and_date_ordering() {
     let out = run_rows(node(keys, spec(&s, vec![0], count))).await;
     assert_eq!(out, ["0.0|2", "NaN|2"]);
     let one = |v| {
-        let mm = vec![agg(Min, 0, &s), agg(Max, 0, &s)];
+        let mm = vec![agg(&Min, 0, &s), agg(&Max, 0, &s)];
         node(scan(&s, vec![vec![f(v)]]), spec(&s, vec![], mm))
     };
     assert_eq!(run_rows(one(vec![1.0, f64::NAN, -1.0])).await, ["-1.0|NaN"]);
@@ -414,10 +415,10 @@ async fn float_string_and_date_ordering() {
     let days = vec![Some(18262), Some(-1), None, None, None, None];
     let dates: ArrayRef = Arc::new(Date32Array::from(days));
     let aggs = vec![
-        agg(Min, 0, &s),
-        agg(Max, 0, &s),
-        agg(Min, 1, &s),
-        agg(Max, 1, &s),
+        agg(&Min, 0, &s),
+        agg(&Max, 0, &s),
+        agg(&Min, 1, &s),
+        agg(&Max, 1, &s),
     ];
     let plan = node(scan(&s, vec![vec![strs, dates]]), spec(&s, vec![], aggs));
     assert_eq!(run_rows(plan).await, ["|ä|-1|18262"]);
@@ -429,7 +430,7 @@ async fn float_string_and_date_ordering() {
 async fn decimals_and_overflow() {
     let one = |t: DataType, col: ArrayRef, f: AggregateFunction, ansi: bool| {
         let s = schema(vec![("x", t)]);
-        let mut sp = spec(&s, vec![], vec![agg(f, 0, &s)]);
+        let mut sp = spec(&s, vec![], vec![agg(&f, 0, &s)]);
         sp.ansi = ansi;
         node(scan(&s, vec![vec![col]]), sp)
     };
@@ -479,13 +480,13 @@ async fn decimals_and_overflow() {
     let grouped = |xs: &[&str], f: AggregateFunction, ansi: bool| {
         let s = schema(vec![("k", DataType::Int64), ("x", d(38, 0))]);
         let k = i64s(&vec![Some(1); xs.len()]);
-        let mut sp = spec(&s, vec![0], vec![agg(f, 1, &s)]);
+        let mut sp = spec(&s, vec![0], vec![agg(&f, 1, &s)]);
         sp.ansi = ansi;
         node(scan(&s, vec![vec![k, dec(xs, 38, 0)]]), sp)
     };
     let up = [nines.as_str(), "1", "-5"];
     for (f, hint) in [(Sum, "try_sum"), (Avg, "try_avg")] {
-        let r = err_text(exec(grouped(&up, f, true), o).await);
+        let r = err_text(exec(grouped(&up, f.clone(), true), o).await);
         assert!(
             r.starts_with(&format!(
                 "[ARITHMETIC_OVERFLOW] Overflow in sum of decimals. Use '{hint}'"
@@ -500,7 +501,7 @@ async fn decimals_and_overflow() {
     // Past i128: "Overflow in sum of decimals" (sum and avg).
     let huge = || dec(&[nines.as_str(); 4], 38, 0);
     for (f, hint) in [(Sum, "try_sum"), (Avg, "try_avg")] {
-        let r = exec(one(d(38, 0), huge(), f, true), o).await;
+        let r = exec(one(d(38, 0), huge(), f.clone(), true), o).await;
         assert_eq!(
             err_text(r),
             format!(
@@ -551,17 +552,17 @@ async fn distinct_aggregates_and_union() {
             vec![vec![Arc::clone(&k), Arc::clone(&x), Arc::clone(&y)]],
         )
     };
-    let all = vec![agg(Sum, 1, &s), agg(Count, 1, &s), agg(Avg, 1, &s)];
+    let all = vec![agg(&Sum, 1, &s), agg(&Count, 1, &s), agg(&Avg, 1, &s)];
     let plan = distinct_plan(input(), spec(&s, vec![], all), &[true, true, true]).unwrap();
     assert_eq!(run_rows(plan).await, ["3|2|1.5"]);
-    let mut pair = agg(Count, 1, &s);
+    let mut pair = agg(&Count, 1, &s);
     pair.args = vec![1, 2];
     let plan = distinct_plan(input(), spec(&s, vec![], vec![pair]), &[true]).unwrap();
     assert_eq!(run_rows(plan).await, ["2"]);
     // count(distinct x), sum(y), count(*) group by k.
     let mixed = vec![
-        agg(Count, 1, &s),
-        agg(Sum, 2, &s),
+        agg(&Count, 1, &s),
+        agg(&Sum, 2, &s),
         AggregateExpr::count_star("c"),
     ];
     let flags = [true, false, false];
@@ -569,11 +570,11 @@ async fn distinct_aggregates_and_union() {
     assert_eq!(run_rows(plan).await, ["1|1|3|3", "NULL|1|4|2"]);
     let plain = distinct_plan(
         input(),
-        spec(&s, vec![0], vec![agg(Count, 1, &s)]),
+        spec(&s, vec![0], vec![agg(&Count, 1, &s)]),
         &[false],
     );
     assert_eq!(run_rows(plain.unwrap()).await, ["1|2", "NULL|2"]);
-    let two = vec![agg(Count, 1, &s), agg(Count, 2, &s)];
+    let two = vec![agg(&Count, 1, &s), agg(&Count, 2, &s)];
     let e = distinct_plan(input(), spec(&s, vec![], two), &[true, true]).err();
     assert_eq!(
         e.map(|e| e.error_class()),
@@ -730,19 +731,19 @@ async fn weights_scale_sum_and_count() {
     let w = || Weights::Column(Int64Array::from(vec![2, -1, 3]));
     let aggs = vec![
         AggregateExpr::count_star("c"),
-        agg(Count, 1, &s),
-        agg(Sum, 1, &s),
-        agg(Avg, 1, &s),
+        agg(&Count, 1, &s),
+        agg(&Sum, 1, &s),
+        agg(&Avg, 1, &s),
     ];
     let plan = node(weighted(w()), spec(&s, vec![0], aggs));
     assert_eq!(run_rows(plan).await, ["1|1|1|15|15.0", "2|3|0|NULL|NULL"]);
     let plan = node(
         weighted(Weights::Const(3)),
-        spec(&s, vec![], vec![agg(Sum, 1, &s)]),
+        spec(&s, vec![], vec![agg(&Sum, 1, &s)]),
     );
     assert_eq!(run_rows(plan).await, ["45"]);
     let unsupported = Some(ErrorClass::KrishivUnsupportedFeature);
-    let plan = node(weighted(w()), spec(&s, vec![0], vec![agg(Min, 1, &s)]));
+    let plan = node(weighted(w()), spec(&s, vec![0], vec![agg(&Min, 1, &s)]));
     let e = exec(plan, Opts::default()).await.err();
     assert_eq!(e.map(|e| e.error_class()), unsupported);
     let plan = union_distinct(weighted(w()), Arc::clone(&s), None).unwrap();
@@ -768,9 +769,9 @@ fn grouped_input(n: i64, keys: i64) -> (SchemaRef, Vec<Vec<ArrayRef>>) {
 fn grouped_aggs(s: &SchemaRef) -> Vec<AggregateExpr> {
     vec![
         AggregateExpr::count_star("c"),
-        agg(Sum, 1, s),
-        agg(Min, 1, s),
-        agg(Avg, 1, s),
+        agg(&Sum, 1, s),
+        agg(&Min, 1, s),
+        agg(&Avg, 1, s),
     ]
 }
 
@@ -1024,7 +1025,7 @@ async fn error_mid_aggregation_releases_memory() {
         i64s(&[Some(i64::MAX), Some(i64::MAX)]),
     ]);
     let (_m, scope) = spill_dir();
-    let mut sp = spec(&s, vec![0], vec![agg(Sum, 1, &s)]);
+    let mut sp = spec(&s, vec![0], vec![agg(&Sum, 1, &s)]);
     sp.spill = Some(scope);
     let o = Opts {
         limit: 2 << 20,
@@ -1094,10 +1095,10 @@ proptest! {
             .collect();
         let aggs = vec![
             AggregateExpr::count_star("c"),
-            agg(Count, 1, &s),
-            agg(Sum, 1, &s),
-            agg(Min, 1, &s),
-            agg(Max, 1, &s),
+            agg(&Count, 1, &s),
+            agg(&Sum, 1, &s),
+            agg(&Min, 1, &s),
+            agg(&Max, 1, &s),
         ];
         let (_m, scope) = spill_dir();
         let mut sp = spec(&s, vec![0], aggs);
@@ -1181,8 +1182,8 @@ async fn every_type_through_both_phases() {
     ];
     let mut aggs = Vec::new();
     for c in 1..=10 {
-        aggs.push(agg(Min, c, &s));
-        aggs.push(agg(Max, c, &s));
+        aggs.push(agg(&Min, c, &s));
+        aggs.push(agg(&Max, c, &s));
     }
     for (f, c) in [
         (Sum, 1),
@@ -1193,7 +1194,7 @@ async fn every_type_through_both_phases() {
         (Sum, 4),
         (Avg, 4),
     ] {
-        aggs.push(agg(f, c, &s));
+        aggs.push(agg(&f, c, &s));
     }
     let halves = vec![
         cols.iter().map(|c| c.slice(0, n / 2)).collect(),
@@ -1568,7 +1569,7 @@ fn picks() -> Vec<(AggregateFunction, usize)> {
 #[tokio::test]
 async fn first_and_last_pick_rows_in_input_order() {
     let (s, b) = picks_input();
-    let aggs: Vec<_> = picks().into_iter().map(|(f, c)| agg(f, c, &s)).collect();
+    let aggs: Vec<_> = picks().into_iter().map(|(f, c)| agg(&f, c, &s)).collect();
     let single = || node(scan(&s, b.clone()), spec(&s, vec![0], aggs.clone()));
     let expected = [
         // k | first x, last x, first x ignoring NULLs, last x ignoring NULLs,
@@ -1604,6 +1605,8 @@ async fn first_and_last_pick_rows_in_input_order() {
     );
 }
 
+mod collect;
+mod misc;
 mod simple;
 mod structs;
 
@@ -1617,7 +1620,7 @@ fn first_and_last_types_and_states() {
             ignore_nulls: false,
         },
     ] {
-        let a = agg(f, 0, &s);
+        let a = agg(&f, 0, &s);
         assert_eq!(a.result_type().unwrap(), DataType::Int32);
         let names: Vec<_> = a
             .state_fields()
@@ -1715,28 +1718,28 @@ fn row_case_aggs(s: &SchemaRef, picks: bool) -> Vec<AggregateExpr> {
     use AggregateFunction::{First, Last};
     let mut a = vec![
         AggregateExpr::count_star("c"),
-        agg(Count, 3, s),
-        agg(Sum, 3, s),
-        agg(Avg, 3, s),
-        agg(Sum, 4, s),
-        agg(Avg, 4, s),
-        agg(Min, 6, s),
-        agg(Max, 6, s),
-        agg(Max, 4, s),
-        agg(Min, 5, s),
-        agg(Max, 5, s),
+        agg(&Count, 3, s),
+        agg(&Sum, 3, s),
+        agg(&Avg, 3, s),
+        agg(&Sum, 4, s),
+        agg(&Avg, 4, s),
+        agg(&Min, 6, s),
+        agg(&Max, 6, s),
+        agg(&Max, 4, s),
+        agg(&Min, 5, s),
+        agg(&Max, 5, s),
     ];
     if picks {
         a.extend([
             agg(
-                First {
+                &First {
                     ignore_nulls: false,
                 },
                 3,
                 s,
             ),
-            agg(Last { ignore_nulls: true }, 5, s),
-            agg(First { ignore_nulls: true }, 4, s),
+            agg(&Last { ignore_nulls: true }, 5, s),
+            agg(&First { ignore_nulls: true }, 4, s),
         ]);
     }
     a
@@ -1889,10 +1892,10 @@ async fn first_and_last_keep_input_order_through_spills() {
     let (s, b) = grouped_input(n, keys);
     let (_m, scope) = spill_dir();
     let aggs = vec![
-        agg(First { ignore_nulls: true }, 1, &s),
-        agg(Last { ignore_nulls: true }, 1, &s),
+        agg(&First { ignore_nulls: true }, 1, &s),
+        agg(&Last { ignore_nulls: true }, 1, &s),
         agg(
-            First {
+            &First {
                 ignore_nulls: false,
             },
             1,
@@ -2142,9 +2145,9 @@ async fn row_layout_key_types_equal_default() {
     let aggs = || {
         vec![
             AggregateExpr::count_star("c"),
-            agg(Sum, x, &s),
-            agg(Min, 0, &s),
-            agg(Max, 2, &s),
+            agg(&Sum, x, &s),
+            agg(&Min, 0, &s),
+            agg(&Max, 2, &s),
         ]
     };
     for keys in [
@@ -2226,7 +2229,7 @@ async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
         spec(
             &strict,
             vec![0],
-            vec![AggregateExpr::count_star("c"), agg(Sum, 1, &strict)],
+            vec![AggregateExpr::count_star("c"), agg(&Sum, 1, &strict)],
         ),
     );
     // `exec` runs both layouts and requires the same error.
@@ -2572,7 +2575,7 @@ fn unread_plan_with(
             vec![i64s(&keys), i64s(&keys)]
         })
         .collect();
-    let mut sp = spec(&s, vec![0], vec![agg(Sum, 1, &s)]);
+    let mut sp = spec(&s, vec![0], vec![agg(&Sum, 1, &s)]);
     sp.spill = spill;
     let agg = match gate {
         Some(gate) => HashAggregate::with_output_gate(sp, gate).unwrap(),
@@ -2796,8 +2799,8 @@ const MOMENTS: [AggregateFunction; 9] = [
 fn moment_aggs() -> Vec<AggregateExpr> {
     MOMENTS
         .iter()
-        .map(|&f| AggregateExpr {
-            function: f,
+        .map(|f| AggregateExpr {
+            function: f.clone(),
             args: if super::arity(f) == 2 {
                 vec![1, 2]
             } else {

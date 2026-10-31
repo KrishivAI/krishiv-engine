@@ -18,8 +18,10 @@
 use std::marker::PhantomData;
 
 use arrow_array::types::ByteArrayType;
-use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, GenericByteArray};
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, NullBuffer};
+use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, Datum, GenericByteArray, Scalar};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+};
 
 use crate::chunk::{self, CHUNK, Resolved, Side, split};
 use crate::dispatch::Dispatch;
@@ -335,6 +337,33 @@ fn common_len(l: Option<usize>, r: Option<usize>) -> Result<usize, KernelError> 
     }
 }
 
+/// A one-row array holding `v` (`None` when `v` is not valid for the type,
+/// e.g. non-UTF-8 bytes for a string column, or its length overflows the
+/// offset type).
+fn one_value<T: ByteArrayType>(v: &[u8]) -> Option<GenericByteArray<T>> {
+    let end = T::Offset::from_usize(v.len())?;
+    let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![T::Offset::usize_as(0), end]));
+    GenericByteArray::<T>::try_new(offsets, Buffer::from_slice_ref(v), None).ok()
+}
+
+/// `a kind b` through arrow-ord.
+fn arrow_cmp<T: ByteArrayType>(
+    kind: CompareKind,
+    a: &GenericByteArray<T>,
+    b: &dyn Datum,
+) -> Result<BooleanArray, KernelError> {
+    use arrow_ord::cmp;
+    let r = match kind {
+        CompareKind::Equal => cmp::eq(a, b),
+        CompareKind::NotEqual => cmp::neq(a, b),
+        CompareKind::Less => cmp::lt(a, b),
+        CompareKind::LessEq => cmp::lt_eq(a, b),
+        CompareKind::Greater => cmp::gt(a, b),
+        CompareKind::GreaterEq => cmp::gt_eq(a, b),
+    };
+    r.map_err(|e| KernelError::internal(format!("arrow-ord comparison: {e}")))
+}
+
 /// `l op r` for strings or binary, in unsigned byte order.
 ///
 /// # Errors
@@ -346,6 +375,18 @@ pub fn compare_bytes<T: ByteArrayType, Op: CompareOp>(
     let len = common_len(l.len(), r.len())?;
     if matches!(l, BytesOperand::Scalar(None)) || matches!(r, BytesOperand::Scalar(None)) {
         return Ok(BooleanArray::new_null(len));
+    }
+    // A column against a non-NULL literal or another column: arrow-ord's
+    // byte-array kernels (unsigned lexicographic order, as here; no float
+    // semantics involved). NULLs propagate as the union of the validities.
+    match (l, r) {
+        (BytesOperand::Array(a), BytesOperand::Scalar(Some(v))) => {
+            if let Some(lit) = one_value::<T>(v) {
+                return arrow_cmp(Op::KIND, a, &Scalar::new(lit));
+            }
+        }
+        (BytesOperand::Array(a), BytesOperand::Array(b)) => return arrow_cmp(Op::KIND, a, b),
+        _ => {}
     }
     // Byte slices compare lexicographically as unsigned bytes; the kind's
     // truth table turns the ordering into the result.

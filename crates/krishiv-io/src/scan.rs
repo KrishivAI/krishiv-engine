@@ -155,6 +155,7 @@ pub struct ScanStream {
     decoder: Option<Box<dyn Decoder>>,
     /// The decoder's counters when it was dropped (the split ended).
     final_metrics: ScanUnitMetrics,
+    final_row_filter: Option<bool>,
     mapper: Option<SchemaMapper>,
     io: IoContext,
     file: FileRef,
@@ -228,6 +229,7 @@ impl ScanStream {
         let mut stream = Self {
             decoder: None,
             final_metrics: ScanUnitMetrics::default(),
+            final_row_filter: None,
             mapper: None,
             io: io.clone(),
             file,
@@ -401,6 +403,7 @@ impl ScanStream {
         self.end_unit();
         if let Some(d) = self.decoder.take() {
             self.final_metrics = d.metrics();
+            self.final_row_filter = d.row_filter_measured();
         }
         self.ready.clear();
         self.in_flight = None;
@@ -603,6 +606,16 @@ impl ScanStream {
         self.decoder
             .as_ref()
             .map_or(self.final_metrics, |d| d.metrics())
+    }
+
+    /// What this stream last measured for its row-level filter
+    /// ([`Decoder::row_filter_measured`]), for the next piece of the file to
+    /// start from ([`ScanRequest::row_filter_start`]).
+    #[must_use]
+    pub fn row_filter_measured(&self) -> Option<bool> {
+        self.decoder
+            .as_ref()
+            .map_or(self.final_row_filter, |d| d.row_filter_measured())
     }
 
     /// The mapper of this file (`None` when the file was skipped).

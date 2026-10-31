@@ -16,9 +16,9 @@ fn occurrences(plan: &LogicalPlan, needle: &str) -> usize {
     plan.to_string().matches(needle).count()
 }
 
-/// The number of extracted expressions: one `AS cse_*` alias each.
+/// The number of extracted expressions: one `AS krishiv_cse_*` alias each.
 fn extractions(plan: &LogicalPlan) -> usize {
-    occurrences(plan, "AS cse_")
+    occurrences(plan, "AS krishiv_cse_")
 }
 
 /// Optimises `sql` with CSE on and off.
@@ -26,7 +26,15 @@ fn both(sql: &str) -> (Plan, Plan) {
     let ctx = support::ctx();
     let plan = support::resolve(sql, &ctx);
     let on = optimize(&plan).unwrap();
-    let off = optimize_with_options(&plan, &support::AllDistinct, &Options { cse: false }).unwrap();
+    let off = optimize_with_options(
+        &plan,
+        &support::AllDistinct,
+        &Options {
+            cse: false,
+            ..Options::default()
+        },
+    )
+    .unwrap();
     (on, off)
 }
 
@@ -88,7 +96,7 @@ fn unconditional_once_plus_conditional_is_hoisted() {
     let (on, off) = both("SELECT a / b AS x, CASE WHEN a > 0 THEN a / b ELSE NULL END AS y FROM t");
     let text = on.root().to_string();
     assert_eq!(extractions(on.root()), 1, "{text}");
-    assert!(text.contains("THEN cse_"), "{text}");
+    assert!(text.contains("THEN krishiv_cse_"), "{text}");
     assert_eq!(occurrences(on.root(), " / "), 1, "{text}");
     assert_same_rows(&div_db(), on.root(), off.root(), "sure plus conditional");
 }
@@ -134,8 +142,8 @@ fn aggregate_arguments_are_deduplicated() {
     let (on, off) = both("SELECT sum(a * b) AS s, count(a * b) AS n FROM t GROUP BY c");
     let text = on.root().to_string();
     assert_eq!(extractions(on.root()), 1, "{text}");
-    assert!(text.contains("sum(cse_"), "{text}");
-    assert!(text.contains("count(cse_"), "{text}");
+    assert!(text.contains("sum(krishiv_cse_"), "{text}");
+    assert!(text.contains("count(krishiv_cse_"), "{text}");
     for seed in 1..=8 {
         assert_same_rows(&data::small(seed), on.root(), off.root(), "aggregate args");
     }
@@ -153,7 +161,11 @@ fn filter_where_arguments_are_not_hoisted() {
     );
     let text = on.root().to_string();
     assert_eq!(extractions(on.root()), 1, "{text}");
-    assert_eq!(occurrences(on.root(), "FILTER (WHERE cse_"), 2, "{text}");
+    assert_eq!(
+        occurrences(on.root(), "FILTER (WHERE krishiv_cse_"),
+        2,
+        "{text}"
+    );
     assert_eq!(occurrences(on.root(), "c#2 + 1L"), 2, "{text}");
     for seed in 1..=8 {
         assert_same_rows(&data::small(seed), on.root(), off.root(), "filter args");
@@ -206,7 +218,7 @@ fn tpch_q1_computes_the_product_once() {
         1,
         "{text}"
     );
-    assert!(text.contains("AS cse_"), "{text}");
+    assert!(text.contains("AS krishiv_cse_"), "{text}");
 }
 
 /// The rule is idempotent: optimizing twice changes nothing, on plans
@@ -280,7 +292,7 @@ fn in_items_and_between_upper_bounds_are_not_hoisted() {
     // Casts of the columns hoist; no division does.
     let hoisted_divisions = text
         .lines()
-        .filter(|l| l.contains("AS cse_") && l.contains(" / "))
+        .filter(|l| l.contains("AS krishiv_cse_") && l.contains(" / "))
         .count();
     assert_eq!(hoisted_divisions, 0, "{text}");
     assert!(extractions(on.root()) >= 1, "{text}");
@@ -292,7 +304,15 @@ fn in_items_and_between_upper_bounds_are_not_hoisted() {
 fn switch_disables_the_rule() {
     let ctx = support::ctx();
     let plan = support::resolve("SELECT ((a + b) * c) + ((a + b) * c) AS x FROM t", &ctx);
-    let off = optimize_with_options(&plan, &support::AllDistinct, &Options { cse: false }).unwrap();
+    let off = optimize_with_options(
+        &plan,
+        &support::AllDistinct,
+        &Options {
+            cse: false,
+            ..Options::default()
+        },
+    )
+    .unwrap();
     assert_eq!(extractions(off.root()), 0);
     assert_eq!(off.root().resolved_output(), plan.root().resolved_output());
     for seed in 1..=8 {
@@ -319,9 +339,16 @@ fn differential_results_match() {
     for q in 1..=22 {
         let plan = support::resolve(&support::tpch_sql(q), &ctx);
         let on = optimize(&plan).unwrap();
-        let off =
-            optimize_with_options(&plan, &support::AllDistinct, &Options { cse: false }).unwrap();
-        extracted += on.root().to_string().matches("AS cse_").count();
+        let off = optimize_with_options(
+            &plan,
+            &support::AllDistinct,
+            &Options {
+                cse: false,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        extracted += on.root().to_string().matches("AS krishiv_cse_").count();
         let (mut want, mut got) = (eval::rows(&db, off.root()), eval::rows(&db, on.root()));
         assert_eq!(got.len(), want.len(), "q{q:02} row counts");
         want.sort();
@@ -349,4 +376,60 @@ fn a_filter_rooting_a_subquery_keeps_its_width() {
     for seed in 1..=8 {
         assert_same_rows(&data::small(seed), on.root(), off.root(), "subquery root");
     }
+}
+
+/// A user alias named like a CSE column (`cse_<n>`) is a user column: it
+/// must survive the pass that narrows union inputs, and results must not
+/// change.
+#[test]
+fn a_user_alias_named_like_a_cse_column_is_left_alone() {
+    let (on, off) = both(
+        "SELECT a AS cse_1, (c + 1) * (c + 1) AS x FROM t \
+         UNION ALL SELECT a, c FROM t",
+    );
+    let text = on.root().to_string();
+    // The user's `AS cse_1` and one extraction (`AS krishiv_cse_0` of the pass).
+    assert_eq!(occurrences(on.root(), "AS cse_1#"), 1, "{text}");
+    assert_eq!(occurrences(on.root(), "AS krishiv_cse_0#"), 1, "{text}");
+    assert_eq!(on.root().resolved_output(), off.root().resolved_output());
+    for seed in 1..=8 {
+        assert_same_rows(&data::small(seed), on.root(), off.root(), "cse_1 alias");
+    }
+}
+
+/// A property-test find: a self-join over a filter with repeated
+/// `coalesce` calls is a fixed point of `optimize`.
+#[test]
+fn a_self_join_with_repeated_coalesce_is_a_fixed_point() {
+    let ctx = support::ctx();
+    let sql = "SELECT * FROM (SELECT x1.c0 AS c0 FROM (SELECT x3.d AS c0, x3.d AS c1, x3.d AS c2 \
+        FROM u AS x2 JOIN u AS x3 ON x2.a = x3.a AND (x2.d IS NULL OR x3.d IS NOT NULL) \
+        WHERE x2.d <> 'x') AS x1 LEFT ANTI JOIN u AS x4 ON coalesce(x1.c0, 'x') = 'x' \
+        WHERE ((coalesce(x1.c2, 'x') = 'z' OR coalesce(x1.c0, 'z') = 'z') \
+        AND coalesce(x1.c0, 'x') = 'y')) ORDER BY c0 LIMIT 1";
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{}\n---\n{}",
+        optimized.root(),
+        again.root()
+    );
+}
+
+/// The same query re-optimised: the user's `cse_0` stays a user column when
+/// the first run's extracted ids sit in the plan.
+#[test]
+fn a_user_alias_survives_re_optimisation() {
+    let ctx = support::ctx();
+    let sql = "SELECT a AS cse_0, (c + 1) * (c + 1) AS x FROM t UNION ALL SELECT a, c FROM t";
+    let plan = support::resolve(sql, &ctx);
+    let first = optimize(&plan).unwrap();
+    let second = optimize(&first).unwrap();
+    assert!(second.structurally_eq(&first));
+    assert_eq!(
+        second.root().resolved_output(),
+        plan.root().resolved_output()
+    );
 }

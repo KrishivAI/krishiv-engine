@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "listagg#0da6f909d94f/ansi_on",
+      "reason": "SELECT listagg(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "listagg#0da6f909d94f/ansi_off",
+      "reason": "SELECT listagg(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "listagg#88fe47b35fe5/ansi_on",
+      "reason": "SELECT listagg(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "listagg#88fe47b35fe5/ansi_off",
+      "reason": "SELECT listagg(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "listagg#b6e168ec4e8b/ansi_on",
+      "reason": "SELECT listagg(col, CAST(X'C328FF' AS STRING)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    },
+    {
+      "id": "listagg#b6e168ec4e8b/ansi_off",
+      "reason": "SELECT listagg(col, CAST(X'C328FF' AS STRING)) FROM VALUES ('a'), ('b'), ('c') AS tab(col) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
+    }
+  ],
+  "format_version": 1,
+  "function": "listagg"
+}

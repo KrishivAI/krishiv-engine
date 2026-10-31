@@ -38,7 +38,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::rowtable::{Mode, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
-use super::{AggregateSpec, unsupported};
+use super::{AggregateSpec, is_order_sensitive, unsupported};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
@@ -293,15 +293,22 @@ impl Spiller {
 
     /// Writes groups `from..` of `table` as one run of partition files at
     /// `level` (blocking I/O).
-    fn write_run(&self, table: &Table, from: usize, level: u32) -> Result<Run> {
+    fn write_run(&self, table: &Table, from: usize, level: u32, partition: u32) -> Result<Run> {
         let parts = table.ids_by_partition(level, from);
         let chunk = spill_chunk(table.memory_size(), table.len());
-        self.write_parts(parts, chunk, table, &|ids| table.state_batch(ids))
+        self.write_parts(
+            parts,
+            chunk,
+            table,
+            &|ids| table.state_batch(ids),
+            partition,
+        )
     }
 
     /// Writes the rows that each source's filter keeps as one run of
     /// partition files at `level`: per partition file, the sources in
-    /// order (their merge order; blocking I/O).
+    /// order (their merge order; blocking I/O). The sources mix driver
+    /// partitions, so the run keeps its insertion order.
     fn write_run_sources(
         &self,
         sources: &[(&RowTable, &dyn Fn(u32) -> bool)],
@@ -335,7 +342,7 @@ impl Spiller {
             *file = Some(self.finish(writer)?);
         }
         bump(&self.counters.spill_runs, 1);
-        Ok(Run(files))
+        Ok(Run::new(files, u32::MAX))
     }
 
     /// Writes the state batches of the groups of each partition (`parts`,
@@ -347,6 +354,7 @@ impl Spiller {
         chunk: usize,
         table: &Table,
         state: &dyn Fn(&[u32]) -> Result<RecordBatch>,
+        partition: u32,
     ) -> Result<Run> {
         let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
         for (p, ids) in parts.into_iter().enumerate() {
@@ -363,7 +371,7 @@ impl Spiller {
             files[p] = Some(self.finish(writer)?);
         }
         bump(&self.counters.spill_runs, 1);
-        Ok(Run(files))
+        Ok(Run::new(files, partition))
     }
 
     /// Writes `chunks` of an in-memory result to one output file
@@ -443,7 +451,22 @@ fn out_chunk(memory: usize, groups: usize, batch_size: usize) -> usize {
 
 /// One spill: a file per hash partition.
 #[derive(Debug)]
-struct Run(Vec<Option<SpillFile>>);
+struct Run {
+    files: Vec<Option<SpillFile>>,
+    /// What merged first: the spilling table's driver partition
+    /// ([`u32::MAX`] for runs of many partitions, which keep their
+    /// insertion order). Runs merge grouped by hash partition, runs of
+    /// one partition in this order, so order-sensitive aggregates
+    /// (`collect_*`, the vector ones) merge partitions in partition-index
+    /// order whatever thread spilled first.
+    partition: u32,
+}
+
+impl Run {
+    fn new(files: Vec<Option<SpillFile>>, partition: u32) -> Self {
+        Self { files, partition }
+    }
+}
 
 struct Local {
     table: Table,
@@ -455,6 +478,9 @@ struct Local {
     /// The global state: a running driver's spill also spills the tables
     /// that finished drivers combined (nobody else can until `finalize`).
     global: GlobalState,
+    /// The scheduler-assigned partition of this driver: combined tables
+    /// merge in this order (see [`Run::partition`]).
+    partition: u32,
 }
 
 /// A partition being merged from disk.
@@ -472,8 +498,9 @@ struct Current {
 
 #[derive(Default)]
 struct Inner {
-    /// Combined driver tables (in-memory phase; `tables[0]` is the target).
-    tables: Vec<(Table, Reservation)>,
+    /// Combined driver tables (in-memory phase; `tables[0]` is the target),
+    /// in driver-partition order (see [`Run::partition`]).
+    tables: Vec<(u32, Table, Reservation)>,
     /// Groups of `tables[1]` already merged into `tables[0]`.
     merged: usize,
     runs: Vec<Run>,
@@ -831,15 +858,18 @@ enum Step {
 
 /// Bytes the finalize state holds in tables.
 fn held(inner: &Inner) -> usize {
-    inner.tables.iter().map(|(_, r)| r.size()).sum::<usize>()
+    inner.tables.iter().map(|(_, _, r)| r.size()).sum::<usize>()
         + inner.current.as_ref().map_or(0, |c| c.reservation.size())
 }
 
-/// Makes the per-partition tasks of `runs` at `level`.
-fn tasks_of(runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>)>) {
+/// Makes the per-partition tasks of `runs` at `level`: runs of one
+/// partition merge in partition-index order (stable), so order-sensitive
+/// aggregates merge deterministically whatever thread spilled first.
+fn tasks_of(mut runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>)>) {
+    runs.sort_by_key(|r| r.partition);
     let mut by_part: Vec<Vec<SpillFile>> = (0..PARTITIONS).map(|_| Vec::new()).collect();
     for run in runs {
-        for (p, f) in run.0.into_iter().enumerate() {
+        for (p, f) in run.files.into_iter().enumerate() {
             if let Some(f) = f {
                 by_part[p].push(f);
             }
@@ -866,13 +896,14 @@ impl HashAggregate {
             let merged = std::mem::take(&mut inner.merged);
             return Ok(Some(Box::new(move || {
                 let mut runs = Vec::new();
-                for (i, (t, mut r)) in tables.into_iter().enumerate() {
+                for (i, (p, t, mut r)) in tables.into_iter().enumerate() {
                     lend_headroom(&mut r);
-                    runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0)?);
+                    runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p)?);
                 }
                 Ok(Box::new(move |inner: &mut Inner| {
                     inner.disk = true;
-                    // Runs merge in the order their rows arrived: the
+                    // Runs merge grouped by driver partition (stable, so
+                    // each partition's runs stay in arrival order): the
                     // drivers' earlier spills, then the tables.
                     let mut all = std::mem::take(&mut inner.runs);
                     all.extend(runs);
@@ -898,7 +929,7 @@ impl HashAggregate {
         bump(&self.counters.repartitions, 1);
         Ok(Some(Box::new(move || {
             lend_headroom(&mut held);
-            let run = s.write_run(&table, 0, level)?;
+            let run = s.write_run(&table, 0, level, u32::MAX)?;
             drop((table, held));
             Ok(Box::new(move |inner: &mut Inner| {
                 if let Some(cur) = inner.current.as_mut() {
@@ -946,15 +977,28 @@ impl HashAggregate {
             return self.must_free(g, inner, ctx, 0);
         }
         let tables = &mut inner.tables;
-        if inner.merged == 0
-            && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].0.len())
+        // Order-sensitive aggregates merge in driver-partition order (see
+        // [`Run::partition`]), not biggest-first.
+        let ordered = self
+            .core
+            .spec
+            .aggregates
+            .iter()
+            .any(|a| is_order_sensitive(&a.function));
+        if !ordered
+            && inner.merged == 0
+            && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len())
         {
             tables.swap(0, big);
         }
         if tables.len() <= 1 {
-            let (table, reservation) = match tables.pop() {
+            let (_, table, reservation) = match tables.pop() {
                 Some(t) => t,
-                None => (self.new_table(g, false)?, ctx.consumer().reservation()),
+                None => (
+                    u32::MAX,
+                    self.new_table(g, false)?,
+                    ctx.consumer().reservation(),
+                ),
             };
             bump(&self.counters.groups, table.len() as u64);
             bump(&self.counters.hash_entries, table.len() as u64);
@@ -965,7 +1009,7 @@ impl HashAggregate {
             return Ok(Step::Done);
         }
         let (dst, rest) = tables.split_at_mut(1);
-        let (dst, src) = (&mut dst[0], &rest[0].0);
+        let ((_, dst, dst_res), src) = (&mut dst[0], &rest[0].1);
         if inner.merged >= src.len() {
             tables.remove(1);
             inner.merged = 0;
@@ -973,16 +1017,16 @@ impl HashAggregate {
         }
         let end = (inner.merged + CHUNK).min(src.len());
         let ids = src.ids(inner.merged..end);
-        let p = dst.0.prepare(&Batch::new(src.state_batch(&ids)?), true)?;
+        let p = dst.prepare(&Batch::new(src.state_batch(&ids)?), true)?;
         let granted: usize = inner.granted.iter().map(Reservation::size).sum();
-        let want = dst.0.projected(&p)? + dst.0.transient(&p);
-        if let Err(need) = reserve_to(&mut dst.1, want.saturating_sub(granted)) {
+        let want = dst.projected(&p)? + dst.transient(&p);
+        if let Err(need) = reserve_to(dst_res, want.saturating_sub(granted)) {
             if self.core.spec.spill.is_none() {
                 return Ok(Step::Grow(need));
             }
             return self.must_free(g, inner, ctx, want);
         }
-        dst.0.apply(&p)?;
+        dst.apply(&p)?;
         inner.merged = end;
         Ok(Step::Yield)
     }
@@ -1116,7 +1160,7 @@ impl HashAggregate {
                 for w in writers {
                     files.push(w.map(|w| s.finish(w)).transpose()?);
                 }
-                runs.push(Run(files));
+                runs.push(Run::new(files, u32::MAX));
                 Ok(Box::new(move |inner: &mut Inner| {
                     tasks_of(runs, level, &mut inner.tasks);
                     Ok(())
@@ -1261,6 +1305,7 @@ impl Sink for HashAggregate {
             signal: Arc::clone(memory.signal()),
             consumer: Arc::clone(memory.consumer()),
             global: Arc::clone(g),
+            partition: ctx.partition(),
         }))
     }
 
@@ -1301,6 +1346,7 @@ impl Sink for HashAggregate {
             mut reservation,
             signal,
             consumer,
+            partition,
             ..
         } = *l;
         // A large row table still narrow widens to its radix partitions
@@ -1317,10 +1363,13 @@ impl Sink for HashAggregate {
         // Earlier drivers have ended: charge their tables to this one, so the
         // arbitrator sees them as this consumer's spillable bytes (the last
         // driver to combine finalizes and spills through `spill_global`).
-        for (_, r) in &mut inner.tables {
+        for (_, _, r) in &mut inner.tables {
             r.transfer_to(&consumer).map_err(KrishivError::from)?;
         }
-        inner.tables.push((table, reservation));
+        // Tables merge in driver-partition order (see [`Run::partition`]),
+        // not in the order drivers combine.
+        let at = inner.tables.partition_point(|(p, _, _)| *p < partition);
+        inner.tables.insert(at, (partition, table, reservation));
         // The last driver's signal stays live through `finalize`.
         let spillable = self.core.spec.spill.is_some();
         signal.set_spillable_bytes(if spillable { held(&inner) } else { 0 });
@@ -1339,7 +1388,7 @@ impl Sink for HashAggregate {
                 // combine: charge the tables to its live spill hook.
                 let mut inner = lock(&g.inner);
                 let to = ctx.consumer().consumer();
-                for (_, r) in &mut inner.tables {
+                for (_, _, r) in &mut inner.tables {
                     r.transfer_to(to).map_err(KrishivError::from)?;
                 }
             }
@@ -1381,7 +1430,7 @@ impl Sink for HashAggregate {
                 g.combined.store(0, AtomicOrdering::Relaxed);
                 std::mem::take(&mut inner.tables)
             };
-            let freed_combined: usize = combined.iter().map(|(_, r)| r.size()).sum();
+            let freed_combined: usize = combined.iter().map(|(_, _, r)| r.size()).sum();
             let own = if l.table.not_worth_spilling() {
                 None
             } else {
@@ -1397,6 +1446,7 @@ impl Sink for HashAggregate {
                 .as_ref()
                 .map(|_| std::mem::replace(&mut l.reservation, s.consumer.reservation()));
             let freed_own = held.as_ref().map_or(0, Reservation::size);
+            let own_partition = l.partition;
             let runs = ctx
                 .run_blocking(move || {
                     let mut runs = Vec::new();
@@ -1404,12 +1454,12 @@ impl Sink for HashAggregate {
                         if let Some(h) = held.as_mut() {
                             lend_headroom(h);
                         }
-                        runs.push(s.write_run(t, 0, 0)?);
+                        runs.push(s.write_run(t, 0, 0, own_partition)?);
                     }
                     drop((own, held));
-                    for (t, mut r) in combined {
+                    for (p, t, mut r) in combined {
                         lend_headroom(&mut r);
-                        runs.push(s.write_run(&t, 0, 0)?);
+                        runs.push(s.write_run(&t, 0, 0, p)?);
                     }
                     Ok(runs)
                 })

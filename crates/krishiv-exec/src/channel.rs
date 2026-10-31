@@ -780,6 +780,38 @@ mod tests {
         ok(sink.combine(l1, &g));
     }
 
+    /// A driver's share spans its morsels: moving to a later morsel neither
+    /// resets what it holds nor lets it past its share, and the driver
+    /// behind passing those morsels releases their batches in key order.
+    #[test]
+    fn a_drivers_share_spans_the_morsels_it_moves_through() {
+        let (sink, g, ctx) = setup(Some(1 << 20), 2);
+        sink.expect_ordered(&g, 0, 0..2);
+        let mut l0 = ok(sink.local_state(&ctx[0], &g));
+        let mut l1 = ok(sink.local_state(&ctx[1], &g));
+        sink.position(&mut l0, &g, 0);
+        sink.position(&mut l1, &g, 1);
+        // 48 KiB each: the share is 128 KiB (1 MiB / 4 / 2 drivers).
+        let big = |v: i64| {
+            let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+            Batch::new(ok(RecordBatch::try_new(
+                schema,
+                vec![Arc::new(Int64Array::from(vec![v; 6 * 1024]))],
+            )))
+        };
+        assert_eq!(status(&ok(sink.sink(big(1), &mut l1, &g))), "more");
+        sink.position(&mut l1, &g, 2);
+        assert_eq!(status(&ok(sink.sink(big(2), &mut l1, &g))), "more");
+        sink.position(&mut l1, &g, 3);
+        assert_eq!(status(&ok(sink.sink(big(3), &mut l1, &g))), "blocked");
+        // Driver 0 moves past driver 1's morsels: driver 1 now holds the
+        // smallest key, and everything it held goes out in key order.
+        sink.position(&mut l0, &g, 4);
+        assert_eq!(received(&sink), [1, 2, 3]);
+        ok(sink.combine(l0, &g));
+        ok(sink.combine(l1, &g));
+    }
+
     /// A released batch stays reserved in the pool while it waits in the
     /// channel and is returned when the caller reads it (or drops the stream).
     #[test]

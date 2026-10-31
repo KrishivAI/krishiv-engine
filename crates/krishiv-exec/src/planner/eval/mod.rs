@@ -792,6 +792,7 @@ mod tests {
         use krishiv_plan::{Expr, ExprNode, ResolvedExpr, ResolvedFunction};
         Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
             ResolvedFunction {
+                within_group: Vec::new(),
                 id: FunctionId::Udf {
                     name: "my_udf".to_owned(),
                     version: 2,

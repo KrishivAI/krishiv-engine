@@ -295,6 +295,7 @@ impl Resolver<'_> {
             args: kids.iter().map(|k| Arc::clone(&k.expr)).collect(),
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         };
         Ok(Bound {
             expr: Arc::new(Expr::new(ExprNode::Function(call)).with_origin(e.origin)),
@@ -690,6 +691,18 @@ impl Resolver<'_> {
     fn retype(&mut self, e: Arc<Expr>, env: &Arc<Env>) -> Result<Arc<Expr>, AnalysisError> {
         let origin = e.origin;
         match &e.node {
+            // An ordered-set call keeps its resolved form: its arguments
+            // already hold the ordering keys (`listagg`) or the tie-break
+            // (`mode`), so binding them again would count them twice. The
+            // result type is that of the value, which a rewrite of a
+            // grouping call does not change.
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if !f.within_group.is_empty()
+                    && matches!(f.id.name(), "listagg" | "mode")
+                    && !has_subquery(&e) =>
+            {
+                Ok(e)
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) if !has_subquery(&e) => {
                 // Rebind by a name that resolves to the same function: a
                 // bare name finds the built-in first (the search path), so
@@ -712,6 +725,7 @@ impl Resolver<'_> {
                         args: f.args.clone(),
                         distinct: f.distinct,
                         filter: f.filter.clone(),
+                        within_group: f.within_group.clone(),
                     }))
                     .with_origin(origin),
                 );

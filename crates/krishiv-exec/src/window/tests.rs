@@ -432,7 +432,7 @@ fn reference(
                     // The string column: by bytes; first/last by row.
                     let texts: Vec<Option<String>> = frame_rows.iter().map(|x| text(x.3)).collect();
                     let set: Vec<&String> = texts.iter().flatten().collect();
-                    let v = match a.function {
+                    let v = match &a.function {
                         AggregateFunction::Min => set.iter().min().map(|s| (*s).clone()),
                         AggregateFunction::Max => set.iter().max().map(|s| (*s).clone()),
                         AggregateFunction::First { ignore_nulls: true } => {
@@ -448,14 +448,14 @@ fn reference(
                     v.unwrap_or_else(|| "null".to_owned())
                 } else {
                     let vals: Vec<i64> = frame_rows.iter().filter_map(|x| x.3).collect();
-                    match a.function {
+                    match &a.function {
                         AggregateFunction::Count if a.args.is_empty() => {
                             frame_rows.len().to_string()
                         }
                         AggregateFunction::Count => vals.len().to_string(),
                         AggregateFunction::First { ignore_nulls } => {
                             let mut picked = frame_rows.iter().map(|x| x.3);
-                            let v = if ignore_nulls {
+                            let v = if *ignore_nulls {
                                 vals.first().copied()
                             } else {
                                 picked.next().flatten()
@@ -463,7 +463,7 @@ fn reference(
                             v.map_or_else(|| "null".to_owned(), |v| v.to_string())
                         }
                         AggregateFunction::Last { ignore_nulls } => {
-                            let v = if ignore_nulls {
+                            let v = if *ignore_nulls {
                                 vals.last().copied()
                             } else {
                                 frame_rows.last().and_then(|x| x.3)
@@ -494,7 +494,29 @@ fn reference(
                         | AggregateFunction::Kurtosis
                         | AggregateFunction::Corr
                         | AggregateFunction::CovarSamp
-                        | AggregateFunction::CovarPop => {
+                        | AggregateFunction::CovarPop
+                        | AggregateFunction::RegrCount
+                        | AggregateFunction::RegrAvgx
+                        | AggregateFunction::RegrAvgy
+                        | AggregateFunction::RegrSxx
+                        | AggregateFunction::RegrSyy
+                        | AggregateFunction::RegrSxy
+                        | AggregateFunction::RegrSlope
+                        | AggregateFunction::RegrIntercept
+                        | AggregateFunction::RegrR2
+                        | AggregateFunction::BitAnd
+                        | AggregateFunction::BitOr
+                        | AggregateFunction::BitXor
+                        | AggregateFunction::Mode
+                        | AggregateFunction::ModeMin
+                        | AggregateFunction::ModeMax
+                        | AggregateFunction::ListAgg { .. }
+                        | AggregateFunction::TrySum
+                        | AggregateFunction::TryAvg
+                        | AggregateFunction::CollectList
+                        | AggregateFunction::CollectSet
+                        | AggregateFunction::VectorSum
+                        | AggregateFunction::VectorAvg => {
                             unreachable!("no window test aggregates with this function")
                         }
                     }
@@ -1154,7 +1176,7 @@ fn reserved_cost_matches_what_evaluation_holds() {
                 + 8 * n
                 + 20 * count(&part)
                 + 16 * count(&peer);
-            let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+            let cost = super::eval::cost(&window, n, count(&part), count(&peer), 0).unwrap();
             assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
             assert!(cost <= 2 * held, "{f:?}: reserved {cost} for {held} held");
         }
@@ -1184,7 +1206,7 @@ async fn partitioned_windows_run_at_a_tight_limit() {
     // A batch: 40 partitions, 1334 peer groups.
     let exact = batches[0].data().get_array_memory_size()
         + 2 * per_batch
-        + super::eval::cost(&window, per_batch, 40, 1_334).unwrap();
+        + super::eval::cost(&window, per_batch, 40, 1_334, 0).unwrap();
     let limit = 4 * exact;
     // The flat estimate this replaces reserved 2 + 16 + 64 + 16 bytes per
     // row besides the input.
@@ -1533,7 +1555,7 @@ async fn exact_and_string_frames_from_disk() {
         for function in [Sum, Avg, Min, Max] {
             functions.push(WindowFunctionPlan {
                 function: WindowFunction::Aggregate(AggregateExpr {
-                    function,
+                    function: function.clone(),
                     args: vec![1],
                     input: AggInput::Raw,
                     mask: None,
@@ -1880,7 +1902,7 @@ fn frame_costs_cover_their_outputs() {
                 .map(|c| Array::get_array_memory_size(c.as_ref()))
                 .sum::<usize>()
                 + 8 * n * 2;
-            let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+            let cost = super::eval::cost(&window, n, count(&part), count(&peer), 0).unwrap();
             assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
         }
     }
@@ -1963,7 +1985,7 @@ fn offset_function_costs_cover_their_scratch() {
         let scratch = n * (8 + 16 + 32 + frames);
         let held = output + views + scratch;
         let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
-        let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+        let cost = super::eval::cost(&window, n, count(&part), count(&peer), 0).unwrap();
         assert!(cost >= held, "{function:?}: reserved {cost} < held {held}");
     }
 }
@@ -2033,15 +2055,33 @@ fn trees_larger_than_a_chunk_match_the_reference() {
 /// short.
 #[tokio::test]
 async fn a_frame_over_a_partition_on_disk_is_refused() {
+    refused_on_disk(
+        agg(AggregateFunction::Sum, Some(3)),
+        WindowFrame {
+            units: FrameUnits::Rows,
+            lower: FrameBound::Offset(-1),
+            upper: FrameBound::Offset(1),
+        },
+    )
+    .await;
+}
+
+/// A running `collect_list` snapshots a growing copy per row: over a
+/// partition larger than memory it is refused too.
+#[tokio::test]
+async fn a_growing_running_state_over_a_partition_on_disk_is_refused() {
+    refused_on_disk(
+        agg(AggregateFunction::CollectList, Some(3)),
+        WindowFrame::running(FrameUnits::Rows),
+    )
+    .await;
+}
+
+async fn refused_on_disk(function: WindowFunction, frame: WindowFrame) {
     let rows: Vec<Row> = (0..3_000)
         .map(|i| (Some(0), Some(i), i, Some(i % 7)))
         .collect();
-    let around = WindowFrame {
-        units: FrameUnits::Rows,
-        lower: FrameBound::Offset(-1),
-        upper: FrameBound::Offset(1),
-    };
-    let window = plan(vec![(agg(AggregateFunction::Sum, Some(3)), around)], true);
+    let window = plan(vec![(function, frame)], true);
     let (_dir, scope) = spill_scope();
     let op = Window::new(schema(), window, true, Some(scope)).unwrap();
     let limit = 1 << 30;
@@ -2279,3 +2319,125 @@ proptest! {
 
 #[path = "group_limit_tests.rs"]
 mod group_limit_tests;
+
+/// A growing state's snapshots are priced by position in the partition, so
+/// a skewed input costs its real quadratic share and the price is additive
+/// across batches.
+#[test]
+fn snapshot_slots_follow_partition_sizes_across_batches() {
+    use super::eval::snapshot_slots;
+    // Partitions of 3 and 1 rows: 1+2+3 and 1.
+    assert_eq!(snapshot_slots(&[true, false, false, true], 0), (7, 1));
+    // One partition of 6 rows, whole or split into batches of 4 and 2.
+    let whole = snapshot_slots(&[true, false, false, false, false, false], 0);
+    let (a, open) = snapshot_slots(&[true, false, false, false], 0);
+    let (b, open) = snapshot_slots(&[false, false], open);
+    assert_eq!(whole, (21, 6));
+    assert_eq!((a + b, open), (21, 6));
+    // Skew is priced exactly: partitions of 100 and 2 rows.
+    let mut flags = vec![false; 102];
+    flags[0] = true;
+    flags[100] = true;
+    assert_eq!(snapshot_slots(&flags, 0).0, 5_050 + 3);
+    assert_eq!(snapshot_slots(&[], 7), (0, 7));
+}
+
+/// The window cost of a running `collect_list` grows with the snapshot
+/// elements; a whole-partition frame and a non-growing aggregate ignore them.
+#[test]
+fn window_cost_counts_snapshot_elements_of_growing_aggregates() {
+    let running = WindowFrame::running(FrameUnits::Rows);
+    let growing = plan(
+        vec![(agg(AggregateFunction::CollectList, Some(3)), running)],
+        true,
+    );
+    let summing = plan(vec![(agg(AggregateFunction::Sum, Some(3)), running)], true);
+    let base = super::eval::cost(&growing, 10, 1, 10, 0).unwrap();
+    assert_eq!(
+        super::eval::cost(&growing, 10, 1, 10, 880).unwrap(),
+        base + 880
+    );
+    let sum_base = super::eval::cost(&summing, 10, 1, 10, 0).unwrap();
+    assert_eq!(
+        super::eval::cost(&summing, 10, 1, 10, 880).unwrap(),
+        sum_base
+    );
+}
+
+/// A running `collect_list` charges its snapshots by the width of its
+/// argument: long strings cost more per element than the 16-byte floor, a
+/// narrow integer column does not.
+#[test]
+fn snapshot_width_follows_the_argument_column() {
+    let rows: Vec<Row> = (0..50)
+        .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+        .collect();
+    let b = batch(&rows);
+    let narrow = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(2)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert_eq!(super::eval::snapshot_width(&narrow, b.data()), 16);
+    let mut columns = b.data().columns().to_vec();
+    let long = "x".repeat(200);
+    columns[4] = Arc::new(arrow_array::StringArray::from_iter_values(
+        (0..50).map(|_| long.as_str()),
+    ));
+    let wide = RecordBatch::try_new(b.data().schema(), columns).unwrap();
+    let list = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(4)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert!(super::eval::snapshot_width(&list, &wide) >= 200);
+    // Distinct keys are kept besides the values: twice the width.
+    let set = plan(
+        vec![(
+            agg(AggregateFunction::CollectSet, Some(4)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert!(super::eval::snapshot_width(&set, &wide) >= 400);
+    // A whole-partition frame snapshots nothing.
+    let whole = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(4)),
+            WindowFrame::whole(FrameUnits::Rows),
+        )],
+        true,
+    );
+    assert_eq!(super::eval::snapshot_width(&whole, &wide), 16);
+}
+
+/// One large partition under a running `collect_list` needs a quadratic
+/// reservation: under a tight limit the window fails with a memory error
+/// before the snapshots are made, and releases what it reserved.
+#[tokio::test]
+async fn a_running_collect_list_over_a_big_partition_fails_under_a_tight_limit() {
+    let window = plan(
+        vec![(
+            agg(AggregateFunction::CollectList, Some(2)),
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    let rows: Vec<Row> = (0..3_000)
+        .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+        .collect();
+    let batches: Vec<Batch> = rows.chunks(500).map(batch).collect();
+    let op = Window::new(schema(), window, true, None).unwrap();
+    let limit = 16 << 20;
+    let (root, ctx) = task(limit);
+    let e = drive(&op, &ctx, &batches).unwrap_err();
+    // The window asks for memory (a spill) before it makes the snapshots;
+    // the driver reports that request.
+    assert!(e.to_string().contains("NeedMemory"), "{e}");
+    drop(ctx);
+    assert_eq!(root.reserved(), 0);
+}

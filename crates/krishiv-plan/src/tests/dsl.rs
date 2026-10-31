@@ -56,6 +56,7 @@ pub(super) fn named_call(name: &str, args: &[(Option<&str>, Expr)]) -> Expr {
         arg_names: args.iter().map(|(n, _)| n.map(str::to_owned)).collect(),
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
     }))
 }
 
@@ -68,6 +69,7 @@ pub(super) fn qualified_call(qualifier: &[&str], name: &str, args: Vec<Expr>) ->
         arg_names: Vec::new(),
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
     }))
 }
 

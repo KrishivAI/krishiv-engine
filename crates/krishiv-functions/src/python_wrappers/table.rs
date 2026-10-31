@@ -23,9 +23,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("mod", "no PySpark function"),
     ("any", "no PySpark function"),
     ("any_value", "no PySpark function"),
-    ("bool_and", "no PySpark function"),
-    ("bool_or", "no PySpark function"),
-    ("count_if", "no PySpark function"),
+    (
+        "array_agg",
+        "ANSI spelling of `collect_list`; SQL-only, like Spark's naming",
+    ),
     ("random", "an alias of `rand`; no PySpark function"),
     ("chr", "no PySpark function; use `char`"),
     ("every", "no PySpark function"),
@@ -34,6 +35,11 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
     ("some", "no PySpark function"),
+    ("vector_cosine_similarity", "no PySpark function in 4.2"),
+    ("vector_inner_product", "no PySpark function in 4.2"),
+    ("vector_l2_distance", "no PySpark function in 4.2"),
+    ("vector_norm", "no PySpark function in 4.2"),
+    ("vector_normalize", "no PySpark function in 4.2"),
     // The cast-named functions (`float(x)`, `int(x)`, ...): the analyzer
     // rewrites every call to a `CAST`, so there is no call to send.
     (
@@ -84,6 +90,12 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "timestamp",
         "cast-named function; the analyzer rewrites the call to a cast",
     ),
+    (
+        "string_agg",
+        "an alias of `listagg`; SQL-only, like `array_agg`",
+    ),
+    ("vector_avg", "no PySpark function; SQL only"),
+    ("vector_sum", "no PySpark function; SQL only"),
     (
         "schema_of_csv",
         "PySpark's `options` map parameter has no wrapper support yet; SQL only",
@@ -195,10 +207,18 @@ pub(super) fn rows() -> Vec<Row> {
         "avg",
         "base64",
         "bin",
+        "bit_and",
         "bit_count",
+        "bit_or",
+        "bit_xor",
+        "bool_and",
+        "bool_or",
+        "count_if",
         "bit_length",
         "cbrt",
         "char",
+        "collect_list",
+        "collect_set",
         "cos",
         "cosh",
         "cot",
@@ -292,6 +312,30 @@ pub(super) fn rows() -> Vec<Row> {
     ] {
         rows.push(Row::new(name, S));
     }
+    for name in ["try_avg", "try_sum"] {
+        rows.push(Row::new(name, C));
+    }
+    for name in [
+        "regr_avgx",
+        "regr_avgy",
+        "regr_count",
+        "regr_intercept",
+        "regr_r2",
+        "regr_slope",
+        "regr_sxx",
+        "regr_sxy",
+        "regr_syy",
+    ] {
+        rows.push(Row::new(name, "y: ColumnOrName, x: ColumnOrName"));
+    }
+    rows.push(Row::new(
+        "listagg",
+        "col: ColumnOrName, delimiter: Column | str = None",
+    ));
+    rows.push(Row::new(
+        "mode",
+        "col: ColumnOrName, deterministic: bool = False",
+    ));
     for name in ["bit_get", "getbit"] {
         rows.push(Row::new(name, "col: ColumnOrName, pos: ColumnOrName"));
     }
@@ -460,6 +504,14 @@ pub(super) fn rows() -> Vec<Row> {
             "regexp_extract",
             "str: ColumnOrName, pattern: str, idx: int",
         ),
+        Row::new("array_size", "col: ColumnOrName"),
+        Row::new("array_append", "col: ColumnOrName, value: Any"),
+        Row::new("array_prepend", "col: ColumnOrName, value: Any"),
+        Row::new("array_insert", "arr: ColumnOrName, pos: ColumnOrName | int, value: Any"),
+        Row::new("array_compact", "col: ColumnOrName"),
+        Row::new("get", "col: ColumnOrName, index: ColumnOrName | int"),
+        Row::new("element_at", "col: ColumnOrName, extraction: Any"),
+        Row::new("try_element_at", "col: ColumnOrName, extraction: ColumnOrName"),
         Row::new("size", "col: ColumnOrName"),
         Row::new(
             "split",

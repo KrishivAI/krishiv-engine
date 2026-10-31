@@ -95,6 +95,10 @@ pub type RecordBatchStream = BoxStream<'static, Result<RecordBatch, KrishivError
 #[derive(Clone)]
 pub struct Session {
     pub(crate) state: Arc<SessionState>,
+    /// The local variables of the SQL script this handle runs, outermost frame first. Empty for a
+    /// session a user holds: only the handle a script's statements run on has frames, so no other
+    /// query on the session ever sees them (`locals.rs`).
+    pub(crate) locals: Arc<[krishiv_plan::analyzer::LocalFrame]>,
 }
 
 impl fmt::Debug for Session {
@@ -316,6 +320,7 @@ impl SessionBuilder {
             None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
         };
         Ok(Session {
+            locals: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
                 catalog: Arc::new(SessionCatalog::default()),
@@ -489,8 +494,12 @@ impl Session {
             .await
     }
 
-    async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
+        // run with the names they stand for.
+        let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
@@ -522,7 +531,7 @@ impl Session {
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
-            Statement::Cache(c) => self.exec_cache(&c).await,
+            Statement::Cache(c) => Box::pin(self.exec_cache(&c, query)).await,
             Statement::Refresh(r) => self.exec_refresh(&r).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
@@ -546,12 +555,56 @@ impl Session {
             Statement::AlterTable(a) => self.exec_alter_table(&a, query).await,
             Statement::Insert(i) => self.exec_insert(&i).await,
             Statement::Truncate(t) => self.exec_truncate(&t).await,
+            Statement::Script(c) => {
+                let off =
+                    crate::conf::get(&self.state.conf.snapshot(), "spark.sql.scripting.enabled")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("false"));
+                if off {
+                    return Err(krishiv_common::error::UnsupportedFeatureSqlScripting {
+                        sql_scripting_enabled: "\"spark.sql.scripting.enabled\"".to_owned(),
+                    }
+                    .into());
+                }
+                Box::pin(self.exec_script(&c, query, redacted)).await
+            }
             Statement::Analyze(a) => self.exec_analyze(&a).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
-            Statement::Delete(d) => self.exec_row_level_change(&d.table, "DELETE"),
-            Statement::Update(u) => self.exec_row_level_change(&u.table, "UPDATE TABLE"),
-            Statement::Merge(m) => self.exec_row_level_change(&m.target, "MERGE INTO TABLE"),
+            Statement::Delete(d) => {
+                let changes = crate::table_commands::RowChanges {
+                    targets: &[],
+                    values: &[],
+                    condition: d.where_clause.as_ref(),
+                };
+                self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
+                    .await
+            }
+            Statement::Update(u) => {
+                let targets: Vec<_> = u.assignments.iter().map(|a| &a.target).collect();
+                let values: Vec<_> = u.assignments.iter().map(|a| &a.value).collect();
+                let changes = crate::table_commands::RowChanges {
+                    targets: &targets,
+                    values: &values,
+                    condition: u.where_clause.as_ref(),
+                };
+                self.exec_row_level_change(
+                    &u.table,
+                    u.alias.as_ref(),
+                    "UPDATE TABLE",
+                    &changes,
+                    query,
+                )
+                .await
+            }
+            Statement::Merge(m) => {
+                let changes = crate::table_commands::RowChanges {
+                    targets: &[],
+                    values: &[],
+                    condition: None,
+                };
+                self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
+                    .await
+            }
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -1003,6 +1056,14 @@ impl Session {
         // One snapshot of the variables per query, like the configuration
         // snapshot: every reference in the query reads the same values.
         let variables = self.state.variables.snapshot();
+        let variables = if self.locals.is_empty() {
+            variables
+        } else {
+            Arc::new(krishiv_plan::analyzer::VariableSnapshot {
+                locals: self.locals.to_vec(),
+                ..(*variables).clone()
+            })
+        };
         let sql_functions = Arc::new(QueryFunctions::new(
             Arc::clone(&self.state.functions),
             self.state.sql_functions.snapshot(),
@@ -1529,46 +1590,120 @@ impl Session {
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
         let job = job_uuid();
-        let Some(write) = DirectoryWrite::begin(
-            &io,
-            at.store.clone(),
-            at.path.clone(),
-            mode,
-            job.clone(),
-            dynamic,
-        )
-        .await?
-        .map(|w| w.partitioned(!partitions.is_empty())) else {
-            // `ignore` found the path: nothing is written.
-            return Ok(());
-        };
-        let plan = physical.into_write(WritePlan {
-            format: format.name().to_owned(),
-            options: options.clone(),
-            store: at.store.to_string(),
-            dir: at.path.as_ref().to_owned(),
-            job_uuid: job,
-            max_records_per_file: max_records,
-            target_file_bytes: 0,
-            partition_by: partitions.iter().map(|(i, _)| *i).collect(),
-        })?;
-        let worker = self.worker(env);
-        let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
-        let mut batches = Vec::new();
-        while let Some(batch) = rows.next().await {
-            batches.push(batch?);
+        // Every name of the write is resolved relative to the directory
+        // opened here, never through a link (P2-T199). The registration
+        // lives until the write is over.
+        let (store, _registration) = self.anchor_local_write(&at, &job)?;
+        let written = async {
+            let Some(write) = DirectoryWrite::begin(
+                &io,
+                store.clone(),
+                at.path.clone(),
+                mode,
+                job.clone(),
+                dynamic,
+            )
+            .await?
+            .map(|w| w.partitioned(!partitions.is_empty())) else {
+                // `ignore` found the path: nothing is written.
+                return Ok(());
+            };
+            let plan = physical.into_write(WritePlan {
+                format: format.name().to_owned(),
+                options: options.clone(),
+                store: store.key().to_owned(),
+                dir: at.path.as_ref().to_owned(),
+                job_uuid: job,
+                max_records_per_file: max_records,
+                target_file_bytes: 0,
+                partition_by: partitions.iter().map(|(i, _)| *i).collect(),
+            })?;
+            let worker = self.worker(env);
+            let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
+            let mut batches = Vec::new();
+            while let Some(batch) = rows.next().await {
+                batches.push(batch?);
+            }
+            drop(rows);
+            let files = committed_files(&batches)?;
+            if let Err(denied) = crate::access::still_physical(self, &at) {
+                // The files the query wrote are under the anchor: remove
+                // them (best effort) before refusing.
+                for f in &files {
+                    drop(io.delete(&store, &f.path).await);
+                }
+                return Err(denied);
+            }
+            write
+                .commit(&io, format.as_ref(), schema, &parsed, files)
+                .await?;
+            // The engine's own write may have replaced a cached path: entries
+            // reading files are dropped, so the next action lists them again.
+            // (An external change drops nothing and stays invisible.)
+            self.refresh_files();
+            Ok(())
         }
-        drop(rows);
-        let files = committed_files(&batches)?;
-        crate::access::still_physical(self, &at)?;
-        write
-            .commit(&io, format.as_ref(), schema, &parsed, files)
-            .await?;
-        // The engine's own write may have replaced a cached path: entries
-        // reading files are dropped, so the next action lists them again.
-        // (An external change drops nothing and stays invisible.)
-        self.refresh_files();
-        Ok(())
+        .await;
+        // A store error after the anchor is open may be a link swapped into
+        // the path: the audited denial is what the caller sees then.
+        if written.is_err()
+            && let Err(denied) = crate::access::still_physical(self, &at)
+            && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
+        {
+            return Err(denied);
+        }
+        written
+    }
+
+    /// The store a directory write at `at` goes through: for a local path
+    /// on Unix a [`krishiv_io::BeneathStore`] anchored at the deepest
+    /// existing directory above the target, registered for this write only
+    /// (messages and `EXPLAIN` still name `file`); otherwise the plain
+    /// store of `at`.
+    fn anchor_local_write(
+        &self,
+        at: &krishiv_exec::files::LocatedPath,
+        job: &str,
+    ) -> Result<(StoreId, Option<StoreRegistration>), KrishivError> {
+        #[cfg(unix)]
+        if let Some(local) = at.display.strip_prefix("file:") {
+            match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
+                Ok(anchored) => {
+                    let id = at.store.private_to(job);
+                    self.state
+                        .io
+                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
+                    let registration = StoreRegistration {
+                        io: Arc::clone(&self.state.io),
+                        id: id.clone(),
+                    };
+                    return Ok((id, Some(registration)));
+                }
+                Err(krishiv_io::AnchorError::Swapped(_)) => {
+                    // A link or file where a directory was checked: the
+                    // audited denial if the path now resolves elsewhere.
+                    crate::access::still_physical(self, at)?;
+                    return Err(anchor_failed(
+                        at,
+                        "a component of the path is not a directory",
+                    ));
+                }
+                Err(krishiv_io::AnchorError::UnsupportedName(name)) => {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!(
+                            "writing below the directory {name:?} (a name with non-ASCII or \
+                             reserved characters above the target)"
+                        ),
+                    }
+                    .into());
+                }
+                Err(krishiv_io::AnchorError::Io(e)) => {
+                    return Err(anchor_failed(at, &e.to_string()));
+                }
+            }
+        }
+        let _ = job;
+        Ok((at.store.clone(), None))
     }
 }
 
@@ -1636,6 +1771,29 @@ fn max_records_per_file(
         }
         .into()
     })
+}
+
+/// A write directory that could not be opened, as the path-based store
+/// reports it (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`).
+fn anchor_failed(at: &krishiv_exec::files::LocatedPath, reason: &str) -> KrishivError {
+    krishiv_common::error::KrishivObjectStoreRequestFailed {
+        path: at.display.clone(),
+        attempts: "1".to_owned(),
+        reason: reason.to_owned(),
+    }
+    .into()
+}
+
+/// Removes a write's private store registration when the write is over.
+struct StoreRegistration {
+    io: Arc<IoScheduler>,
+    id: StoreId,
+}
+
+impl Drop for StoreRegistration {
+    fn drop(&mut self) {
+        self.io.unregister_store(&self.id);
+    }
 }
 
 /// The commit's files from the write plan's result rows (one per file:

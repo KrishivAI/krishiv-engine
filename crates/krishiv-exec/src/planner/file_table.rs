@@ -13,7 +13,7 @@ use krishiv_io::{
     FileFormat, FileRef, FileStatistics, FormatOptions, IoContext, MetadataNeeds, ScalarValue,
     ScanOptions,
 };
-use krishiv_optimizer::{ColumnStats, TableStats};
+use krishiv_optimizer::{ColumnStats, StatSource, TableStats};
 use krishiv_plan::Literal;
 use krishiv_types::DecimalType;
 
@@ -229,7 +229,7 @@ fn table_stats(s: &FileStatistics, table: &SchemaRef) -> TableStats {
         let nulls = c.null_count.exact().copied();
         // Footers carry no distinct counts; an integral range bounds them
         // (`c_nationkey` in 0..=24 has at most 25 values).
-        let distinct = match (c.min.exact(), c.max.exact()) {
+        let range = match (c.min.exact(), c.max.exact()) {
             (Some(lo), Some(hi)) => integral(lo).zip(integral(hi)).and_then(|(lo, hi)| {
                 let span = u64::try_from(hi.checked_sub(lo)?).ok()?.checked_add(1)?;
                 let values = out.rows.saturating_sub(nulls.unwrap_or(0));
@@ -240,7 +240,8 @@ fn table_stats(s: &FileStatistics, table: &SchemaRef) -> TableStats {
         out.columns.insert(
             name.clone(),
             ColumnStats {
-                distinct,
+                source: StatSource::IntegralRange,
+                distinct: range,
                 nulls,
                 min: literal(&c.min),
                 max: literal(&c.max),

@@ -15,17 +15,23 @@ use krishiv_common::error::{
     DatatypeMismatchInSubqueryDataTypeMismatch, DatatypeMismatchInSubqueryLengthMismatch,
     DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidOrderingType,
     DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
+    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedToParseTooComplex, FieldNotFound, InternalError,
     InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
-    InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount, KrishivError,
-    KrishivUnsupportedFeature, NamedParametersNotSupported, NestedAggregateFunction,
-    RequiredParameterNotFound, UnexpectedPositionalArgument, UnrecognizedParameterName,
-    UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
-    WrongNumArgsWithSuggestion, WrongNumArgsWithoutSuggestion,
+    InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
+    InvalidWithinGroupExpressionDistinctUnsupported,
+    InvalidWithinGroupExpressionMismatchWithDistinctInput,
+    InvalidWithinGroupExpressionMismatchWithDistinctInputUnsafeCast,
+    InvalidWithinGroupExpressionWithinGroupMissing, InvalidWithinGroupExpressionWrongNumOrderings,
+    KrishivError, KrishivUnsupportedFeature, NamedParametersNotSupported, NestedAggregateFunction,
+    NonFoldableArgument, RequiredParameterNotFound, UnexpectedInputType,
+    UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
+    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithSuggestion,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
 use krishiv_types::{DataType, DecimalType, StructField, StructType};
@@ -42,8 +48,8 @@ use super::suggest::closest;
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FunctionCall,
-    FunctionId, FunctionKind, Literal, LogicalPlan, Origin, QuantifiedLike, ResolvedExpr,
-    ResolvedFunction, Star, SubqueryKind, TypedLiteralKind,
+    FunctionId, FunctionKind, Literal, LogicalPlan, NullOrdering, Origin, QuantifiedLike,
+    ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind, TypedLiteralKind,
 };
 
 /// Where an operator's expressions resolve.
@@ -1531,7 +1537,11 @@ impl Resolver<'_> {
             }
             ExprNode::Function(f) => {
                 let n = f.args.len();
-                if let Some(filter) = kids.get(n)
+                // The filter is the child after the arguments, when the
+                // call has one; any `WITHIN GROUP` ordering keys follow it
+                // and are never the filter.
+                if f.filter.is_some()
+                    && let Some(filter) = kids.get(n)
                     && filter.ty.data_type != Some(DataType::Boolean)
                 {
                     return Err(AnalysisError::new(
@@ -1544,7 +1554,8 @@ impl Resolver<'_> {
                         e.origin,
                     ));
                 }
-                if let Some(filter) = kids.get(n)
+                if f.filter.is_some()
+                    && let Some(filter) = kids.get(n)
                     && filter.win.is_some()
                 {
                     return Err(super::windows::window_in_filter(filter, e.origin));
@@ -1590,6 +1601,14 @@ impl Resolver<'_> {
                 let mut kids = kids.to_vec();
                 if signature.is_some() {
                     let filter = kids.get(n).cloned();
+                    // Any `WITHIN GROUP` ordering keys follow the filter;
+                    // keep them after it (only `mask` and the unimplemented
+                    // `count_min_sketch` rearrange, and both refuse the
+                    // ordering, but the slice below must still count it).
+                    let orders: Vec<Bound> = kids
+                        .get(n + usize::from(f.filter.is_some())..)
+                        .unwrap_or(&[])
+                        .to_vec();
                     let mut reordered = self.rearrange_named(
                         &parts,
                         signature.unwrap_or(&[]),
@@ -1598,6 +1617,7 @@ impl Resolver<'_> {
                         e.origin,
                     )?;
                     reordered.extend(filter);
+                    reordered.extend(orders);
                     kids = reordered;
                 } else if f.arg_names.iter().any(Option::is_some) {
                     return Err(AnalysisError::new(
@@ -1607,7 +1627,12 @@ impl Resolver<'_> {
                         e.origin,
                     ));
                 }
-                let n = kids.len() - usize::from(f.filter.is_some());
+                // The bound argument children: after any named-argument
+                // rearrangement (which fills defaults, so `f.args.len()`
+                // undercounts `mask`), minus the filter and any
+                // `WITHIN GROUP` ordering keys (which follow it, so
+                // `kids.len()` overcounts `mode`/`listagg`).
+                let n = kids.len() - usize::from(f.filter.is_some()) - f.within_group.len();
                 // Spark's `SimpleDateFormat` time parser is not implemented: a
                 // pattern function under it would answer with the new parser.
                 if self.ctx.conf.legacy_time_parser
@@ -1633,7 +1658,7 @@ impl Resolver<'_> {
                     }
                     return self.operator_call(op, e.origin, &kids[..n]);
                 }
-                let entry = if session_qualified {
+                let mut entry = if session_qualified {
                     match self.ctx.functions.lookup(&parts, self.ctx.profile) {
                         FunctionLookup::Found(entry) => entry,
                         FunctionLookup::KnownUnsupported => {
@@ -1689,6 +1714,55 @@ impl Resolver<'_> {
                         }
                     }
                 };
+                // `array_agg` is Spark's spelling of `collect_list` (its
+                // result column is named `collect_list(...)`): resolve it
+                // as `collect_list` throughout.
+                if entry.id.name() == "array_agg" {
+                    entry = match self
+                        .ctx
+                        .functions
+                        .lookup(&["collect_list".to_owned()], self.ctx.profile)
+                    {
+                        FunctionLookup::Found(entry) => entry,
+                        _ => {
+                            return Err(unsupported("function array_agg".to_owned(), e.origin));
+                        }
+                    };
+                }
+                // `string_agg` is Spark's alias of `listagg` (its result
+                // column is named `listagg(...)`): resolve it as `listagg`
+                // throughout.
+                if entry.id.name() == "string_agg" {
+                    entry = match self
+                        .ctx
+                        .functions
+                        .lookup(&["listagg".to_owned()], self.ctx.profile)
+                    {
+                        FunctionLookup::Found(entry) => entry,
+                        _ => {
+                            return Err(unsupported("function string_agg".to_owned(), e.origin));
+                        }
+                    };
+                }
+                // `mode` and `listagg` take `WITHIN GROUP` orderings, which
+                // lower into the resolved call (see `mode_call` and
+                // `listagg_call`); any other function keeps Spark's
+                // `FUNCTION_WITH_UNSUPPORTED_SYNTAX` error.
+                if !f.within_group.is_empty() && !matches!(entry.id.name(), "mode" | "listagg") {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: format!("`{lookup_name}`"),
+                            syntax: "WITHIN GROUP (ORDER BY ...)".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
+                if entry.id.name() == "mode" {
+                    return self.mode_call(&entry, e, f, &kids, window_fn);
+                }
+                if entry.id.name() == "listagg" {
+                    return self.listagg_call(&entry, e, f, &kids, window_fn);
+                }
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
                 }
@@ -1840,6 +1914,22 @@ impl Resolver<'_> {
                             owned.push(filter.clone());
                         }
                         (&owned[..], n)
+                    } else if is_builtin_entry(&entry)
+                        && matches!(entry.id.name(), "vector_norm" | "vector_normalize")
+                        && n == 1
+                    {
+                        // `vector_norm(v)` is `vector_norm(v, 2.0)`.
+                        owned = kids[..n].to_vec();
+                        owned.push(default_argument(
+                            Literal::Float(2.0),
+                            DataType::Float,
+                            false,
+                            e.origin,
+                        ));
+                        if let Some(filter) = kids.get(n) {
+                            owned.push(filter.clone());
+                        }
+                        (&owned[..], 2)
                     } else if is_builtin_entry(&entry) && entry.id.name() == "named_struct" && n > 0
                     {
                         owned = kids.clone();
@@ -1933,6 +2023,7 @@ impl Resolver<'_> {
                     args: call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect(),
                     distinct: f.distinct,
                     filter: call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                    within_group: Vec::new(),
                     data_type,
                     nullable: ty.nullable,
                     deterministic: entry.deterministic,
@@ -2113,6 +2204,517 @@ impl Resolver<'_> {
     }
 
     /// `b` implicitly cast to `to`, if given (named and shown as `b`).
+    /// `mode` with its `WITHIN GROUP` ordering and deterministic flag
+    /// (Spark's `ModeBuilder` and `SupportsOrderingWithinGroup` checks):
+    /// the ordering lowers to the value the executor reads, and the shown
+    /// form keeps what was written (`mode() WITHIN GROUP (ORDER BY ...)`
+    /// for the ordered forms, with Spark's swapped direction).
+    ///
+    /// `kids` holds the bound arguments, the filter, then the bound
+    /// ordering keys; the executor reads the first resolved argument as
+    /// the value and the second (a folded boolean literal, when present)
+    /// as the tie-break (largest when true).
+    #[inline(never)]
+    fn mode_call(
+        &self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+        window_fn: bool,
+    ) -> Result<Bound, AnalysisError> {
+        let zone = self.ctx.conf.session_zone;
+        let ansi = self.ctx.conf.ansi;
+        let n_args = f.args.len();
+        let at = |i: usize| kids.get(i);
+        let filter_at = n_args + usize::from(f.filter.is_some());
+        let orders: &[Bound] = kids.get(filter_at..).unwrap_or(&[]);
+        let sql = |i: usize| at(i).map(|k| pretty(&k.shown(), zone));
+        if f.distinct {
+            return Err(AnalysisError::new(
+                InvalidWithinGroupExpressionDistinctUnsupported {
+                    func_name: "`mode`".to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        // The nested-aggregate and window checks, over the arguments, the
+        // filter and the ordering keys alike.
+        let mut checked: Vec<Bound> = kids[..filter_at.min(kids.len())].to_vec();
+        checked.extend(orders.iter().cloned());
+        if !window_fn {
+            call_checks(entry, e, &checked, filter_at.min(checked.len()))?;
+        }
+        let wrong_arity = || {
+            AnalysisError::new(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: "`mode`".to_owned(),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: n_args.to_string(),
+                    docroot: SPARK_DOC_ROOT.to_owned(),
+                },
+                e.origin,
+            )
+        };
+        // The value the executor reads, the tie-break flag (largest when
+        // true) and the shown ordering (Spark's swapped direction: an
+        // ascending written order shows as descending and picks the
+        // smallest, a descending one shows bare and picks the largest).
+        enum Form {
+            Plain,
+            Smallest,
+            Largest,
+        }
+        let (value, form): (&Bound, Form) = match (n_args, orders.len()) {
+            (0, 0) => {
+                return Err(AnalysisError::new(
+                    InvalidWithinGroupExpressionWithinGroupMissing {
+                        func_name: "`mode`".to_owned(),
+                    },
+                    e.origin,
+                ));
+            }
+            (0, 1) => {
+                let descending = f.within_group[0].direction == SortDirection::Descending;
+                (
+                    &orders[0],
+                    if descending {
+                        Form::Largest
+                    } else {
+                        Form::Smallest
+                    },
+                )
+            }
+            (0, n) => {
+                return Err(AnalysisError::new(
+                    InvalidWithinGroupExpressionWrongNumOrderings {
+                        func_name: "`mode`".to_owned(),
+                        expected_num: "1".to_owned(),
+                        actual_num: n.to_string(),
+                    },
+                    e.origin,
+                ));
+            }
+            (1, 0) => (at(0).ok_or_else(wrong_arity)?, Form::Plain),
+            (2, 0) => {
+                let flag = at(1).ok_or_else(wrong_arity)?;
+                // The flag must fold (a column does not); a literal
+                // without a folded value (binary, timestamp) still counts
+                // as folded here, and fails the type check below.
+                let folded = self.fold(&flag.expr, ansi);
+                let literal = matches!(flag.expr.node, ExprNode::Literal(_));
+                match (folded, literal) {
+                    (None, false) => {
+                        return Err(AnalysisError::new(
+                            NonFoldableArgument {
+                                func_name: "`mode`".to_owned(),
+                                param_name: "`deterministic`".to_owned(),
+                                param_type: "\"BOOLEAN\"".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    (Some(Constant::Error(err)), _) => {
+                        return Err(AnalysisError::new(err, flag.expr.origin));
+                    }
+                    (Some(Constant::Null), _) => {
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchUnexpectedNull {
+                                sql_expr: format!("\"{}\"", sql(1).unwrap_or_default()),
+                                expr_name: "`deterministic`".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    (Some(Constant::Boolean(true)), _) => {
+                        (at(0).ok_or_else(wrong_arity)?, Form::Smallest)
+                    }
+                    (Some(Constant::Boolean(false)), _) => {
+                        (at(0).ok_or_else(wrong_arity)?, Form::Plain)
+                    }
+                    // A literal without a folded value (binary, timestamp)
+                    // or any other non-boolean foldable fails the type
+                    // check, as Spark checks the type after folding.
+                    _ if flag.ty.data_type != Some(DataType::Boolean) => {
+                        let input = flag
+                            .ty
+                            .data_type
+                            .clone()
+                            .map_or_else(|| "VOID".to_owned(), |t| t.sql());
+                        return Err(AnalysisError::new(
+                            UnexpectedInputType {
+                                param_index: "second".to_owned(),
+                                function_name: "`mode`".to_owned(),
+                                required_type: "\"BOOLEAN\"".to_owned(),
+                                input_sql: format!("\"{}\"", sql(1).unwrap_or_default()),
+                                input_type: format!("\"{input}\""),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    // A boolean-typed foldable that folds to no constant
+                    // (unreachable through the current constant folder).
+                    _ => (at(0).ok_or_else(wrong_arity)?, Form::Plain),
+                }
+            }
+            (1 | 2, _) => {
+                return Err(AnalysisError::new(
+                    InvalidWithinGroupExpressionWrongNumOrderings {
+                        func_name: "`mode`".to_owned(),
+                        expected_num: "0".to_owned(),
+                        actual_num: orders.len().to_string(),
+                    },
+                    e.origin,
+                ));
+            }
+            _ => return Err(wrong_arity()),
+        };
+        let data_type = value.ty.data_type.clone().unwrap_or(DataType::Null);
+        let mut args = vec![Arc::clone(&value.expr)];
+        // The tie-break the executor reads (largest when true).
+        let largest = match form {
+            Form::Plain => None,
+            Form::Smallest => Some(false),
+            Form::Largest => Some(true),
+        };
+        if let Some(largest) = largest {
+            args.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Boolean(largest))).with_origin(e.origin),
+            ));
+        }
+        // The shown ordering: Spark's swapped direction (ascending shows
+        // as descending, descending shows bare).
+        let shown_order = |o: &Bound, descending: bool, shown: bool| SortOrder {
+            expr: if shown {
+                o.shown()
+            } else {
+                Arc::clone(&o.expr)
+            },
+            direction: if descending {
+                SortDirection::Ascending
+            } else {
+                SortDirection::Descending
+            },
+            nulls: NullOrdering::NullsFirst,
+        };
+        let within_group = match form {
+            Form::Plain => Vec::new(),
+            Form::Smallest => vec![shown_order(value, false, false)],
+            Form::Largest => vec![shown_order(value, true, false)],
+        };
+        let call = ResolvedFunction {
+            id: entry.id.clone(),
+            kind: entry.kind,
+            args,
+            distinct: f.distinct,
+            filter: at(n_args)
+                .filter(|_| f.filter.is_some())
+                .map(|k| Arc::clone(&k.expr)),
+            within_group,
+            data_type: data_type.clone(),
+            nullable: true,
+            deterministic: entry.deterministic,
+        };
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(call))).with_origin(e.origin),
+        );
+        // The shown form keeps what was written (the ordering for the
+        // ordered forms, at Spark's swapped direction).
+        let shown = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: entry.id.clone(),
+                kind: entry.kind,
+                args: vec![value.shown()],
+                distinct: f.distinct,
+                filter: at(n_args).filter(|_| f.filter.is_some()).map(Bound::shown),
+                within_group: match form {
+                    Form::Plain => Vec::new(),
+                    Form::Smallest => vec![shown_order(value, false, true)],
+                    Form::Largest => vec![shown_order(value, true, true)],
+                },
+                data_type,
+                nullable: true,
+                deterministic: entry.deterministic,
+            },
+        )));
+        let shown = Arc::new(shown.with_origin(e.origin));
+        let bound = Bound {
+            expr,
+            ty: arg_type(value.ty.data_type.clone().unwrap_or(DataType::Null), true),
+            agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
+                Some(e.origin)
+            } else {
+                kids.iter().find_map(|k| k.agg)
+            },
+            win: kids.iter().find_map(|k| k.win),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral: kids
+                .iter()
+                .flat_map(|k| k.lateral.iter().copied())
+                .collect(),
+            shown: Some(shown),
+        };
+        Ok(bound)
+    }
+
+    /// `listagg(expr[, delimiter])` with its `WITHIN GROUP` ordering
+    /// (Spark's `ListAgg` checks): the delimiter is implicitly cast to
+    /// the value's type by the declared inputs, `DISTINCT` needs the
+    /// ordering to be the value itself (or a cast that preserves
+    /// equality, as Spark's `hasDistinctOrderAmbiguity` computes it).
+    ///
+    /// `kids` holds the bound arguments, the filter, then the bound
+    /// ordering keys; the executor reads the value, then the ordering
+    /// keys, and the folded delimiter from the resolved call.
+    #[inline(never)]
+    fn listagg_call(
+        &self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+        window_fn: bool,
+    ) -> Result<Bound, AnalysisError> {
+        let n_args = f.args.len();
+        let filter_at = n_args + usize::from(f.filter.is_some());
+        let orders: &[Bound] = kids.get(filter_at..).unwrap_or(&[]);
+        let zone = self.ctx.conf.session_zone;
+        // The nested-aggregate and window checks, over the arguments, the
+        // filter and the ordering keys alike.
+        let mut checked: Vec<Bound> = kids[..filter_at.min(kids.len())].to_vec();
+        checked.extend(orders.iter().cloned());
+        if !window_fn {
+            call_checks(entry, e, &checked, filter_at.min(checked.len()))?;
+        }
+        // The value and the delimiter, implicitly cast (Spark's arity
+        // check, then `listagg`'s own delimiter checks in the registry).
+        // The SQL layer fills a missing delimiter with NULL, so the call
+        // always has both.
+        if n_args == 0 {
+            return Err(AnalysisError::new(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: "`listagg`".to_owned(),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: "0".to_owned(),
+                    docroot: SPARK_DOC_ROOT.to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        // A call built outside SQL (`call_function("listagg", [x])`) has no
+        // delimiter: it is NULL, as the SQL layer writes it.
+        let mut head: Vec<Bound> = kids[..n_args].to_vec();
+        if n_args == 1 {
+            head.push(default_argument(
+                Literal::Null(None),
+                DataType::Null,
+                true,
+                e.origin,
+            ));
+        }
+        let (mut call_kids, ty) = self.typed_call(entry, e, &head)?;
+        // `DISTINCT` with an ordering: the ordering must be the value
+        // itself. When the value is a cast of the ordering key, the cast
+        // must preserve equality (Spark's `hasDistinctOrderAmbiguity`,
+        // with the looser cast rule off): anything else is ambiguous
+        // (`MISMATCH_WITH_DISTINCT_INPUT`), an unsafe cast (`DOUBLE`,
+        // `FLOAT`, `TIMESTAMP` to `STRING`) its
+        // `MISMATCH_WITH_DISTINCT_INPUT_UNSAFE_CAST`. The value is the
+        // implicitly cast one (a `DOUBLE` column reads as its `STRING`
+        // cast); the error quotes what was written.
+        if f.distinct && !orders.is_empty() {
+            // Structural equality, ignoring source spans (either side may
+            // be written elsewhere).
+            let mut memo = std::collections::HashMap::new();
+            let mut key = |e: &Arc<Expr>| semantic_key(e, &mut memo);
+            let value = &call_kids[0].expr;
+            let same =
+                orders.len() == 1 && orders.first().is_some_and(|o| key(&o.expr) == key(value));
+            if !same {
+                let cast_of = match &call_kids[0].expr.node {
+                    ExprNode::Cast { expr, to, .. }
+                        if orders.len() == 1
+                            && orders.first().is_some_and(|o| key(&o.expr) == key(expr))
+                            && matches!(to, DataType::String | DataType::Binary) =>
+                    {
+                        Some(to.clone())
+                    }
+                    _ => None,
+                };
+                match cast_of {
+                    // A cast that preserves equality deduplicates exactly.
+                    Some(to)
+                        if orders
+                            .first()
+                            .and_then(|o| o.ty.data_type.clone())
+                            .is_some_and(|from| Self::cast_preserves_equality(&from, &to)) => {}
+                    Some(to) => {
+                        let input = orders
+                            .first()
+                            .and_then(|o| o.ty.data_type.clone())
+                            .map_or_else(|| "VOID".to_owned(), |t| t.sql());
+                        return Err(AnalysisError::new(
+                            InvalidWithinGroupExpressionMismatchWithDistinctInputUnsafeCast {
+                                func_name: "`listagg`".to_owned(),
+                                input_type: format!("\"{input}\""),
+                                cast_type: format!("\"{}\"", to.sql()),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    None => {
+                        let arg = |k: &Bound| pretty(&k.shown(), zone);
+                        return Err(AnalysisError::new(
+                            InvalidWithinGroupExpressionMismatchWithDistinctInput {
+                                func_name: "`listagg`".to_owned(),
+                                func_arg: format!("\"{}\"", arg(&kids[0])),
+                                ordering_expr: orders
+                                    .iter()
+                                    .map(|o| format!("\"{}\"", pretty(&o.shown(), zone)))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            },
+                            e.origin,
+                        ));
+                    }
+                }
+            }
+        }
+        // A NULL delimiter stays NULL (it reads as empty): the implicit
+        // cast must not give it a type, or the same-type check below
+        // would compare the value against the cast.
+        if head.len() > 1
+            && matches!(
+                head.get(1).map(|k| &k.expr.node),
+                Some(ExprNode::Literal(Literal::Null(_)))
+            )
+        {
+            call_kids[1] = default_argument(Literal::Null(None), DataType::Null, true, e.origin);
+        }
+        // The executor reads a literal delimiter: fold one here (the
+        // shown form keeps what was written). Binary and other literals
+        // the folder has no value for stay as written for the planner.
+        if let Some(delim) = call_kids.get_mut(1) {
+            let folded = match self.fold(&delim.expr, self.ctx.conf.ansi) {
+                Some(Constant::String(s)) => Some((Literal::String(s), false)),
+                Some(Constant::Null) => Some((Literal::Null(None), true)),
+                Some(Constant::Boolean(b)) => Some((Literal::String(b.to_string()), false)),
+                Some(Constant::Integral(i)) => Some((Literal::String(i.to_string()), false)),
+                Some(Constant::Error(err)) => {
+                    return Err(AnalysisError::new(err, delim.expr.origin));
+                }
+                Some(_) | None => None,
+            };
+            if let Some((lit, nullable)) = folded {
+                let ty = arg_type(DataType::String, nullable);
+                if delim.ty.data_type == Some(DataType::String) {
+                    delim.expr =
+                        Arc::new(Expr::new(ExprNode::Literal(lit)).with_origin(delim.expr.origin));
+                    delim.ty = ty;
+                }
+            }
+        }
+        // The resolved ordering keys, with their written directions.
+        let mut args: Vec<Arc<Expr>> = call_kids.iter().map(|k| Arc::clone(&k.expr)).collect();
+        args.extend(orders.iter().map(|k| Arc::clone(&k.expr)));
+        let resolved_orders: Vec<SortOrder> = orders
+            .iter()
+            .zip(&f.within_group)
+            .map(|(k, o)| SortOrder {
+                expr: Arc::clone(&k.expr),
+                direction: o.direction,
+                nulls: o.nulls,
+            })
+            .collect();
+        let shown_orders: Vec<SortOrder> = orders
+            .iter()
+            .zip(&f.within_group)
+            .map(|(k, o)| SortOrder {
+                expr: k.shown(),
+                direction: o.direction,
+                nulls: o.nulls,
+            })
+            .collect();
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        let call = ResolvedFunction {
+            id: entry.id.clone(),
+            kind: entry.kind,
+            args,
+            distinct: f.distinct,
+            filter: kids
+                .get(n_args)
+                .filter(|_| f.filter.is_some())
+                .map(|k| Arc::clone(&k.expr)),
+            within_group: resolved_orders,
+            data_type: data_type.clone(),
+            nullable: ty.nullable,
+            deterministic: entry.deterministic,
+        };
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(call))).with_origin(e.origin),
+        );
+        // The shown form keeps what was written (the delimiter default
+        // included, as Spark's constructor writes it).
+        let shown_args: Vec<Arc<Expr>> = call_kids.iter().map(Bound::shown).collect();
+        let shown = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: entry.id.clone(),
+                kind: entry.kind,
+                args: shown_args,
+                distinct: f.distinct,
+                filter: kids
+                    .get(n_args)
+                    .filter(|_| f.filter.is_some())
+                    .map(Bound::shown),
+                within_group: shown_orders,
+                data_type,
+                nullable: ty.nullable,
+                deterministic: entry.deterministic,
+            },
+        )));
+        let shown = Arc::new(shown.with_origin(e.origin));
+        Ok(Bound {
+            expr,
+            ty,
+            agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
+                Some(e.origin)
+            } else {
+                kids.iter().find_map(|k| k.agg)
+            },
+            win: kids.iter().find_map(|k| k.win),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral: kids
+                .iter()
+                .flat_map(|k| k.lateral.iter().copied())
+                .collect(),
+            shown: Some(shown),
+        })
+    }
+
+    /// Whether casting `from` to string or binary preserves equality, so
+    /// `listagg(DISTINCT CAST(x AS STRING)) WITHIN GROUP (ORDER BY x)`
+    /// deduplicates exactly (Spark's `isCastEqualityPreserving` and
+    /// `isCastTargetEqualityPreserving`, with the engine's types: no
+    /// interval values, and every string is binary-collated).
+    fn cast_preserves_equality(from: &DataType, to: &DataType) -> bool {
+        if !matches!(to, DataType::String | DataType::Binary) {
+            return false;
+        }
+        matches!(
+            from,
+            DataType::Byte
+                | DataType::Short
+                | DataType::Integer
+                | DataType::Long
+                | DataType::Decimal(_)
+                | DataType::Date
+                | DataType::TimestampNtz
+                | DataType::Boolean
+                | DataType::Binary
+                | DataType::String,
+        )
+    }
+
     /// A registry call's arguments after their implicit casts, and its
     /// result type: Spark's arity check, then the function's input types
     /// and result rule. Out of line: it keeps the recursive `expr` frame
@@ -2229,6 +2831,7 @@ impl Resolver<'_> {
         // `kids.first()` is the `FILTER`, if any (`n == 0`).
         call_kids.extend(kids.first().cloned());
         let call = ResolvedFunction {
+            within_group: Vec::new(),
             id: entry.id.clone(),
             kind: entry.kind,
             args: call_kids
@@ -2564,6 +3167,7 @@ impl Resolver<'_> {
                 args: kids.iter().map(Bound::shown).collect(),
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type: DataType::Boolean,
                 nullable: both.ty.nullable,
                 deterministic: true,
@@ -2633,6 +3237,7 @@ impl Resolver<'_> {
                 args,
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type,
                 nullable,
                 deterministic: true,
@@ -2856,6 +3461,7 @@ impl Resolver<'_> {
                         args: vec![Arc::clone(&arg.expr)],
                         distinct: false,
                         filter: None,
+                        within_group: Vec::new(),
                         data_type,
                         nullable: ty.nullable,
                         deterministic: entry.deterministic,
@@ -2911,6 +3517,7 @@ impl Resolver<'_> {
                 args: kids[..2].iter().map(Bound::shown).collect(),
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type: DataType::Boolean,
                 nullable: like.ty.nullable,
                 deterministic: true,
@@ -2999,6 +3606,7 @@ impl Resolver<'_> {
                         args,
                         distinct: false,
                         filter: None,
+                        within_group: Vec::new(),
                         data_type: DataType::Boolean,
                         nullable,
                         deterministic: true,
@@ -3137,6 +3745,7 @@ impl Resolver<'_> {
                 args: kids[..n].iter().map(Bound::shown).collect(),
                 distinct: f.distinct,
                 filter: kids.get(n).map(Bound::shown),
+                within_group: Vec::new(),
                 data_type: ty.data_type.clone().unwrap_or(DataType::Null),
                 nullable: ty.nullable,
                 deterministic: entry.deterministic,
@@ -3152,6 +3761,7 @@ impl Resolver<'_> {
                         args,
                         distinct,
                         filter,
+                        within_group: Vec::new(),
                         data_type: data_type.clone(),
                         nullable: ty.nullable,
                         deterministic: entry.deterministic,
@@ -3371,6 +3981,7 @@ impl Resolver<'_> {
                     args,
                     distinct,
                     filter,
+                    within_group: Vec::new(),
                     data_type: ty.data_type.clone().unwrap_or(DataType::Null),
                     nullable: ty.nullable,
                     deterministic: true,
@@ -3784,6 +4395,7 @@ impl Resolver<'_> {
                     args: Vec::new(),
                     distinct: false,
                     filter: None,
+                    within_group: Vec::new(),
                 }))
                 .with_origin(origin),
             );
@@ -4038,6 +4650,7 @@ impl Resolver<'_> {
                 arg_names: Vec::new(),
                 distinct: f.distinct,
                 filter: None,
+                within_group: Vec::new(),
             }))
             .with_origin(origin),
         ))
@@ -4170,6 +4783,7 @@ impl Resolver<'_> {
         }
         let struct_call = Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
+                within_group: Vec::new(),
                 name: "named_struct".to_owned(),
                 qualifier: Vec::new(),
                 args: struct_args,
@@ -4654,6 +5268,17 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             };
             format!("{keyword} '{value}'")
         }
+        // Spark's pretty SQL shows a cast to an array, map or struct type as
+        // its operand (`CAST(array() AS ARRAY<FLOAT>)` is `array()`).
+        ExprNode::Cast { to, mode, .. }
+            if *mode != CastMode::Try
+                && matches!(
+                    to,
+                    DataType::Array(_) | DataType::Map(_) | DataType::Struct(_)
+                ) =>
+        {
+            k[0].to_owned()
+        }
         ExprNode::Cast { to, mode, .. } => {
             let cast = if *mode == CastMode::Try {
                 "TRY_CAST"
@@ -4726,9 +5351,10 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         ExprNode::Function(FunctionCall {
             name,
             qualifier,
-            args: _,
             arg_names,
             distinct,
+            filter,
+            within_group,
             ..
         }) => {
             let qualified = if qualifier.is_empty() {
@@ -4742,7 +5368,39 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             } else {
                 None
             };
-            call(&qualified, op, *distinct, k, Some(arg_names), None)
+            // The argument children come first; the filter child follows
+            // them when the call has one, and any `WITHIN GROUP`
+            // ordering keys follow it (a named-argument rearrangement
+            // fills defaults, so the written count undercounts `mask`).
+            let n = k
+                .len()
+                .saturating_sub(usize::from(filter.is_some()) + within_group.len());
+            let text = call(
+                &qualified,
+                op,
+                *distinct,
+                &k[..n.min(k.len())],
+                Some(arg_names),
+                None,
+            );
+            // The filter child follows the arguments, when the call has
+            // one; any `WITHIN GROUP` ordering keys follow it.
+            let mut rest = k.get(n.min(k.len())..).unwrap_or_default().iter();
+            let filter = filter.as_ref().and_then(|_| rest.next());
+            let mut text = text;
+            if !within_group.is_empty() {
+                let orders: Vec<String> = within_group
+                    .iter()
+                    .zip(rest)
+                    .map(|(o, name)| format!("{name} {}", order_sql(o)))
+                    .collect();
+                text = format!("{text} WITHIN GROUP (ORDER BY {})", orders.join(", "));
+            }
+            // Spark appends the filter after the whole function text.
+            match filter {
+                Some(filter) => format!("{text} FILTER (WHERE {filter})"),
+                None => text,
+            }
         }
         // Spark's `lag`/`lead` show `input, offset, default`, and
         // `nth_value` `input, offset` then ` ignore nulls` when set.
@@ -4777,7 +5435,11 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
                 FunctionId::Registry { name, .. } => builtin_op(name, f.args.len()),
                 FunctionId::Udf { .. } => None,
             };
-            let n = f.args.len().min(k.len());
+            // As above: the argument children come first, then the
+            // filter child, then any ordering keys.
+            let n = k
+                .len()
+                .saturating_sub(usize::from(f.filter.is_some()) + f.within_group.len());
             // `aggregate`/`reduce` of three arguments show the identity
             // `finish` Spark's constructor fills in, once the merge is bound
             // (see `hof`): the call then reads as the four-argument form.
@@ -4795,10 +5457,38 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
                 ];
                 &owned
             } else {
-                &k[..n]
+                &k[..n.min(k.len())]
             };
             let text = call(f.id.name(), op, f.distinct, kids, None, Some(&f.data_type));
-            match k.get(n) {
+            // The filter child follows the arguments, when the call has
+            // one; any `WITHIN GROUP` ordering keys follow it.
+            let mut rest = k.get(n.min(k.len())..).unwrap_or_default().iter();
+            let filter = f.filter.as_ref().and_then(|_| rest.next());
+            let mut text = text;
+            if !f.within_group.is_empty() {
+                // `mode` keeps Spark's `Mode.sql` form: the ordering is
+                // the tie-break and takes no arguments.
+                if f.id.name() == "mode" {
+                    if let (Some(name), Some(o)) = (rest.next(), f.within_group.first()) {
+                        let desc = if o.direction == SortDirection::Descending {
+                            " DESC"
+                        } else {
+                            ""
+                        };
+                        text = format!("mode() WITHIN GROUP (ORDER BY {name}{desc})");
+                    }
+                } else {
+                    let orders: Vec<String> = f
+                        .within_group
+                        .iter()
+                        .zip(rest)
+                        .map(|(o, name)| format!("{name} {}", order_sql(o)))
+                        .collect();
+                    text = format!("{text} WITHIN GROUP (ORDER BY {})", orders.join(", "));
+                }
+            }
+            // Spark appends the filter after the whole function text.
+            match filter {
                 Some(filter) => format!("{text} FILTER (WHERE {filter})"),
                 None => text,
             }
@@ -5251,7 +5941,13 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
                     _ => f.id.name(),
                 };
                 name = Some(f);
-                format!("f{id}:{:?}:{}", f.kind, f.distinct)
+                // The ordering keys are children; their directions are not.
+                let directions: Vec<_> = f
+                    .within_group
+                    .iter()
+                    .map(|o| (o.direction, o.nulls))
+                    .collect();
+                format!("f{id}:{:?}:{}:{directions:?}", f.kind, f.distinct)
             }
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => format!("a{}", output.id.0),
             ExprNode::Literal(v) => format!("l{v:?}"),
@@ -5420,6 +6116,7 @@ mod tests {
         let one = || Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1))));
         Bound {
             expr: Arc::new(Expr::new(ExprNode::Function(FunctionCall {
+                within_group: Vec::new(),
                 name: "+".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
@@ -5594,6 +6291,7 @@ mod tests {
     #[test]
     fn qualified_operators_print_as_written() {
         let qualified = Expr::new(ExprNode::Function(FunctionCall {
+            within_group: Vec::new(),
             name: "+".to_owned(),
             qualifier: vec!["session".to_owned()],
             args: vec![
@@ -5606,6 +6304,7 @@ mod tests {
         }));
         assert_eq!(pretty(&qualified, None), "session.+(1, 2)");
         let bare = Expr::new(ExprNode::Function(FunctionCall {
+            within_group: Vec::new(),
             name: "+".to_owned(),
             qualifier: Vec::new(),
             args: vec![

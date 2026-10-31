@@ -30,10 +30,11 @@ const ALL: [AggregateFunction; 9] = [
 /// The functions NULL (or NaN, with the legacy flag) for one row.
 const SINGLE_ROW_DIVIDES: [AggregateFunction; 4] = [StddevSamp, VarSamp, CovarSamp, Corr];
 
-fn expr(f: AggregateFunction) -> AggregateExpr {
+fn expr(f: &AggregateFunction) -> AggregateExpr {
+    let n = arity(f);
     AggregateExpr {
-        function: f,
-        args: (0..arity(f)).collect(),
+        function: f.clone(),
+        args: (0..n).collect(),
         input: AggInput::Raw,
         arg_type: DataType::Float64,
         mask: None,
@@ -50,11 +51,11 @@ fn some(v: &[f64]) -> Vec<Option<f64>> {
 }
 
 /// An accumulator over `groups` groups, without ANSI.
-fn acc(f: AggregateFunction, legacy: bool, groups: usize) -> Accumulator {
+fn acc(f: &AggregateFunction, legacy: bool, groups: usize) -> Accumulator {
     acc_ansi(f, legacy, false, groups)
 }
 
-fn acc_ansi(f: AggregateFunction, legacy: bool, ansi: bool, groups: usize) -> Accumulator {
+fn acc_ansi(f: &AggregateFunction, legacy: bool, ansi: bool, groups: usize) -> Accumulator {
     let mut a = Accumulator::new(&expr(f), ansi)
         .unwrap()
         .legacy_statistical(legacy);
@@ -63,7 +64,7 @@ fn acc_ansi(f: AggregateFunction, legacy: bool, ansi: bool, groups: usize) -> Ac
 }
 
 /// The columns an aggregate reads: `xs`, and `ys` for the pair statistics.
-fn columns(f: AggregateFunction, xs: &[Option<f64>], ys: &[Option<f64>]) -> Vec<ArrayRef> {
+fn columns(f: &AggregateFunction, xs: &[Option<f64>], ys: &[Option<f64>]) -> Vec<ArrayRef> {
     let mut cols = vec![doubles(xs)];
     if arity(f) == 2 {
         cols.push(doubles(ys));
@@ -73,7 +74,7 @@ fn columns(f: AggregateFunction, xs: &[Option<f64>], ys: &[Option<f64>]) -> Vec<
 
 /// One global group over rows `xs` (and `ys`), in one pass.
 fn global(
-    f: AggregateFunction,
+    f: &AggregateFunction,
     legacy: bool,
     xs: &[Option<f64>],
     ys: &[Option<f64>],
@@ -126,7 +127,7 @@ fn sequence(n: usize, seed: u64) -> Vec<f64> {
 
 #[test]
 fn no_rows_is_null() {
-    for f in ALL {
+    for f in &ALL {
         for legacy in [false, true] {
             assert_eq!(global(f, legacy, &[], &[]), None, "{f:?} legacy={legacy}");
             // A group that only saw NULLs has no rows either.
@@ -139,10 +140,10 @@ fn no_rows_is_null() {
 #[test]
 fn one_row_divides_by_zero_where_spark_does() {
     let (x, y) = (some(&[5.0]), some(&[7.0]));
-    for f in ALL {
+    for f in &ALL {
         let strict = global(f, false, &x, &y);
         let legacy = global(f, true, &x, &y);
-        if [Skewness, Kurtosis].contains(&f) || SINGLE_ROW_DIVIDES.contains(&f) {
+        if [Skewness, Kurtosis].contains(f) || SINGLE_ROW_DIVIDES.contains(f) {
             assert_eq!(strict, None, "{f:?}");
             assert!(is_nan(legacy), "{f:?}: {legacy:?}");
         } else {
@@ -156,7 +157,7 @@ fn one_row_divides_by_zero_where_spark_does() {
 #[test]
 fn constant_values_have_no_variance() {
     let (x, y) = (some(&[3.0; 4]), some(&[2.0; 4]));
-    for f in ALL {
+    for f in &ALL {
         let strict = global(f, false, &x, &y);
         let legacy = global(f, true, &x, &y);
         match f {
@@ -188,23 +189,23 @@ fn corr_of_a_constant_column_is_a_division_by_zero_under_ansi() {
         (&constant, &constant),
     ] {
         for legacy in [false, true] {
-            let mut a = acc_ansi(Corr, legacy, true, 1);
-            a.update(&[0; 3], &columns(Corr, xs, ys), &Weights::Const(1))
+            let mut a = acc_ansi(&Corr, legacy, true, 1);
+            a.update(&[0; 3], &columns(&Corr, xs, ys), &Weights::Const(1))
                 .unwrap();
             let e = a.evaluate(&[0]).unwrap_err();
             assert_eq!(e.error_class(), ErrorClass::DivideByZero, "legacy={legacy}");
             // Without ANSI the same buffer is NULL.
-            assert_eq!(global(Corr, legacy, xs, ys), None);
+            assert_eq!(global(&Corr, legacy, xs, ys), None);
         }
     }
     // Rows with variance in both columns, and a single row, never raise
     // (the single row is NULL, or NaN with the legacy flag).
     for legacy in [false, true] {
-        let mut a = acc_ansi(Corr, legacy, true, 2);
+        let mut a = acc_ansi(&Corr, legacy, true, 2);
         a.update(
             &[0, 0, 0, 1],
             &columns(
-                Corr,
+                &Corr,
                 &some(&[1.0, 2.0, 4.0, 5.0]),
                 &some(&[2.0, 1.0, 7.0, 5.0]),
             ),
@@ -216,11 +217,11 @@ fn corr_of_a_constant_column_is_a_division_by_zero_under_ansi() {
     }
     // A group that raises does not stop the evaluation of the others when
     // they are evaluated apart: only the selected groups are read.
-    let mut a = acc_ansi(Corr, false, true, 2);
+    let mut a = acc_ansi(&Corr, false, true, 2);
     a.update(
         &[0, 0, 1, 1],
         &columns(
-            Corr,
+            &Corr,
             &some(&[1.0, 2.0, 3.0, 3.0]),
             &some(&[1.0, 2.0, 1.0, 2.0]),
         ),
@@ -235,7 +236,7 @@ fn corr_of_a_constant_column_is_a_division_by_zero_under_ansi() {
 fn rows_with_a_null_argument_are_skipped() {
     let xs = [Some(1.0), None, Some(3.0), Some(5.0), Some(9.5), None];
     let ys = [Some(2.0), Some(9.0), None, Some(10.0), Some(1.5), None];
-    for f in ALL {
+    for f in &ALL {
         let complete: Vec<usize> = (0..xs.len())
             .filter(|&i| xs[i].is_some() && (arity(f) == 1 || ys[i].is_some()))
             .collect();
@@ -259,7 +260,7 @@ fn values_under_null_slots_never_count() {
         Some(valid.clone()),
     ));
     let y: ArrayRef = Arc::new(Float64Array::new(values.into(), Some(valid)));
-    for f in ALL {
+    for f in &ALL {
         let mut a = acc(f, false, 1);
         let cols = if arity(f) == 2 {
             vec![Arc::clone(&x), Arc::clone(&y)]
@@ -278,7 +279,7 @@ fn nan_and_infinity_propagate() {
     let ys = some(&[1.0, 2.0, 3.0]);
     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let xs = some(&[1.0, bad, 3.0]);
-        for f in ALL {
+        for f in &ALL {
             for legacy in [false, true] {
                 let v = global(f, legacy, &xs, &ys);
                 assert!(is_nan(v), "{f:?}({bad}): {v:?}");
@@ -287,15 +288,15 @@ fn nan_and_infinity_propagate() {
     }
     // The pair statistics see a NaN in either argument.
     for f in [Corr, CovarPop, CovarSamp] {
-        let v = global(f, false, &ys, &some(&[1.0, f64::NAN, 3.0]));
+        let v = global(&f, false, &ys, &some(&[1.0, f64::NAN, 3.0]));
         assert!(is_nan(v), "{f:?}");
     }
     // A NaN is a value, not a NULL: it counts as a row. One row still
     // divides by zero first (Spark checks the count before the value).
     let nan = some(&[f64::NAN]);
-    assert!(is_nan(global(StddevPop, false, &nan, &[])));
-    assert_eq!(global(StddevSamp, false, &nan, &[]), None);
-    assert!(is_nan(global(StddevSamp, true, &nan, &[])));
+    assert!(is_nan(global(&StddevPop, false, &nan, &[])));
+    assert_eq!(global(&StddevSamp, false, &nan, &[]), None);
+    assert!(is_nan(global(&StddevSamp, true, &nan, &[])));
 }
 
 /// A two-pass reference: the central moments and co-moments of `xs`, `ys`.
@@ -329,7 +330,7 @@ fn matches_the_textbook_definitions() {
     let (x, y) = (some(&xs), some(&ys));
     let r = reference(&xs, &ys);
     let n = r.n;
-    let want = |f| match f {
+    let want = |f: &AggregateFunction| match f {
         StddevSamp => (r.m2 / (n - 1.0)).sqrt(),
         StddevPop => (r.m2 / n).sqrt(),
         VarSamp => r.m2 / (n - 1.0),
@@ -341,7 +342,7 @@ fn matches_the_textbook_definitions() {
         CovarPop => r.ck / n,
         _ => f64::NAN,
     };
-    for f in ALL {
+    for f in &ALL {
         let got = global(f, false, &x, &y);
         assert!(
             close(got, Some(want(f)), 1e-9),
@@ -367,10 +368,10 @@ fn values_far_from_zero_keep_their_precision() {
     assert!((naive - 2.0).abs() > 1.0, "{naive}");
     // The values 0..=4 equally often have variance 2.
     let within = |v, want| close(v, Some(want), 1e-6);
-    assert!(within(global(VarPop, false, &x, &[]), 2.0));
-    assert!(within(global(StddevPop, false, &x, &[]), 2.0_f64.sqrt()));
-    assert!(within(global(CovarPop, false, &x, &y), -4.0));
-    assert!(within(global(Corr, false, &x, &y), -1.0));
+    assert!(within(global(&VarPop, false, &x, &[]), 2.0));
+    assert!(within(global(&StddevPop, false, &x, &[]), 2.0_f64.sqrt()));
+    assert!(within(global(&CovarPop, false, &x, &y), -4.0));
+    assert!(within(global(&Corr, false, &x, &y), -1.0));
 }
 
 /// A recorded result: the function, its arguments and Spark's value.
@@ -388,7 +389,7 @@ fn spark_slices(rows: usize, p: usize) -> Vec<Range<usize>> {
 /// Spark's evaluation: each partition folds its rows into a partial buffer;
 /// the final stage merges the partials, in order, into an empty buffer.
 fn spark_style(
-    f: AggregateFunction,
+    f: &AggregateFunction,
     legacy: bool,
     xs: &[Option<f64>],
     ys: &[Option<f64>],
@@ -434,13 +435,13 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
         (VarSamp, 0.809_523_809_523_809_4),
         (StddevSamp, 0.899_735_410_842_437_2),
     ] {
-        let got = spark_style(f, false, &a, &none, 2);
+        let got = spark_style(&f, false, &a, &none, 2);
         assert!(same(got, Some(want)), "{f:?}: {got:?} vs {want:?}");
     }
     // linear-regression.sql: `SELECT k, corr(y, x) ... GROUP BY k`, group
     // k = 2 of the six-row table cut in two partitions: its rows
     // (y, x) = (10, 11), (20, 22) | (25, NULL), (30, 35), (NULL, 40).
-    let mut last = acc(Corr, false, 1);
+    let mut last = acc(&Corr, false, 1);
     for (ys, xs) in [
         (vec![Some(10.0), Some(20.0)], vec![Some(11.0), Some(22.0)]),
         (
@@ -448,11 +449,11 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
             vec![None, Some(35.0), Some(40.0)],
         ),
     ] {
-        let mut partial = acc(Corr, false, 1);
+        let mut partial = acc(&Corr, false, 1);
         partial
             .update(
                 &[0; 3][..ys.len()],
-                &columns(Corr, &ys, &xs),
+                &columns(&Corr, &ys, &xs),
                 &Weights::Const(1),
             )
             .unwrap();
@@ -488,14 +489,14 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
         (Corr, &pairs_x, &pairs_y, 0.866_025_403_784_438_7),
     ];
     for (f, x, y, want) in cases {
-        let got = spark_style(f, false, x, y, x.len());
+        let got = spark_style(&f, false, x, y, x.len());
         assert!(
             same(got, Some(want)),
             "{f:?} over {x:?}: {got:?} vs {want:?}"
         );
     }
     // A pass over one partition is another rounding of the same value.
-    let one_pass = global(Skewness, false, &m10, &none);
+    let one_pass = global(&Skewness, false, &m10, &none);
     assert!(close(one_pass, Some(1.113_565_746_902_201_3), 1e-14));
     assert!(!same(one_pass, Some(1.113_565_746_902_201_3)));
 }
@@ -503,7 +504,7 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
 /// `values` in `parts` contiguous pieces, each folded on its own and the
 /// partial states merged into a fresh accumulator in `order`.
 fn split_merge(
-    f: AggregateFunction,
+    f: &AggregateFunction,
     xs: &[Option<f64>],
     ys: &[Option<f64>],
     parts: usize,
@@ -538,7 +539,7 @@ fn any_split_merged_in_any_order_agrees_with_one_pass() {
     for i in (3..120).step_by(11) {
         ys[i] = None;
     }
-    for f in ALL {
+    for f in &ALL {
         let once = global(f, false, &xs, &ys);
         for parts in 1..=9 {
             let orders: [(&str, Order); 3] = [
@@ -562,7 +563,7 @@ fn any_split_merged_in_any_order_agrees_with_one_pass() {
 #[test]
 fn empty_partial_states_merge_to_the_same_value() {
     let (xs, ys) = (some(&sequence(31, 5)), some(&sequence(31, 6)));
-    for f in ALL {
+    for f in &ALL {
         let want = global(f, false, &xs, &ys);
         let mut full = acc(f, false, 1);
         full.update(&[0; 31], &columns(f, &xs, &ys), &Weights::Const(1))
@@ -596,7 +597,7 @@ fn groups_are_independent() {
     let xs = some(&[1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 5.0]);
     let ys = some(&[2.0, 5.0, 4.0, 4.0, 7.0, 3.0, 1.0]);
     let groups = [0_u32, 1, 0, 1, 0, 1, 2];
-    for f in ALL {
+    for f in &ALL {
         let mut a = acc(f, false, 3);
         a.update(&groups, &columns(f, &xs, &ys), &Weights::Const(1))
             .unwrap();
@@ -631,11 +632,11 @@ fn integer_and_float_inputs_are_read_as_doubles() {
         Some(2.0),
         Some(4.0),
     ]));
-    let want = global(VarSamp, false, &some(&[1.0, 2.0, 4.0]), &[]);
+    let want = global(&VarSamp, false, &some(&[1.0, 2.0, 4.0]), &[]);
     for (col, t) in [(ints, DataType::Int32), (floats, DataType::Float32)] {
         let e = AggregateExpr {
             arg_type: t,
-            ..expr(VarSamp)
+            ..expr(&VarSamp)
         };
         assert_eq!(e.result_type().unwrap(), DataType::Float64);
         let mut a = Accumulator::new(&e, true).unwrap();
@@ -659,16 +660,16 @@ fn state_columns_are_sparks_buffers() {
             })
             .collect()
     };
-    assert_eq!(names(StddevSamp), ["m#n", "m#avg", "m#m2"]);
-    assert_eq!(names(VarPop), ["m#n", "m#avg", "m#m2"]);
-    assert_eq!(names(Skewness), ["m#n", "m#avg", "m#m2", "m#m3"]);
-    assert_eq!(names(Kurtosis), ["m#n", "m#avg", "m#m2", "m#m3", "m#m4"]);
-    assert_eq!(names(CovarPop), ["m#n", "m#xAvg", "m#yAvg", "m#ck"]);
+    assert_eq!(names(&StddevSamp), ["m#n", "m#avg", "m#m2"]);
+    assert_eq!(names(&VarPop), ["m#n", "m#avg", "m#m2"]);
+    assert_eq!(names(&Skewness), ["m#n", "m#avg", "m#m2", "m#m3"]);
+    assert_eq!(names(&Kurtosis), ["m#n", "m#avg", "m#m2", "m#m3", "m#m4"]);
+    assert_eq!(names(&CovarPop), ["m#n", "m#xAvg", "m#yAvg", "m#ck"]);
     assert_eq!(
-        names(Corr),
+        names(&Corr),
         ["m#n", "m#xAvg", "m#yAvg", "m#ck", "m#xMk", "m#yMk"]
     );
-    for f in ALL {
+    for f in &ALL {
         let a = acc(f, false, 2);
         let state = a.state(&[0, 1]).unwrap();
         assert_eq!(state.len(), names(f).len(), "{f:?}");
@@ -683,7 +684,7 @@ fn state_columns_are_sparks_buffers() {
 
 #[test]
 fn only_numbers_are_read_and_the_result_is_double() {
-    for f in ALL {
+    for f in &ALL {
         for t in [
             DataType::Int8,
             DataType::Int64,
@@ -715,7 +716,7 @@ fn only_numbers_are_read_and_the_result_is_double() {
 
 #[test]
 fn row_weights_other_than_one_are_refused() {
-    for f in ALL {
+    for f in &ALL {
         let mut a = acc(f, false, 1);
         let cols = columns(f, &some(&[1.0, 2.0]), &some(&[3.0, 4.0]));
         let err = a.update(&[0, 0], &cols, &Weights::Const(2)).unwrap_err();
@@ -735,7 +736,7 @@ fn row_weights_other_than_one_are_refused() {
 
 #[test]
 fn malformed_inputs_are_errors_not_panics() {
-    for f in ALL {
+    for f in &ALL {
         let mut a = acc(f, false, 1);
         let cols = columns(f, &some(&[1.0, 2.0]), &some(&[1.0, 2.0]));
         // A group that does not exist.

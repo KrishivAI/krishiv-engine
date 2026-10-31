@@ -288,7 +288,8 @@ impl ParquetDecoder {
             widen.then_some(widen_column as super::row_filter::Widen),
             !row_index && guard.is_empty(),
             kept,
-        );
+        )
+        .resuming(req.row_filter_start);
         let dynamic: Vec<PushdownExpr> = req
             .dynamic
             .iter()
@@ -721,6 +722,10 @@ impl Decoder for ParquetDecoder {
         self.fetching
             .and_then(|i| self.planned.iter().find(|u| u.index == i))
             .map_or(0, |u| u.decode)
+    }
+
+    fn row_filter_measured(&self) -> Option<bool> {
+        self.late.measurement()
     }
 
     fn metrics(&self) -> ScanUnitMetrics {

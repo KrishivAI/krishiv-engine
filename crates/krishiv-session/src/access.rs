@@ -486,8 +486,9 @@ pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), 
 /// with credentials, any path containing `%` (percent-encoded text would
 /// not be decoded the way the comparison reads it, so even a literal `%`
 /// in a file name is refused) and relative or unresolved paths. Session
-/// writes go to the resolved directory and fail if a link is swapped into
-/// it before the write begins or commits.
+/// writes go to the resolved directory, which is opened once and then used
+/// by descriptor (no name is resolved through a link while the write runs),
+/// and fail if a link is swapped into it before the write begins or commits.
 /// Resolving links reads file metadata on the calling thread, once per
 /// path and query.
 ///
