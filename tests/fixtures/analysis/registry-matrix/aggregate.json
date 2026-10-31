@@ -53,14 +53,6 @@
       "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP'2024-02-29 12:34:56.123456', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "aggregate#789dbb904728/ansi_on",
-      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "aggregate#789dbb904728/ansi_off",
-      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
       "id": "aggregate#953e7e66a28f/ansi_on",
       "reason": "SELECT aggregate(INTERVAL '1 02:03:04' DAY TO SECOND, 0, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -87,14 +79,6 @@
     {
       "id": "aggregate#df03772adf86/ansi_off",
       "reason": "SELECT aggregate(INTERVAL '1-2' YEAR TO MONTH, 0, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "aggregate#e2b2204d9129/ansi_on",
-      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "aggregate#e2b2204d9129/ansi_off",
-      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "aggregate#e8f67136464e/ansi_on",
