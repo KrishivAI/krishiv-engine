@@ -33,8 +33,8 @@
 //! [`crate::version::SparkVersion`].
 
 use krishiv_common::error::{
-    ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTimestamp, CastInvalidInput,
-    CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion,
+    ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTime, CannotParseTimestamp,
+    CastInvalidInput, CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion,
     DatetimeFieldOutOfBoundsWithoutSuggestion, DatetimeOverflow, DivideByZero, ErrorClass,
     IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
     InvalidFractionOfSecond, InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError,
@@ -313,6 +313,14 @@ impl KernelError {
                 range_message: message,
             }
             .into(),
+        }
+    }
+
+    /// `CANNOT_PARSE_TIME`: `input` and `format` are Spark's quoted renderings.
+    pub(crate) fn cannot_parse_time(row: usize, input: String, format: String) -> Self {
+        Self {
+            row: Some(row),
+            error: CannotParseTime { input, format }.into(),
         }
     }
 

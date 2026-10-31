@@ -276,6 +276,55 @@ pub fn time_to_units(
     times.unary(|n| n.checked_div(nanos_per_unit).unwrap_or(0))
 }
 
+/// The format Spark names in `CANNOT_PARSE_TIME` for a one-argument
+/// `to_time` (its text is read with the default `TIME` grammar).
+const DEFAULT_TIME_FORMAT: &str = "HH:mm:ss.SSSSSS";
+
+/// `to_time(text[, format])`: with no `formats`, the default `TIME` grammar;
+/// else each row's pattern (a NULL pattern gives NULL). An unparsable row
+/// is `CANNOT_PARSE_TIME` with `fail_on_error`, else NULL.
+///
+/// # Errors
+/// `CANNOT_PARSE_TIME`; an invalid pattern's own error.
+pub fn to_time(
+    strings: &StringArray,
+    formats: Option<&StringArray>,
+    fail_on_error: bool,
+) -> Result<PrimitiveArray<Time64NanosecondType>, KernelError> {
+    use crate::datetime_pattern::{DateTimePattern, Purpose};
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+    let mut out = Vec::with_capacity(strings.len());
+    for i in 0..strings.len() {
+        let fmt = formats.map(|f| (!f.is_null(i)).then(|| f.value(i)));
+        if strings.is_null(i) || fmt == Some(None) {
+            out.push(None);
+            continue;
+        }
+        let text = strings.value(i);
+        let parsed = match fmt.flatten() {
+            None => parse_time(text),
+            Some(f) => DateTimePattern::new(f, Purpose::Parse)
+                .map_err(|e| KernelError::with_row(Some(i), e))?
+                .parse_local(text, false)
+                .map_err(|e| KernelError::with_row(Some(i), e))?
+                .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(1_000)),
+        };
+        match parsed {
+            Some(n) => out.push(Some(n)),
+            None if fail_on_error => {
+                let shown = fmt.flatten().unwrap_or(DEFAULT_TIME_FORMAT);
+                return Err(KernelError::cannot_parse_time(
+                    i,
+                    crate::cast::sql_string(text),
+                    crate::cast::sql_string(shown),
+                ));
+            }
+            None => out.push(None),
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -358,6 +358,7 @@ fn cast_target(name: &str) -> Option<DataType> {
         "binary" => DataType::Binary,
         "date" => DataType::Date,
         "timestamp" => DataType::Timestamp,
+        "time" => DataType::Time { precision: 6 },
         _ => return None,
     })
 }

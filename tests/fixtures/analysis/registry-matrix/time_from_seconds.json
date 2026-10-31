@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "time_from_seconds#0e8ceaeeef48/ansi_on",
+      "reason": "SELECT time_from_seconds(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#0e8ceaeeef48/ansi_off",
+      "reason": "SELECT time_from_seconds(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#40fc3662faa5/ansi_on",
+      "reason": "SELECT time_from_seconds(X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#40fc3662faa5/ansi_off",
+      "reason": "SELECT time_from_seconds(X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#50c3fc8949b5/ansi_on",
+      "reason": "SELECT time_from_seconds(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#50c3fc8949b5/ansi_off",
+      "reason": "SELECT time_from_seconds(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#585cfa9628ef/ansi_on",
+      "reason": "SELECT time_from_seconds(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#585cfa9628ef/ansi_off",
+      "reason": "SELECT time_from_seconds(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#71b083d9ffcd/ansi_on",
+      "reason": "SELECT time_from_seconds(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#71b083d9ffcd/ansi_off",
+      "reason": "SELECT time_from_seconds(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#8c951e667d02/ansi_on",
+      "reason": "SELECT time_from_seconds(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#8c951e667d02/ansi_off",
+      "reason": "SELECT time_from_seconds(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#99ae605e06d7/ansi_on",
+      "reason": "SELECT time_from_seconds(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#99ae605e06d7/ansi_off",
+      "reason": "SELECT time_from_seconds(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#acad5ddd7f82/ansi_on",
+      "reason": "SELECT time_from_seconds(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#acad5ddd7f82/ansi_off",
+      "reason": "SELECT time_from_seconds(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#bc3aaf5f3142/ansi_on",
+      "reason": "SELECT time_from_seconds(map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#bc3aaf5f3142/ansi_off",
+      "reason": "SELECT time_from_seconds(map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#f18724bca819/ansi_on",
+      "reason": "SELECT time_from_seconds(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_from_seconds#f18724bca819/ansi_off",
+      "reason": "SELECT time_from_seconds(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "time_from_seconds"
+}
