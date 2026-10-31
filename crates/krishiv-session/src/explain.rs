@@ -221,7 +221,7 @@ impl DataFrame {
             .physical(&analysis.analyzed, &analysis.env)
             .await
         {
-            Ok((optimized, physical)) => (optimized, physical.explain().clone()),
+            Ok((optimized, physical)) => (optimized, physical.explain_all()),
             Err(e) if lenient => return Ok(failed(mode, &parsed, Some(&analysis), &e)),
             Err(e) => return Err(e),
         };

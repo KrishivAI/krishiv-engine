@@ -394,7 +394,7 @@ impl DataFrame {
             });
             before = plan;
         }
-        let node = physical.explain().clone();
+        let node = physical.explain_all();
         Ok((
             ExplainVerbose {
                 parsed,
