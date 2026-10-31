@@ -22,7 +22,10 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::Sort;
 use super::keys::{KeyEncoder, SortKey};
-use super::merge::{Bucketing, Merger, SortedBatch, interleave_batches};
+use super::merge::{
+    Bucketing, Merger, Slice, SortedBatch, interleave_batches, parallel_merge, sort_slices,
+    split_slices,
+};
 use crate::context::{ExecConfig, OperatorId, QueryContext, QueryId, TaskContext};
 use crate::executor::{Executor, TokioExecutor, WorkloadClass};
 use crate::operator::{Sink, Source};
@@ -629,4 +632,279 @@ fn a_wide_bucket_merge_sorts_in_the_merge_order() {
     let merger = Merger::bucket(schema, keys, &plain, 0, &handle).unwrap();
     assert!(!merger.sorts_rows(), "an unbucketed merge runs the tree");
     assert_eq!(drain(merger), want);
+}
+
+/// `count` batches of `rows` rows of `key(batch, row)`.
+fn int_batches(
+    schema: &SchemaRef,
+    count: i64,
+    rows: i64,
+    key: impl Fn(i64, i64) -> i64,
+) -> Vec<Batch> {
+    (0..count)
+        .map(|b| {
+            let k = (0..rows).map(|r| key(b, r));
+            let k: ArrayRef = Arc::new(Int64Array::from_iter_values(k));
+            Batch::new(RecordBatch::try_new(Arc::clone(schema), vec![k]).unwrap())
+        })
+        .collect()
+}
+
+fn int_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]))
+}
+
+fn scattered(b: i64, r: i64) -> i64 {
+    (b * 1000 + r).wrapping_mul(2_654_435_761) % 1_000_003
+}
+
+/// The merge's cuts keep every row once and in the tree's order, whatever the
+/// number of parts: ties across many runs, NaN and NULL keys, runs of very
+/// different lengths, and every key equal.
+#[test]
+fn parts_sorted_one_by_one_are_the_merge() {
+    let (schema, batch) = floats();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0).nulls_first(false)]).unwrap();
+    let n = batch.num_rows();
+    let rotations: Vec<Batch> = (0..100)
+        .map(|i| {
+            let rows: Vec<(usize, usize)> = (0..1 + i % n).map(|r| (0, (r + i) % n)).collect();
+            interleave_batches(&schema, std::slice::from_ref(&batch), &rows).unwrap()
+        })
+        .collect();
+    let root = TreePool::new(&MemoryConfig::default());
+    let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let runs: Vec<Arc<SortedBatch>> = rotations
+        .iter()
+        .map(|b| Arc::new(SortedBatch::new(b.clone(), &keys, None).unwrap()))
+        .collect();
+    let drain = |mut m: Merger| {
+        let mut out = Vec::new();
+        while let Some(b) = m.next(37).unwrap() {
+            out.extend(ids(&b));
+        }
+        out
+    };
+    let want = drain(
+        Merger::new(
+            Arc::clone(&schema),
+            Arc::clone(&keys),
+            runs.clone(),
+            &[],
+            &handle,
+        )
+        .unwrap(),
+    );
+    let memory: Vec<Slice> = runs
+        .iter()
+        .map(|s| (Arc::clone(s), 0..s.order.len()))
+        .collect();
+    let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
+    for parts in [1, 2, 3, 7, 16, rows, rows + 5] {
+        let cut = split_slices(&memory, parts).unwrap();
+        assert!(cut.len() <= parts);
+        let mut order = Vec::new();
+        for part in &cut {
+            assert_eq!(part.len(), memory.len());
+            order.extend(sort_slices(part).unwrap());
+        }
+        let merger = Merger::from_order(
+            Arc::clone(&schema),
+            Arc::clone(&keys),
+            &memory,
+            order,
+            handle.reservation(),
+        );
+        assert_eq!(drain(merger), want, "{parts} parts");
+    }
+}
+
+/// Equal keys do not pile up in one part, since the merge's order is total.
+#[test]
+fn equal_keys_spread_over_the_parts() {
+    let schema = int_schema();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0)]).unwrap();
+    let memory: Vec<Slice> = int_batches(&schema, 100, 100, |_, _| 7)
+        .into_iter()
+        .map(|b| {
+            let s = Arc::new(SortedBatch::new(b, &keys, None).unwrap());
+            let all = 0..s.order.len();
+            (s, all)
+        })
+        .collect();
+    let cut = split_slices(&memory, 4).unwrap();
+    assert_eq!(cut.len(), 4);
+    for part in &cut {
+        let rows: usize = part.iter().map(|(_, r)| r.len()).sum();
+        assert!((2000..=3000).contains(&rows), "{rows} rows in a part");
+    }
+}
+
+#[test]
+fn a_parallel_merge_needs_slices_rows_threads_and_memory() {
+    let schema = int_schema();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0)]).unwrap();
+    let runs = |count, rows, buckets: Option<&Bucketing>| -> Vec<Arc<SortedBatch>> {
+        int_batches(&schema, count, rows, scattered)
+            .into_iter()
+            .map(|b| Arc::new(SortedBatch::new(b, &keys, buckets).unwrap()))
+            .collect()
+    };
+    let root = TreePool::new(&MemoryConfig::default());
+    let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let wide = runs(65, 1000, None);
+    let (memory, parts, scratch) = parallel_merge(&wide, 8, &handle).unwrap();
+    assert_eq!((memory.len(), parts), (65, 3), "rows bound the parts");
+    assert!(scratch.size() > 0);
+    drop(scratch);
+    assert_eq!(parallel_merge(&wide, 2, &handle).unwrap().1, 2);
+    assert!(parallel_merge(&wide, 1, &handle).is_none(), "one thread");
+    let few_slices = runs(64, 1000, None);
+    assert!(parallel_merge(&few_slices, 8, &handle).is_none());
+    let few_rows = runs(65, 100, None);
+    assert!(parallel_merge(&few_rows, 8, &handle).is_none());
+    let bucketing = Bucketing::new(Arc::clone(&keys), 1);
+    let bucketed = runs(65, 1000, Some(&bucketing));
+    assert!(parallel_merge(&bucketed, 8, &handle).is_none());
+    let tight = TreePool::new(&MemoryConfig {
+        limit: Some(1024),
+        ..MemoryConfig::default()
+    });
+    let small = ConsumerHandle::register(tight.child("q", None), "sort", None);
+    assert!(parallel_merge(&wide, 8, &small).is_none(), "the tree instead");
+}
+
+/// A sort's source over a wide in-memory result on two threads, with what it
+/// needs to stay alive: the keys it reads, with the rest of the merge spilled
+/// after the first batch if `spill_after_first`.
+async fn read_wide_result(spill_after_first: bool) -> Vec<i64> {
+    let schema = int_schema();
+    let batches = int_batches(&schema, 100, 400, scattered);
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(2).unwrap();
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(1 << 30),
+            quantum: 1,
+            ..MemoryConfig::default()
+        },
+        Arc::new(crate::executor::TokioClock),
+    );
+    let config = ExecConfig {
+        batch_size: 1000,
+        ..ExecConfig::default()
+    };
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    let ctx = |op| {
+        TaskContext::new(
+            Arc::clone(&query),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(op),
+            "Sort",
+        )
+    };
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!(
+            "sort-unit-parallel-{}-{spill_after_first}",
+            std::process::id()
+        ));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let sort = Sort::new(schema, &[SortKey::asc(0)], Some(manager.scope().unwrap())).unwrap();
+    let sink_ctx = ctx(0);
+    let global = Sink::global_state(&sort, &sink_ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &sink_ctx, &global).unwrap();
+    for b in batches {
+        sort.sink(b, &mut local, &global).unwrap();
+    }
+    sort.combine(local, &global).unwrap();
+    sort.finalize(&global, &sink_ctx).await.unwrap();
+    let source_ctx = ctx(1).with_dependency(Arc::clone(&global));
+    let source_global = Source::global_state(&sort, &source_ctx).unwrap();
+    let mut local = Source::local_state(&sort, &source_ctx, &source_global).unwrap();
+    let mut keys = Vec::new();
+    while let Some(b) = sort.get_data(&mut local, &source_global).await.unwrap() {
+        let k = b
+            .data()
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>();
+        let first = keys.is_empty();
+        keys.extend(k.values().iter().copied());
+        if first && spill_after_first {
+            assert!(super::sort::spill_result_again(&mut local).await.unwrap() > 0);
+            assert_eq!(sort.metrics().runs_spilled, 1);
+        }
+    }
+    assert!(query.error().is_none());
+    drop((local, source_global, source_ctx, global, sink_ctx));
+    assert_eq!(manager.used_bytes(), 0);
+    assert_eq!(root.reserved(), 0, "the merge's memory went back");
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+    keys
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wide_result_reads_in_order_through_the_parallel_merge() {
+    let mut want: Vec<i64> = (0..100)
+        .flat_map(|b| (0..400).map(move |r| scattered(b, r)))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(read_wide_result(false).await, want);
+    // The rest of the merge spilled after the first batch reads the same.
+    assert_eq!(read_wide_result(true).await, want);
+}
+
+/// A cancelled parallel merge fails the read, and every later read: never a
+/// short result.
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_parallel_merge_fails_the_read() {
+    let schema = int_schema();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(2).unwrap();
+    let root = TreePool::with_clock(
+        &MemoryConfig::default(),
+        Arc::new(crate::executor::TokioClock),
+    );
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", None),
+    );
+    let ctx = |op| {
+        TaskContext::new(
+            Arc::clone(&query),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(op),
+            "Sort",
+        )
+    };
+    let sort = Sort::new(Arc::clone(&schema), &[SortKey::asc(0)], None).unwrap();
+    let sink_ctx = ctx(0);
+    let global = Sink::global_state(&sort, &sink_ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &sink_ctx, &global).unwrap();
+    for b in int_batches(&schema, 100, 400, scattered) {
+        sort.sink(b, &mut local, &global).unwrap();
+    }
+    sort.combine(local, &global).unwrap();
+    sort.finalize(&global, &sink_ctx).await.unwrap();
+    let source_ctx = ctx(1).with_dependency(Arc::clone(&global));
+    let source_global = Source::global_state(&sort, &source_ctx).unwrap();
+    let mut local = Source::local_state(&sort, &source_ctx, &source_global).unwrap();
+    query.cancel();
+    assert!(sort.get_data(&mut local, &source_global).await.is_err());
+    let mut again = Source::local_state(&sort, &source_ctx, &source_global).unwrap();
+    assert!(sort.get_data(&mut again, &source_global).await.is_err());
+    drop((local, again, source_global, source_ctx, global, sink_ctx));
+    assert_eq!(root.reserved(), 0);
 }

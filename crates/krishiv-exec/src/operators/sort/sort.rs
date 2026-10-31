@@ -30,7 +30,8 @@ use krishiv_types::batch::Batch;
 
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
-    Bucketing, Merger, SortedBatch, SpillRun, data_bytes, interleave_batches, write_run,
+    Bucketing, Merger, SortedBatch, SpillRun, data_bytes, interleave_batches, parallel_merge,
+    sort_slices, split_slices, write_run,
 };
 use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
@@ -1749,6 +1750,18 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
             Take::Wait => changed.await,
         }
     };
+    let opened = match &batches {
+        Some(batches) => open_parallel(l, held, batches).await,
+        None => Ok(None),
+    };
+    let merger = match opened {
+        Ok(Some(opened)) => Some(opened),
+        Ok(None) => merger,
+        Err(e) => {
+            held.fail(e.clone());
+            return Err(e);
+        }
+    };
     let rows = l.batch_rows;
     let (schema, encoder, handle) = (
         Arc::clone(&held.schema),
@@ -1783,6 +1796,44 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
             Err(e)
         }
     }
+}
+
+/// The merge of an unbucketed sort's wide in-memory result, computed as one
+/// blocking task per part: a loser tree over thousands of batches costs a
+/// chain of cache misses per row, on one thread. `None`: the tree it is.
+async fn open_parallel(
+    l: &SortSource,
+    held: &Arc<Held>,
+    batches: &Arc<[Arc<SortedBatch>]>,
+) -> Result<Option<Box<Merger>>> {
+    let parallelism = l.executor.parallelism();
+    let Some((memory, parts, scratch)) = parallel_merge(batches, parallelism, &held.handle) else {
+        return Ok(None);
+    };
+    let memory = Arc::new(memory);
+    let shared = Arc::clone(&memory);
+    let cut = blocking(&l.query, &l.executor, move || {
+        split_slices(&shared, parts)
+    })
+    .await?;
+    let sorted = cut.into_iter().map(|part| {
+        let query = Arc::clone(&l.query);
+        blocking(&l.query, &l.executor, move || {
+            query.check_cancelled()?;
+            sort_slices(&part)
+        })
+    });
+    let orders = futures::future::try_join_all(sorted).await?;
+    let mut order = Vec::with_capacity(orders.iter().map(Vec::len).sum());
+    orders.iter().for_each(|o| order.extend_from_slice(o));
+    drop(orders);
+    Ok(Some(Box::new(Merger::from_order(
+        Arc::clone(&held.schema),
+        Arc::clone(&held.encoder),
+        &memory,
+        order,
+        scratch,
+    ))))
 }
 
 /// Writes the rest of `merger` with `writer` in batches of `rows` rows,
