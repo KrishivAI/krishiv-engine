@@ -41,14 +41,6 @@
       "reason": "SELECT reduce(array(1, 2, 3), TIMESTAMP'2024-02-29 12:34:56.123456', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "reduce#55924f40b448/ansi_on",
-      "reason": "SELECT reduce(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "reduce#55924f40b448/ansi_off",
-      "reason": "SELECT reduce(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
       "id": "reduce#6113937fdffb/ansi_on",
       "reason": "SELECT reduce(array(1, 2, 3), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -99,14 +91,6 @@
     {
       "id": "reduce#d63811a27f58/ansi_off",
       "reason": "SELECT reduce(array(1, 2, 3), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "reduce#d9e8d5305bef/ansi_on",
-      "reason": "SELECT reduce(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "reduce#d9e8d5305bef/ansi_off",
-      "reason": "SELECT reduce(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "reduce#dedc84bc25c6/ansi_on",
