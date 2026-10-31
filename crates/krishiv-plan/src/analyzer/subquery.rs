@@ -327,6 +327,23 @@ fn null_literal(e: &Expr) -> bool {
 }
 
 /// Whether `e` is an integer literal above zero.
+/// `inner_column = outer_expression`, either way round.
+fn is_outer_equality(e: &Arc<Expr>) -> bool {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return false;
+    };
+    if f.id != FunctionId::Builtin(Builtin::Eq) || f.args.len() != 2 {
+        return false;
+    }
+    let plain = |a: &Arc<Expr>, b: &Arc<Expr>| {
+        matches!(&a.node, ExprNode::Resolved(ResolvedExpr::Column(_)))
+            && !has_outer(Node::Expr(a))
+            && has_outer(Node::Expr(b))
+            && inner_columns(b).is_empty()
+    };
+    plain(&f.args[0], &f.args[1]) || plain(&f.args[1], &f.args[0])
+}
+
 fn positive_literal(e: &Expr) -> bool {
     match &e.node {
         ExprNode::Literal(v) => match v {
@@ -1047,6 +1064,46 @@ impl Rewriter {
                 } else {
                     self.pull(input, false)
                 }
+            }
+            // `IN (SELECT agg ... WHERE k = o GROUP BY g)`: the aggregate
+            // runs per `(g, k)`, so each outer row meets the groups of its
+            // own `k`. Only equalities keep that reading, and a global
+            // aggregate (one row even for no input) would not.
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                aggregates,
+            } if keep && !keys.is_empty() && !keys.iter().any(|k| has_outer(Node::Expr(k))) => {
+                let (inner, corr) = self.pull(input, true)?;
+                if !corr.iter().all(is_outer_equality) {
+                    return Err(unsupported(
+                        "outer references below a grouped aggregate that are not equalities",
+                        plan.origin,
+                    ));
+                }
+                let mut keys = keys.clone();
+                let mut aggregates = aggregates.clone();
+                let mut have: HashSet<AttrId> = HashSet::new();
+                for k in &keys {
+                    if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
+                        have.insert(c.id);
+                    }
+                }
+                for c in &corr {
+                    for col in inner_columns(c) {
+                        if have.insert(col.id) {
+                            let e = col_expr(&col, Origin::UNKNOWN);
+                            keys.push(Arc::clone(&e));
+                            aggregates.push(e);
+                        }
+                    }
+                }
+                let agg = PlanNode::Aggregate {
+                    input: inner,
+                    grouping: Grouping::GroupBy(keys),
+                    aggregates,
+                };
+                Ok((node(agg, plan.origin), corr))
             }
             // EXISTS asks only whether a row exists: a positive LIMIT keeps
             // that answer (an OFFSET or `LIMIT 0` would not).
