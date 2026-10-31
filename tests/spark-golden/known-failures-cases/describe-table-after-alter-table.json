@@ -1,11 +1,8 @@
 {
   "cases": {
     "sql-commands": [
-      1,
       3,
-      6,
-      8,
-      10
+      8
     ]
   },
   "file": "describe-table-after-alter-table",
