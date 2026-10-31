@@ -167,6 +167,11 @@ impl RowCols {
 
     /// Row `id` and its heap (empty if out of range).
     #[inline]
+    fn prefetch(&self, id: u32) {
+        krishiv_kernels::prefetch_read(&self.fixed, (id as usize).saturating_mul(self.stride));
+    }
+
+    #[inline]
     fn row(&self, id: u32) -> (&[u8], &[u8]) {
         let at = (id as usize).saturating_mul(self.stride);
         let row = self
@@ -316,6 +321,13 @@ impl RowArena {
 }
 
 impl RowSource for RowArena {
+    #[inline]
+    fn prefetch(&self, id: u32) {
+        if let Cols::Rows(k) = &self.keys {
+            k.prefetch(id);
+        }
+    }
+
     #[inline]
     fn row(&self, id: u32) -> (&[u8], &[u8]) {
         match &self.keys {
