@@ -305,6 +305,7 @@ pub(super) fn specs() -> Vec<Spec> {
             "current_database",
             "current_schema",
             "current_catalog",
+            "current_path",
         ],
         &Inputs::Any,
         string,

@@ -721,6 +721,16 @@ impl fmt::Debug for AnalysisContext {
     }
 }
 
+/// `current_path()`: the SQL path as the comma-separated entries.
+pub(crate) fn current_path(catalogs: &dyn CatalogResolver) -> String {
+    catalogs
+        .sql_path()
+        .iter()
+        .map(|e| krishiv_common::sql_path::render(e))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// The fingerprint of `ctx`, with the epochs of the catalogs consulted.
 pub(crate) fn fingerprint(
     ctx: &AnalysisContext,
@@ -728,6 +738,7 @@ pub(crate) fn fingerprint(
 ) -> ContextFingerprint {
     let mut current = vec![ctx.catalogs.current_catalog().to_owned()];
     current.extend(ctx.catalogs.current_namespace().iter().cloned());
+    current.push(current_path(&*ctx.catalogs));
     ContextFingerprint {
         profile: ctx.profile,
         conf: ctx.conf,

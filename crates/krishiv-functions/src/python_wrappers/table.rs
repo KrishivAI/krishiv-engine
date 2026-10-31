@@ -217,6 +217,7 @@ pub(super) fn rows() -> Vec<Row> {
         "curdate",
         "current_catalog",
         "current_database",
+        "current_path",
         "current_date",
         "current_schema",
         "current_timestamp",

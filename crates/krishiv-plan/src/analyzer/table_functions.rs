@@ -16,7 +16,7 @@ use krishiv_types::DataType;
 use super::coerce::{ordinal, quoted_type};
 use super::exprs::{Bound, pretty};
 use super::{AnalysisError, TableFunctionKind, TableFunctionLookup};
-use crate::{BoundColumn, Expr, LogicalPlan, Origin, PlanNode};
+use crate::{BoundColumn, Expr, ExprNode, LogicalPlan, Origin, PlanNode};
 
 use super::resolve::{Env, Rel, Resolver};
 
@@ -64,6 +64,16 @@ impl Resolver<'_> {
             }
             TableFunctionLookup::Found(TableFunctionKind::UnsupportedGenerator) => {
                 Err(super::bind::unsupported("table-valued functions", o))
+            }
+            TableFunctionLookup::Found(_)
+                if args
+                    .iter()
+                    .any(|a| matches!(a.node, ExprNode::Alias { .. })) =>
+            {
+                Err(super::bind::unsupported(
+                    "named table-function arguments",
+                    o,
+                ))
             }
             TableFunctionLookup::Found(TableFunctionKind::Range) => self.range(p, args, env),
             TableFunctionLookup::Found(TableFunctionKind::SqlKeywords) => {

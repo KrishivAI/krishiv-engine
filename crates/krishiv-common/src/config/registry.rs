@@ -12,6 +12,8 @@ const MIB: u64 = 1024 * 1024;
 pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
+    &SQL_PATH_ENABLED,
+    &SQL_DEFAULT_PATH,
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
     &MAP_KEY_DEDUP_POLICY,
@@ -93,19 +95,23 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
     ("spark.network.timeout", &NETWORK_TIMEOUT),
+    ("spark.sql.defaultPath", &SQL_DEFAULT_PATH),
     ("krishiv.cache.maxBytes", &CACHE_MAX_BYTES),
     ("krishiv.exec.batchSize", &EXEC_BATCH_SIZE),
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
+    ("spark.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
+    ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),
     ("krishiv.io.prefetchBytes", &IO_PREFETCH_BYTES),
     ("krishiv.io.strictOptions", &IO_STRICT_OPTIONS),
     ("krishiv.spill.zstd.level", &SPILL_ZSTD_LEVEL),
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
+    ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
@@ -340,6 +346,29 @@ pub static SESSION_TIME_ZONE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.session.timeZone"),
+};
+
+/// Whether `SET PATH` is allowed.
+pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.path.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether `SET PATH` (the SQL standard routine and relation search path) is enabled.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.path.enabled"),
+};
+
+/// What `DEFAULT_PATH` expands to.
+pub static SQL_DEFAULT_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.defaultPath",
+    value_type: ValueType::String,
+    default: Some(ConfigValue::String(Cow::Borrowed(""))),
+    doc: "What `DEFAULT_PATH` expands to: a comma-separated `SET PATH` element list without `PATH`. \
+          Empty means `system.builtin, system.session, current_schema`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.defaultPath"),
 };
 
 /// Table-insertion type coercion policy.
