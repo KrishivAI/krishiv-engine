@@ -35,10 +35,11 @@ use krishiv_types::DecimalType;
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause,
-    FromStatement, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Ident, Join,
-    JoinConstraint, JoinKind, Literal, NamedWindow, NullTreatment, NumKind, Pivot, Query, Relation,
-    RelationExt, Select, SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem,
-    Span, TableAlias, TableFactor, TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
+    FromStatement, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, Join,
+    JoinConstraint, JoinKind, Limit, Literal, NamedWindow, NullTreatment, NumKind, Pipe,
+    PipeAggregate, PipeOp, PipeOpKind, Pivot, Query, Relation, RelationExt, Select, SelectItem,
+    SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias, TableFactor,
+    TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
@@ -132,6 +133,17 @@ fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
         error: e.into(),
         span,
     }
+}
+
+/// The clauses `ORDER BY`, `SORT BY`, `OFFSET` and `LIMIT` of a query or of
+/// a pipe operator.
+struct Organization<'a> {
+    order_by: &'a [SortItem],
+    sort_by: &'a [SortItem],
+    order_span: Option<Span>,
+    offset: Option<&'a Expr>,
+    limit: Option<&'a Limit>,
+    span: Span,
 }
 
 /// Rejects the query-organization clauses lowering does not support.
@@ -439,7 +451,7 @@ impl Lowerer {
     /// A query body: a `SELECT`, a set operation, a table, ...
     fn body(&mut self, body: &SetExpr) -> R<LogicalPlan> {
         Ok(match &body.kind {
-            SetExprKind::Pipe(_) => return Err(unsupported("pipe operators", body.span)),
+            SetExprKind::Pipe(p) => self.pipe(p)?,
             SetExprKind::Transform(_) => return Err(unsupported("TRANSFORM", body.span)),
             SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
             SetExprKind::Query(inner) => self.query(inner)?,
@@ -460,35 +472,7 @@ impl Lowerer {
             } => {
                 let left = arc(self.deeper(|l| l.body(left))?);
                 let right = arc(self.deeper(|l| l.body(right))?);
-                let all = *quantifier == Some(SetQuantifier::All);
-                let op = match op {
-                    SetOperator::Union => {
-                        let union = self.node(
-                            PlanNode::Union {
-                                inputs: vec![left, right],
-                                by_name: false,
-                                allow_missing_columns: false,
-                            },
-                            body.span,
-                        );
-                        return Ok(if all {
-                            union
-                        } else {
-                            self.node(PlanNode::Distinct { input: arc(union) }, body.span)
-                        });
-                    }
-                    SetOperator::Intersect => krishiv_plan::SetOperation::Intersect,
-                    SetOperator::Except => krishiv_plan::SetOperation::Except,
-                };
-                self.node(
-                    PlanNode::SetOp {
-                        left,
-                        right,
-                        op,
-                        all,
-                    },
-                    body.span,
-                )
+                self.set_operation(*op, *quantifier, left, right, body.span)
             }
             SetExprKind::Values(v) => {
                 let plan = self.inline_table(&v.rows, v.alias.as_ref(), v.span)?;
@@ -500,9 +484,230 @@ impl Lowerer {
         })
     }
 
+    /// `left op right` as Spark's `visitSetOperationImpl` builds it:
+    /// `UNION` is a `Union` (under `Distinct` unless `ALL`), the rest a
+    /// `SetOp`.
+    fn set_operation(
+        &mut self,
+        op: SetOperator,
+        quantifier: Option<SetQuantifier>,
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+        span: Span,
+    ) -> LogicalPlan {
+        let all = quantifier == Some(SetQuantifier::All);
+        let op = match op {
+            SetOperator::Union => {
+                let union = self.node(
+                    PlanNode::Union {
+                        inputs: vec![left, right],
+                        by_name: false,
+                        allow_missing_columns: false,
+                    },
+                    span,
+                );
+                return if all {
+                    union
+                } else {
+                    self.node(PlanNode::Distinct { input: arc(union) }, span)
+                };
+            }
+            SetOperator::Intersect => krishiv_plan::SetOperation::Intersect,
+            SetOperator::Except => krishiv_plan::SetOperation::Except,
+        };
+        self.node(
+            PlanNode::SetOp {
+                left,
+                right,
+                op,
+                all,
+            },
+            span,
+        )
+    }
+
+    /// `input |> operator |> ...`: each operator reads the plan of the
+    /// ones before it, as Spark's `visitOperatorPipeRightSide` builds them.
+    fn pipe(&mut self, p: &Pipe) -> R<LogicalPlan> {
+        let mut plan = self.deeper(|l| l.body(&p.input))?;
+        for op in &p.ops {
+            plan = self.pipe_op(plan, op)?;
+        }
+        Ok(plan)
+    }
+
+    fn pipe_op(&mut self, plan: LogicalPlan, op: &PipeOp) -> R<LogicalPlan> {
+        let star = |l: &Self, except: Vec<Vec<String>>| {
+            arc(l.ex(
+                ExprNode::Star(Star {
+                    qualifier: Vec::new(),
+                    except,
+                    plan_id: None,
+                }),
+                op.span,
+            ))
+        };
+        Ok(match &op.kind {
+            PipeOpKind::Select(s) => {
+                if let Some(g) = &s.group_by {
+                    return Err(unsupported("GROUP BY in a pipe SELECT", g.span));
+                }
+                let exprs = self.with_windows(&s.windows, |l| {
+                    s.projection
+                        .iter()
+                        .map(|i| l.select_item(i))
+                        .collect::<R<Vec<_>>>()
+                })?;
+                let plan = self.node(
+                    PlanNode::Project {
+                        input: arc(plan),
+                        exprs,
+                    },
+                    s.span,
+                );
+                self.wrap_distinct_hints(plan, s.quantifier, &s.hints, s.span)?
+            }
+            PipeOpKind::Extend(items) => {
+                let mut exprs = vec![star(self, Vec::new())];
+                for item in items {
+                    exprs.push(self.select_item(item)?);
+                }
+                self.node(
+                    PlanNode::Project {
+                        input: arc(plan),
+                        exprs,
+                    },
+                    op.span,
+                )
+            }
+            PipeOpKind::Drop(names) => {
+                let except = names
+                    .iter()
+                    .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
+                    .collect();
+                let exprs = vec![star(self, except)];
+                self.node(
+                    PlanNode::Project {
+                        input: arc(plan),
+                        exprs,
+                    },
+                    op.span,
+                )
+            }
+            PipeOpKind::As(name) => self.node(
+                PlanNode::SubqueryAlias {
+                    input: arc(plan),
+                    alias: name.value.clone(),
+                    columns: Vec::new(),
+                },
+                op.span,
+            ),
+            PipeOpKind::Where(w) => {
+                let predicate = arc(self.expr(&w.condition)?);
+                self.node(
+                    PlanNode::Filter {
+                        input: arc(plan),
+                        predicate,
+                    },
+                    op.span,
+                )
+            }
+            PipeOpKind::Pivot(p, None) => self.pivot(plan, p)?,
+            PipeOpKind::Unpivot(u, None) => self.unpivot(plan, u)?,
+            PipeOpKind::Join(j) => self.join(plan, j)?,
+            PipeOpKind::SetOp {
+                op: set,
+                quantifier,
+                right,
+            } => {
+                let right = arc(self.deeper(|l| l.body(right))?);
+                self.set_operation(*set, *quantifier, arc(plan), right, op.span)
+            }
+            PipeOpKind::Organization(o) => {
+                if !o.cluster_by.is_empty() {
+                    return Err(unsupported("CLUSTER BY", o.span));
+                }
+                if !o.distribute_by.is_empty() {
+                    return Err(unsupported("DISTRIBUTE BY", o.span));
+                }
+                self.organize_parts(
+                    plan,
+                    &Organization {
+                        order_by: &o.order_by,
+                        sort_by: &o.sort_by,
+                        order_span: o.order_span,
+                        offset: o.offset.as_ref(),
+                        limit: o.limit.as_ref(),
+                        span: o.span,
+                    },
+                )?
+            }
+            PipeOpKind::Aggregate(a) => self.pipe_aggregate(plan, a)?,
+            PipeOpKind::Set(_) => return Err(unsupported("pipe SET", op.span)),
+            PipeOpKind::Sample(t) => return Err(unsupported("TABLESAMPLE", t.span)),
+            PipeOpKind::Pivot(_, Some(_)) | PipeOpKind::Unpivot(_, Some(_)) => {
+                return Err(unsupported("PIVOT with UNPIVOT", op.span));
+            }
+        })
+    }
+
+    /// `AGGREGATE [aggregates] [GROUP BY keys]`: the result is the keys,
+    /// then the aggregates.
+    fn pipe_aggregate(&mut self, plan: LogicalPlan, a: &PipeAggregate) -> R<LogicalPlan> {
+        let mut keys = Vec::new();
+        let mut items = Vec::new();
+        for g in a.group_by.iter().flat_map(|g| &g.items) {
+            match &g.kind {
+                GroupItemKind::Expr(e) => {
+                    if matches!(e.kind, ExprKind::Literal(Literal::Number { .. })) {
+                        return Err(unsupported(
+                            "a position in a pipe AGGREGATE GROUP BY",
+                            g.span,
+                        ));
+                    }
+                    let key = arc(self.expr(e)?);
+                    items.push(Arc::clone(&key));
+                    keys.push(key);
+                }
+                GroupItemKind::Named(item) => {
+                    keys.push(arc(self.expr(&item.expr)?));
+                    items.push(self.select_item(item)?);
+                }
+                _ => return Err(unsupported("grouping sets in a pipe AGGREGATE", g.span)),
+            }
+        }
+        for item in &a.aggregates {
+            items.push(self.select_item(item)?);
+        }
+        Ok(self.node(
+            PlanNode::Aggregate {
+                input: arc(plan),
+                grouping: Grouping::GroupBy(keys),
+                aggregates: items,
+            },
+            a.span,
+        ))
+    }
+
     /// `ORDER BY`, `SORT BY`, `OFFSET` and `LIMIT` of `q` over `plan`.
-    fn organize(&mut self, mut plan: LogicalPlan, q: &Query) -> R<LogicalPlan> {
-        for (items, global) in [(&q.order_by, true), (&q.sort_by, false)] {
+    fn organize(&mut self, plan: LogicalPlan, q: &Query) -> R<LogicalPlan> {
+        self.organize_parts(
+            plan,
+            &Organization {
+                order_by: &q.order_by,
+                sort_by: &q.sort_by,
+                order_span: q.order_span,
+                offset: q.offset.as_ref(),
+                limit: q.limit.as_ref(),
+                span: q.span,
+            },
+        )
+    }
+
+    /// The clauses of [`Self::organize`] given as parts, which a pipe
+    /// operator shares.
+    fn organize_parts(&mut self, mut plan: LogicalPlan, q: &Organization<'_>) -> R<LogicalPlan> {
+        for (items, global) in [(q.order_by, true), (q.sort_by, false)] {
             if !items.is_empty() {
                 let order = items.iter().map(|s| self.sort_item(s)).collect::<R<_>>()?;
                 // Spark's errors cite the ORDER BY clause.
@@ -518,7 +723,7 @@ impl Lowerer {
             }
         }
         // `LIMIT n OFFSET m` skips `m` rows, then keeps `n`.
-        if let Some(offset) = &q.offset {
+        if let Some(offset) = q.offset {
             let offset_expr = arc(self.expr(offset)?);
             plan = self.node(
                 PlanNode::Offset {
@@ -528,7 +733,7 @@ impl Lowerer {
                 offset.span,
             );
         }
-        if let Some(limit) = &q.limit
+        if let Some(limit) = q.limit
             && let Some(v) = &limit.value
         {
             let limit_expr = arc(self.expr(v)?);
@@ -584,11 +789,21 @@ impl Lowerer {
     }
 
     /// A `SELECT`'s `DISTINCT` and hints around its lowered list.
-    fn select_wrap(&mut self, s: &Select, mut plan: LogicalPlan) -> R<LogicalPlan> {
-        if s.quantifier == Some(SetQuantifier::Distinct) {
-            plan = self.node(PlanNode::Distinct { input: arc(plan) }, s.span);
+    fn select_wrap(&mut self, s: &Select, plan: LogicalPlan) -> R<LogicalPlan> {
+        self.wrap_distinct_hints(plan, s.quantifier, &s.hints, s.span)
+    }
+
+    fn wrap_distinct_hints(
+        &mut self,
+        mut plan: LogicalPlan,
+        quantifier: Option<SetQuantifier>,
+        hints: &[Hint],
+        span: Span,
+    ) -> R<LogicalPlan> {
+        if quantifier == Some(SetQuantifier::Distinct) {
+            plan = self.node(PlanNode::Distinct { input: arc(plan) }, span);
         }
-        for h in s.hints.iter().rev() {
+        for h in hints.iter().rev() {
             let params = h
                 .params
                 .iter()

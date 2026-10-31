@@ -1,0 +1,22 @@
+---
+source: crates/krishiv-sql/tests/lower.rs
+expression: "report(&[\"FROM t |> WHERE a > 1 |> SELECT a, b |> ORDER BY a LIMIT 3\",\n\"SELECT * FROM t |> EXTEND a + 1 AS c |> DROP b |> AS u\",\n\"FROM t |> AGGREGATE sum(a) AS s GROUP BY b\",\n\"FROM t |> AGGREGATE GROUP BY b AS k\",\n\"FROM t |> JOIN u ON t.a = u.a |> UNION ALL (SELECT 1, 2)\",\n\"FROM t |> SELECT DISTINCT a\", \"FROM t |> AGGREGATE sum(a) GROUP BY 1\",\n\"FROM t |> SET a = 1\", \"FROM t |> TABLESAMPLE (3 ROWS)\",])"
+---
+FROM t |> WHERE a > 1 |> SELECT a, b |> ORDER BY a LIMIT 3
+  => [MULTIPLE_QUERY_RESULT_CLAUSES_WITH_PIPE_OPERATORS] ORDER BY and LIMIT cannot coexist in the same SQL pipe operator using '|>'. Please separate the multiple result clauses into separate pipe operators and then retry the query again. SQLSTATE: 42000 @ 40..58
+SELECT * FROM t |> EXTEND a + 1 AS c |> DROP b |> AS u
+  => SubqueryAlias u | +- Project [* EXCEPT (b)] |    +- Project [*, (a + 1) AS c] |       +- Project [*] |          +- Read t | 
+FROM t |> AGGREGATE sum(a) AS s GROUP BY b
+  => Aggregate [b], [b, sum(a) AS s] | +- Read t | 
+FROM t |> AGGREGATE GROUP BY b AS k
+  => Aggregate [b], [b AS k] | +- Read t | 
+FROM t |> JOIN u ON t.a = u.a |> UNION ALL (SELECT 1, 2)
+  => Union | :- Join Inner, (t.a == u.a) | :  :- Read t | :  +- Read u | +- Project [1, 2] |    +- OneRowRelation | 
+FROM t |> SELECT DISTINCT a
+  => Distinct | +- Project [a] |    +- Read t | 
+FROM t |> AGGREGATE sum(a) GROUP BY 1
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature a position in a pipe AGGREGATE GROUP BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 36..37
+FROM t |> SET a = 1
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature pipe SET is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..19
+FROM t |> TABLESAMPLE (3 ROWS)
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature TABLESAMPLE is not supported by Krishiv yet. SQLSTATE: 0A000 @ 10..30
