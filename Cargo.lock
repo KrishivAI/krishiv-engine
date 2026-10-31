@@ -2001,6 +2001,7 @@ dependencies = [
  "krishiv-kernels",
  "krishiv-types",
  "krishiv-udf-sdk",
+ "quick-xml",
  "regex-automata",
  "regex-syntax",
 ]
