@@ -1041,3 +1041,218 @@ proptest! {
         prop_assert_eq!(pieces.join("."), text);
     }
 }
+
+/// Expected values are from a Spark 4.2 run with the two legacy switches on.
+#[test]
+fn legacy_charsets_and_replacement() {
+    use krishiv_kernels::string::{BinOperand, CharsetOptions};
+    let java = CharsetOptions {
+        java_charsets: true,
+        replace_malformed: false,
+    };
+    let replace = CharsetOptions {
+        java_charsets: true,
+        replace_malformed: true,
+    };
+    let enc = |text: &str, cs: &str, opts| {
+        s::encode_with(StrOperand::Array(&r1(text)), lit(Some(cs)), opts)
+            .map(|a| a.value(0).to_vec())
+            .map_err(|e| e.error_class())
+    };
+    let dec = |bytes: &[u8], cs: &str, opts| {
+        s::decode_with(
+            BinOperand::Array(&bins(&[Some(bytes)])),
+            lit(Some(cs)),
+            opts,
+        )
+        .map(|a| a.value(0).to_owned())
+        .map_err(|e| e.error_class())
+    };
+    // Off by default, on with the switch.
+    assert_eq!(
+        enc("hello", "WINDOWS-1252", CharsetOptions::default()).unwrap_err(),
+        ErrorClass::InvalidParameterValueCharset
+    );
+    assert_eq!(enc("hello", "WINDOWS-1252", java).unwrap(), b"hello");
+    assert_eq!(dec(b"hello", "WINDOWS-1252", java).unwrap(), "hello");
+    assert_eq!(
+        enc("x", "Windows-xxx", java).unwrap_err(),
+        ErrorClass::InvalidParameterValueCharset
+    );
+    // Java's tables and names.
+    assert_eq!(
+        enc("é€Ž", "windows-1252", java).unwrap(),
+        [0xE9, 0x80, 0x8E]
+    );
+    assert_eq!(enc("Ž", "ISO8859_2", java).unwrap(), [0xAE]);
+    assert_eq!(enc("Ž", "LATIN2", java).unwrap(), [0xAE]);
+    assert_eq!(enc("€", "iso-8859-15", java).unwrap(), [0xA4]);
+    assert_eq!(enc("Ž", "cp1252", java).unwrap(), [0x8E]);
+    assert_eq!(enc("a", "latin1", java).unwrap(), b"a");
+    // Only the aliases Java has: `iso_8859_2` and `iso8859-16` are not names.
+    for bad in ["iso_8859_2", "iso_8859_13", "iso8859-16", "iso-8859-10"] {
+        assert_eq!(
+            enc("a", bad, java).unwrap_err(),
+            ErrorClass::InvalidParameterValueCharset,
+            "{bad}"
+        );
+    }
+    for good in [
+        "x-iso-8859-11",
+        "latin9",
+        "l2",
+        "8859_2",
+        "ibm819",
+        "iso_8859_1",
+    ] {
+        assert_eq!(enc("a", good, java).unwrap(), b"a", "{good}");
+    }
+    assert_eq!(enc("a", "UTF-32BE", java).unwrap(), [0, 0, 0, b'a']);
+    assert_eq!(enc("a", "utf-32le", java).unwrap(), [b'a', 0, 0, 0]);
+    // No BOM handling in the explicit byte orders.
+    assert_eq!(
+        dec(&[0, 0, 0xFE, 0xFF], "utf-32be", java).unwrap(),
+        "\u{FEFF}"
+    );
+    for name in [
+        "windows-1251",
+        "cp1251",
+        "sjis",
+        "windows-1258",
+        "UTF-32BE-BOM",
+    ] {
+        assert_eq!(
+            enc("a", name, java).unwrap_err(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{name}"
+        );
+    }
+    // `UTF_32` and `UTF32` are the BOM-aware `UTF-32`.
+    for name in ["utf_32", "UTF32"] {
+        assert_eq!(enc("a", name, java).unwrap(), [0, 0, 0, b'a'], "{name}");
+        assert_eq!(
+            dec(&[0xFF, 0xFE, 0, 0, b'a', 0, 0, 0], name, java).unwrap(),
+            "a",
+            "{name}"
+        );
+    }
+    // Encoded surrogates and a high surrogate before an odd byte are one
+    // malformed unit each.
+    assert_eq!(
+        dec(&[0xED, 0xA0, 0x80], "utf-8", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0xED, 0xA0, 0x80, 0x41], "utf-8", replace).unwrap(),
+        "\u{FFFD}A"
+    );
+    assert_eq!(
+        dec(&[0xD8, 0x3D, 0x00], "utf-16", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0xD8, 0x3D, 0xD8], "utf-16be", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0x3D, 0xD8, 0x00], "utf-16le", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(dec(&[0x80], "windows-1252", java).unwrap(), "€");
+    assert_eq!(dec(&[0xA4], "iso-8859-15", java).unwrap(), "€");
+    assert_eq!(dec(&[0xE9], "ISO-8859-1", java).unwrap(), "é");
+    // A character the charset cannot hold, a byte it leaves undefined.
+    assert_eq!(
+        enc("渭", "iso-8859-2", java).unwrap_err(),
+        ErrorClass::MalformedCharacterCoding
+    );
+    assert_eq!(
+        dec(&[0x81], "windows-1252", java).unwrap_err(),
+        ErrorClass::MalformedCharacterCoding
+    );
+    // Replacement: `?` for the encoder, U+FFFD for the decoder.
+    assert_eq!(enc("aé渭b", "US-ASCII", replace).unwrap(), b"a??b");
+    assert_eq!(enc("a渭", "iso-8859-2", replace).unwrap(), b"a?");
+    assert_eq!(enc("a😀", "windows-1252", replace).unwrap(), b"a?");
+    assert_eq!(enc("a€", "iso-8859-1", replace).unwrap(), b"a?");
+    assert_eq!(
+        dec(&[0x80, 0x81], "windows-1252", replace).unwrap(),
+        "€\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0x41, 0xFF, 0x42], "us-ascii", replace).unwrap(),
+        "A\u{FFFD}B"
+    );
+    assert_eq!(
+        dec(&[0x41, 0xE5, 0x8A, 0x42], "utf-8", replace).unwrap(),
+        "A\u{FFFD}B"
+    );
+    assert_eq!(
+        dec(&[0x00, 0x41, 0x00], "utf-16", replace).unwrap(),
+        "A\u{FFFD}"
+    );
+    // A high surrogate without its low half takes the next unit with it.
+    assert_eq!(
+        dec(&[0xD8, 0x00, 0x00, 0x41], "utf-16", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0xDC, 0x00, 0x00, 0x41], "utf-16", replace).unwrap(),
+        "\u{FFFD}A"
+    );
+    assert_eq!(dec(&[0xD8, 0x3D], "utf-16", replace).unwrap(), "\u{FFFD}");
+    assert_eq!(
+        dec(&[0, 0, 0, 0x41, 0], "utf-32", replace).unwrap(),
+        "A\u{FFFD}"
+    );
+    assert_eq!(
+        dec(&[0, 0x11, 0, 0], "utf-32", replace).unwrap(),
+        "\u{FFFD}"
+    );
+    // A surrogate code point reaches Spark's UTF-8 conversion as `?`, with
+    // or without the switch.
+    for opts in [CharsetOptions::default(), replace] {
+        assert_eq!(dec(&[0, 0, 0xD8, 0], "utf-32", opts).unwrap(), "?");
+    }
+}
+
+#[test]
+fn single_byte_tables_round_trip() {
+    use krishiv_kernels::string::{BinOperand, CharsetOptions};
+    let java = CharsetOptions {
+        java_charsets: true,
+        replace_malformed: true,
+    };
+    let all: Vec<u8> = (0..=255).collect();
+    for cs in [
+        "windows-1252",
+        "iso-8859-2",
+        "iso-8859-3",
+        "iso-8859-4",
+        "iso-8859-5",
+        "iso-8859-6",
+        "iso-8859-7",
+        "iso-8859-8",
+        "iso-8859-9",
+        "iso-8859-11",
+        "iso-8859-13",
+        "iso-8859-15",
+        "iso-8859-16",
+    ] {
+        let text =
+            s::decode_with(BinOperand::Array(&bins(&[Some(&all)])), lit(Some(cs)), java).unwrap();
+        let text = text.value(0);
+        let back = s::encode_with(StrOperand::Array(&r1(text)), lit(Some(cs)), java).unwrap();
+        // Undefined bytes decode to U+FFFD, which no table holds: they come
+        // back as `?`. Every defined byte returns as itself.
+        for (i, (b, c)) in back.value(0).iter().zip(text.chars()).enumerate() {
+            let want = if c == '\u{FFFD}' {
+                b'?'
+            } else {
+                u8::try_from(i).unwrap()
+            };
+            assert_eq!(*b, want, "{cs} byte {i:#x}");
+        }
+        assert_eq!(back.value(0).len(), 256, "{cs}");
+    }
+}
