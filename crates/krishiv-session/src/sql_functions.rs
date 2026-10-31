@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{FunctionLookup, FunctionRegistry, SparkProfile, SqlFunction};
+use krishiv_plan::function::Builtin;
 use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, SourceId};
 
 use crate::catalog::{SessionCatalog, expand_temp_views};
@@ -236,9 +237,13 @@ impl QueryFunctions {
                     let ExprNode::Function(call) = &e.node else {
                         return Ok(e);
                     };
+                    // Canonical operators and built-ins stay bare; anything
+                    // else, session UDFs included, is a user function.
+                    let builtin = ["system".to_owned(), "builtin".to_owned(), call.name.clone()];
                     if !call.qualifier.is_empty()
+                        || Builtin::from_name(&call.name).is_some()
                         || !matches!(
-                            self.base.lookup(std::slice::from_ref(&call.name), profile),
+                            self.base.lookup(&builtin, profile),
                             FunctionLookup::NotFound
                         )
                     {
