@@ -1164,7 +1164,7 @@ pub struct CreatePermanentView {
     /// `TBLPROPERTIES (...)`.
     pub tblproperties: Vec<TableOption>,
     /// `WITH SCHEMA ...`.
-    pub schema_binding: Option<SchemaBinding>,
+    pub schema_binding: Option<SchemaBindingClause>,
     /// `PARTITIONED ON (...)` was written (Spark rejects it after
     /// parsing).
     pub partitioned_on: bool,
@@ -1191,6 +1191,16 @@ pub struct PermanentViewColumn {
     /// Its comment, if written.
     pub comment: Option<String>,
     /// Source text.
+    pub span: Span,
+}
+
+/// A `WITH SCHEMA ...` clause as written: the mode and the clause's span
+/// (Spark points `FEATURE_NOT_ENABLED` at it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SchemaBindingClause {
+    /// The mode.
+    pub mode: SchemaBinding,
+    /// Source text, from `WITH` to the end of the mode.
     pub span: Span,
 }
 
@@ -1393,12 +1403,12 @@ pub enum AlterViewAction {
         /// The new query.
         query: Box<Query>,
         /// `WITH SCHEMA ...`, if written.
-        schema_binding: Option<SchemaBinding>,
+        schema_binding: Option<SchemaBindingClause>,
         /// Source text.
         span: Span,
     },
     /// `WITH SCHEMA ...` without a query.
-    SetSchemaBinding(SchemaBinding),
+    SetSchemaBinding(SchemaBindingClause),
     /// `SET TBLPROPERTIES (...)`.
     SetTblProperties(Vec<TableOption>),
     /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
