@@ -11,24 +11,41 @@ use krishiv_session::Session;
 
 const KEY: &str = "spark.sql.session.timeZone";
 
+const CANONICAL: &str = "krishiv.sql.session.timeZone";
+
 #[test]
 fn an_unknown_zone_is_refused_when_it_is_set() {
-    for bad in ["Mars/Base", "Europe/Pariss", "invalid/zone", "+25:00", ""] {
-        let s = Session::new().unwrap();
-        let before = s.conf().get(KEY);
-        let e = s.conf().set(KEY, bad).unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::InvalidConfValueTimeZone,
-            "{bad}"
-        );
-        let text = e.to_string();
-        assert!(text.contains(KEY) && text.contains(bad), "{text}");
-        assert_eq!(
-            s.conf().get(KEY),
-            before,
-            "a refused SET changes nothing: {bad}"
-        );
+    // Under the Spark key and the canonical one; a zone with whitespace
+    // around it is not a zone (Spark's `ZoneId.of` does not trim).
+    for key in [KEY, CANONICAL] {
+        for bad in [
+            "Mars/Base",
+            "Europe/Pariss",
+            "invalid/zone",
+            "+25:00",
+            "",
+            " UTC ",
+            "UTC ",
+        ] {
+            let s = Session::new().unwrap();
+            let before = s.conf().get(key);
+            let e = s.conf().set(key, bad).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::InvalidConfValueTimeZone,
+                "{key} {bad:?}"
+            );
+            assert_eq!(
+                e.message_parameters(),
+                [("confValue", bad.to_owned()), ("confName", key.to_owned())],
+                "{key} {bad:?}"
+            );
+            assert_eq!(
+                s.conf().get(key),
+                before,
+                "a refused SET changes nothing: {key} {bad:?}"
+            );
+        }
     }
 }
 
