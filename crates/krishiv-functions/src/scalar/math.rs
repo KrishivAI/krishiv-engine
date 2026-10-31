@@ -133,14 +133,14 @@ fn width_bucket(value: f64, min: f64, max: f64, buckets: i64) -> Option<i64> {
         } else if value >= upper {
             buckets + 1
         } else {
-            (n * (value - lower) / (upper - lower)) as i64 + 1
+            ((n * (value - lower) / (upper - lower)) as i64).wrapping_add(1)
         }
     } else if value > upper {
         0
     } else if value <= lower {
         buckets + 1
     } else {
-        (n * (upper - value) / (upper - lower)) as i64 + 1
+        ((n * (upper - value) / (upper - lower)) as i64).wrapping_add(1)
     })
 }
 

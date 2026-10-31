@@ -50,6 +50,11 @@ fn buckets_follow_spark() {
         ("double('Infinity'), 0, 10, 5", "6"),
         ("double('-Infinity'), 0, 10, 5", "0"),
         ("1.0, 0, double('-Infinity'), 5", "NULL"),
+        // The double overflows to infinity; Java's `(long)` saturates and the
+        // `+ 1` wraps.
+        ("1.0e308, 0.0, 1.7e308, 10", "-9223372036854775808"),
+        ("1.0e308, 1.7e308, 0.0, 10", "-9223372036854775808"),
+        ("1.0e308, -1.7e308, 1.7e308, 9223372036854775806L", "1"),
         ("-1, 0, 10, 5", "0"),
         ("10, 0, 10, 5", "6"),
         ("5, 10, 0, 5", "3"),
