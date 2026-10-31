@@ -4,8 +4,9 @@ name: Binaries
 # the plain x86-64 baseline (published as `krishiv-compat`), and neoverse-n1 on
 # aarch64. The level is set through RUSTFLAGS on these build steps only, never
 # in .cargo/config.toml, so development, tests, regular CI and the benchmark
-# jobs keep the default target. The binary checks the CPU on start and names
-# the missing feature and the compat binary (krishiv_common::cpu). Nothing is
+# jobs keep the default target. The binary checks the CPU on start, before its
+# constructors (krishiv_alloc), and names the missing feature and the compat
+# binary (krishiv_common::cpu). Nothing is
 # published here.
 #
 # Runs when this file changes, by hand, and from other workflows.

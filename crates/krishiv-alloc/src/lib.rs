@@ -152,6 +152,22 @@ pub fn limit_in_args<'a>(args: impl IntoIterator<Item = &'a [u8]>) -> Option<u64
 /// allocator settings (module docs).
 pub const LIMIT_VAR: &CStr = c"KRISHIV_MEMORY_LIMIT";
 
+/// The CPU check that must come before [`init`]: both are compiled for the build's
+/// CPU level, and a v3 constructor faults on an older CPU before `main` could report it.
+#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+mod cpu_check {
+    extern "C" fn check() {
+        krishiv_common::cpu::check_cpuid_or_exit();
+    }
+
+    /// Runs [`check`] before any `.init_array` constructor (a reference from
+    /// [`super::install`] keeps it linked). Only an executable may have this section,
+    /// and only binaries link this crate.
+    #[used]
+    #[unsafe(link_section = ".preinit_array")]
+    pub(super) static CHECK: extern "C" fn() = check;
+}
+
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod init {
     use std::ffi::{CStr, c_char, c_int};
@@ -273,11 +289,13 @@ pub fn release() {
 }
 
 /// The binary's half of the policy, called first thing in `main`: keeps
-/// the constructor linked and returns [`release`], the hook to install with
+/// the constructors linked and returns [`release`], the hook to install with
 /// `krishiv_memory::set_release_hook`.
 pub fn install() -> fn() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     std::hint::black_box(&init::INIT);
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    std::hint::black_box(&cpu_check::CHECK);
     release
 }
 
