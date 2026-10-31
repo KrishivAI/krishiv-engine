@@ -1422,6 +1422,9 @@ impl Expander<'_> {
                 LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
             );
         }
+        // Otherwise (a query that repeats a column name, or a column list of another length) the columns are only
+        // renamed by position: a repeated name cannot be cast, since `ColumnRef` has no ordinal. The binding check
+        // matches by name and ordinal as Spark does, so a type change under such a view is not cast here.
         Ok(Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
                 input,

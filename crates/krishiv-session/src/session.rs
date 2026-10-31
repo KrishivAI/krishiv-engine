@@ -1192,11 +1192,13 @@ impl Session {
         let compensation = crate::view_schema::compensation(&env.config);
         let mut synced = Vec::new();
         for read in reads {
+            // A view whose query does not analyze is left to the outer query, which raises that error itself;
+            // the views after it still get their checks.
             let Ok(plan) = Plan::try_new(Arc::clone(&read.query)) else {
-                break;
+                continue;
             };
             let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
-                break;
+                continue;
             };
             if let Some(changed) = crate::view_schema::check_read(
                 read,

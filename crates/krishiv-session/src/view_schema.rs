@@ -436,6 +436,54 @@ mod tests {
     }
 
     #[test]
+    fn nested_types_up_cast_element_wise() {
+        use DataType as T;
+        use krishiv_types::{ArrayType, MapType, StructField, StructType};
+        let array = |t: T, n| T::Array(std::sync::Arc::new(ArrayType::new(t, n)));
+        assert!(can_up_cast(
+            &array(T::Integer, false),
+            &array(T::Long, true)
+        ));
+        assert!(!can_up_cast(
+            &array(T::Integer, true),
+            &array(T::Long, false)
+        ));
+        assert!(!can_up_cast(
+            &array(T::Long, true),
+            &array(T::Integer, true)
+        ));
+        let map = |k: T, v: T, n| T::Map(std::sync::Arc::new(MapType::new(k, v, n)));
+        assert!(can_up_cast(
+            &map(T::Integer, T::Integer, true),
+            &map(T::Long, T::Long, true)
+        ));
+        assert!(!can_up_cast(
+            &map(T::Long, T::Integer, true),
+            &map(T::Integer, T::Integer, true)
+        ));
+        assert!(!can_up_cast(
+            &map(T::Integer, T::Integer, true),
+            &map(T::Integer, T::Integer, false)
+        ));
+        let strukt = |fields: Vec<(&str, T)>| {
+            T::Struct(StructType::new(
+                fields
+                    .into_iter()
+                    .map(|(n, t)| StructField::new(n, t, true)),
+            ))
+        };
+        assert!(can_up_cast(
+            &strukt(vec![("a", T::Integer)]),
+            &strukt(vec![("a", T::Long)])
+        ));
+        assert!(!can_up_cast(
+            &strukt(vec![("a", T::Integer)]),
+            &strukt(vec![("a", T::Integer), ("b", T::Integer)])
+        ));
+        assert!(!can_up_cast(&array(T::Integer, true), &T::String));
+    }
+
+    #[test]
     fn a_column_list_makes_evolution_type_evolution() {
         let config = Config::new();
         assert_eq!(
