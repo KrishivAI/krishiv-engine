@@ -1219,6 +1219,11 @@ impl Rewriter {
             PlanNode::Project { input: sort, exprs }
                 if !exprs.iter().any(|e| has_outer(Node::Expr(e))) =>
             {
+                // The projection moves above the ranking filter, so a
+                // nondeterministic one would see only the kept rows.
+                if !exprs.iter().all(super::sqlfn::is_deterministic) {
+                    return Err(unsupported_limit());
+                }
                 match ordered(sort) {
                     Some((below, order)) => (below, order, Some(exprs.clone())),
                     None => (Arc::clone(input), Vec::new(), None),
