@@ -122,7 +122,7 @@ pub(super) fn span(list: &ListArray, row: usize) -> (usize, usize) {
 }
 
 /// `COLLECTION_SIZE_LIMIT_EXCEEDED.FUNCTION` for a result of `elements`.
-fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
+pub(super) fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
     CollectionSizeLimitExceededFunction {
         function_name: format!("`{name}`"),
         number_of_elements: elements.to_string(),
@@ -132,7 +132,7 @@ fn too_long(name: &str, elements: impl std::fmt::Display) -> KrishivError {
 }
 
 /// `UNABLE_TO_ACQUIRE_MEMORY` for a result of `elements` indices.
-fn no_memory(elements: usize) -> KrishivError {
+pub(super) fn no_memory(elements: usize) -> KrishivError {
     UnableToAcquireMemory {
         requested_bytes: elements
             .saturating_mul(std::mem::size_of::<Option<u32>>())

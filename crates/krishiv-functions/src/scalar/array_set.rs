@@ -28,7 +28,7 @@ use krishiv_kernels::map as kh;
 use krishiv_kernels::order::cmp_rows;
 
 use super::args::{Inputs, internal, to_utf8};
-use super::array_edit::{MAX_ARRAY_LENGTH, index, list_of, rebuild, span};
+use super::array_edit::{MAX_ARRAY_LENGTH, index, list_of, no_memory, rebuild, span, too_long};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
@@ -372,10 +372,13 @@ fn zip(x: &Inputs<'_>, fields: &Fields, element: &Arc<Field>) -> Result<ArrayRef
             let longest = lists.iter().map(|l| span(l, row).1).max().unwrap_or(0);
             total += longest;
             if total > MAX_ARRAY_LENGTH {
-                return Err(internal(format!("arrays_zip of {total} elements")));
+                return Err(too_long("arrays_zip", total));
             }
             for (k, l) in lists.iter().enumerate() {
                 let (start, len) = span(l, row);
+                picks[k]
+                    .try_reserve(longest)
+                    .map_err(|_| no_memory(longest))?;
                 for i in 0..longest {
                     picks[k].push(if i < len {
                         Some(index(start + i)?)
