@@ -254,7 +254,10 @@ fn sql_function_roots(
             if let Node::Plan(p) = node
                 && let PlanNode::TableFunction { name, .. } = &p.node
                 && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &name.split('.').map(str::to_owned).collect::<Vec<_>>(),
+                    &name
+                        .split(crate::TABLE_FUNCTION_NAME_SEP)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>(),
                     ctx.profile,
                 )
             {

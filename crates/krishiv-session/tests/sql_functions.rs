@@ -1071,18 +1071,46 @@ fn a_table_function_is_checked_when_it_is_created() {
         "CREATE FUNCTION tf2() RETURNS TABLE (a INT) RETURN SELECT 1",
     );
     ok(&s, "CREATE FUNCTION sf2() RETURNS INT RETURN 1");
-    assert_eq!(
-        fails(&s, "SELECT tf2()").error_class().name(),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
-    assert_eq!(
-        fails(&s, "SELECT * FROM sf2()").error_class().name(),
-        "UNRESOLVABLE_TABLE_VALUED_FUNCTION"
-    );
+    // Spark's classes and parameters (sql-udf.sql.out, foo3_14a and foo3_14b).
+    let (class, params) = class_and_params(&fails(&s, "SELECT tf2()"));
+    assert_eq!(class, "NOT_A_SCALAR_FUNCTION");
+    assert_eq!(params["functionName"], "`spark_catalog`.`default`.`tf2`");
+    let (class, params) = class_and_params(&fails(&s, "SELECT * FROM sf2()"));
+    assert_eq!(class, "NOT_A_TABLE_FUNCTION");
+    assert_eq!(params["functionName"], "`spark_catalog`.`default`.`sf2`");
     // A table function over another.
     ok(
         &s,
         "CREATE FUNCTION tf3(x INT) RETURNS TABLE (a INT) RETURN SELECT a + x FROM tf2()",
     );
     assert_eq!(ok(&s, "SELECT * FROM tf3(10)"), ["11"]);
+}
+
+#[test]
+fn a_table_function_takes_deterministic_arguments_and_no_temporary_ones() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE FUNCTION tf_r(x DOUBLE) RETURNS TABLE (a DOUBLE, b DOUBLE) RETURN SELECT x, x",
+    );
+    let e = fails(&s, "SELECT * FROM tf_r(rand())");
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    // A stored function cannot call a temporary table function.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tmp_t() RETURNS TABLE (a INT) RETURN SELECT 1",
+    );
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION calls_tmp_t() RETURNS TABLE (a INT) RETURN SELECT * FROM tmp_t()",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    assert_eq!(params["tempObj"], "FUNCTION");
+    assert_eq!(params["tempObjName"], "`tmp_t`");
+    // A quoted name with a dot is one name.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION `d.t`() RETURNS TABLE (a INT) RETURN SELECT 5",
+    );
+    assert_eq!(ok(&s, "SELECT * FROM `d.t`()"), ["5"]);
 }

@@ -1169,13 +1169,13 @@ impl Lowerer {
                 self.node(
                     PlanNode::TableFunction {
                         // A qualified name (`ns.f`) is kept as one string, its
-                        // parts joined by dots; the analyzer splits it.
+                        // parts joined by `TABLE_FUNCTION_NAME_SEP`.
                         name: name
                             .parts
                             .iter()
                             .map(|p| p.value.as_str())
                             .collect::<Vec<_>>()
-                            .join("."),
+                            .join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()),
                         args: lowered,
                     },
                     tf.span,

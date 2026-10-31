@@ -45,7 +45,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use krishiv_common::error::{
     CyclicFunctionReference, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, FailedToParseTooComplex,
-    KrishivError, RequiredParameterNotFound, UnexpectedPositionalArgument,
+    KrishivError, NotAScalarFunction, RequiredParameterNotFound, UnexpectedPositionalArgument,
     UnrecognizedParameterName, UserDefinedFunctionsCannotContainComplexFunctions,
     UserDefinedFunctionsReturnColumnCountMismatch, WrongNumArgsWithoutSuggestion,
 };
@@ -60,8 +60,8 @@ use super::exprs::{Bound, Cx, SPARK_DOC_ROOT, WindowUse, cast_error, pretty};
 use super::resolve::{Attr, Rel, Resolver};
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, LogicalPlan, Origin, ResolvedExpr,
-    ResolvedFunction, SourceId,
+    AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, LogicalPlan, Origin, PlanNode,
+    ResolvedExpr, ResolvedFunction, SourceId,
 };
 
 /// A parameter of a [`SqlFunction`].
@@ -232,7 +232,12 @@ impl Resolver<'_> {
     ) -> Result<Bound, AnalysisError> {
         let n = call.args.len();
         if def.returns_table.is_some() {
-            return Err(unsupported("a table function as a scalar", e.origin));
+            return Err(AnalysisError::new(
+                NotAScalarFunction {
+                    function_name: def.routine_name(),
+                },
+                e.origin,
+            ));
         }
         if call.distinct || call.filter.is_some() {
             return Err(unsupported(
@@ -419,11 +424,38 @@ impl Resolver<'_> {
         let outer_lambdas = std::mem::take(&mut self.lambdas);
         let outer = self.frame.replace(Arc::clone(&frame));
         let body_env = self.isolated_env();
-        let resolved = self.rel(plan, &body_env);
+        let hop = self.fn_path.len().is_multiple_of(STEP);
+        let resolved = if hop {
+            on_big_stack(|| self.rel(plan, &body_env))
+                .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, o)))
+        } else {
+            self.rel(plan, &body_env)
+        };
         self.frame = outer;
         self.lambdas = outer_lambdas;
         self.fn_path.pop();
         let rel = resolved?;
+        // Spark evaluates an argument once per call. The body inlines it, so
+        // a nondeterministic one is accepted only where that is the same:
+        // read at most once, by a body that scans no relation (which would
+        // evaluate it once per row).
+        let scans = visit_distinct(Node::Plan(plan), |node| match node {
+            Node::Plan(x) if matches!(x.node, PlanNode::Read(_)) => ControlFlow::Break(()),
+            _ => ControlFlow::Continue(()),
+        })
+        .is_break();
+        for (param, fp) in def.params.iter().zip(&frame.params) {
+            if !is_deterministic(&fp.arg.expr) && (scans || fp.reads.load(Ordering::Relaxed) > 1) {
+                return Err(unsupported(
+                    format!(
+                        "a nondeterministic argument for parameter {} of table function {}, which the body reads more than once or over a relation",
+                        quoted(std::slice::from_ref(&param.name)),
+                        def.routine_name(),
+                    ),
+                    o,
+                ));
+            }
+        }
         if columns.is_empty() {
             return Ok(rel);
         }
