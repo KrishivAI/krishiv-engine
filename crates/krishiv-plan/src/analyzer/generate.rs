@@ -10,7 +10,10 @@
 
 use std::sync::Arc;
 
-use krishiv_common::error::{DatatypeMismatchUnexpectedInputType, UdtfAliasNumberMismatch};
+use krishiv_common::error::{
+    DatatypeMismatchUnexpectedInputType, UdtfAliasNumberMismatch,
+    UnsupportedGeneratorNestedInExpressions,
+};
 use krishiv_types::DataType;
 
 use super::AnalysisError;
@@ -96,6 +99,14 @@ impl Resolver<'_> {
         let rels = [&c];
         let cx = Self::cx(&c.out, &rels, env, "Generate");
         let b = self.bind(arg, &cx)?;
+        if super::ops::has_generator(&b.expr) {
+            return Err(AnalysisError::new(
+                UnsupportedGeneratorNestedInExpressions {
+                    expression: format!("\"{}\"", pretty(&b.expr, self.ctx.conf.session_zone)),
+                },
+                b.expr.origin,
+            ));
+        }
         let resolved = !output.is_empty();
         let columns = if resolved {
             output.to_vec()
