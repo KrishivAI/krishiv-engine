@@ -56,7 +56,10 @@ jobs:
     needs: nightly-green
     if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
     name: cli (${{ matrix.artifact }})
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: since 26.04 its system packages are built for x86-64-v3
+    # (amd64v3). Its own ld.so faults under the QEMU step whatever we build, and a
+    # compat binary should not be linked on a v3 system.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
