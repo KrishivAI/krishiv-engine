@@ -22,14 +22,16 @@
 //!   costs on every row it tests: `(1 - pass) * DROP_SAVES_NS > cost`, with
 //!   the form's per-row cost from the `runtime_filter` microbenchmark
 //!   ([`KeyFilter::row_cost_ns`]). Above `min(max_pass_rate, 1 - cost /
-//!   DROP_SAVES_NS)` it stops evaluating that filter on rows for the rest
-//!   of the partition (statistics stages keep using it: they cost
+//!   DROP_SAVES_NS)` it stops evaluating that filter on rows until the
+//!   measurement restarts (statistics stages keep using it: they cost
 //!   nothing), or until the filter publishes a new generation.
-//! - **Deterministic per partition (P2-T171 I10).** The measurement and the
-//!   decision restart at every partition a driver claims
-//!   ([`RowStage::start_partition`]) and depend only on row counts, never
-//!   on time or on which driver read what before: the same partition gets
-//!   the same decisions on any run, worker or attempt.
+//! - **Decisions change speed, never results (P2-T171 I10).** The measurement
+//!   and the decision restart when a scan says so
+//!   ([`RowStage::start_partition`]): a memory scan at every morsel, a file
+//!   scan every few morsels a driver claims, about one planned split's
+//!   rows. They depend on row counts, never on time, but in a file scan also
+//!   on which morsels a driver won. A filter only drops rows its join would
+//!   drop, so the query's output does not depend on them.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -225,8 +227,8 @@ impl RowStage {
         Self { filters, settings }
     }
 
-    /// A new scan partition starts: every filter is measured afresh, so
-    /// the switch-off decisions depend on that partition's rows only.
+    /// A new stretch of the scan starts: every filter is measured afresh, so
+    /// the switch-off decisions depend on that stretch's rows only.
     pub(crate) fn start_partition(&mut self) {
         for f in &mut self.filters {
             f.window_rows = 0;

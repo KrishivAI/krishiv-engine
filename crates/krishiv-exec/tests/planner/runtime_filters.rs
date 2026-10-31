@@ -337,8 +337,8 @@ proptest! {
 /// Filters prune at every stage they reach: an empty build skips the probe
 /// side's splits unopened; a selective build prunes row groups of a
 /// clustered key and drops rows of the others; a scan below an aggregate
-/// runs while the build does (its filter may arrive late) and its join
-/// still returns the right rows.
+/// starts after the build, so its filter applies from the first row, and
+/// its join still returns the right rows.
 #[test]
 fn filters_prune_splits_row_groups_and_rows() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -405,6 +405,17 @@ fn filters_prune_splits_row_groups_and_rows() {
     let q = "SELECT b.v FROM big b JOIN small s ON b.s = s.s";
     let (_, c) = run(&t.plan_sql(q).unwrap());
     assert!(c.rows_dropped > 0, "{c:?}");
+    // Below an aggregate the scan does not depend on the build, but its
+    // pipeline starts after it: nearly every row meets the filter.
+    let q = "SELECT x.k, t.v FROM (SELECT s AS k, count(*) AS c FROM big GROUP BY s) x \
+             JOIN small t ON x.k = t.s";
+    let plan = t.plan_sql(q).unwrap();
+    configured(&mut t, MODES[0].1);
+    let off = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    configured(&mut t, &[]);
+    let (got, c) = run(&plan);
+    assert_eq!(sorted(&got), off);
+    assert!(c.rows_dropped >= 3_600, "{c:?}");
 }
 
 /// Runtime filters on and off over a TPC-H or TPC-DS data set
@@ -616,4 +627,46 @@ fn bloom_settings_are_honoured() {
     assert_eq!(dropped[3], dropped[1], "{dropped:?}");
     // An exact set passes no false positive: it drops at least as many.
     assert!(dropped[4] >= dropped[0], "{dropped:?}");
+}
+
+/// The `scan_waits` of every runtime filter a join in `node` publishes.
+fn scan_waits(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<bool>) {
+    if let krishiv_exec::physical::PhysNode::HashJoin(j) = node {
+        out.extend(j.runtime_filters.iter().map(|f| f.options.scan_waits));
+    }
+    for c in node.children() {
+        scan_waits(c, out);
+    }
+}
+
+/// A scan waits for a filter built from another table, and not for one built
+/// from its own: both sides of the self-join start together.
+#[test]
+fn a_scan_waits_only_for_a_filter_from_another_table() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 13;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 4000, 0));
+    write(dir.path(), "small.parquet", &table(&mut rng, 600, 4000, 0));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let t = parquet_files(dir.path(), &sources, true, &rt);
+    let waits = |q: &str| {
+        let mut out = Vec::new();
+        scan_waits(t.plan_sql(q).unwrap().plan.root(), &mut out);
+        out
+    };
+    assert_eq!(
+        waits("SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64"),
+        [true]
+    );
+    assert_eq!(
+        waits("SELECT a.v FROM big a JOIN big b ON a.k64 = b.k64"),
+        [false]
+    );
 }

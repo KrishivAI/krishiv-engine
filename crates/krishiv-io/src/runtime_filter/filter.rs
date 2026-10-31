@@ -35,6 +35,9 @@ pub struct KeyFilterOptions {
     pub exact_max_values: usize,
     /// Collect hashes for a Bloom filter.
     pub bloom: bool,
+    /// Whether the target scan starts only after this build has finalized.
+    /// Speed only: a scan that starts first adopts the filter when it comes.
+    pub scan_waits: bool,
     /// Most keys a Bloom filter is built for (`krishiv.runtimeFilter.bloom.maxItems`).
     pub bloom_max_items: u64,
     /// Largest Bloom filter (`krishiv.runtimeFilter.bloom.maxBytes`).
@@ -51,6 +54,7 @@ impl Default for KeyFilterOptions {
             max_values: 50,
             exact_max_values: EXACT_SET_MAX,
             bloom: true,
+            scan_waits: false,
             bloom_max_items: 4_000_000,
             bloom_max_bytes: 8 << 20,
             bloom_fpp: 0.01,
