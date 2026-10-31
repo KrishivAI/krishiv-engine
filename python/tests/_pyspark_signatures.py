@@ -83,7 +83,7 @@ PYSPARK_SIGNATURES = {
     "date_add": "start, days",
     "date_diff": "end, start",
     "date_format": "date, format",
-    "date_from_unix_date": "col",
+    "date_from_unix_date": "days",
     "date_part": "field, source",
     "date_sub": "start, days",
     "date_trunc": "format, timestamp",

@@ -593,7 +593,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("unix_seconds", "col: ColumnOrName"),
         Row::new("unix_millis", "col: ColumnOrName"),
         Row::new("unix_micros", "col: ColumnOrName"),
-        Row::new("date_from_unix_date", "col: ColumnOrName"),
+        Row::new("date_from_unix_date", "days: ColumnOrName"),
         Row::new(
             "months_between",
             "date1: ColumnOrName, date2: ColumnOrName, roundOff: bool = True",

@@ -667,9 +667,9 @@ def date_format(date: ColumnOrName, format: str) -> Column:
     return _call("date_format", _named(date, "date"), _lit(format, "format"))
 
 
-def date_from_unix_date(col: ColumnOrName) -> Column:
+def date_from_unix_date(days: ColumnOrName) -> Column:
     """Calls the registry function ``date_from_unix_date``."""
-    return _call("date_from_unix_date", _named(col, "col"))
+    return _call("date_from_unix_date", _named(days, "days"))
 
 
 def date_part(field: Column, source: ColumnOrName) -> Column:
