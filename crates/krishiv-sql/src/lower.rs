@@ -532,6 +532,9 @@ impl Lowerer {
     fn pipe(&mut self, p: &Pipe) -> R<LogicalPlan> {
         let mut plan = self.deeper(|l| l.body(&p.input))?;
         for op in &p.ops {
+            // Spark's `PipeOperator(left)`: the operator reads what the one
+            // before it output, never a column that one dropped.
+            plan = self.node(PlanNode::PipeOperator { input: arc(plan) }, op.span);
             plan = self.pipe_op(plan, op)?;
         }
         Ok(plan)

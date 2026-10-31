@@ -716,6 +716,10 @@ impl Encoder {
                 self.exprs(params, bias);
                 self.plan(input, bias);
             }
+            PlanNode::PipeOperator { input } => {
+                self.tag("PipeOperator");
+                self.plan(input, bias);
+            }
             PlanNode::JoinHint { input, strategy } => {
                 self.tag("JoinHint");
                 self.debug(strategy);
