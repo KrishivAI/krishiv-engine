@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `DataFrame::estimate` (ADR 0041): what a statement would scan, before it runs.
+#![expect(clippy::unwrap_used, reason = "the helper sits outside #[test] fns")]
 
 use std::sync::Arc;
 
