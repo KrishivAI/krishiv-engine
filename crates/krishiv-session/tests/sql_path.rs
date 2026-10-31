@@ -159,3 +159,41 @@ fn canonical_conf_keys_drive_the_path() {
     run(&s, "SET PATH = SYSTEM_PATH");
     assert!(!first(&s, "SELECT current_path()").is_empty());
 }
+
+#[test]
+fn a_view_keeps_the_path_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA fa",
+        "CREATE SCHEMA fb",
+        "CREATE TABLE fa.frozen_t USING parquet AS SELECT 1 AS id",
+        "CREATE TABLE fb.frozen_t USING parquet AS SELECT 2 AS id",
+        "SET PATH = spark_catalog.fa, system.builtin",
+        "CREATE VIEW default.v_frozen AS SELECT id FROM frozen_t",
+        "SET PATH = spark_catalog.fb, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT id FROM frozen_t"), "2");
+    assert_eq!(first(&s, "SELECT id FROM default.v_frozen"), "1");
+}
+
+#[test]
+fn a_stored_function_keeps_the_path_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA ga",
+        "CREATE SCHEMA gb",
+        "CREATE TABLE ga.frozen_t USING parquet AS SELECT 10 AS id",
+        "CREATE TABLE gb.frozen_t USING parquet AS SELECT 20 AS id",
+        "SET PATH = spark_catalog.ga, system.builtin",
+        "CREATE FUNCTION default.frozen_fn() RETURNS INT RETURN (SELECT MAX(id) FROM frozen_t)",
+        "CREATE FUNCTION default.frozen_tvf() RETURNS TABLE (id INT) RETURN SELECT id FROM frozen_t",
+        "SET PATH = spark_catalog.gb, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT MAX(id) FROM frozen_t"), "20");
+    assert_eq!(first(&s, "SELECT default.frozen_fn()"), "10");
+    assert_eq!(first(&s, "SELECT * FROM default.frozen_tvf()"), "10");
+}

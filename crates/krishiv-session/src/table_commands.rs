@@ -349,6 +349,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let frozen_path = env.catalog.sql_path_snapshot();
         if v.temporary || v.global {
             return Err(unsupported("global and qualified temporary views"));
         }
@@ -504,6 +505,7 @@ impl Session {
             view: Some(ViewDef {
                 sql,
                 namespace: self.state.catalog.current_namespace(),
+                path: frozen_path,
                 query_columns,
                 schema_mode,
             }),
@@ -572,6 +574,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let frozen_path = env.catalog.sql_path_snapshot();
         let name = self.table_name(&a.name, &env)?;
         if matches!(a.action, AlterViewAction::SetSchemaBinding(_))
             && self.temp_entry_of(&name, &env)
@@ -640,6 +643,7 @@ impl Session {
                         .unwrap_or_default()
                         .to_owned(),
                     namespace: self.state.catalog.current_namespace(),
+                    path: frozen_path,
                     query_columns,
                     schema_mode,
                 });

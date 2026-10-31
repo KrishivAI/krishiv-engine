@@ -93,6 +93,9 @@ pub struct SqlFunction {
     /// catalog (`spark_catalog`, `default`); empty for a temporary one. Spark
     /// names a stored function by all three parts in the errors of a call.
     pub qualifier: Vec<String>,
+    /// The SQL path in force when a stored function was created: its body's bare names resolve through it,
+    /// whatever `SET PATH` does later. Empty for a temporary function (it follows the caller's path).
+    pub path: Vec<Vec<String>>,
     /// The parameters, in order.
     pub params: Vec<SqlParam>,
     /// The declared return type the body is cast to; `None` keeps the
