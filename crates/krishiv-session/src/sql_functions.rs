@@ -352,11 +352,11 @@ impl QueryFunctions {
                     let from_path = path.iter().find_map(|entry| match entry.as_slice() {
                         [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                             let n = fold(n, self.case_sensitive);
-                            self.stored.get(&n, &name).map(|_| n)
+                            self.stored.get(&n, &name).map(|_| vec![c.clone(), n])
                         }
                         _ => None,
                     });
-                    call.qualifier = vec![from_path.unwrap_or_else(|| namespace.to_owned())];
+                    call.qualifier = from_path.unwrap_or_else(|| vec![namespace.to_owned()]);
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
                     Ok(Arc::new(next))
