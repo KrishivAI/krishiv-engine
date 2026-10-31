@@ -17,6 +17,7 @@ Paths are relative to this crate.
 - `src/view_schema.rs` schema binding modes of permanent views (`WITH SCHEMA BINDING|COMPENSATION|TYPE EVOLUTION|EVOLUTION`, Spark's `ViewSchemaMode`): the read projection per mode, the checks against the analyzed view query, the evolved schema stored after analysis; `tests/views_schema_binding.rs`
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
 - `src/access.rs` `StatementInfo` / `Session::statement_info` (class + read securables with columns), write/DDL checks (`authorize_statement`), the `krishiv::audit` denial record, `PathPrefixPolicy`
+- `src/partitions.rs` partitioned and bucketed tables: the layout `CREATE TABLE` stores (partition columns last), the partitions the catalog tracks (`ADD PARTITION`, registered after `INSERT`/CTAS), `DESCRIBE ... PARTITION`, `SHOW PARTITIONS`, `ANALYZE ... PARTITION`; `tests/partitioned_tables.rs`
 - `src/explain.rs` EXPLAIN and `DataFrame::estimate` (ADR 0041: estimated table-scan bytes and rows from the optimizer's statistics, `None` when unknown; the CLI's agent cost gate uses it); `src/profile.rs` profile for EXPLAIN ANALYZE
 - `src/agent.rs` the `krishiv.agent-result` v1 formatter (compact tables, errors, estimates) plus the shared Spark-style value renderer
 - `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` and `tests/window_goldens.rs` (window functions against Spark goldens) end-to-end tests
