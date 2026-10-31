@@ -604,16 +604,45 @@ pub fn cast(
         }};
     }
     match (from, to) {
-        // Whole seconds since midnight, which always fit an `int`.
-        (DataType::Time64(TimeUnit::Nanosecond), DataType::Int32 | DataType::Int64) => {
+        // Whole seconds since midnight: always an `int`; a `tinyint` or
+        // `smallint` that cannot hold them is `CAST_OVERFLOW` (ANSI).
+        (
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64,
+        ) => {
             let t = input.as_primitive::<Time64NanosecondType>();
             let secs = |i: usize| t.value(i).div_euclid(time::NANOS_PER_SECOND);
-            if *to == DataType::Int64 {
-                Ok(Arc::new(map_rows::<Int64Type>(input, |i| Ok(Some(secs(i))))?) as ArrayRef)
-            } else {
-                Ok(Arc::new(map_rows::<Int32Type>(input, |i| {
+            let narrow = |i: usize| -> Result<Option<i64>, KernelError> {
+                fail(mode, None, || {
+                    KernelError::cast_overflow(
+                        i,
+                        format!("TIME '{}'", time::format_time(t.value(i))),
+                        &from_name,
+                        &to_name,
+                    )
+                })
+            };
+            match to {
+                DataType::Int64 => {
+                    Ok(Arc::new(map_rows::<Int64Type>(input, |i| Ok(Some(secs(i))))?) as ArrayRef)
+                }
+                DataType::Int32 => Ok(Arc::new(map_rows::<Int32Type>(input, |i| {
                     Ok(i32::try_from(secs(i)).ok())
-                })?) as ArrayRef)
+                })?) as ArrayRef),
+                DataType::Int16 => {
+                    Ok(Arc::new(map_rows::<Int16Type>(input, |i| {
+                        match i16::try_from(secs(i)) {
+                            Ok(v) => Ok(Some(v)),
+                            Err(_) => Ok(narrow(i)?.and_then(|v| i16::try_from(v).ok())),
+                        }
+                    })?) as ArrayRef)
+                }
+                _ => Ok(Arc::new(map_rows::<Int8Type>(input, |i| {
+                    match i8::try_from(secs(i)) {
+                        Ok(v) => Ok(Some(v)),
+                        Err(_) => Ok(narrow(i)?.and_then(|v| i8::try_from(v).ok())),
+                    }
+                })?) as ArrayRef),
             }
         }
         (f, DataType::Int8) if is_numeric(f) => numeric_to_int!(Int8Type),

@@ -274,4 +274,38 @@ mod tests {
         let units = StringArray::from(vec![Some("HOUR"), Some("bad")]);
         assert!(time_trunc(&units, &t).is_ok());
     }
+    #[test]
+    fn narrow_integral_casts_overflow_like_spark() {
+        use crate::cast::{CastMode, CastOptions, FixedOffset, cast};
+        use arrow_schema::DataType;
+        let zone = FixedOffset(0);
+        let t = times(&[Some(112 * S), Some(86_399 * S), None]);
+        let run = |mode, to: &DataType| {
+            cast(
+                &t,
+                to,
+                &CastOptions {
+                    mode,
+                    time_zone: &zone,
+                },
+            )
+        };
+        let ok = run(CastMode::Legacy, &DataType::Int8).unwrap();
+        let ok = ok
+            .as_any()
+            .downcast_ref::<arrow_array::Int8Array>()
+            .unwrap();
+        assert_eq!(ok.value(0), 112);
+        assert!(ok.is_null(1) && ok.is_null(2));
+        let e = run(CastMode::Ansi, &DataType::Int8).unwrap_err();
+        assert_eq!(
+            e.error().error_class(),
+            krishiv_common::error::ErrorClass::CastOverflow
+        );
+        let wide = run(CastMode::Ansi, &DataType::Int16).unwrap_err();
+        assert_eq!(
+            wide.error().error_class(),
+            krishiv_common::error::ErrorClass::CastOverflow
+        );
+    }
 }
