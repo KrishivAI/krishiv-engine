@@ -22,7 +22,7 @@ use krishiv_common::error::{
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
     InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
-    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    InvalidExtractFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
     InvalidWithinGroupExpressionDistinctUnsupported,
@@ -1501,47 +1501,7 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Field { base: _, name } => {
-                let b = &kids[0];
-                let st = match &b.ty.data_type {
-                    Some(DataType::Struct(st)) => st.clone(),
-                    _ => {
-                        let other =
-                            b.ty.data_type
-                                .as_ref()
-                                .map_or_else(|| "VOID".to_owned(), DataType::sql);
-                        return Err(AnalysisError::new(
-                            InvalidExtractBaseFieldType {
-                                base: format!(
-                                    "\"{}\"",
-                                    pretty(&b.shown(), self.ctx.conf.session_zone)
-                                ),
-                                other: format!("\"{other}\""),
-                            },
-                            e.origin,
-                        ));
-                    }
-                };
-                let cs = self.ctx.conf.case_sensitive;
-                let Some((ordinal, field)) = st
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .find(|(_, f)| same(f.name(), name, cs))
-                else {
-                    return Err(unresolved_field(
-                        &[pretty(&b.shown(), self.ctx.conf.session_zone), name.clone()],
-                        &st,
-                        e.origin,
-                    ));
-                };
-                let ty = arg_type(field.data_type().clone(), field.nullable() || b.ty.nullable);
-                let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Field {
-                    base: Arc::clone(&b.expr),
-                    ordinal,
-                    name: name.clone(),
-                    data_type: ty.data_type.clone().unwrap_or(DataType::Null),
-                    nullable: ty.nullable,
-                }));
+                let (expr, ty) = self.struct_field(e, &kids[0], name)?;
                 Bound {
                     expr,
                     ty: ty.clone(),
@@ -2103,6 +2063,50 @@ impl Resolver<'_> {
                         ));
                     }
                     return self.cast_named_call(&entry, e, f, kids, to);
+                }
+                // `s['a']` on a struct is the field `a` (Spark's
+                // `ExtractValue`): the extraction is a non-null string.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && matches!(kids[0].ty.data_type, Some(DataType::Struct(_)))
+                {
+                    let ExprNode::Literal(Literal::String(name)) = &kids[1].expr.node else {
+                        return Err(AnalysisError::new(
+                            InvalidExtractFieldType {
+                                extraction: format!(
+                                    "\"{}\"",
+                                    pretty(&kids[1].shown(), self.ctx.conf.session_zone)
+                                ),
+                            },
+                            e.origin,
+                        ));
+                    };
+                    let (expr, ty) = self.struct_field(e, &kids[0], name)?;
+                    return Ok(Bound {
+                        expr,
+                        ty: ty.clone(),
+                        ..keep(ty)
+                    });
+                }
+                // `array_of_structs['a']` is Spark's `GetArrayStructFields` (the
+                // field of every element); not built yet, so it is refused
+                // rather than read as a position.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && matches!(
+                        &kids[0].ty.data_type,
+                        Some(DataType::Array(a)) if matches!(a.element_type(), DataType::Struct(_))
+                    )
+                    && matches!(&kids[1].expr.node, ExprNode::Literal(Literal::String(_)))
+                {
+                    return Err(AnalysisError::new(
+                        KrishivUnsupportedFeature {
+                            feature: "subscripts of an array of structs by field name".to_owned(),
+                        },
+                        e.origin,
+                    ));
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `arrays_zip(a, b)` names its struct fields after columns,
@@ -3975,6 +3979,59 @@ impl Resolver<'_> {
         b.carry_markers(kids);
         b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
         Ok(b)
+    }
+
+    /// The field `name` of the struct `b`, as `b.name` or `b['name']`.
+    fn struct_field(
+        &self,
+        e: &Expr,
+        b: &Bound,
+        name: &str,
+    ) -> Result<(Arc<Expr>, ArgType), AnalysisError> {
+        let st = match &b.ty.data_type {
+            Some(DataType::Struct(st)) => st.clone(),
+            _ => {
+                let other =
+                    b.ty.data_type
+                        .as_ref()
+                        .map_or_else(|| "VOID".to_owned(), DataType::sql);
+                return Err(AnalysisError::new(
+                    InvalidExtractBaseFieldType {
+                        base: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
+                        other: format!("\"{other}\""),
+                    },
+                    e.origin,
+                ));
+            }
+        };
+        let cs = self.ctx.conf.case_sensitive;
+        let Some((ordinal, field)) = st
+            .fields()
+            .iter()
+            .enumerate()
+            .find(|(_, f)| same(f.name(), name, cs))
+        else {
+            return Err(unresolved_field(
+                &[
+                    pretty(&b.shown(), self.ctx.conf.session_zone),
+                    name.to_owned(),
+                ],
+                &st,
+                e.origin,
+            ));
+        };
+        let ty = arg_type(field.data_type().clone(), field.nullable() || b.ty.nullable);
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                base: Arc::clone(&b.expr),
+                ordinal,
+                name: name.to_owned(),
+                data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                nullable: ty.nullable,
+            }))
+            .with_origin(e.origin),
+        );
+        Ok((expr, ty))
     }
 
     /// A conditional function rewritten during analysis (Spark's
@@ -6364,6 +6421,11 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
         ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => "namedlambdavariable()".to_owned(),
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall {
+            name, qualifier, ..
+        }) if name == "__subscript" && qualifier.is_empty() && k.len() == 2 => {
+            format!("{}[{}]", k[0], k[1])
+        }
+        ExprNode::Function(FunctionCall {
             name,
             qualifier,
             arg_names,
@@ -6443,6 +6505,12 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
             } else {
                 text
             }
+        }
+        // Spark's `ExtractValue` shows `child[ordinal]`.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id.name() == "__subscript" && k.len() == 2 && f.filter.is_none() =>
+        {
+            format!("{}[{}]", k[0], k[1])
         }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {

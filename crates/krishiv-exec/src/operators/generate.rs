@@ -22,8 +22,10 @@ use crate::operator::{LocalState, Operator, OperatorOutput};
 /// For each input row, the rows of the argument's elements it generates: a
 /// row keeps its weight in every copy. With `outer`, a row whose argument
 /// is NULL or empty is kept once with NULL generated columns; without, it
-/// is dropped. One output batch per input batch (a row's elements are
-/// never split), so a very long array makes one long batch.
+/// is dropped. Output batches hold at most the query's
+/// `ExecConfig::batch_size` rows: a long array (or many rows) spreads over
+/// several batches, a row's elements split between them, instead of one
+/// allocation.
 #[derive(Debug)]
 pub struct Generate {
     schema: SchemaRef,
@@ -120,8 +122,21 @@ fn generated_fields(kind: GeneratorKind, outer: bool, ty: &DataType) -> Result<V
     Ok(out)
 }
 
-/// The driver's partition: `arg` evaluates stateful functions in it.
-struct Partition(u32);
+/// Where the operator is: the driver's partition (`arg` evaluates stateful
+/// functions in it) and the input batch's elements still to emit.
+struct Cursor {
+    batch_size: usize,
+    partition: u32,
+    pending: Option<Pending>,
+}
+
+/// The current input batch: the elements of its argument, the row being
+/// generated and how many of its elements are out.
+struct Pending {
+    elements: Elements,
+    row: usize,
+    done: usize,
+}
 
 /// The elements of an argument column: its offsets (the element range of
 /// each row, `None` for a NULL row) and the arrays the elements are taken
@@ -199,30 +214,48 @@ impl Operator for Generate {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(Partition(ctx.partition())))
+        Ok(Box::new(Cursor {
+            batch_size: ctx.query().config().batch_size.max(1),
+            partition: ctx.partition(),
+            pending: None,
+        }))
     }
 
     fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
-        if input.num_rows() == 0 {
-            return Ok(OperatorOutput::NeedMoreInput(None));
-        }
-        let partition = local_mut::<Partition>(local, "Generate")?.0;
-        let arg = self.arg.evaluate_in(input.data(), partition)?;
-        let elements = Elements::of(self.kind, &arg)?;
+        let cur = local_mut::<Cursor>(local, "Generate")?;
+        let mut pending = match cur.pending.take() {
+            Some(p) => p,
+            None => {
+                if input.num_rows() == 0 {
+                    return Ok(OperatorOutput::NeedMoreInput(None));
+                }
+                let arg = self.arg.evaluate_in(input.data(), cur.partition)?;
+                Pending {
+                    elements: Elements::of(self.kind, &arg)?,
+                    row: 0,
+                    done: 0,
+                }
+            }
+        };
+        let elements = &pending.elements;
         // The input row and the element each output row reads (`None`: the
         // NULL row of an outer generator), and its position.
         let mut rows: Vec<u32> = Vec::new();
         let mut taken: Vec<Option<u32>> = Vec::new();
         let mut positions: Vec<Option<i32>> = Vec::new();
-        for (row, range) in elements.ranges.iter().enumerate() {
+        let mut row = pending.row;
+        let mut done = pending.done;
+        while row < elements.ranges.len() && rows.len() < cur.batch_size {
             let row32 =
                 u32::try_from(row).map_err(|_| internal("a batch over 2^32 rows".to_owned()))?;
-            let (start, end) = range.unwrap_or((0, 0));
+            let (start, end) = elements.ranges[row].unwrap_or((0, 0));
             if end > start {
-                for (pos, element) in (start..end).enumerate() {
+                let room = cur.batch_size - rows.len();
+                let n = (end - start - done).min(room);
+                for pos in done..done + n {
                     rows.push(row32);
                     taken
-                        .push(Some(u32::try_from(element).map_err(|_| {
+                        .push(Some(u32::try_from(start + pos).map_err(|_| {
                             internal("an element index over 2^32".to_owned())
                         })?));
                     positions.push(Some(
@@ -230,12 +263,25 @@ impl Operator for Generate {
                             .map_err(|_| internal("a position over 2^31".to_owned()))?,
                     ));
                 }
-            } else if self.outer {
-                rows.push(row32);
-                taken.push(None);
-                positions.push(None);
+                done += n;
+                if start + done == end {
+                    row += 1;
+                    done = 0;
+                }
+            } else {
+                if self.outer {
+                    rows.push(row32);
+                    taken.push(None);
+                    positions.push(None);
+                }
+                row += 1;
+                done = 0;
             }
         }
+        pending.row = row;
+        pending.done = done;
+        let more = row < pending.elements.ranges.len();
+        let elements = &pending.elements;
         if rows.is_empty() {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
@@ -283,8 +329,13 @@ impl Operator for Generate {
                     .clone(),
             ),
         };
-        Ok(OperatorOutput::NeedMoreInput(Some(Batch::with_weights(
-            data, weights,
-        )?)))
+        let out = Batch::with_weights(data, weights)?;
+        if more {
+            // A full batch with rows of this input left: same input again.
+            cur.pending = Some(pending);
+            Ok(OperatorOutput::HaveMoreOutput(out))
+        } else {
+            Ok(OperatorOutput::NeedMoreInput(Some(out)))
+        }
     }
 }

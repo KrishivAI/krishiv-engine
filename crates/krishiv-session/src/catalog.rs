@@ -1275,11 +1275,21 @@ impl Expander<'_> {
                 .iter()
                 .any(|c| same_name(c, bare, self.case_sensitive))
         {
-            // The first schema of the view's frozen path holding the name, else the view's own namespace.
+            // The first schema of the view's frozen path holding the name. A name no schema of a
+            // non-empty frozen path holds stays missing (the first schema reports it), never
+            // read from a namespace the path left out; a view without a catalog schema in its
+            // path reads its own namespace.
             let namespace = self
                 .view_path
                 .as_deref()
-                .and_then(|path| self.path_schema_of(path, bare))
+                .and_then(|path| {
+                    self.path_schema_of(path, bare).or_else(|| {
+                        path.iter().find_map(|entry| match entry.as_slice() {
+                            [c, n] if c.eq_ignore_ascii_case(CATALOG) => Some(n.clone()),
+                            _ => None,
+                        })
+                    })
+                })
                 .unwrap_or_else(|| namespace.clone());
             let qualified = ReadSource::Table {
                 name: vec![namespace, bare.clone()],

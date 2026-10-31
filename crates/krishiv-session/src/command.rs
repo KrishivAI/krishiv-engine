@@ -848,10 +848,6 @@ impl Session {
                 .create_stored_function(f, namespace, part, entry, redacted)
                 .await;
         }
-        entry.def = Arc::new(SqlFunction {
-            path: self.query_env().catalog.sql_path_snapshot(),
-            ..(*entry.def).clone()
-        });
         // A built-in or a registered UDF of the name is not ours to replace
         // or shadow (Spark: `ROUTINE_ALREADY_EXISTS`, or with `OR REPLACE`
         // `CANNOT_REPLACE_NON_SQL_UDF_WITH_SQL_UDF`).

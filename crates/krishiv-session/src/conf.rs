@@ -131,7 +131,7 @@ pub(crate) fn local_zone() -> String {
 /// [`local_zone`] with its inputs as arguments. Checked against Spark 4.2.0
 /// runs: a non-empty `TZ` decides alone (without a leading `:` or `posix/`)
 /// and is `GMT` when Java does not know it; else the zone `/etc/localtime`
-/// links to. Java compares a non-link `/etc/localtime` with the zoneinfo
+/// links to (without `posix/`). Java compares a non-link `/etc/localtime` with the zoneinfo
 /// files; this reads `/etc/timezone` instead, else `UTC`. Java asks libc for
 /// the offset of a `TZ` it does not know, which reads POSIX strings
 /// ([`posix_zone_id`]).
@@ -144,7 +144,7 @@ fn local_zone_from(tz: Option<&str>, link: Option<&str>, file: Option<&str>) -> 
             .unwrap_or_else(|| "GMT".to_owned());
     }
     link.and_then(|link| link.rsplit_once("zoneinfo/"))
-        .map(|(_, zone)| zone)
+        .map(|(_, zone)| zone.strip_prefix("posix/").unwrap_or(zone))
         .or_else(|| file.map(str::trim))
         .and_then(java_zone_id)
         .unwrap_or_else(|| "UTC".to_owned())
@@ -418,6 +418,10 @@ mod tests {
     fn without_tz_the_local_zone_comes_from_the_system() {
         let link = "/usr/share/zoneinfo/Europe/Berlin";
         assert_eq!(local_zone_from(None, Some(link), None), "Europe/Berlin");
+        assert_eq!(
+            local_zone_from(None, Some("/usr/share/zoneinfo/posix/Asia/Tokyo"), None),
+            "Asia/Tokyo"
+        );
         assert_eq!(
             local_zone_from(None, Some("../usr/share/zoneinfo/Etc/UTC"), None),
             "Etc/UTC"

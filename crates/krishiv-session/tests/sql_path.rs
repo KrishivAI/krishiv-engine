@@ -219,18 +219,27 @@ fn alter_view_as_takes_the_path_current_at_the_alter() {
 }
 
 #[test]
-fn a_temporary_function_keeps_the_path_it_was_created_under() {
+fn a_view_does_not_read_a_namespace_its_path_left_out() {
     let s = session();
     for sql in [
-        "CREATE SCHEMA ta",
-        "CREATE SCHEMA tb",
-        "CREATE TABLE ta.tmpf_t USING parquet AS SELECT 10 AS id",
-        "CREATE TABLE tb.tmpf_t USING parquet AS SELECT 20 AS id",
-        "SET PATH = spark_catalog.ta, system.builtin, system.session",
-        "CREATE TEMPORARY FUNCTION tmp_fn() RETURNS INT RETURN (SELECT MAX(id) FROM tmpf_t)",
-        "SET PATH = spark_catalog.tb, system.builtin, system.session",
+        "CREATE SCHEMA ma",
+        "CREATE TABLE ma.gone_t USING parquet AS SELECT 1 AS id",
+        "SET PATH = spark_catalog.ma, system.builtin",
+        "CREATE VIEW default.v_gone AS SELECT id FROM gone_t",
+        "DROP TABLE ma.gone_t",
+        "CREATE TABLE default.gone_t USING parquet AS SELECT 2 AS id",
     ] {
         run(&s, sql);
     }
-    assert_eq!(first(&s, "SELECT tmp_fn()"), "10");
+    let err = block_on(async {
+        s.sql("SELECT id FROM default.v_gone")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("TableOrViewNotFound"),
+        "{err:?}"
+    );
 }
