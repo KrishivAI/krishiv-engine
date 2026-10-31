@@ -16,6 +16,7 @@ use krishiv_exec::physical::{
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind, WritePlan,
 };
+use krishiv_exec::physical::{SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
@@ -231,9 +232,13 @@ pub fn from_message(
 }
 
 fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
+    let explain_nodes = m
+        .shared
+        .iter()
+        .fold(m.explain.len(), |n, s| n.saturating_add(s.explain.len()));
     for (what, n, max) in [
         ("nodes", m.nodes.len(), limits.max_nodes),
-        ("explain nodes", m.explain.len(), limits.max_nodes),
+        ("explain nodes", explain_nodes, limits.max_nodes),
         ("expressions", m.exprs.len(), limits.max_exprs),
     ] {
         if n > max {
@@ -277,6 +282,16 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         d.depths.push(depth);
         d.child_depth = 0;
     }
+    let mut shared = Vec::with_capacity(m.shared.len());
+    for s in &m.shared {
+        shared.push(SharedPlan {
+            id: SharedId(s.id),
+            plan: d.take(s.root, d.slots.len())?,
+            explain: explain(&s.explain, s.explain_root, limits.max_depth)?,
+            deterministic: s.deterministic,
+            ordered: s.ordered,
+        });
+    }
     let root = d.take(m.root, d.slots.len())?;
     if d.slots.iter().any(Option::is_some) {
         return Err(corrupt("a node no other node or the root uses"));
@@ -303,10 +318,10 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));
     }
-    Ok(
-        PhysicalPlan::new(root, schema_from(&m.schema)?, explain, env)
-            .with_warnings(m.warnings.clone()),
-    )
+    PhysicalPlan::new(root, schema_from(&m.schema)?, explain, env)
+        .with_warnings(m.warnings.clone())
+        .with_shared(shared)
+        .map_err(|_| corrupt("a shared plan read before it is listed, or listed twice"))
 }
 
 fn explain(table: &[pb::ExplainNode], root: u32, max_depth: usize) -> Result<ExplainNode> {
@@ -437,6 +452,10 @@ impl Decoder {
         Ok(match required(&m.kind, "a node kind")? {
             Kind::Scan(s) => PhysNode::Scan(self.scan(s)?),
             Kind::OneRow(_) => PhysNode::OneRow,
+            Kind::SharedRead(s) => PhysNode::SharedRead {
+                id: SharedId(s.id),
+                layout: layout(&s.layout),
+            },
             Kind::Range(r) if r.step == 0 => return Err(corrupt("a range with step 0")),
             Kind::Range(r) if r.num_slices == Some(0) => {
                 return Err(corrupt("a range with 0 slices"));

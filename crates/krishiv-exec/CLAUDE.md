@@ -53,7 +53,8 @@ the sort also uses to prune each sorted batch while that pays; the planner infer
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
-worker that runs it; the planner validates nodes with the same builders). `Scheduler::submit` takes a
+worker that runs it; the planner validates nodes with the same builders). `PhysicalPlan::shared` (P2-T198): subplans
+read by `PhysNode::SharedRead`, data and codec only so far; a walk over a plan starts at `PhysicalPlan::roots`. `Scheduler::submit` takes a
 `PhysicalPlan`; `QueryRunner::execute` runs an already instantiated `ExecNode` graph.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted

@@ -57,6 +57,24 @@ message PhysicalPlan {
   // content.
   // ignorable: a reader that predates features checks min_reader_version.
   uint32 epoch = 12;
+  // feature: shared_subplan
+  // The plans several `SharedReadNode`s read, inner first: a plan reads only
+  // earlier ones. Their nodes are entries of `nodes`.
+  repeated SharedPlan shared = 13;
+}
+
+// feature: shared_subplan
+// A subplan run once per query instantiation and read in full by each reader.
+message SharedPlan {
+  uint64 id = 1;
+  uint32 root = 2;
+  // Its printable tree, post-order.
+  repeated ExplainNode explain = 3;
+  uint32 explain_root = 4;
+  // Whether it computes the same rows when run again.
+  bool deterministic = 5;
+  // Whether readers must see its rows in the order it produces them.
+  bool ordered = 6;
 }
 
 // The header fields of a `PhysicalPlan`, read without decoding its tables.
@@ -120,7 +138,16 @@ message Node {
     WindowGroupLimitNode window_group_limit = 17;
     // feature: range
     RangeNode range = 18;
+    // feature: shared_subplan
+    SharedReadNode shared_read = 19;
   }
+}
+
+// feature: shared_subplan
+// The rows of a shared plan, under the reader's attribute ids.
+message SharedReadNode {
+  uint64 id = 1;
+  repeated uint64 layout = 2;
 }
 
 // feature: range
