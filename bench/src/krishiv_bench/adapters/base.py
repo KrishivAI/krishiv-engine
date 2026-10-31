@@ -64,6 +64,8 @@ class Engine(ABC):
     name: str = "?"
     # Peak RSS (bytes) of the engine's process tree during the last ``timed_run``; ``None`` when not measured.
     last_peak_rss_bytes: int | None = None
+    # User + system CPU seconds of the engine's process tree during the last ``timed_run``; ``None`` when not measured.
+    last_cpu_seconds: float | None = None
 
     @abstractmethod
     def version(self) -> str: ...
