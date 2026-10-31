@@ -22,7 +22,8 @@ use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
     AccessDecision, AccessPolicy, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
     BoxFuture, DefaultAnalyzer, MemoryCatalog, PolicyVersion, Principal, Privilege, QueryContext,
-    ResolutionConf, RowColumnPolicy, Securable, SparkProfile, SqlFrontend, TableColumn,
+    ResolutionConf, RowColumnPolicy, Securable, SessionZone, SparkProfile, SqlFrontend,
+    TableColumn,
 };
 use crate::walk::{Node, visit_distinct};
 use crate::{
@@ -1450,19 +1451,23 @@ fn resolution_reads_only_its_configs() {
         ResolutionConf::default()
     );
     // The timestamp type and session zone flow through `from_conf`: unset
-    // is UTC, fixed offsets resolve, regions and malformed zones are `None`.
+    // is UTC, fixed offsets and regions resolve, unknown zones are `None`.
     let ntz =
         ResolutionConf::from_conf(|k| (k == "spark.sql.timestampType").then_some("TIMESTAMP_NTZ"));
     assert!(ntz.timestamp_ntz);
-    assert_eq!(ntz.session_zone, Some(0));
+    assert_eq!(ntz.session_zone, Some(SessionZone::Fixed(0)));
     let plus =
         ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("+05:30"));
-    assert_eq!(plus.session_zone, Some(19_800));
+    assert_eq!(plus.session_zone, Some(SessionZone::Fixed(19_800)));
     assert!(!plus.timestamp_ntz);
     let region = ResolutionConf::from_conf(|k| {
         (k == "spark.sql.session.timeZone").then_some("America/Los_Angeles")
     });
-    assert_eq!(region.session_zone, None);
+    assert!(matches!(region.session_zone, Some(SessionZone::Region(_))));
+    assert_eq!(
+        region.session_zone,
+        SessionZone::resolve("America/Los_Angeles")
+    );
     let bad =
         ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("Mars/Base"));
     assert_eq!(bad.session_zone, None);
@@ -2365,16 +2370,16 @@ fn typed_literals_resolve_with_the_session_zone() {
         }
     };
     let utc = ResolutionConf {
-        session_zone: Some(0),
+        session_zone: Some(SessionZone::Fixed(0)),
         ..ResolutionConf::default()
     };
     let plus = ResolutionConf {
-        session_zone: Some(19_800),
+        session_zone: Some(SessionZone::Fixed(19_800)),
         ..ResolutionConf::default()
     };
     let ntz_conf = ResolutionConf {
         timestamp_ntz: true,
-        session_zone: Some(0),
+        session_zone: Some(SessionZone::Fixed(0)),
         ..ResolutionConf::default()
     };
     let region = ResolutionConf {
@@ -2442,7 +2447,7 @@ fn typed_literals_resolve_with_the_session_zone() {
             "{value}"
         );
     }
-    // A region session serves explicit zones but not wall-clock time.
+    // An unresolvable session zone serves explicit zones but not wall-clock time.
     project(
         TypedLiteralKind::Timestamp,
         "2024-01-01 10:00:00+05:30",
@@ -2473,6 +2478,29 @@ fn typed_literals_resolve_with_the_session_zone() {
         expr.node,
         ExprNode::Literal(Literal::Timestamp(1_704_132_000_000_000))
     ));
+    // A region session zone reads wall-clock text through the database,
+    // with the zone's offset at that instant: January is UTC-08:00, July
+    // UTC-07:00 (daylight saving).
+    let la = ResolutionConf {
+        session_zone: SessionZone::resolve("America/Los_Angeles"),
+        ..ResolutionConf::default()
+    };
+    for (text, micros) in [
+        ("2024-01-01 10:00:00", 1_704_132_000_000_000_i64),
+        ("2024-07-01 10:00:00", 1_719_853_200_000_000_i64),
+    ] {
+        let a = project(TypedLiteralKind::Timestamp, text, la).unwrap();
+        let crate::PlanNode::Project { exprs, .. } = &a.plan.root().node else {
+            panic!("a literal projects");
+        };
+        let ExprNode::Resolved(crate::ResolvedExpr::Alias { expr, .. }) = &exprs[0].node else {
+            panic!("a literal projects as an alias");
+        };
+        assert!(
+            matches!(expr.node, ExprNode::Literal(Literal::Timestamp(v)) if v == micros),
+            "{text}"
+        );
+    }
 }
 
 /// A conditional with `FILTER` names the filter once: the shown call takes

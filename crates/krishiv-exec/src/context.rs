@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
     Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_RADIX_BITS, EXEC_JOIN_ROW_LAYOUT,
-    EXEC_SORT_HASH_BUCKETS,
+    EXEC_SEED, EXEC_SORT_HASH_BUCKETS,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
@@ -111,8 +111,13 @@ impl ExecConfig {
             .get(&EXEC_SORT_HASH_BUCKETS)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let seed = config
+            .get(&EXEC_SEED)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .map(i64::cast_unsigned);
         Self {
             batch_size,
+            seed,
             sort_hash_buckets,
             agg_row_layout,
             join_row_layout,

@@ -261,6 +261,10 @@ PYSPARK_CALLS = [
     ),
     (lambda: F.make_date("y", "m", "d"), ("call", "make_date", (("col", "y"), ("col", "m"), ("col", "d")))),
     (
+        lambda: F.make_timestamp("y", "mo", "d", "h", "mi", "s"),
+        ("call", "make_timestamp", tuple(("col", c) for c in ("y", "mo", "d", "h", "mi", "s"))),
+    ),
+    (
         lambda: F.convert_timezone(F.lit("UTC"), F.lit("Asia/Hong_Kong"), "ts"),
         ("call", "convert_timezone", (("lit", "UTC"), ("lit", "Asia/Hong_Kong"), ("col", "ts"))),
     ),

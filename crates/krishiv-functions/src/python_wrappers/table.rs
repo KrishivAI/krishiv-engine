@@ -20,6 +20,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    (
+        "timestampadd",
+        "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
+    ),
+    (
+        "timestampdiff",
+        "parsed from `TIMESTAMPDIFF(unit, a, b)`; PySpark names it `timestamp_diff`",
+    ),
     ("mod", "no PySpark function"),
     ("any", "no PySpark function"),
     ("any_value", "no PySpark function"),
@@ -644,6 +652,30 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("to_date", "col: ColumnOrName, format: str = None"),
         Row::new("try_to_date", "col: ColumnOrName, format: str = None"),
         Row::new("to_timestamp", "col: ColumnOrName, format: str = None"),
+        Row::new(
+            "make_timestamp",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "make_timestamp_ltz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "try_make_timestamp",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "try_make_timestamp_ltz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "make_timestamp_ntz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName",
+        ),
+        Row::new(
+            "try_make_timestamp_ntz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName",
+        ),
         Row::new(
             "try_to_timestamp",
             "col: ColumnOrName, format: ColumnOrName = None",

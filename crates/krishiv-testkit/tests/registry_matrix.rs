@@ -200,7 +200,9 @@ fn registered_functions_analyze_as_spark_does() {
         .functions()
         .iter()
         .map(|d| d.name)
-        .filter(|n| !per_function.contains_key(n))
+        .filter(|n| {
+            !per_function.contains_key(n) && !krishiv_functions::registry::is_grammar_only(n)
+        })
         .collect();
     assert!(missing.is_empty(), "no matrix cases for {missing:?}");
     let (total, passed) = per_function

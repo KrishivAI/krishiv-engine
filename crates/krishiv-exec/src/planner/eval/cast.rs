@@ -13,7 +13,7 @@ use super::nested_cast;
 use super::strings::{from_view, to_view};
 use super::{EvalEnv, Input, PhysExpr, Value};
 use crate::error::Result;
-use crate::planner::build::{internal, unsupported};
+use crate::planner::build::internal;
 
 /// The canonical Arrow carrier of `t` when several Arrow types store one
 /// Spark `STRING` or `BINARY` (`Utf8`/`LargeUtf8`/`Utf8View`, or
@@ -113,7 +113,7 @@ pub(super) struct CastParts {
     /// The kernels' target: `Utf8` where the result is a `Utf8View` string.
     pub(super) kernel_to: ArrowType,
     pub(super) mode: KernelMode,
-    pub(super) zone: FixedOffset,
+    pub(super) zone: krishiv_kernels::datetime::ZoneRef,
 }
 
 /// The cast of `from` to `to` in `mode`, with the session zone of `env`.
@@ -129,14 +129,10 @@ pub(super) fn parts(
         CastMode::Try => KernelMode::Try,
         _ => return Err(internal("a cast mode the analyzer did not pin")),
     };
-    let zone = match (needs_zone(from, &to), env.zone) {
-        (_, Some(offset)) => FixedOffset(offset),
-        (false, None) => FixedOffset(0),
-        (true, None) => {
-            return Err(unsupported(
-                "casts that read a session time zone other than a fixed offset",
-            ));
-        }
+    let zone = if needs_zone(from, &to) {
+        env.zone_rules()?
+    } else {
+        krishiv_kernels::datetime::ZoneRef::Fixed(FixedOffset(0))
     };
     let kernel_to = match &to {
         ArrowType::Utf8View => ArrowType::Utf8,
@@ -164,7 +160,7 @@ impl CastParts {
             to: to.clone(),
             kernel_to,
             mode: self.mode,
-            zone: self.zone,
+            zone: self.zone.clone(),
         }
     }
 }
