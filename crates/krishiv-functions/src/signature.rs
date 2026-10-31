@@ -354,10 +354,16 @@ impl InputType {
             Self::Array => "\"ARRAY\"".to_owned(),
             Self::Numeric { intervals: false } | Self::StrictNumeric => "\"NUMERIC\"".to_owned(),
             Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
-            // Spark's `AnyTimestampType` names itself in words.
+            // Spark's `AnyTimestampType` names itself in words. The time
+            // fields also take a `TIME` (Spark types that overload
+            // separately, so its message keeps the timestamp wording).
             Self::OneOf(types)
                 if matches!(
-                    types.as_slice(),
+                    types
+                        .iter()
+                        .filter(|t| !matches!(t, DataType::Time { .. }))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
                     [DataType::Timestamp, DataType::TimestampNtz]
                 ) =>
             {

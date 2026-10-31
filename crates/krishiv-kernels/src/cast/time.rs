@@ -45,7 +45,7 @@ pub fn parse_time(text: &str) -> Option<i64> {
             let mut nanos = 0_i64;
             for (i, d) in fraction.bytes().take(6).enumerate() {
                 let scale = 10_i64.checked_pow(u32::try_from(8_usize.checked_sub(i)?).ok()?)?;
-                nanos = nanos.checked_add(i64::from(d - b'0').checked_mul(scale)?)?;
+                nanos = nanos.checked_add(i64::from(d.wrapping_sub(b'0')).checked_mul(scale)?)?;
             }
             (field(whole)?, nanos)
         }
@@ -55,10 +55,15 @@ pub fn parse_time(text: &str) -> Option<i64> {
     }
     let hour = match meridiem {
         None if hour < 24 => hour,
-        Some(pm) if (1..=12).contains(&hour) => hour % 12 + if pm { 12 } else { 0 },
+        Some(pm) if (1..=12).contains(&hour) => {
+            hour.rem_euclid(12).wrapping_add(if pm { 12 } else { 0 })
+        }
         _ => return None,
     };
-    Some(((hour * 60 + minute) * 60 + second) * NANOS_PER_SECOND + nanos)
+    // Each field is range-checked above, so none of this can wrap.
+    let minutes = hour.wrapping_mul(60).wrapping_add(minute);
+    let seconds = minutes.wrapping_mul(60).wrapping_add(second);
+    Some(seconds.wrapping_mul(NANOS_PER_SECOND).wrapping_add(nanos))
 }
 
 /// `HH:mm:ss` with the fraction's trailing zeros dropped, as Spark shows a
@@ -108,8 +113,8 @@ impl TimeTruncUnit {
     /// Nanoseconds in one unit.
     fn nanos(self) -> i64 {
         match self {
-            Self::Hour => 3_600 * NANOS_PER_SECOND,
-            Self::Minute => 60 * NANOS_PER_SECOND,
+            Self::Hour => 3_600_000_000_000,
+            Self::Minute => 60_000_000_000,
             Self::Second => NANOS_PER_SECOND,
             Self::Millisecond => 1_000_000,
             Self::Microsecond => 1_000,
@@ -148,7 +153,9 @@ pub fn time_trunc(
         let unit = TimeTruncUnit::parse(units.value(i))
             .ok_or_else(|| bad_unit(i, "time_trunc", units.value(i)))?;
         let n = times.value(i);
-        out.push(Some(n - n % unit.nanos()));
+        out.push(Some(
+            n.wrapping_sub(n.checked_rem(unit.nanos()).unwrap_or(0)),
+        ));
     }
     Ok(out.into_iter().collect())
 }
@@ -171,7 +178,12 @@ pub fn time_diff(
         }
         let unit = TimeTruncUnit::parse(units.value(i))
             .ok_or_else(|| bad_unit(i, "time_diff", units.value(i)))?;
-        out.push(Some((end.value(i) - start.value(i)) / unit.nanos()));
+        out.push(Some(
+            end.value(i)
+                .wrapping_sub(start.value(i))
+                .checked_div(unit.nanos())
+                .unwrap_or(0),
+        ));
     }
     Ok(out.into_iter().collect())
 }

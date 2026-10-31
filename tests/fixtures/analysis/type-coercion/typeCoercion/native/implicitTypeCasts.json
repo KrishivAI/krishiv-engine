@@ -1,16 +1,8 @@
 {
   "entries": [
     {
-      "query": "SELECT '12:00:00' = TIME'12:00:00' FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: TIME literals"
-    },
-    {
-      "query": "SELECT '12:00:01' > TIME'12:00:00' FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: TIME literals"
-    },
-    {
       "query": "SELECT time_trunc('HOUR', '12:34:56') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function time_trunc"
+      "reason": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "file": "typeCoercion/native/implicitTypeCasts",

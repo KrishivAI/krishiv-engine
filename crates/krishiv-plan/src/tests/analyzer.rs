@@ -3448,7 +3448,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 17);
+    assert_eq!(ResolutionConf::KEYS.len(), 18);
 }
 
 /// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`, or 0 with

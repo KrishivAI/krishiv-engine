@@ -309,7 +309,6 @@ fn expected_not_run() -> BTreeMap<String, usize> {
         ("session conf override".to_owned(), 4),
         ("unsupported: CAST from STRING to BOOLEAN".to_owned(), 4),
         ("unsupported: INTERVAL literals".to_owned(), 144),
-        ("unsupported: TIME literals".to_owned(), 6),
     ])
 }
 

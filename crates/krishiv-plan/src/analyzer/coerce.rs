@@ -338,12 +338,21 @@ fn common_in(
         _ if is_numeric(x) && is_numeric(y) => T::Double,
         (T::String, n) | (n, T::String) if integral_digits(n).is_some() => T::Long,
         (T::String, n) | (n, T::String) if is_numeric(n) => T::Double,
-        (T::String, t @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary))
-        | (t @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary), T::String) => {
-            t.clone()
-        }
-        (T::Date, t @ (T::Timestamp | T::TimestampNtz))
+        (
+            T::String,
+            t
+            @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary | T::Time { .. }),
+        )
+        | (
+            t
+            @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary | T::Time { .. }),
+            T::String,
+        )
+        | (T::Date, t @ (T::Timestamp | T::TimestampNtz))
         | (t @ (T::Timestamp | T::TimestampNtz), T::Date) => t.clone(),
+        (T::Time { precision: p }, T::Time { precision: q }) => T::Time {
+            precision: *p.max(q),
+        },
         (T::Timestamp, T::TimestampNtz) | (T::TimestampNtz, T::Timestamp) => T::Timestamp,
         _ => return None,
     };
