@@ -1665,6 +1665,18 @@ impl Resolver<'_> {
                     // resolved child drops its markers: carry them over.
                     let mut b = self.expr(&Arc::new(call), cx)?;
                     b.carry_markers(&kids[..n]);
+                    // Shown as Spark names it, over the operands as written
+                    // (a session variable keeps its name).
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            name,
+                            vec![kids[first].shown(), kids[second].shown()]
+                                .into_iter()
+                                .map(|k| Expr::clone(&k))
+                                .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
                     return Ok(b);
                 }
                 if !session_qualified && let Some(op) = builtin_op(lookup_name, n) {
