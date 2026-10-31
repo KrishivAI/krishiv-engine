@@ -1318,3 +1318,59 @@ fn generate_does_not_carry_its_argument_column() {
         [1, 2, 3]
     );
 }
+
+#[test]
+fn generate_splits_its_output_at_the_batch_size() {
+    let (_root, ctx) = ctx_with(ExecConfig {
+        batch_size: 3,
+        ..ExecConfig::default()
+    });
+    let input_schema = Arc::new(Schema::empty());
+    let one_row = || {
+        Batch::new(
+            RecordBatch::try_new_with_options(
+                Arc::clone(&input_schema),
+                vec![],
+                &arrow_array::RecordBatchOptions::new().with_row_count(Some(2)),
+            )
+            .unwrap(),
+        )
+    };
+    // Two rows: 5 elements, then an empty array an outer generator keeps.
+    let arg = Arc::new(Fixed(lists(vec![
+        Some((1..=5).map(Some).collect()),
+        Some(vec![]),
+    ])));
+    let op = Generate::try_new(&input_schema, GeneratorKind::PosExplode, true, arg, None).unwrap();
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let input = one_row();
+    let mut sizes = Vec::new();
+    let mut values = Vec::new();
+    let mut positions = Vec::new();
+    loop {
+        let (out, last) = match op.execute(&input, &mut local).unwrap() {
+            OperatorOutput::HaveMoreOutput(b) => (Some(b), false),
+            OperatorOutput::NeedMoreInput(b) => (b, true),
+            other => unreachable!("unexpected {other:?}"),
+        };
+        if let Some(b) = out {
+            sizes.push(b.num_rows());
+            let p = b
+                .data()
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            positions.extend(p.iter());
+            let v = b.data().column(1).as_primitive::<Int64Type>();
+            values.extend(v.iter());
+        }
+        if last {
+            break;
+        }
+    }
+    assert_eq!(sizes, [3, 3]);
+    assert_eq!(values, [Some(1), Some(2), Some(3), Some(4), Some(5), None]);
+    assert_eq!(
+        positions,
+        [Some(0), Some(1), Some(2), Some(3), Some(4), None]
+    );
+}

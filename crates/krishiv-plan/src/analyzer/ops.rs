@@ -1486,14 +1486,20 @@ impl Resolver<'_> {
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
-        // Spark extracts a generator from an aggregate's select list; this
-        // engine does not, and would fail later as `OUTSIDE_SELECT`.
-        if items.iter().any(|b| has_generator(&b.expr)) {
-            return Err(unsupported(
-                "a generator in an aggregate SELECT list",
-                p.origin,
-            ));
-        }
+        // Spark's `ExtractGenerator`: the generator's argument takes the
+        // item's place in the aggregate, the generator runs above it.
+        // A written alias of the generator (the analyzer names every item,
+        // so the written one is read from the unresolved list).
+        let written = aggregates.iter().find_map(|e| match &e.node {
+            ExprNode::Alias { name, expr }
+                if matches!(&expr.node, ExprNode::Function(f)
+                if super::generate::is_generator_name(&f.name)) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        });
+        let (items, generator) = self.extract_generator(p.origin, items, written)?;
         // `GROUP BY ALL`: a lone unqualified `all` in SQL groups by the select
         // list, unless a column or a select-list alias named `all` takes it
         // (Spark resolves names first). A DataFrame `groupBy("all")` has no
@@ -1506,7 +1512,23 @@ impl Resolver<'_> {
         // No grouping (`HAVING` without `GROUP BY`): Spark's
         // `MISSING_GROUP_BY` for an ungrouped column.
         let global = group.is_empty();
-        self.build_aggregate(p.origin, &c, group, &items, global, None, env)
+        let agg = self.build_aggregate(p.origin, &c, group, &items, global, None, env)?;
+        match generator {
+            None => Ok(agg),
+            Some(g) => {
+                if agg
+                    .out
+                    .get(g.index())
+                    .is_none_or(|a| a.col.id != g.input_id())
+                {
+                    return Err(unsupported(
+                        "a generator beside lateral aliases or windows in an aggregate",
+                        p.origin,
+                    ));
+                }
+                self.generate_over_aggregate(p.origin, &agg, &g)
+            }
+        }
     }
 
     /// Whether the input has a column, or (with `group_by_aliases`) the
