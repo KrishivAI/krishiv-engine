@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 17 };
+        let kinds = if depth == 0 { 5 } else { 18 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -296,6 +296,10 @@ impl Gen<'_> {
                 },
             }),
             12 => ExprNode::Resolved(ResolvedExpr::LambdaVar(self.bound())),
+            17 => ExprNode::Resolved(ResolvedExpr::StateInput {
+                columns: self.exprs(),
+                raw_type: self.data_type(),
+            }),
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
                     0 => SubqueryKind::Scalar,
@@ -372,10 +376,16 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 27 };
+        let kinds = if depth == 0 { 4 } else { 28 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
+            27 => PlanNode::PartialAggregate {
+                input: self.input(d),
+                keys: self.exprs(),
+                aggregates: self.exprs(),
+                states: self.many(0, 2, Gen::bound),
+            },
             1 => PlanNode::Sql {
                 query: self.name(),
                 args: match self.pick(3) {
@@ -868,6 +878,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 m_type(data_type, w) || m_exprs(args, w) || m_filter(filter, w)
             }
             ResolvedExpr::Alias { expr, output } => m_bound(output, w) || m_expr(expr, w),
+            ResolvedExpr::StateInput { columns, raw_type } => {
+                m_exprs(columns, w) || m_type(raw_type, w)
+            }
             ResolvedExpr::Field {
                 base,
                 ordinal,
@@ -976,6 +989,17 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
     match &mut p.node {
         PlanNode::OneRowRelation | PlanNode::TableFunction { .. } | PlanNode::Range { .. } => false,
         PlanNode::Read(s) => m_source(s, w),
+        PlanNode::PartialAggregate {
+            input,
+            keys,
+            aggregates,
+            states,
+        } => {
+            m_plan(input, w)
+                || m_exprs(keys, w)
+                || m_exprs(aggregates, w)
+                || states.iter_mut().any(|c| m_bound(c, w))
+        }
         PlanNode::Sql { query, args } => {
             site!(w, query.push('x'));
             let other = match args {

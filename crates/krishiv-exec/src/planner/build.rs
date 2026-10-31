@@ -300,6 +300,15 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.aggregate(input, grouping, aggregates)
             }
+            PlanNode::PartialAggregate {
+                input,
+                keys,
+                aggregates,
+                states,
+            } => {
+                let input = self.plan(input)?;
+                self.partial_aggregate(input, keys, aggregates, states)
+            }
             PlanNode::Join {
                 left,
                 right,
