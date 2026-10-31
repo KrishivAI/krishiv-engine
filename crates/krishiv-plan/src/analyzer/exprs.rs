@@ -2173,8 +2173,12 @@ impl Resolver<'_> {
                 // Only for the built-in: a qualified session UDF of the
                 // same name runs the UDF.
                 let is_schema_of_csv = is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "schema_of_csv" | "schema_of_xml");
+                    && matches!(
+                        entry.id.name(),
+                        "schema_of_csv" | "schema_of_xml" | "schema_of_json"
+                    );
                 let of_xml = entry.id.name() == "schema_of_xml";
+                let of_json = entry.id.name() == "schema_of_json";
                 // `from_csv` and `to_csv` show only their first argument.
                 let is_csv = is_builtin_entry(&entry)
                     && matches!(
@@ -2251,7 +2255,7 @@ impl Resolver<'_> {
                 // `SchemaOfCsv` evaluates its foldable child): the DDL
                 // literal, shown as the call.
                 if is_schema_of_csv {
-                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml)?;
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml, of_json)?;
                 }
                 // `from_csv` and `to_csv` show only their first argument
                 // (Spark's `toPrettySQL` drops the schema and options).
@@ -3115,6 +3119,7 @@ impl Resolver<'_> {
         kids: &[Bound],
         bound: &mut Bound,
         xml: bool,
+        json: bool,
     ) -> Result<(), AnalysisError> {
         if kids.is_empty() || kids.len() > 2 {
             return Ok(());
@@ -3125,7 +3130,23 @@ impl Resolver<'_> {
         let Some(Constant::String(csv)) = csv else {
             return Ok(());
         };
-        let ddl = if xml {
+        let ddl = if json {
+            // `schema_of_json`: only a `map(...)` literal of options folds;
+            // anything else keeps the call.
+            let pairs = match kids.get(1) {
+                None => Vec::new(),
+                Some(opts) => match &opts.expr.node {
+                    ExprNode::Literal(Literal::Map(pairs)) => pairs.clone(),
+                    _ => return Ok(()),
+                },
+            };
+            match krishiv_functions::scalar::schema_of_json_ddl(&csv, &pairs)
+                .map_err(|err| AnalysisError::new(err, e.origin))?
+            {
+                Some(ddl) => ddl,
+                None => return Ok(()),
+            }
+        } else if xml {
             // `schema_of_xml`: the document under the written options.
             let pairs = match kids.get(1) {
                 None => Vec::new(),
@@ -6728,6 +6749,18 @@ fn call(
         }
         // `JsonToStructs` has the JSON text as its only child: the schema and
         // the options are not shown.
+        // A map schema is the exception: Spark 4.2 names the column `entries`.
+        _ if name.eq_ignore_ascii_case("from_json")
+            && k.get(1).is_some_and(|schema| {
+                schema
+                    .trim_matches('\'')
+                    .trim_start()
+                    .get(..4)
+                    .is_some_and(|head| head.eq_ignore_ascii_case("map<"))
+            }) =>
+        {
+            "entries".to_owned()
+        }
         _ if name.eq_ignore_ascii_case("from_json") && !k.is_empty() => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("from_json({d}{})", k[0])

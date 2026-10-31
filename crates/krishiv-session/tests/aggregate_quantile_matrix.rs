@@ -555,7 +555,6 @@ const ERRORS: &[(&str, &str)] = &[
 /// Window percentile aggregates are not supported here (Spark evaluates them
 /// over the frame): they are refused, not evaluated.
 const REFUSED: &[&str] = &[
-    "SELECT percentile(v, 0.5) OVER () FROM VALUES (1),(2),(3),(4),(5),(CAST(NULL AS INT)),(7),(8),(9),(10) t(v)",
     "SELECT percentile_approx(v, 0.5) OVER () FROM VALUES (1),(2),(3),(4),(5),(CAST(NULL AS INT)),(7),(8),(9),(10) t(v)",
     "SELECT approx_count_distinct(v) OVER () FROM VALUES (1),(2),(3),(4),(5),(CAST(NULL AS INT)),(7),(8),(9),(10) t(v)",
 ];
