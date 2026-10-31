@@ -614,6 +614,48 @@ impl Rewriter {
         })
     }
 
+    /// `v [NOT] IN (SELECT agg ...)` over a correlated global aggregate:
+    /// the subquery has exactly one row for every outer row, so it is
+    /// `v = (scalar subquery)` (negated: `NOT (v = ...)`, the same NULLs).
+    fn single_row_in(&mut self, c: &Arc<Expr>) -> Option<Arc<Expr>> {
+        let (negated, inner) = match not_arg(c) {
+            Some(x) => (true, x),
+            None => (false, c),
+        };
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &inner.node
+        else {
+            return None;
+        };
+        let [value] = &values[..] else { return None };
+        if !self.correlated(inner) || self.reads_correlated(value) || has_outer(Node::Expr(value)) {
+            return None;
+        }
+        let PlanNode::Aggregate {
+            grouping: Grouping::GroupBy(keys),
+            aggregates,
+            ..
+        } = &plan.node
+        else {
+            return None;
+        };
+        if !keys.is_empty() || aggregates.len() != 1 {
+            return None;
+        }
+        let sub = Arc::new(Expr::new(ExprNode::Subquery {
+            kind: SubqueryKind::Scalar,
+            plan: Arc::clone(plan),
+        }));
+        let eq = boolean(Builtin::Eq, vec![Arc::clone(value), sub]);
+        Some(if negated {
+            boolean(Builtin::Not, vec![eq])
+        } else {
+            eq
+        })
+    }
+
     /// A filter's predicate subqueries as semi / anti joins and its
     /// correlated scalar subqueries as outer joins. Conjuncts that read the
     /// enclosing query go above the joins, where its own rewrite pulls them
@@ -630,6 +672,7 @@ impl Rewriter {
         let mut scalars = Vec::new();
         let mut existential = Vec::new();
         for c in conjuncts(predicate) {
+            let c = self.single_row_in(&c).unwrap_or(c);
             if let Some(pred) = self.predicate(&c) {
                 joins.push(pred);
                 continue;
@@ -761,6 +804,15 @@ impl Rewriter {
         input: Arc<LogicalPlan>,
         exprs: Vec<Arc<Expr>>,
     ) -> R<Arc<LogicalPlan>> {
+        let exprs: Vec<Arc<Expr>> = exprs
+            .into_iter()
+            .map(|e| {
+                let replaced = e.transform_up(&mut |x: Arc<Expr>| {
+                    Ok::<_, std::convert::Infallible>(self.single_row_in(&x).unwrap_or(x))
+                });
+                replaced.unwrap_or_else(|never| match never {})
+            })
+            .collect();
         if !exprs
             .iter()
             .any(|e| self.reads_correlated(e) || self.existential(e))
@@ -1801,6 +1853,9 @@ fn on_no_rows(e: &Arc<Expr>) -> Option<Option<Literal>> {
     {
         return Some(Some(Literal::Long(0)));
     }
+    if let Some(v) = integer_on_no_rows(e) {
+        return Some(v.map(Literal::Long));
+    }
     // Otherwise NULL when every path to a leaf meets an aggregate that is
     // NULL over no rows through operators that keep a NULL.
     let mut stack = vec![Arc::clone(e)];
@@ -1845,4 +1900,40 @@ fn on_no_rows(e: &Arc<Expr>) -> Option<Option<Literal>> {
         }
     }
     any_aggregate.then_some(None)
+}
+
+/// `e` over no rows when it is integer arithmetic over `count`s (0), other
+/// aggregates (NULL) and integer literals: `Some(None)` is NULL.
+fn integer_on_no_rows(e: &Arc<Expr>) -> Option<Option<i64>> {
+    match &e.node {
+        ExprNode::Literal(Literal::Long(v)) => Some(Some(*v)),
+        ExprNode::Literal(Literal::Integer(v)) => Some(Some(i64::from(*v))),
+        ExprNode::Cast {
+            expr,
+            to: DataType::Long,
+            ..
+        } => integer_on_no_rows(expr),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+            match f.id.name() {
+                "count" => Some(Some(0)),
+                "sum" | "avg" | "min" | "max" | "any_value" => Some(None),
+                _ => None,
+            }
+        }
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.args.len() == 2 => {
+            let op: fn(i64, i64) -> Option<i64> = match f.id {
+                FunctionId::Builtin(Builtin::Add) => i64::checked_add,
+                FunctionId::Builtin(Builtin::Subtract) => i64::checked_sub,
+                FunctionId::Builtin(Builtin::Multiply) => i64::checked_mul,
+                _ => return None,
+            };
+            let a = integer_on_no_rows(&f.args[0])?;
+            let b = integer_on_no_rows(&f.args[1])?;
+            match (a, b) {
+                (Some(a), Some(b)) => op(a, b).map(Some),
+                _ => Some(None),
+            }
+        }
+        _ => None,
+    }
 }
