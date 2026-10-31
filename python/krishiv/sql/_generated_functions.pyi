@@ -145,6 +145,9 @@ __all__ = [
     "lpad",
     "ltrim",
     "make_date",
+    "make_timestamp",
+    "make_timestamp_ltz",
+    "make_timestamp_ntz",
     "make_valid_utf8",
     "map_concat",
     "map_contains_key",
@@ -274,6 +277,9 @@ __all__ = [
     "try_avg",
     "try_divide",
     "try_element_at",
+    "try_make_timestamp",
+    "try_make_timestamp_ltz",
+    "try_make_timestamp_ntz",
     "try_mod",
     "try_multiply",
     "try_parse_url",
@@ -447,6 +453,32 @@ def lower(col: ColumnOrName) -> Column: ...
 def lpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column: ...
 def ltrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column: ...
 def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column: ...
+def make_timestamp(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column: ...
+def make_timestamp_ltz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column: ...
+def make_timestamp_ntz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+) -> Column: ...
 def make_valid_utf8(str: ColumnOrName) -> Column: ...
 def map_concat(*cols: ColumnOrName) -> Column: ...
 def map_contains_key(col: ColumnOrName, value: Any) -> Column: ...
@@ -586,6 +618,32 @@ def try_add(left: ColumnOrName, right: ColumnOrName) -> Column: ...
 def try_avg(col: ColumnOrName) -> Column: ...
 def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column: ...
 def try_element_at(col: ColumnOrName, extraction: ColumnOrName) -> Column: ...
+def try_make_timestamp(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column: ...
+def try_make_timestamp_ltz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+    timezone: ColumnOrName | None = None,
+) -> Column: ...
+def try_make_timestamp_ntz(
+    years: ColumnOrName,
+    months: ColumnOrName,
+    days: ColumnOrName,
+    hours: ColumnOrName,
+    mins: ColumnOrName,
+    secs: ColumnOrName,
+) -> Column: ...
 def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column: ...
 def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column: ...
 def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column: ...

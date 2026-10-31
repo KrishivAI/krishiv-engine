@@ -652,21 +652,17 @@ fn krishiv_only_errors_are_never_caught() {
     );
 }
 
-/// `datediff(unit, start, end)` is `timestampdiff`; that function is not implemented yet, so the call
-/// reads as an unknown routine rather than as a two-parameter `datediff` given three arguments.
+/// `datediff(unit, start, end)` is `timestampdiff`, not a two-parameter `datediff` given three
+/// arguments.
 #[test]
 fn datediff_with_a_unit_is_timestampdiff() {
     let s = Session::new().unwrap();
-    assert_eq!(
-        class(
-            &s,
-            "SELECT datediff(DAY, DATE '2020-01-01', DATE '2020-01-11')"
-        ),
-        class(
-            &s,
-            "SELECT timestampdiff(DAY, DATE '2020-01-01', DATE '2020-01-11')"
-        )
-    );
+    for sql in [
+        "SELECT CAST(datediff(DAY, DATE '2020-01-01', DATE '2020-01-11') AS STRING)",
+        "SELECT CAST(timestampdiff(DAY, DATE '2020-01-01', DATE '2020-01-11') AS STRING)",
+    ] {
+        assert_eq!(rows(&s, sql), ok(&[&["10"]]), "{sql}");
+    }
     assert_eq!(
         rows(
             &s,

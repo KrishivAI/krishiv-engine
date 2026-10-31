@@ -5,7 +5,7 @@ use std::sync::Arc;
 use krishiv_common::error::{ErrorClass, InvalidOptionsNonMapFunction, KrishivError};
 use krishiv_types::{ArrayType, DataType, DecimalType};
 
-use super::{Aggregate, Execution, FunctionDef, Lookup, builtins};
+use super::{Aggregate, Execution, FunctionDef, Lookup, builtins, is_grammar_only};
 use crate::scalar::scalar_names;
 use crate::signature::{
     ArgType, CallTypes, Constant, FunctionKind, InputType, Inputs, Operator, SparkProfile,
@@ -50,6 +50,10 @@ fn every_definition_is_in_sparks_catalog() {
     let names: Vec<&str> = r.functions().iter().map(|d| d.name).collect();
     assert!(names.windows(2).all(|w| w[0] < w[1]));
     for d in r.functions() {
+        if is_grammar_only(d.name) {
+            assert!(r.spark_function(d.name).is_none(), "{}", d.name);
+            continue;
+        }
         let s = r.spark_function(d.name).unwrap();
         assert_eq!(d.since, s.since, "{}", d.name);
         // Spark rejected every probe of `raise_error` (it always raises),
@@ -628,21 +632,13 @@ fn calendar_signatures() {
         assert_eq!(def(name).execution, Execution::Scalar, "{name}");
     }
     // What stays unregistered is known to Spark, so it is not "not found".
-    for name in [
-        "make_timestamp",
-        "try_make_timestamp",
-        "make_timestamp_ltz",
-        "make_timestamp_ntz",
-        "make_interval",
-    ] {
-        assert!(
-            matches!(
-                builtins().lookup(name, SparkProfile::V4_2),
-                Lookup::KnownUnsupported
-            ),
-            "{name}"
-        );
-    }
+    assert!(
+        matches!(
+            builtins().lookup("make_interval", SparkProfile::V4_2),
+            Lookup::KnownUnsupported
+        ),
+        "make_interval"
+    );
 }
 
 #[test]
