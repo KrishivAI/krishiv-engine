@@ -3448,7 +3448,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 20);
+    assert_eq!(ResolutionConf::KEYS.len(), 21);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),
@@ -5157,6 +5157,42 @@ fn casting_to_time_is_unsupported_time_type() {
             serde_json::json!(["UNSUPPORTED_TIME_TYPE", {}])
         );
     }
+}
+
+/// With `spark.sql.timeType.enabled` a `TIME '...'` literal is a `time(6)`
+/// named by its normalized value; a time casts to another time and to
+/// `int`/`bigint`, and to nothing else.
+#[test]
+fn time_literals_and_casts_with_the_type_enabled() {
+    let on = ResolutionConf {
+        time_type: true,
+        ..ResolutionConf::default()
+    };
+    let ctx_on = context(MemoryCatalog::new("spark_catalog"), on);
+    let one_row = || LogicalPlan::new(PlanNode::OneRowRelation);
+    let literal = Expr::new(ExprNode::TypedLiteral {
+        kind: crate::TypedLiteralKind::Time,
+        value: "01:02:03 PM".to_owned(),
+    });
+    let analyzed = run(one_row().project(vec![literal.clone()]), &ctx_on).unwrap();
+    assert_eq!(analyzed.output[0].data_type, DataType::time(6).unwrap());
+    assert_eq!(analyzed.output[0].name, "TIME '13:02:03'");
+    // Off (the default), the literal is refused.
+    let r = run(one_row().project(vec![literal]), &ctx());
+    assert_eq!(
+        summary(&r),
+        serde_json::json!(["UNSUPPORTED_TIME_TYPE", {}])
+    );
+    // Casts: string to time, time to time and to bigint resolve; a double
+    // does not.
+    let cast = |from: Expr, to: DataType| run(one_row().project(vec![from.cast(to)]), &ctx_on);
+    let text = || Expr::from(Literal::String("10:00".to_owned()));
+    assert!(cast(text(), DataType::time(3).unwrap()).is_ok());
+    let time = || text().cast(DataType::time(6).unwrap());
+    assert!(cast(time(), DataType::time(0).unwrap()).is_ok());
+    assert!(cast(time(), DataType::Long).is_ok());
+    assert!(cast(time(), DataType::Double).is_err());
+    assert!(cast(Expr::from(Literal::Double(1.0)), DataType::time(6).unwrap()).is_err());
 }
 
 /// Spark's strength reduction for an integral expression compared with a

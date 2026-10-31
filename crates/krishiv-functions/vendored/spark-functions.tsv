@@ -437,14 +437,14 @@ theta_union	function	4.1	true	aggregate	0011000	[2, 3]
 theta_union_agg	function	4.1	true	aggregate	0110000	[1, 2]
 time	function	4.1	unknown	unknown	0100000	1
 time_bucket	function	4.2	true	scalar	0011000	[2, 3]
-time_diff	function	4.1	unknown	unknown	0001000	3
+time_diff	function	4.1	true	scalar	0001000	3
 time_from_micros	function	4.2	unknown	unknown	0100000	1
 time_from_millis	function	4.2	unknown	unknown	0100000	1
 time_from_seconds	function	4.2	unknown	unknown	0100000	1
 time_to_micros	function	4.2	unknown	unknown	0100000	1
 time_to_millis	function	4.2	unknown	unknown	0100000	1
 time_to_seconds	function	4.2	unknown	unknown	0100000	1
-time_trunc	function	4.1	unknown	unknown	0010000	2
+time_trunc	function	4.1	true	scalar	0010000	2
 timestamp	function	3.5	true	scalar	0100000	1
 timestamp_micros	function	3.5	true	scalar	0100000	1
 timestamp_millis	function	3.5	true	scalar	0100000	1
