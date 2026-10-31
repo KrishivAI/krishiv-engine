@@ -21,9 +21,10 @@
 //!   `case_table.rs`). The divergent code points (Greek letters with an iota
 //!   subscript, modifier/circled/Roman-numeral letters, Georgian) are pinned
 //!   by `toolchain_unicode_is_pinned`.
-//! - `encode`/`decode` take Spark's seven default charsets; the
-//!   `spark.sql.legacy.javaCharsets` and `spark.sql.legacy.codingErrorAction`
-//!   switches are not read.
+//! - `encode`/`decode` take Spark's seven default charsets; `encode_with` /
+//!   `decode_with` take the two legacy switches (`CharsetOptions`: `windows-1252`
+//!   and the ISO-8859 family from own tables, `?` / U+FFFD replacement), which
+//!   the SQL layer does not pass yet.
 //! - `base64` always writes MIME chunking (a CRLF every 76 symbols), Spark's
 //!   default; `spark.sql.chunkBase64String.enabled` is not read.
 //! - `split_part` and `substring_index` with `Int.MIN` return what Spark's
@@ -35,6 +36,7 @@
 
 mod case_table;
 mod chars;
+mod charsets;
 mod codec;
 mod like;
 mod mask_table;
@@ -54,8 +56,8 @@ pub use chars::{
     space, split_part, substring_index, translate,
 };
 pub use codec::{
-    base64, decode, encode, is_valid_utf8, make_valid_utf8, to_binary, unbase64, url_decode,
-    url_encode, validate_utf8,
+    CharsetOptions, base64, decode, decode_with, encode, encode_with, is_valid_utf8,
+    make_valid_utf8, to_binary, unbase64, url_decode, url_encode, validate_utf8,
 };
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};

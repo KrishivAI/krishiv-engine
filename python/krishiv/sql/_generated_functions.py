@@ -230,6 +230,7 @@ __all__ = [
     "regexp",
     "regexp_count",
     "regexp_extract",
+    "regexp_extract_all",
     "regexp_instr",
     "regexp_like",
     "regexp_replace",
@@ -1439,6 +1440,11 @@ def regexp_count(str: ColumnOrName, regexp: ColumnOrName) -> Column:
 def regexp_extract(str: ColumnOrName, pattern: str, idx: int) -> Column:
     """Calls the registry function ``regexp_extract``."""
     return _call("regexp_extract", _named(str, "str"), _lit(pattern, "pattern"), _lit(idx, "idx"))
+
+
+def regexp_extract_all(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None = None) -> Column:
+    """Calls the registry function ``regexp_extract_all``."""
+    return _call("regexp_extract_all", _named(str, "str"), _named(regexp, "regexp"), *_opt(_lit, idx, "idx"))
 
 
 def regexp_instr(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None = None) -> Column:

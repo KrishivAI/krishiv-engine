@@ -1956,6 +1956,24 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 2)
+                } else if is_builtin_entry(&entry)
+                    && let Some(default) = regexp_default_index(entry.id.name(), n)
+                {
+                    // `regexp_extract(str, re)` is `regexp_extract(str, re, 1)`,
+                    // `regexp_instr(str, re)` takes index 0 and
+                    // `regexp_replace(str, re, rep)` position 1; Spark names
+                    // the column with the default shown.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Integer(default),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], n + 1)
                 } else if is_builtin_entry(&entry) && entry.id.name() == "split" && n == 2 {
                     // `split(str, pattern)` is `split(str, pattern, -1)`.
                     owned = kids[..n].to_vec();
@@ -2092,6 +2110,16 @@ impl Resolver<'_> {
                 // result is renamed and the names follow the arrays as
                 // string literals, which the executor reads.
                 let mut zip_names: Vec<Arc<Expr>> = Vec::new();
+                // Under `spark.sql.legacy.negativeIndexInArrayInsert`,
+                // `array_insert` carries the switch as a trailing literal.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "array_insert"
+                    && self.ctx.conf.legacy_negative_index_in_array_insert
+                {
+                    zip_names.push(Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(e.origin),
+                    ));
+                }
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "arrays_zip"
                     && let Some(DataType::Array(a)) = &ty.data_type
@@ -6731,6 +6759,16 @@ fn call(
         _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
             "current_catalog".to_owned()
         }
+        // `RLike` prints its function name upper case, whichever spelling
+        // (`rlike`, `regexp`, `regexp_like`) the query used.
+        _ if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "rlike" | "regexp" | "regexp_like"
+        ) =>
+        {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{})", name.to_uppercase(), named(k, arg_names))
+        }
         // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
         // two-argument math (`power`, `atan2`, `hypot`) print upper case,
         // as Spark's `UnaryMathExpression` / `BinaryMathExpression` do;
@@ -6759,6 +6797,18 @@ fn named(k: &[&str], arg_names: Option<&[Option<String>]>) -> String {
         )
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The default of the optional trailing integer argument of a regular-expression
+/// function called with `n` arguments: the group index of `regexp_extract` /
+/// `regexp_extract_all` (1) and `regexp_instr` (0), the start position of
+/// `regexp_replace` (1).
+fn regexp_default_index(name: &str, n: usize) -> Option<i32> {
+    match (name, n) {
+        ("regexp_extract" | "regexp_extract_all", 2) | ("regexp_replace", 3) => Some(1),
+        ("regexp_instr", 2) => Some(0),
+        _ => None,
+    }
 }
 
 /// Whether Spark prints `name` upper case: the `UnaryMathExpression` /

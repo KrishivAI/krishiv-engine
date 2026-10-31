@@ -522,8 +522,8 @@ fn pipe_operator_checks() {
 }
 
 #[test]
-fn pipelines_lower_as_unsupported_and_cap_their_depth() {
-    assert!(unsupported("TABLE t |> WHERE a").contains("pipe operators"));
+fn pipelines_cap_their_depth() {
+    assert!(unsupported("TABLE t |> SET a = 1").contains("pipe SET"));
     // Operators of one pipeline are a list: a long chain costs no depth.
     let chain = format!("TABLE t{}", " |> WHERE a".repeat(5000));
     assert_eq!(pipe_ops(&chain).len(), 5000);

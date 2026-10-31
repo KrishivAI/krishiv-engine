@@ -2006,3 +2006,19 @@ fn udf_results_with_views_run() {
     got.sort();
     assert_eq!(got, [None, Some("b".to_owned()), Some("c".to_owned())]);
 }
+
+#[test]
+fn a_stored_body_names_its_stored_function_not_a_session_udf() {
+    let s = session();
+    collect(
+        &s,
+        "CREATE FUNCTION add_one(x INT) RETURNS INT RETURN x + 100",
+    );
+    collect(
+        &s,
+        "CREATE FUNCTION caller(x INT) RETURNS INT RETURN add_one(x)",
+    );
+    s.register_udf(AddOne).unwrap();
+    let rows = collect(&s, "SELECT caller(1)");
+    assert_eq!(ints(&rows), [Some(101)]);
+}
