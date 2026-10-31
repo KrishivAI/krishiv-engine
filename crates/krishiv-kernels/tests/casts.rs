@@ -222,6 +222,36 @@ fn strings_to_dates_match_spark() {
     }
 }
 
+#[test]
+fn strings_to_booleans_match_spark() {
+    let b = DataType::Boolean;
+    for t in ["t", "TRUE", " Yes\u{7f}", "y", "1"] {
+        assert_eq!(one(s(t), b.clone(), Ansi), "true", "{t:?}");
+    }
+    for f in ["F", "false", "\tNo ", "n", "0"] {
+        assert_eq!(one(s(f), b.clone(), Ansi), "false", "{f:?}");
+    }
+    assert_eq!(
+        one(s("maybe"), b.clone(), Ansi),
+        invalid("'maybe'", "BOOLEAN")
+    );
+    assert_eq!(one(s("2"), b.clone(), Ansi), invalid("'2'", "BOOLEAN"));
+    assert_eq!(one(s(""), b.clone(), Ansi), invalid("''", "BOOLEAN"));
+    for mode in [Legacy, Try] {
+        assert_eq!(one(s("maybe"), b.clone(), mode), "NULL");
+    }
+    let out = run(
+        &StringArray::from(vec![Some("t"), None, Some("x")]),
+        &b,
+        Legacy,
+    )
+    .unwrap();
+    assert_eq!(
+        out.as_ref(),
+        &BooleanArray::from(vec![Some(true), None, None]) as &dyn Array
+    );
+}
+
 /// Documented divergence: Spark 4.0-4.2 ANSI/try casts of a decimal with
 /// precision > 18 to int/smallint/tinyint round through `double` (giving
 /// 1 here); Krishiv truncates exactly like Spark's legacy cast.
@@ -603,7 +633,7 @@ fn unsupported_and_identity() {
             &arrow_array::BinaryArray::from(vec![Some(&b"x"[..]), None]) as &dyn Array
         );
     }
-    assert!(run(&s("1"), &DataType::Boolean, Ansi).is_err());
+    assert!(run(&s("x"), &DataType::Boolean, Ansi).is_err());
     let d: ArrayRef = Arc::new(Date32Array::from(vec![1]));
     assert!(run(&d, &DataType::Int32, Ansi).is_err());
     let same = run(&d, &DataType::Date32, Ansi).unwrap();

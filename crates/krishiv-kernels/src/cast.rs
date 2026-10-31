@@ -936,6 +936,21 @@ fn from_string<O: OffsetSizeTrait>(
             })?;
             decimal_out(out, p, sc)
         }
+        DataType::Boolean => {
+            let mut out = arrow_array::builder::BooleanBuilder::with_capacity(s.len());
+            for i in 0..s.len() {
+                if s.is_null(i) {
+                    out.append_null();
+                } else if let Some(b) = text::parse_boolean(s.value(i).as_bytes()) {
+                    out.append_value(b);
+                } else {
+                    // Only the error or a NULL is possible: the legacy value is NULL.
+                    fail::<bool>(mode, None, || invalid(i))?;
+                    out.append_null();
+                }
+            }
+            Ok(Arc::new(out.finish()))
+        }
         DataType::Date32 => {
             let out =
                 map_rows::<Date32Type>(s, |i| match text::parse_date(s.value(i).as_bytes()) {
