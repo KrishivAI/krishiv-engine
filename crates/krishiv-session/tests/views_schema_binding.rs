@@ -504,9 +504,27 @@ fn without_the_feature_a_view_compensates_unless_configured_not_to() {
     run(&s, "INSERT INTO t VALUES (1)");
     assert_eq!(schema(&s, "SELECT * FROM v"), ["c1:int"]);
     assert_eq!(rows(&s, "SELECT * FROM v"), ["1"]);
-    run(&s, "SET spark.sql.legacy.viewSchemaCompensation = false");
+    // The Krishiv key is the same setting.
+    run(&s, "SET krishiv.sql.legacy.viewSchemaCompensation = false");
     assert_eq!(
         err(&s, "SELECT * FROM v").error_class().name(),
         "CANNOT_UP_CAST_DATATYPE"
     );
+    run(&s, "SET spark.sql.legacy.viewSchemaCompensation = true");
+    assert_eq!(rows(&s, "SELECT * FROM v"), ["1"]);
+}
+
+#[test]
+fn the_krishiv_key_turns_the_binding_mode_off_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET krishiv.sql.legacy.viewSchemaBindingMode = false");
+    assert_eq!(
+        err(&s, "CREATE VIEW v WITH SCHEMA BINDING AS SELECT 1")
+            .error_class()
+            .name(),
+        "FEATURE_NOT_ENABLED"
+    );
+    run(&s, "CREATE VIEW v AS SELECT 1");
+    assert_eq!(info(&s, "v", "View Schema Mode"), None);
 }
