@@ -23,8 +23,8 @@ use krishiv_types::batch::{Batch, Weights};
 use super::Sort;
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
-    Bucketing, Merger, Slice, SortedBatch, interleave_batches, parallel_merge, sort_slices,
-    split_slices,
+    Bucketing, Merger, Slice, SortedBatch, interleave_batches, merge_part, merge_splitters,
+    parallel_merge, sort_slices,
 };
 use crate::context::{ExecConfig, OperatorId, QueryContext, QueryId, TaskContext};
 use crate::executor::{Executor, TokioExecutor, WorkloadClass};
@@ -658,6 +658,16 @@ fn scattered(b: i64, r: i64) -> i64 {
     (b * 1000 + r).wrapping_mul(2_654_435_761) % 1_000_003
 }
 
+/// `memory`'s parts between its splitters.
+fn cut(memory: &[Slice], parts: usize) -> Vec<Vec<Slice>> {
+    let splitters = merge_splitters(memory, parts).unwrap();
+    let lows = std::iter::once(None).chain(splitters.iter().copied().map(Some));
+    let highs = splitters.iter().copied().map(Some).chain([None]);
+    lows.zip(highs)
+        .map(|(lo, hi)| merge_part(memory, lo, hi).unwrap())
+        .collect()
+}
+
 /// The merge's cuts keep every row once and in the tree's order, whatever the
 /// number of parts: ties across many runs, NaN and NULL keys, runs of very
 /// different lengths, and every key equal.
@@ -701,7 +711,7 @@ fn parts_sorted_one_by_one_are_the_merge() {
         .collect();
     let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
     for parts in [1, 2, 3, 7, 16, rows, rows + 5] {
-        let cut = split_slices(&memory, parts).unwrap();
+        let cut = cut(&memory, parts);
         assert!(cut.len() <= parts);
         let mut order = Vec::new();
         for part in &cut {
@@ -712,10 +722,35 @@ fn parts_sorted_one_by_one_are_the_merge() {
             Arc::clone(&schema),
             Arc::clone(&keys),
             &memory,
-            order,
-            handle.reservation(),
+            order.clone(),
+            (handle.reservation(), 0),
+            1,
         );
         assert_eq!(drain(merger), want, "{parts} parts");
+        // Gathered ahead, a few batches at a time: the same rows.
+        let mut merger = Merger::from_order(
+            Arc::clone(&schema),
+            Arc::clone(&keys),
+            &memory,
+            order,
+            (handle.reservation(), 0),
+            parts.min(4),
+        );
+        let mut gathered = Vec::new();
+        loop {
+            let batches: Vec<Batch> = merger
+                .gather_jobs(37)
+                .iter()
+                .map(|j| j.run().unwrap())
+                .collect();
+            merger.gathered(batches);
+            let Some(batch) = merger.next(37).unwrap() else {
+                break;
+            };
+            assert!(batch.num_rows() <= 37);
+            gathered.extend(ids(&batch));
+        }
+        assert_eq!(gathered, want, "{parts} parts, gathered ahead");
     }
 }
 
@@ -732,7 +767,7 @@ fn equal_keys_spread_over_the_parts() {
             (s, all)
         })
         .collect();
-    let cut = split_slices(&memory, 4).unwrap();
+    let cut = cut(&memory, 4);
     assert_eq!(cut.len(), 4);
     for part in &cut {
         let rows: usize = part.iter().map(|(_, r)| r.len()).sum();
@@ -753,25 +788,26 @@ fn a_parallel_merge_needs_slices_rows_threads_and_memory() {
     let root = TreePool::new(&MemoryConfig::default());
     let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
     let wide = runs(65, 1000, None);
-    let (memory, parts, scratch) = parallel_merge(&wide, 8, &handle).unwrap();
-    assert_eq!((memory.len(), parts), (65, 3), "rows bound the parts");
-    assert!(scratch.size() > 0);
-    drop(scratch);
-    assert_eq!(parallel_merge(&wide, 2, &handle).unwrap().1, 2);
-    assert!(parallel_merge(&wide, 1, &handle).is_none(), "one thread");
+    let m = parallel_merge(&wide, 8, 1000, &handle).unwrap();
+    assert_eq!((m.memory.len(), m.parts), (65, 3), "rows bound the parts");
+    assert_eq!(m.ready_bytes, 8 * 1000 * 3);
+    assert!(m.scratch.size() > m.ready_bytes);
+    drop(m);
+    assert_eq!(parallel_merge(&wide, 2, 1000, &handle).unwrap().parts, 2);
+    assert!(parallel_merge(&wide, 1, 1000, &handle).is_none(), "one thread");
     let few_slices = runs(64, 1000, None);
-    assert!(parallel_merge(&few_slices, 8, &handle).is_none());
+    assert!(parallel_merge(&few_slices, 8, 1000, &handle).is_none());
     let few_rows = runs(65, 100, None);
-    assert!(parallel_merge(&few_rows, 8, &handle).is_none());
+    assert!(parallel_merge(&few_rows, 8, 1000, &handle).is_none());
     let bucketing = Bucketing::new(Arc::clone(&keys), 1);
     let bucketed = runs(65, 1000, Some(&bucketing));
-    assert!(parallel_merge(&bucketed, 8, &handle).is_none());
+    assert!(parallel_merge(&bucketed, 8, 1000, &handle).is_none());
     let tight = TreePool::new(&MemoryConfig {
         limit: Some(1024),
         ..MemoryConfig::default()
     });
     let small = ConsumerHandle::register(tight.child("q", None), "sort", None);
-    assert!(parallel_merge(&wide, 8, &small).is_none(), "the tree instead");
+    assert!(parallel_merge(&wide, 8, 1000, &small).is_none(), "the tree instead");
 }
 
 /// A sort's source over a wide in-memory result on two threads, with what it
@@ -837,6 +873,7 @@ async fn read_wide_result(spill_after_first: bool) -> Vec<i64> {
             .data()
             .column(0)
             .as_primitive::<arrow_array::types::Int64Type>();
+        assert!(b.num_rows() <= 1000);
         let first = keys.is_empty();
         keys.extend(k.values().iter().copied());
         if first && spill_after_first {
@@ -907,4 +944,46 @@ async fn a_cancelled_parallel_merge_fails_the_read() {
     assert!(sort.get_data(&mut again, &source_global).await.is_err());
     drop((local, again, source_global, source_ctx, global, sink_ctx));
     assert_eq!(root.reserved(), 0);
+}
+
+/// Rows sharing leading bytes order the same with those bytes skipped, also
+/// when their keys are longer than the prefix and differ only past it.
+#[test]
+fn a_part_with_a_shared_prefix_sorts_past_it() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+        Field::new("c", DataType::Int64, false),
+    ]));
+    let keys = KeyEncoder::new(
+        &schema,
+        &[SortKey::asc(0), SortKey::asc(1), SortKey::asc(2)],
+    )
+    .unwrap();
+    let memory: Vec<Slice> = (0..5_i64)
+        .map(|b| {
+            let col = |f: &dyn Fn(i64) -> i64| -> ArrayRef {
+                Arc::new(Int64Array::from_iter_values((0..200).map(|r| f(b * 200 + r))))
+            };
+            let columns = vec![col(&|_| 42), col(&|i| i % 3), col(&|i| 1000 - i)];
+            let batch = RecordBatch::try_new(Arc::clone(&schema), columns).unwrap();
+            let s = Arc::new(SortedBatch::new(Batch::new(batch), &keys, None).unwrap());
+            let all = 0..s.order.len();
+            (s, all)
+        })
+        .collect();
+    let order = sort_slices(&memory).unwrap();
+    assert_eq!(order.len(), 1000);
+    let row = |&(s, r): &(u32, u32)| memory[s as usize].0.rows.row(r as usize);
+    assert!(order.windows(2).all(|w| row(&w[0]) <= row(&w[1])));
+}
+
+#[test]
+fn the_shared_prefix_of_nothing_sorts_nothing() {
+    let schema = int_schema();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0)]).unwrap();
+    let batch = int_batches(&schema, 1, 10, scattered).remove(0);
+    let s = Arc::new(SortedBatch::new(batch, &keys, None).unwrap());
+    assert!(sort_slices(&[(s, 3..3)]).unwrap().is_empty());
+    assert!(sort_slices(&[]).unwrap().is_empty());
 }

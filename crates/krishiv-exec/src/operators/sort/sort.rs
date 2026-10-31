@@ -30,8 +30,8 @@ use krishiv_types::batch::Batch;
 
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
-    Bucketing, Merger, SortedBatch, SpillRun, data_bytes, interleave_batches, parallel_merge,
-    sort_slices, split_slices, write_run,
+    Bucketing, Merger, ParallelMerge, SortedBatch, SpillRun, data_bytes, interleave_batches,
+    merge_part, merge_splitters, parallel_merge, sort_slices, write_run,
 };
 use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
@@ -1754,7 +1754,7 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
         Some(batches) => open_parallel(l, held, batches).await,
         None => Ok(None),
     };
-    let merger = match opened {
+    let mut merger = match opened {
         Ok(Some(opened)) => Some(opened),
         Ok(None) => merger,
         Err(e) => {
@@ -1763,6 +1763,27 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
         }
     };
     let rows = l.batch_rows;
+    if let Some(m) = &mut merger {
+        let jobs = m.gather_jobs(rows);
+        if !jobs.is_empty() {
+            let gather = jobs
+                .into_iter()
+                .map(|job| blocking(&l.query, &l.executor, move || job.run()));
+            match futures::future::try_join_all(gather).await {
+                Ok(batches) => m.gathered(batches),
+                Err(e) => {
+                    held.fail(e.clone());
+                    return Err(e);
+                }
+            }
+        }
+        if let Some(batch) = m.pop_ready() {
+            if let Some(m) = merger {
+                held.put(b, Bucket::Merging(m));
+            }
+            return Ok(Step::Batch(batch));
+        }
+    }
     let (schema, encoder, handle) = (
         Arc::clone(&held.schema),
         Arc::clone(&held.encoder),
@@ -1799,28 +1820,38 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
 }
 
 /// The merge of an unbucketed sort's wide in-memory result, computed as one
-/// blocking task per part: a loser tree over thousands of batches costs a
-/// chain of cache misses per row, on one thread. `None`: the tree it is.
+/// blocking task per part, its output gathered a batch per part at once: a
+/// loser tree over thousands of batches costs a chain of cache misses per
+/// row, on one thread. `None`: the tree it is.
 async fn open_parallel(
     l: &SortSource,
     held: &Arc<Held>,
     batches: &Arc<[Arc<SortedBatch>]>,
 ) -> Result<Option<Box<Merger>>> {
     let parallelism = l.executor.parallelism();
-    let Some((memory, parts, scratch)) = parallel_merge(batches, parallelism, &held.handle) else {
+    let Some(ParallelMerge {
+        memory,
+        parts,
+        scratch,
+        ready_bytes,
+    }) = parallel_merge(batches, parallelism, l.batch_rows, &held.handle)
+    else {
         return Ok(None);
     };
     let memory = Arc::new(memory);
     let shared = Arc::clone(&memory);
-    let cut = blocking(&l.query, &l.executor, move || {
-        split_slices(&shared, parts)
+    let splitters = blocking(&l.query, &l.executor, move || {
+        merge_splitters(&shared, parts)
     })
     .await?;
-    let sorted = cut.into_iter().map(|part| {
+    let lows = std::iter::once(None).chain(splitters.iter().copied().map(Some));
+    let highs = splitters.iter().copied().map(Some).chain([None]);
+    let sorted = lows.zip(highs).map(|(lo, hi)| {
         let query = Arc::clone(&l.query);
+        let memory = Arc::clone(&memory);
         blocking(&l.query, &l.executor, move || {
             query.check_cancelled()?;
-            sort_slices(&part)
+            sort_slices(&merge_part(&memory, lo, hi)?)
         })
     });
     let orders = futures::future::try_join_all(sorted).await?;
@@ -1832,7 +1863,8 @@ async fn open_parallel(
         Arc::clone(&held.encoder),
         &memory,
         order,
-        scratch,
+        (scratch, ready_bytes),
+        parts,
     ))))
 }
 

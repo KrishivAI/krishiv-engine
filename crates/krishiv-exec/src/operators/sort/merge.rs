@@ -7,6 +7,7 @@
 //! `(key row, run index)` (one comparison per level and output row), so rows that compare equal come out in run order:
 //! the merge is stable when runs are numbered in input order.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, RecordBatchOptions};
@@ -328,9 +329,15 @@ pub(crate) struct Merger {
 /// The rows of a sorted merge, in output order, and the memory they hold.
 struct SortedRows {
     /// `(source, row)` in output order.
-    order: Vec<(u32, u32)>,
-    /// The next row of `order` to emit.
+    order: Arc<[(u32, u32)]>,
+    /// The next row of `order` to emit or gather.
     pos: usize,
+    /// What [`GatherJob`]s read.
+    sources: Arc<[Batch]>,
+    /// Output batches gathered ahead of `pos`, in order.
+    ready: VecDeque<Batch>,
+    /// Output batches to gather at once: 1 gathers on the reader's step.
+    gather: usize,
     /// Accounts `order` (and, while sorting, its keyed form).
     _scratch: Reservation,
 }
@@ -347,8 +354,12 @@ const SORT_MIN_SLICES: usize = 64;
 /// Fewest rows worth a part of a parallel merge of its own.
 const PARALLEL_MIN_PART_ROWS: usize = 1 << 14;
 
-/// Samples per part taken from each slice to place a parallel merge's cuts.
-const SAMPLES_PER_PART: usize = 2;
+/// Samples per part to place a parallel merge's cuts: a part's size is off by
+/// about `1 / sqrt(SAMPLES_PER_PART)` of itself.
+const SAMPLES_PER_PART: usize = 128;
+
+/// `2^64 / phi`: multiples of it spread evenly over the `u64` range.
+const GOLDEN_RATIO: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// A range of a sorted batch's `order`: one input of a merge.
 pub(super) type Slice = (Arc<SortedBatch>, std::ops::Range<usize>);
@@ -362,17 +373,33 @@ fn merge_cmp(memory: &[Slice], (sa, ra): (u32, u32), (sb, rb): (u32, u32)) -> st
     a.cmp(&b).then((sa, ra).cmp(&(sb, rb)))
 }
 
+/// The leading bytes all the rows of `memory` share: those of its smallest and
+/// largest row, which each slice's ends give. A part of a merge has a narrow
+/// key range, so its 16-byte prefixes do more past these bytes.
+fn shared_prefix_len(memory: &[Slice]) -> usize {
+    let mut ends = memory.iter().filter(|(_, r)| !r.is_empty()).flat_map(|(s, r)| {
+        [r.start, r.end - 1].map(|at| s.rows.row(s.order[at] as usize))
+    });
+    let Some(first) = ends.next() else {
+        return 0;
+    };
+    let (lo, hi) = ends.fold((first, first), |(lo, hi), row| (lo.min(row), hi.max(row)));
+    let (lo, hi) = (lo.data(), hi.data());
+    lo.iter().zip(hi).take_while(|(a, b)| a == b).count()
+}
+
 /// The rows of `memory`, as `(index into memory, row)`, in the merge's order.
 pub(super) fn sort_slices(memory: &[Slice]) -> Result<Vec<(u32, u32)>> {
     let too_many = || internal("a sort merge of more than u32::MAX rows".to_owned());
     let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
+    let shared = shared_prefix_len(memory);
     let mut keyed: Vec<(u128, u32, u32)> = Vec::with_capacity(rows);
     for (i, (s, range)) in memory.iter().enumerate() {
         let i = u32::try_from(i).map_err(|_| too_many())?;
         keyed.extend(
             s.order[range.clone()]
                 .iter()
-                .map(|&r| (wide_prefix(s.rows.row(r as usize).data()), i, r)),
+                .map(|&r| (wide_prefix(&s.rows.row(r as usize).data()[shared..]), i, r)),
         );
     }
     keyed.sort_unstable_by(|&(pa, sa, ra), &(pb, sb, rb)| {
@@ -382,15 +409,27 @@ pub(super) fn sort_slices(memory: &[Slice]) -> Result<Vec<(u32, u32)>> {
     Ok(keyed.into_iter().map(|(_, s, r)| (s, r)).collect())
 }
 
-/// A wide in-memory merge to run as parallel sorts, with its memory: `None`
-/// when there are few slices or rows for `parallelism` to pay, or no memory
-/// for the keyed rows (the loser tree needs none). The parts it sorts come
-/// from [`split_slices`].
+/// A wide in-memory merge to run in parallel.
+pub(super) struct ParallelMerge {
+    pub(super) memory: Vec<Slice>,
+    /// The parts to sort, and the output batches to gather at once.
+    pub(super) parts: usize,
+    /// Holds the keyed rows, the order and the output batches gathered ahead.
+    pub(super) scratch: Reservation,
+    /// Of `scratch`, the bytes of the output batches gathered ahead.
+    pub(super) ready_bytes: usize,
+}
+
+/// The parallel form of a wide in-memory merge, with its memory: `None` when
+/// there are few slices or rows for `parallelism` to pay, or no memory for
+/// the keyed rows and the output gathered ahead (the loser tree needs
+/// neither). The parts it sorts come from [`merge_splitters`] and [`merge_part`].
 pub(super) fn parallel_merge(
     batches: &[Arc<SortedBatch>],
     parallelism: usize,
+    batch_rows: usize,
     handle: &Arc<ConsumerHandle>,
-) -> Option<(Vec<Slice>, usize, Reservation)> {
+) -> Option<ParallelMerge> {
     let unbucketed = batches.iter().all(|s| s.bounds.len() == 2);
     if !unbucketed || batches.len() <= SORT_MIN_SLICES {
         return None;
@@ -405,29 +444,75 @@ pub(super) fn parallel_merge(
     if parts < 2 {
         return None;
     }
+    let data: usize = memory.iter().map(|(s, _)| data_bytes(&s.batch)).sum();
+    let ready_bytes = data
+        .div_ceil(rows)
+        .saturating_mul(batch_rows)
+        .saturating_mul(parts);
     let mut scratch = handle.reservation();
     scratch
-        .try_grow(rows.saturating_mul(KEYED_ROW_BYTES + ORDER_ROW_BYTES))
+        .try_grow(
+            rows.saturating_mul(KEYED_ROW_BYTES + ORDER_ROW_BYTES)
+                .saturating_add(ready_bytes),
+        )
         .ok()?;
-    Some((memory, parts, scratch))
+    Some(ParallelMerge {
+        memory,
+        parts,
+        scratch,
+        ready_bytes,
+    })
 }
 
-/// Cuts `memory` into `parts` sets of slices, each of the same length as
-/// `memory`, so that every row of one set comes before every row of the next
-/// in the merge's order: sorting the sets one by one and joining the results
-/// is the whole merge. Cuts come from samples of every slice, weighted by the
-/// rows each stands for, and fall between rows of equal keys too, since the
-/// merge's order is total.
-pub(super) fn split_slices(memory: &[Slice], parts: usize) -> Result<Vec<Vec<Slice>>> {
+/// One output batch of a sorted merge, to gather on a thread of its own.
+pub(super) struct GatherJob {
+    schema: SchemaRef,
+    sources: Arc<[Batch]>,
+    order: Arc<[(u32, u32)]>,
+    range: std::ops::Range<usize>,
+}
+
+impl GatherJob {
+    /// The output batch, reading only the sources it uses.
+    pub(super) fn run(&self) -> Result<Batch> {
+        let mut slot = vec![u32::MAX; self.sources.len()];
+        let mut used: Vec<&Batch> = Vec::new();
+        let mut indices = Vec::with_capacity(self.range.len());
+        for &(s, r) in &self.order[self.range.clone()] {
+            let at = &mut slot[s as usize];
+            if *at == u32::MAX {
+                *at = u32::try_from(used.len())
+                    .map_err(|_| internal("too many merge sources".to_owned()))?;
+                used.push(&self.sources[s as usize]);
+            }
+            indices.push((*at as usize, r as usize));
+        }
+        interleave_batches(&self.schema, &used, &indices)
+    }
+}
+
+/// The rows between `parts` parts of `memory`: `(index into memory, row)`,
+/// at most `parts - 1` of them, ascending in the merge's order, which is total,
+/// so cuts fall between rows of equal keys too. They come from about
+/// [`SAMPLES_PER_PART`] samples per part, placed across the slices so that many
+/// slices with one sample each still see their whole key range, and weighted
+/// by the rows each stands for.
+pub(super) fn merge_splitters(memory: &[Slice], parts: usize) -> Result<Vec<(u32, u32)>> {
     let too_many = || internal("a sort merge of more than u32::MAX slices".to_owned());
-    let per_slice = parts.saturating_mul(SAMPLES_PER_PART);
+    let per_slice = parts
+        .saturating_mul(SAMPLES_PER_PART)
+        .div_ceil(memory.len().max(1));
     let mut samples: Vec<((u32, u32), usize)> = Vec::new();
     for (i, (s, range)) in memory.iter().enumerate() {
-        let i = u32::try_from(i).map_err(|_| too_many())?;
+        let index = u32::try_from(i).map_err(|_| too_many())?;
         let taken = per_slice.min(range.len());
         samples.extend((0..taken).map(|j| {
-            let at = range.start + (2 * j + 1) * range.len() / (2 * taken);
-            ((i, s.order[at]), range.len() / taken)
+            // A fraction of the slice from the golden-ratio sequence, so
+            // that slices with one sample each cover the whole key range.
+            let spot = u128::from(((i + j) as u64).wrapping_mul(GOLDEN_RATIO));
+            let at = spot * range.len() as u128 >> 64;
+            let at = range.start + at as usize;
+            ((index, s.order[at]), range.len() / taken)
         }));
     }
     samples.sort_unstable_by(|a, b| merge_cmp(memory, a.0, b.0));
@@ -442,28 +527,35 @@ pub(super) fn split_slices(memory: &[Slice], parts: usize) -> Result<Vec<Vec<Sli
             splitters.push(sample);
         }
     }
-    // Where each slice's rows pass each splitter.
-    let mut out: Vec<Vec<Slice>> = Vec::with_capacity(splitters.len() + 1);
-    let mut starts: Vec<usize> = memory.iter().map(|(_, r)| r.start).collect();
-    for splitter in splitters.iter().map(Some).chain([None]) {
-        let mut part = Vec::with_capacity(memory.len());
-        for (i, ((s, range), start)) in memory.iter().zip(&mut starts).enumerate() {
-            let i = u32::try_from(i).map_err(|_| too_many())?;
-            let end = match splitter {
-                Some(&at) => {
-                    *start
-                        + s.order[*start..range.end].partition_point(|&r| {
-                            merge_cmp(memory, (i, r), at) == std::cmp::Ordering::Less
-                        })
-                }
-                None => range.end,
-            };
-            part.push((Arc::clone(s), *start..end));
-            *start = end;
-        }
-        out.push(part);
+    Ok(splitters)
+}
+
+/// The rows of `memory` from splitter `lo` (none: the first row) up to
+/// splitter `hi` (none: past the last row), as slices of the same indices:
+/// sorting the parts between consecutive splitters one by one and joining the
+/// results is the whole merge.
+pub(super) fn merge_part(
+    memory: &[Slice],
+    lo: Option<(u32, u32)>,
+    hi: Option<(u32, u32)>,
+) -> Result<Vec<Slice>> {
+    let too_many = || internal("a sort merge of more than u32::MAX slices".to_owned());
+    let mut part = Vec::with_capacity(memory.len());
+    for (i, (s, range)) in memory.iter().enumerate() {
+        let i = u32::try_from(i).map_err(|_| too_many())?;
+        let at = |start: usize, splitter: Option<(u32, u32)>| match splitter {
+            Some(to) => {
+                start
+                    + s.order[start..range.end].partition_point(|&r| {
+                        merge_cmp(memory, (i, r), to) == std::cmp::Ordering::Less
+                    })
+            }
+            None => range.end,
+        };
+        let start = if lo.is_some() { at(range.start, lo) } else { range.start };
+        part.push((Arc::clone(s), start..at(start, hi)));
     }
-    Ok(out)
+    Ok(part)
 }
 
 impl Merger {
@@ -528,20 +620,31 @@ impl Merger {
         scratch: Reservation,
     ) -> Result<Self> {
         let order = sort_slices(memory)?;
-        Ok(Self::from_order(schema, encoder, memory, order, scratch))
+        Ok(Self::from_order(
+            schema,
+            encoder,
+            memory,
+            order,
+            (scratch, 0),
+            1,
+        ))
     }
 
     /// A merge whose rows are already in output `order` (`(index into
-    /// memory, row)`), `scratch` holding its memory.
+    /// memory, row)`), gathering `gather` output batches at once. `scratch`
+    /// holds its memory, of which it keeps the order's and the given bytes.
     pub(super) fn from_order(
         schema: SchemaRef,
         encoder: Arc<KeyEncoder>,
         memory: &[Slice],
         order: Vec<(u32, u32)>,
-        mut scratch: Reservation,
+        (mut scratch, ready_bytes): (Reservation, usize),
+        gather: usize,
     ) -> Self {
-        scratch.shrink(scratch.size().saturating_sub(order.len() * ORDER_ROW_BYTES));
-        let sources = memory.iter().map(|(s, _)| s.batch.clone()).collect();
+        let keep = (order.len() * ORDER_ROW_BYTES).saturating_add(ready_bytes);
+        scratch.shrink(scratch.size().saturating_sub(keep));
+        let sources: Vec<Batch> = memory.iter().map(|(s, _)| s.batch.clone()).collect();
+        let shared: Arc<[Batch]> = sources.as_slice().into();
         Self {
             schema,
             encoder,
@@ -553,8 +656,11 @@ impl Merger {
             stamp: Vec::new(),
             generation: 0,
             sorted: Some(SortedRows {
-                order,
+                order: order.into(),
                 pos: 0,
+                sources: shared,
+                ready: VecDeque::new(),
+                gather,
                 _scratch: scratch,
             }),
         }
@@ -564,6 +670,42 @@ impl Merger {
     #[cfg(test)]
     pub(super) fn sorts_rows(&self) -> bool {
         self.sorted.is_some()
+    }
+
+    /// The next output batches of a sorted merge that gathers several at
+    /// once, none while some are still to read: run them, in any order, and
+    /// hand the results to [`Merger::gathered`] in the jobs' order.
+    pub(super) fn gather_jobs(&mut self, rows: usize) -> Vec<GatherJob> {
+        let Some(s) = self.sorted.as_mut().filter(|s| s.gather > 1) else {
+            return Vec::new();
+        };
+        if !s.ready.is_empty() {
+            return Vec::new();
+        }
+        let mut jobs = Vec::with_capacity(s.gather);
+        while jobs.len() < s.gather && s.pos < s.order.len() {
+            let end = s.order.len().min(s.pos + rows.max(1));
+            jobs.push(GatherJob {
+                schema: Arc::clone(&self.schema),
+                sources: Arc::clone(&s.sources),
+                order: Arc::clone(&s.order),
+                range: s.pos..end,
+            });
+            s.pos = end;
+        }
+        jobs
+    }
+
+    /// Takes the results of [`Merger::gather_jobs`].
+    pub(super) fn gathered(&mut self, batches: Vec<Batch>) {
+        if let Some(s) = &mut self.sorted {
+            s.ready.extend(batches);
+        }
+    }
+
+    /// The next batch gathered ahead, if any.
+    pub(super) fn pop_ready(&mut self) -> Option<Batch> {
+        self.sorted.as_mut()?.ready.pop_front()
     }
 
     /// A merge of the `order` ranges of `memory` followed by `spilled`
@@ -692,6 +834,9 @@ impl Merger {
     /// `None` once every run is exhausted. Reading a spilled run is blocking
     /// I/O.
     pub(crate) fn next(&mut self, max_rows: usize) -> Result<Option<Batch>> {
+        if let Some(batch) = self.pop_ready() {
+            return Ok(Some(batch));
+        }
         let mut out = Vec::with_capacity(max_rows.min(1 << 16));
         if let Some(sorted) = &mut self.sorted {
             let end = sorted.order.len().min(sorted.pos + max_rows.max(1));
