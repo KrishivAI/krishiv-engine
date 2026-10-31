@@ -291,22 +291,19 @@ fn the_spark_probe_rows_match() {
 #[test]
 fn shapes_that_need_unnesting_stay_refused() {
     let env = env();
-    for body in [
-        // A join condition that reads both sides.
-        "SELECT c.ck FROM c JOIN w ON c.ck = w.wk AND EXISTS (SELECT 1 FROM s WHERE s.sk = c.ck \
-         AND s.v = w.v)",
-    ] {
-        let sql = format!("{PROBE}{body}");
-        let plan =
-            krishiv_sql::parse_and_lower(&sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
-                .unwrap();
-        let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
-        assert_eq!(
-            e.error.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{body}: {e}"
-        );
-    }
+    // A join condition that reads both sides.
+    let body = "SELECT c.ck FROM c JOIN w ON c.ck = w.wk AND EXISTS (SELECT 1 FROM s WHERE \
+                s.sk = c.ck AND s.v = w.v)";
+    let sql = format!("{PROBE}{body}");
+    let plan =
+        krishiv_sql::parse_and_lower(&sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+            .unwrap();
+    let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "KRISHIV_UNSUPPORTED_FEATURE",
+        "{body}: {e}"
+    );
 }
 
 /// Re-analysing a rewritten plan changes nothing and mints no second
