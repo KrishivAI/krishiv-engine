@@ -46,7 +46,7 @@ fn size_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// of `pattern` (Spark's `StringSplit`). The analyzer fills the default
 /// `limit` of `-1` and casts the arguments, so the rule only types the
 /// result: an array of non-null strings, nullable when an argument is.
-fn split_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn split_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(
         DataType::Array(ArrayType::new(DataType::String, false).into()),
         c.any_nullable(),

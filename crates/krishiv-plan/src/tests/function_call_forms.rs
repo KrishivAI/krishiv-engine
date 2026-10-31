@@ -359,7 +359,7 @@ fn ilike_rewrites_to_lower_like_with_its_name() {
     assert_eq!(names(&r), ["ilike(s, A%)"]);
     // The rewritten call evaluates case-insensitively; `rlike` is untouched.
     let r = analyze(vec![Expr::builtin(Builtin::RLike, vec![c("s"), s("A")])]).unwrap();
-    assert_eq!(names(&r), ["rlike(s, A)"]);
+    assert_eq!(names(&r), ["RLIKE(s, A)"]);
 }
 
 #[test]

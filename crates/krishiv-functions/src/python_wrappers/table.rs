@@ -537,6 +537,10 @@ pub(super) fn rows() -> Vec<Row> {
             "regexp_extract",
             "str: ColumnOrName, pattern: str, idx: int",
         ),
+        Row::new(
+            "regexp_extract_all",
+            "str: ColumnOrName, regexp: ColumnOrName, idx: int | Column = None",
+        ),
         Row::new("array_size", "col: ColumnOrName"),
         Row::new("array_append", "col: ColumnOrName, value: Any"),
         Row::new("array_prepend", "col: ColumnOrName, value: Any"),

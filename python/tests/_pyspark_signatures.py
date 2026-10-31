@@ -224,6 +224,7 @@ PYSPARK_SIGNATURES = {
     "regexp": "str, regexp",
     "regexp_count": "str, regexp",
     "regexp_extract": "str, pattern, idx",
+    "regexp_extract_all": "str, regexp, idx=None",
     "regexp_instr": "str, regexp, idx=None",
     "regexp_like": "str, regexp",
     "regexp_replace": "string, pattern, replacement",

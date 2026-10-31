@@ -67,6 +67,7 @@ pub(super) const NAMES: &[&str] = &[
     "regexp",
     "regexp_like",
     "regexp_extract",
+    "regexp_extract_all",
     "regexp_count",
     "regexp_instr",
     "regexp_substr",
@@ -105,6 +106,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         ("regexp_extract", 2 | 3) if indexed => {
             let with_idx = types.len() == 3;
             Binding::new(DataType::Utf8, move |x: &Inputs<'_>| extract(x, with_idx))
+        }
+        ("regexp_extract_all", 2 | 3) if indexed => {
+            let with_idx = types.len() == 3;
+            Binding::new(
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8View, false))),
+                move |x: &Inputs<'_>| extract_all_column(x, with_idx),
+            )
         }
         ("regexp_count", 2) if strings(2) => {
             Binding::new(DataType::Int32, |x: &Inputs<'_>| count(x))
@@ -368,6 +376,50 @@ fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
         out.push(Some(text));
     }
     Ok(Arc::new(StringArray::from(out)) as ArrayRef)
+}
+
+/// `regexp_extract_all(str, regexp[, idx])` over a batch: group `idx` of
+/// every match, an `array<string>` (NULL in, NULL out). The list holds
+/// non-nullable `Utf8View` items under the field `element`, as for `split`.
+fn extract_all_column(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
+    const FUNCTION: &str = "`regexp_extract_all`";
+    let strings = x.strings(0)?;
+    let patterns = x.str(1)?;
+    let idxs = with_idx.then(|| x.int(2)).transpose()?;
+    let mut cache = Cache::default();
+    let item = Field::new("element", DataType::Utf8View, false);
+    let mut builder = ListBuilder::new(StringViewBuilder::new()).with_field(Arc::new(item));
+    let mut total = 0usize;
+    for row in 0..x.rows() {
+        let (Some(source), Some(pattern)) = (
+            strings.is_valid(row).then(|| strings.value(row)),
+            operand(&patterns, row),
+        ) else {
+            builder.append(false);
+            continue;
+        };
+        let Some(idx) = idx_at(&idxs, row).or(if with_idx { None } else { Some(1) }) else {
+            builder.append(false);
+            continue;
+        };
+        let compiled = cache.compiled(pattern, FUNCTION)?;
+        let pieces = extract_all(compiled, source, idx)?;
+        // Every match adds at most its text and an offset; bound the batch
+        // as `split` does.
+        total = total.saturating_add(source.len());
+        if total.saturating_add(pieces.len()) > i32::MAX as usize {
+            return Err(UnableToAcquireMemory {
+                requested_bytes: total.to_string(),
+                received_bytes: "0".to_owned(),
+            }
+            .into());
+        }
+        for p in &pieces {
+            builder.values().append_value(p);
+        }
+        builder.append(true);
+    }
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 /// `regexp_count(str, regexp)`: the number of `find` iterations.
