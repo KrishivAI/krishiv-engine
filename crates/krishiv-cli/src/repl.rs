@@ -43,7 +43,8 @@ pub(crate) struct Repl {
 }
 
 impl Repl {
-    /// Default state: timer off, table output.
+    /// Default state: timer off, table output (tests; the REPL starts from the flags).
+    #[cfg(test)]
     pub(crate) fn new(max_rows: usize) -> Self {
         Self {
             timer: false,
