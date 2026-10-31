@@ -53,6 +53,34 @@ pub(crate) struct ViewDef {
     /// read projects the stored columns from the query's output by these names, so a base table that gained
     /// columns does not change the view (Spark's schema compensation).
     pub(crate) query_columns: Vec<String>,
+    /// `WITH SCHEMA ...` as stored; `None` for a view created while `spark.sql.legacy.viewSchemaBindingMode` was
+    /// off (Spark then stores no mode, and the view reads as `BINDING` once the feature is on).
+    pub(crate) schema_mode: Option<ViewSchemaMode>,
+}
+
+/// How a permanent view follows the schema of its query (Spark's `ViewSchemaMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewSchemaMode {
+    /// Columns are found by name and only up-cast to the stored types.
+    Binding,
+    /// Columns are found by name and cast to the stored types with ANSI casts.
+    Compensation,
+    /// Columns are found by name and keep the query's types, which the view stores.
+    TypeEvolution,
+    /// The view is the query's output, whose schema the view stores.
+    Evolution,
+}
+
+impl ViewSchemaMode {
+    /// The mode as `DESCRIBE` and `SHOW CREATE TABLE` print it.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Binding => "BINDING",
+            Self::Compensation => "COMPENSATION",
+            Self::TypeEvolution => "TYPE EVOLUTION",
+            Self::Evolution => "EVOLUTION",
+        }
+    }
 }
 
 /// A table in the catalog.

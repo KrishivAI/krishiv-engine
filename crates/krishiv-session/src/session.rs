@@ -1128,6 +1128,7 @@ impl Session {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
+                binding_enabled: crate::view_schema::binding_enabled(&env.config),
             }),
         )?;
         // A permanent view is inlined before binding, so the analyzer never asks the
@@ -1137,6 +1138,9 @@ impl Session {
         if let Some(e) = expansion.deferred {
             return Err(e);
         }
+        let synced = self
+            .check_stored_views(&expansion.stored_reads, env)
+            .await?;
         let plan = expansion.plan;
         let plan = Plan::try_new(plan)?;
         let analyzed = DefaultAnalyzer
@@ -1153,6 +1157,11 @@ impl Session {
             });
         // Analysis checks every read: its denials are the reads' denials.
         let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
+        // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
+        // concurrent change of the view wins (its entry is no longer the one the read found).
+        for (found, changed) in synced {
+            crate::store::CatalogStore::replace_table(&self.state.catalog.store, &found, changed);
+        }
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
             if !analyzed.securables.iter().any(|s| s.securable == securable) {
@@ -1166,6 +1175,39 @@ impl Session {
             }
         }
         Ok(analyzed)
+    }
+
+    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
+    /// views first. Returns the evolved entries to store once the whole query analyzed. A query that does not
+    /// analyze alone is left to the analysis of the whole query, which reports it as it would without views.
+    ///
+    /// # Errors
+    /// What [`crate::view_schema::check_read`] raises.
+    async fn check_stored_views(
+        &self,
+        reads: &[crate::view_schema::StoredRead],
+        env: &QueryEnv,
+    ) -> Result<Vec<(Arc<crate::store::CatalogTable>, crate::store::CatalogTable)>, KrishivError>
+    {
+        let compensation = crate::view_schema::compensation(&env.config);
+        let mut synced = Vec::new();
+        for read in reads {
+            let Ok(plan) = Plan::try_new(Arc::clone(&read.query)) else {
+                break;
+            };
+            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
+                break;
+            };
+            if let Some(changed) = crate::view_schema::check_read(
+                read,
+                &analyzed,
+                env.analysis.conf.case_sensitive,
+                compensation,
+            )? {
+                synced.push((Arc::clone(&read.entry), changed));
+            }
+        }
+        Ok(synced)
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -2044,7 +2086,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 10] = [
+const PARSER_KEYS: [&str; 11] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -2055,6 +2097,7 @@ const PARSER_KEYS: [&str; 10] = [
     "spark.sql.legacy.consecutiveStringLiterals.enabled",
     "spark.sql.sources.bucketing.maxBuckets",
     "spark.sql.parser.singleCharacterPipeOperator.enabled",
+    "spark.sql.legacy.viewSchemaBindingMode",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
