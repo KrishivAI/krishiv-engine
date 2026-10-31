@@ -148,6 +148,31 @@ pub fn xxh64(bytes: &[u8]) -> u64 {
     Xxh64::hash_bytes(bytes, 0).cast_unsigned()
 }
 
+/// XXH64 of `bytes` with an explicit seed (Spark's
+/// `HyperLogLogPlusPlusHelper` hashes with seed 42), signed as Spark's
+/// `XxHash64` keeps it.
+#[inline]
+#[must_use]
+pub fn xxh64_seed(bytes: &[u8], seed: i64) -> i64 {
+    Xxh64::hash_bytes(bytes, seed)
+}
+
+/// XXH64 of the 4 little-endian bytes of `v` with an explicit seed (as
+/// [`xxh64_seed`] of the bytes), signed.
+#[inline]
+#[must_use]
+pub fn xxh64_seed_int(v: i32, seed: i64) -> i64 {
+    Xxh64::hash_int(v, seed)
+}
+
+/// XXH64 of the 8 little-endian bytes of `v` with an explicit seed (as
+/// [`xxh64_seed`] of the bytes), signed.
+#[inline]
+#[must_use]
+pub fn xxh64_seed_long(v: i64, seed: i64) -> i64 {
+    Xxh64::hash_long(v, seed)
+}
+
 /// One step of the fold over several key columns: `mix(h ^ h_col)`, a
 /// folded multiply (the 128-bit product's halves xor-ed).
 #[inline]

@@ -158,6 +158,15 @@ fn memory_entries_parse_and_default() {
 }
 
 #[test]
+fn the_exec_seed_is_unset_until_given() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&EXEC_SEED), None);
+    c.set("krishiv.exec.seed", "-7").unwrap();
+    assert_eq!(c.get(&EXEC_SEED).and_then(ConfigValue::as_int), Some(-7));
+    assert!(c.set("krishiv.exec.seed", "abc").is_err());
+}
+
+#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {

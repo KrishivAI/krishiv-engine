@@ -648,7 +648,7 @@ fn integer_and_float_inputs_are_read_as_doubles() {
 
 #[test]
 fn state_columns_are_sparks_buffers() {
-    let names = |f| -> Vec<String> {
+    let names = |f: &AggregateFunction| -> Vec<String> {
         expr(f)
             .state_fields()
             .unwrap()

@@ -20,6 +20,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    (
+        "timestampadd",
+        "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
+    ),
+    (
+        "timestampdiff",
+        "parsed from `TIMESTAMPDIFF(unit, a, b)`; PySpark names it `timestamp_diff`",
+    ),
     ("mod", "no PySpark function"),
     ("any", "no PySpark function"),
     ("any_value", "no PySpark function"),
@@ -34,6 +42,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("luhn_check", "no PySpark function"),
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
+    (
+        "percentile_cont",
+        "ordered-set aggregate: SQL-only, needs WITHIN GROUP (ORDER BY ...)",
+    ),
+    (
+        "percentile_disc",
+        "ordered-set aggregate: SQL-only, needs WITHIN GROUP (ORDER BY ...)",
+    ),
     ("some", "no PySpark function"),
     ("vector_cosine_similarity", "no PySpark function in 4.2"),
     ("vector_inner_product", "no PySpark function in 4.2"),
@@ -436,6 +452,23 @@ pub(super) fn rows() -> Vec<Row> {
             "assert_true",
             "col: ColumnOrName, errMsg: Column | str = None",
         ),
+        Row::new("median", C),
+        Row::new(
+            "percentile",
+            "col: ColumnOrName, percentage: Column | float, frequency: Column | int = 1",
+        ),
+        Row::new(
+            "percentile_approx",
+            "col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000",
+        ),
+        Row::new(
+            "approx_percentile",
+            "col: ColumnOrName, percentage: Column | float, accuracy: Column | int = 10000",
+        ),
+        Row::new(
+            "approx_count_distinct",
+            "col: ColumnOrName, rsd: Column | float = None",
+        ),
         Row::new("raise_error", "errMsg: Column | str"),
         Row::new("create_map", "*cols: ColumnOrName").to("map"),
         Row::new("map_contains_key", "col: ColumnOrName, value: Any"),
@@ -619,6 +652,30 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("to_date", "col: ColumnOrName, format: str = None"),
         Row::new("try_to_date", "col: ColumnOrName, format: str = None"),
         Row::new("to_timestamp", "col: ColumnOrName, format: str = None"),
+        Row::new(
+            "make_timestamp",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "make_timestamp_ltz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "try_make_timestamp",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "try_make_timestamp_ltz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName = None",
+        ),
+        Row::new(
+            "make_timestamp_ntz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName",
+        ),
+        Row::new(
+            "try_make_timestamp_ntz",
+            "years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName",
+        ),
         Row::new(
             "try_to_timestamp",
             "col: ColumnOrName, format: ColumnOrName = None",

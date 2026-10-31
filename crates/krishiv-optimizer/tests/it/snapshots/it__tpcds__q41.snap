@@ -1,0 +1,20 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [i_product_name#21 ASC NULLS FIRST], true
+   +- Aggregate [i_product_name#21], [i_product_name#21]
+      +- Project [i_product_name#21]
+         +- Join Inner, (i_manufact#14 == i_manufact#36)
+            :- Project [i_manufact#14, i_product_name#21]
+            :  +- Filter ((i_manufact_id#13 >= 738) and (i_manufact_id#13 <= 778))
+            :     +- Scan spark_catalog.default.item [i_category#12, i_manufact_id#13, i_manufact#14, i_size#15, i_color#17, i_units#18, i_product_name#21] (shared #1)
+            +- Project [i_manufact#36]
+               +- Filter (CASE WHEN isnull(item_cnt#44) THEN 0L ELSE item_cnt#44 END > 0L)
+                  +- Aggregate [i_manufact#36], [count(1) AS item_cnt#44, i_manufact#36]
+                     +- Project [i_manufact#36]
+                        +- Shift +22
+                           +- Filter (((((krishiv_cse_0#4294967296 and ((i_color#17 == 'powder') or (i_color#17 == 'khaki'))) and (((i_units#18 == 'Ounce') or (i_units#18 == 'Oz')) and ((i_size#15 == 'medium') or (i_size#15 == 'extra large')))) or ((krishiv_cse_0#4294967296 and ((i_color#17 == 'brown') or (i_color#17 == 'honeydew'))) and (((i_units#18 == 'Bunch') or (i_units#18 == 'Ton')) and ((i_size#15 == 'N/A') or (i_size#15 == 'small'))))) or ((((i_category#12 == 'Men') and ((i_color#17 == 'floral') or (i_color#17 == 'deep'))) and (((i_units#18 == 'N/A') or (i_units#18 == 'Dozen')) and (i_size#15 == 'petite'))) or (((i_category#12 == 'Men') and ((i_color#17 == 'light') or (i_color#17 == 'cornflower'))) and (((i_units#18 == 'Box') or (i_units#18 == 'Pound')) and ((i_size#15 == 'medium') or (i_size#15 == 'extra large')))))) or ((((krishiv_cse_0#4294967296 and ((i_color#17 == 'midnight') or (i_color#17 == 'snow'))) and (((i_units#18 == 'Pallet') or (i_units#18 == 'Gross')) and ((i_size#15 == 'medium') or (i_size#15 == 'extra large')))) or ((krishiv_cse_0#4294967296 and ((i_color#17 == 'cyan') or (i_color#17 == 'papaya'))) and (((i_units#18 == 'Cup') or (i_units#18 == 'Dram')) and ((i_size#15 == 'N/A') or (i_size#15 == 'small'))))) or ((((i_category#12 == 'Men') and ((i_color#17 == 'orange') or (i_color#17 == 'frosted'))) and (((i_units#18 == 'Each') or (i_units#18 == 'Tbl')) and (i_size#15 == 'petite'))) or (((i_category#12 == 'Men') and ((i_color#17 == 'forest') or (i_color#17 == 'ghost'))) and (((i_units#18 == 'Lb') or (i_units#18 == 'Bundle')) and ((i_size#15 == 'medium') or (i_size#15 == 'extra large')))))))
+                              +- Project [i_category#12, i_manufact_id#13, i_manufact#14, i_size#15, i_color#17, i_units#18, i_product_name#21, (i_category#12 == 'Women') AS krishiv_cse_0#4294967296]
+                                 +- Shared #1, printed above

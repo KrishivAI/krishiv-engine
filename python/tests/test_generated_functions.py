@@ -132,7 +132,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 COLUMN_ANNOTATIONS = {"ColumnOrName", "Column", "ColumnOrName | float", "ColumnOrName | int"}
-LITERALS = {"int": 7, "str": "s_x", "bool": True, "Any": 3}
+LITERALS = {"int": 7, "str": "s_x", "bool": True, "Any": 3, "float": 0.5}
 
 
 def _sample(name: str, p: inspect.Parameter) -> tuple[list[Any], list[tuple[str, Any]]]:
@@ -261,6 +261,10 @@ PYSPARK_CALLS = [
     ),
     (lambda: F.make_date("y", "m", "d"), ("call", "make_date", (("col", "y"), ("col", "m"), ("col", "d")))),
     (
+        lambda: F.make_timestamp("y", "mo", "d", "h", "mi", "s"),
+        ("call", "make_timestamp", tuple(("col", c) for c in ("y", "mo", "d", "h", "mi", "s"))),
+    ),
+    (
         lambda: F.convert_timezone(F.lit("UTC"), F.lit("Asia/Hong_Kong"), "ts"),
         ("call", "convert_timezone", (("lit", "UTC"), ("lit", "Asia/Hong_Kong"), ("col", "ts"))),
     ),
@@ -287,6 +291,33 @@ PYSPARK_CALLS = [
     (lambda: F.array_insert("a", "p", 1), ("call", "array_insert", (("col", "a"), ("col", "p"), ("lit", 1)))),
     (lambda: F.try_element_at("a", "k"), ("call", "try_element_at", (("col", "a"), ("col", "k")))),
     (lambda: F.element_at("a", "k"), ("call", "element_at", (("col", "a"), ("lit", "k")))),
+    # The percentile family sends its defaulted frequency and accuracy as PySpark does;
+    # `approx_count_distinct` leaves an omitted `rsd` out.
+    (lambda: F.median("v"), ("call", "median", (("col", "v"),))),
+    (lambda: F.percentile("v", 0.5), ("call", "percentile", (("col", "v"), ("lit", 0.5), ("lit", 1)))),
+    (
+        lambda: F.percentile("v", 0.5, 3),
+        ("call", "percentile", (("col", "v"), ("lit", 0.5), ("lit", 3))),
+    ),
+    (
+        lambda: F.percentile_approx("v", 0.5),
+        ("call", "percentile_approx", (("col", "v"), ("lit", 0.5), ("lit", 10000))),
+    ),
+    (
+        lambda: F.approx_percentile("v", 0.9, 100),
+        ("call", "approx_percentile", (("col", "v"), ("lit", 0.9), ("lit", 100))),
+    ),
+    (lambda: F.approx_count_distinct("v"), ("call", "approx_count_distinct", (("col", "v"),))),
+    # `percentage` and `rsd` are literals as PySpark writes `lit(...)`; a Column stays a column.
+    (
+        lambda: F.percentile_approx("v", F.col("p")),
+        ("call", "percentile_approx", (("col", "v"), ("col", "p"), ("lit", 10000))),
+    ),
+    (lambda: F.approx_count_distinct("v", F.col("r")), ("call", "approx_count_distinct", (("col", "v"), ("col", "r")))),
+    (
+        lambda: F.approx_count_distinct("v", 0.05),
+        ("call", "approx_count_distinct", (("col", "v"), ("lit", 0.05))),
+    ),
 ]
 
 

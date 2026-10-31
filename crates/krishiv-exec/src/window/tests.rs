@@ -516,7 +516,11 @@ fn reference(
                         | AggregateFunction::CollectList
                         | AggregateFunction::CollectSet
                         | AggregateFunction::VectorSum
-                        | AggregateFunction::VectorAvg => {
+                        | AggregateFunction::VectorAvg
+                        | AggregateFunction::Percentile { .. }
+                        | AggregateFunction::PercentileApprox { .. }
+                        | AggregateFunction::PercentileDisc { .. }
+                        | AggregateFunction::ApproxCountDistinct { .. } => {
                             unreachable!("no window test aggregates with this function")
                         }
                     }
@@ -1553,6 +1557,7 @@ async fn exact_and_string_frames_from_disk() {
     let mut functions = Vec::new();
     for (k, frame) in frames.iter().enumerate() {
         for function in [Sum, Avg, Min, Max] {
+            let name = format!("d{k}{function:?}");
             functions.push(WindowFunctionPlan {
                 function: WindowFunction::Aggregate(AggregateExpr {
                     function: function.clone(),
@@ -1564,7 +1569,7 @@ async fn exact_and_string_frames_from_disk() {
                 }),
                 frame: *frame,
                 filter: None,
-                name: format!("d{k}{function:?}"),
+                name,
             });
         }
     }
