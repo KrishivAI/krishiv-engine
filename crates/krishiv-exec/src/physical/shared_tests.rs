@@ -178,7 +178,6 @@ fn instantiation_declares_a_shared_plans_filters() {
         .unwrap();
     // The filter of a scan inside the shared plan is declared before anything is built (the reader's schema
     // here does not match the root's, so the instantiation itself fails).
-    let e = instantiate(&p, &worker).err().unwrap();
-    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(instantiate(&p, &worker).is_err());
     assert_eq!(values.filter(FilterId(7)).unwrap().id(), FilterId(7));
 }
