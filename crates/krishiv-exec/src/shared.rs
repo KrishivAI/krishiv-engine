@@ -276,7 +276,9 @@ impl Sink for SharedSink {
                     let (hook, consumer) = OutputSpill::register(ctx, "SharedPlan output");
                     for s in &mut segments {
                         if let Segment::Memory { reservation, .. } = s {
-                            reservation.transfer_to(&consumer).map_err(KrishivError::from)?;
+                            reservation
+                                .transfer_to(&consumer)
+                                .map_err(KrishivError::from)?;
                         }
                     }
                     Some((hook, consumer, scope.clone()))
@@ -329,7 +331,10 @@ impl Sink for SharedSink {
                         query.check_cancelled()?;
                         writer.write(b).map_err(KrishivError::from)?;
                     }
-                    writer.finish().map_err(KrishivError::from).map_err(Into::into)
+                    writer
+                        .finish()
+                        .map_err(KrishivError::from)
+                        .map_err(Into::into)
                 })
                 .await?;
             let freed = l.reservation.size();
@@ -399,8 +404,9 @@ impl Source for SharedSource {
     }
 
     fn max_parallelism(&self, global: &GlobalState) -> usize {
-        global_ref::<ReaderGlobal>(global, "SharedSource")
-            .map_or(1, |g| usize::try_from(g.batches).unwrap_or(usize::MAX).max(1))
+        global_ref::<ReaderGlobal>(global, "SharedSource").map_or(1, |g| {
+            usize::try_from(g.batches).unwrap_or(usize::MAX).max(1)
+        })
     }
 
     fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
@@ -436,9 +442,8 @@ impl Source for SharedSource {
                             let mut reader = match reader {
                                 Some(r) => r,
                                 None => {
-                                    let mut r = file
-                                        .reader(reservation)
-                                        .map_err(KrishivError::from)?;
+                                    let mut r =
+                                        file.reader(reservation).map_err(KrishivError::from)?;
                                     // A segment spilled under this reader
                                     // continues where it was.
                                     for _ in 0..want {
@@ -458,7 +463,9 @@ impl Source for SharedSource {
                             // The file ended early: a short result is
                             // never returned.
                             None => {
-                                return Err(internal("a shared plan's spill file ended early".to_owned()));
+                                return Err(internal(
+                                    "a shared plan's spill file ended early".to_owned(),
+                                ));
                             }
                         }
                     }

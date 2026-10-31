@@ -73,6 +73,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &METRICS_ENABLED,
     &AVRO_COMPRESSION_CODEC,
     &AVRO_DATETIME_REBASE_MODE_IN_READ,
+    &SHARE_CTE_INSTANCES,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -224,6 +225,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.statisticalAggregate",
         &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
+        "krishiv.sql.optimizer.shareCteInstances",
+        &SHARE_CTE_INSTANCES,
     ),
     (
         "spark.sql.avro.datetimeRebaseModeInRead",
@@ -1092,4 +1097,20 @@ pub static PARTITION_OVERWRITE_MODE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.sources.partitionOverwriteMode"),
+};
+
+/// `krishiv.sql.optimizer.shareCteInstances`.
+pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.optimizer.shareCteInstances",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Compute a deterministic CTE body once per query when two or more references to it are \
+          identical after optimization and the body holds a pipeline breaker (an aggregate, join, \
+          window, sort, distinct or set operation); every reference reads the one result. A group \
+          is kept as separate copies when a runtime filter reaches one of its members. Results \
+          are the same either way. Nondeterministic CTE bodies referenced twice or more are \
+          always computed once, as Spark does: this switch does not affect them.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
 };

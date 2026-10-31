@@ -61,12 +61,15 @@ mod project;
 mod prune;
 mod pushdown;
 mod restrict;
+mod share_cte;
 mod stats;
 mod sum_rewrite;
 
 use std::sync::Arc;
 
-use krishiv_common::config::{ANSI_ENABLED, Config, SESSION_TIME_ZONE};
+use krishiv_common::config::{
+    ANSI_ENABLED, Config, ConfigValue, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+};
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
     AttrId, BoundColumn, Expr, ExprNode, Grouping, LogicalPlan, Origin, Plan, PlanNode,
@@ -411,6 +414,20 @@ fn run(
             } else {
                 batch(pruned, "Tidy", &mut t)?
             }
+        } else {
+            root
+        };
+        // Identical deterministic CTE instances share one computation
+        // (P2-T198): only where a session configuration is given, and the
+        // switch is on.
+        let share = udfs.is_some_and(|(_, config)| {
+            config
+                .get(&SHARE_CTE_INSTANCES)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(true)
+        });
+        let root = if share {
+            t.once("ShareCte", &root, |r| share_cte::share(Arc::clone(r)))?
         } else {
             root
         };

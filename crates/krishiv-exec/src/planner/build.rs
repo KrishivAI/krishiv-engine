@@ -42,8 +42,8 @@ use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op, filter_op, project_op,
-    replicate_op, scan_filter, sort_op, top_n_op,
+    SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op,
+    filter_op, project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
 use crate::values::{LocalValues, ValueService};
 
@@ -68,31 +68,63 @@ impl PhysicalPlanner for DefaultPlanner {
         // Planning recurses once per relation; plans nest up to
         // `krishiv_plan::MAX_DEPTH` levels.
         let run = || {
-            let mut planner = Planner::new(cx, root);
-            let planned = planner.plan(root)?;
-            let mut planned = select(planned, &output, "Project")?;
-            let mut shared = std::mem::take(&mut planner.shared);
-            attach_runtime_filters(
-                &mut planner.scan_filters,
-                shared
-                    .iter_mut()
-                    .map(|s| &mut s.plan)
-                    .chain(std::iter::once(&mut planned.node)),
-            );
-            Ok::<_, KrishivError>(
-                PhysicalPlan::new(
-                    planned.node,
-                    planned.schema,
-                    planned.explain,
-                    planner.env.to_plan(),
-                )
-                .with_shared(shared)?
-                .with_warnings(planner.warnings),
-            )
+            // First as a plan with its deterministic shared definitions
+            // inlined per reference (as before); the groups no runtime
+            // filter reaches are then planned shared (design P2-T198 3.1).
+            let (plan, shareable) = plan_once(cx, root, &output, None)?;
+            if shareable.is_empty() {
+                return Ok::<_, KrishivError>(plan);
+            }
+            Ok(plan_once(cx, root, &output, Some(shareable))?.0)
         };
         krishiv_common::stack::on_big_stack(run)
             .ok_or_else(|| internal("cannot start a planner thread"))?
     }
+}
+
+/// One planning pass; the definitions of `share` are shared. Also returns the
+/// deterministic groups a second pass may share: two or more references whose
+/// copies no runtime filter reaches.
+fn plan_once(
+    cx: &PlanningContext,
+    root: &Arc<LogicalPlan>,
+    output: &[BoundColumn],
+    share: Option<HashSet<Vec<AttrId>>>,
+) -> Result<(PhysicalPlan, HashSet<Vec<AttrId>>)> {
+    let mut planner = Planner::new(cx, root);
+    planner.share_groups = share;
+    let planned = planner.plan(root)?;
+    let mut planned = select(planned, output, "Project")?;
+    // A group is shareable when none of its copies' scans receives a filter.
+    let filtered: HashSet<u64> = planner.scan_filters.keys().map(|s| s.0).collect();
+    let shareable: HashSet<Vec<AttrId>> = planner
+        .copies
+        .iter()
+        .filter(|(_, copies)| {
+            copies.len() >= 2
+                && copies
+                    .iter()
+                    .all(|r| !filtered.iter().any(|f| r.contains(f)))
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    let mut shared = std::mem::take(&mut planner.shared);
+    attach_runtime_filters(
+        &mut planner.scan_filters,
+        shared
+            .iter_mut()
+            .map(|s| &mut s.plan)
+            .chain(std::iter::once(&mut planned.node)),
+    );
+    let plan = PhysicalPlan::new(
+        planned.node,
+        planned.schema,
+        planned.explain,
+        planner.env.to_plan(),
+    )
+    .with_shared(shared)?
+    .with_warnings(planner.warnings);
+    Ok((plan, shareable))
 }
 
 /// Hands each scan under `roots` the runtime filters joins publish to it.
@@ -203,6 +235,11 @@ pub(crate) struct Planner<'a> {
     shared: Vec<SharedPlan>,
     shared_ids: HashMap<Vec<AttrId>, SharedId>,
     shared_schemas: HashMap<SharedId, SchemaRef>,
+    /// The deterministic definitions to share (design P2-T198 kind 2); `None` shares none of them, which is how
+    /// the first pass plans.
+    share_groups: Option<HashSet<Vec<AttrId>>>,
+    /// The scans of each unshared deterministic reference's copy, by definition.
+    copies: HashMap<Vec<AttrId>, Vec<std::ops::Range<u64>>>,
     /// The join hints a join read, by address.
     pub(crate) consumed_hints: HashSet<usize>,
     next_id: u64,
@@ -239,6 +276,8 @@ impl<'a> Planner<'a> {
             shared: Vec::new(),
             shared_ids: HashMap::new(),
             shared_schemas: HashMap::new(),
+            share_groups: None,
+            copies: HashMap::new(),
             consumed_hints: HashSet::new(),
             next_id,
             rf: Settings::new(&cx.config),
@@ -380,26 +419,51 @@ impl<'a> Planner<'a> {
                 self.plan(input)
             }
             PlanNode::CteRef(r) => {
-                // A reference that survived InlineCTE reads the definition's rows, computed once per query
-                // (design P2-T198): the same rows and values for every reader.
-                let (id, schema) = self.shared_plan(&r.source, &r.name)?;
-                let layout: Vec<AttrId> = r.output.iter().map(|c| c.id).collect();
-                let explain = ExplainNode::leaf(
-                    "SharedRead",
-                    &format!("#{} {} [{}]", id.0, r.name, columns(&r.output)),
-                );
-                // No runtime filter reaches a shared plan: it is computed once for every reader.
-                Ok(Planned {
-                    node: PhysNode::SharedRead {
-                        id,
-                        layout: layout.clone(),
-                    },
-                    schema,
-                    layout,
-                    explain,
-                    sites: Vec::new(),
-                    placement: Placement::Unknown,
-                })
+                let def = self
+                    .ctes
+                    .get(&r.source)
+                    .cloned()
+                    .ok_or_else(|| internal(&format!("CTE {} is not in scope", r.name)))?;
+                // A deterministic definition is shared only where the first pass found no runtime filter
+                // reaching a reference; a nondeterministic one always is (design P2-T198).
+                let share = !krishiv_optimizer::plan_is_deterministic(&def)
+                    || self
+                        .share_groups
+                        .as_ref()
+                        .is_some_and(|g| g.contains(&r.source));
+                if share {
+                    return self.shared_read(r);
+                }
+                let scans_from = self.next_scan;
+                let planned = self.plan(&def)?;
+                self.copies
+                    .entry(r.source.clone())
+                    .or_default()
+                    .push(scans_from..self.next_scan);
+                // Exactly the definition's columns, under this reference's
+                // attributes.
+                let source: Vec<BoundColumn> = r
+                    .source
+                    .iter()
+                    .zip(&r.output)
+                    .map(|(s, o)| BoundColumn {
+                        id: *s,
+                        ..o.clone()
+                    })
+                    .collect();
+                let mut planned = select(planned, &source, "CteRef")?;
+                planned.layout = r.output.iter().map(|c| c.id).collect();
+                planned.placement = std::mem::take(&mut planned.placement).map_attrs(|a| {
+                    r.source
+                        .iter()
+                        .position(|s| *s == a)
+                        .and_then(|i| r.output.get(i))
+                        .map(|o| o.id)
+                });
+                // Each unshared reference is planned anew: its scans are its own.
+                planned.sites = renamed(&planned.sites, &r.source, &planned.layout);
+                planned.explain.detail = format!("{} [{}]", r.name, columns(&r.output));
+                Ok(planned)
             }
             PlanNode::Limit { input, limit } => {
                 let n = limit_value(limit)?;
@@ -469,6 +533,28 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// A reference read from the definition's shared plan.
+    fn shared_read(&mut self, r: &krishiv_plan::CteRef) -> Result<Planned> {
+        let (id, schema) = self.shared_plan(&r.source, &r.name)?;
+        let layout: Vec<AttrId> = r.output.iter().map(|c| c.id).collect();
+        let explain = ExplainNode::leaf(
+            "SharedRead",
+            &format!("#{} {} [{}]", id.0, r.name, columns(&r.output)),
+        );
+        // No runtime filter reaches a shared plan: it is computed once for every reader.
+        Ok(Planned {
+            node: PhysNode::SharedRead {
+                id,
+                layout: layout.clone(),
+            },
+            schema,
+            layout,
+            explain,
+            sites: Vec::new(),
+            placement: Placement::Unknown,
+        })
+    }
+
     /// The number and schema of the shared plan of the definition whose output attributes are `source`,
     /// planned on first use (so inner shared plans come first).
     fn shared_plan(&mut self, source: &[AttrId], name: &str) -> Result<(SharedId, SchemaRef)> {
@@ -494,7 +580,9 @@ impl<'a> Planner<'a> {
         // Exactly the definition's columns, in its order.
         let planned = select(planned, &output, "CteRef")?;
         let ordered = ends_in_sort(&planned.node);
-        let id = SharedId(u64::try_from(self.shared.len()).map_err(|_| internal("too many shared plans"))?);
+        let id = SharedId(
+            u64::try_from(self.shared.len()).map_err(|_| internal("too many shared plans"))?,
+        );
         let schema = Arc::clone(&planned.schema);
         self.shared.push(SharedPlan {
             id,

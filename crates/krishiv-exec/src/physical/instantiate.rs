@@ -69,10 +69,10 @@ use crate::operators::{
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
-use crate::shared::{SharedSink, SharedSource};
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, OrderedNode, SourceNode};
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
+use crate::shared::{SharedSink, SharedSource};
 use crate::values::{
     BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
 };
