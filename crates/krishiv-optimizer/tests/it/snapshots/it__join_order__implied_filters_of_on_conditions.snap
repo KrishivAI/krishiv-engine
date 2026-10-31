@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/join_order.rs
-assertion_line: 465
 expression: optimized.root().to_string()
 ---
 Aggregate [], [count(1) AS count(1)#12, sum(ws_quantity#2) AS sum(ws_quantity)#13, sum(wr_fee#11) AS sum(wr_fee)#14]
@@ -11,6 +10,6 @@ Aggregate [], [count(1) AS count(1)#12, sum(ws_quantity#2) AS sum(ws_quantity)#1
       +- Project [wr_item_sk#8, wr_order_number#9, wr_fee#11, ca_state#6, ca_country#7]
          +- Join Inner, (ca_address_sk#5 == wr_refunded_addr_sk#10)
             :- Scan spark_catalog.default.web_returns [wr_item_sk#8, wr_order_number#9, wr_refunded_addr_sk#10, wr_fee#11]
-            +- Filter ((cse_15#15 and (ca_state#6 IN ('IN', 'OH', 'NJ'))) or (cse_15#15 and (ca_state#6 IN ('WI', 'CT', 'KY'))))
-               +- Project [ca_address_sk#5, ca_state#6, ca_country#7, (ca_country#7 == 'United States') AS cse_15#15]
+            +- Filter ((krishiv_cse_0#4294967296 and (ca_state#6 IN ('IN', 'OH', 'NJ'))) or (krishiv_cse_0#4294967296 and (ca_state#6 IN ('WI', 'CT', 'KY'))))
+               +- Project [ca_address_sk#5, ca_state#6, ca_country#7, (ca_country#7 == 'United States') AS krishiv_cse_0#4294967296]
                   +- Scan spark_catalog.default.customer_address [ca_address_sk#5, ca_state#6, ca_country#7]
