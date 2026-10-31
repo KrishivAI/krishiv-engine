@@ -3,7 +3,7 @@
 //! character (a code point, newlines included), and `escape` makes the next
 //! character literal (only `%`, `_` and the escape itself may follow it).
 
-use arrow_array::{BooleanArray, OffsetSizeTrait};
+use arrow_array::{Array, BooleanArray, GenericStringArray, OffsetSizeTrait, Scalar};
 
 use super::{Slot, StrOperand, bool_result, row_count};
 use crate::error::KernelError;
@@ -154,6 +154,26 @@ fn general_match(tokens: &[Token], s: &str) -> bool {
     }
 }
 
+/// Rewrites a validated `pattern` (escape `escape`) into arrow-string's
+/// dialect: `%` and `_` are wildcards and a backslash is the only escape.
+fn to_arrow_pattern(pattern: &str, escape: char) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        let (literal, c) = if c == escape {
+            // A trailing escape cannot reach here: `compile` rejected it.
+            (true, chars.next().unwrap_or(c))
+        } else {
+            (false, c)
+        };
+        if (literal && matches!(c, '%' | '_')) || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// `str LIKE pattern ESCAPE escape`.
 ///
 /// # Errors
@@ -167,6 +187,25 @@ pub fn like<O: OffsetSizeTrait>(
 ) -> Result<BooleanArray, KernelError> {
     let slots: [&dyn Slot; 2] = [&input, &pattern];
     let rows = row_count(&slots)?;
+    // A column against one literal pattern, the usual shape, runs on
+    // arrow-string's matchers once the pattern is validated here (Spark's
+    // escape errors are ours; an all-NULL column never reaches them).
+    if let (StrOperand::Array(col), StrOperand::Scalar(Some(p))) = (input, pattern) {
+        if col.null_count() == col.len() {
+            return Ok(BooleanArray::new_null(rows));
+        }
+        let first = (0..col.len()).find(|&i| col.is_valid(i)).unwrap_or(0);
+        LikePattern::compile(p, escape, first)?;
+        let arrow_pattern = Scalar::new(GenericStringArray::<O>::from(vec![to_arrow_pattern(
+            p, escape,
+        )]));
+        // arrow-string compiles a regex for general patterns and refuses one
+        // over the regex size limit (a very long pattern); the matcher below
+        // has no such limit, so that case runs on it.
+        if let Ok(result) = arrow_string::like::like(col, &arrow_pattern) {
+            return Ok(result);
+        }
+    }
     // The pattern of the last row, compiled once while it repeats (always,
     // for a literal pattern).
     let mut compiled: Option<(String, LikePattern)> = None;

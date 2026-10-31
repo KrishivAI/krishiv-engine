@@ -78,9 +78,9 @@ fn narrow_columns_with_a_small_constant_are_rewritten() {
     // Spark types `smallint + 1` as an `int` addition over a cast column;
     // CSE then computes the shared cast once below the aggregate.
     let text = plan("SELECT SUM(si + 1) FROM s");
-    assert!(text.contains("CAST(si#1 AS INT) AS cse_"), "{text}");
-    assert!(text.contains("sum(cse_"), "{text}");
-    assert!(text.contains("count(cse_"), "{text}");
+    assert!(text.contains("CAST(si#1 AS INT) AS krishiv_cse_"), "{text}");
+    assert!(text.contains("sum(krishiv_cse_"), "{text}");
+    assert!(text.contains("count(krishiv_cse_"), "{text}");
     assert!(!text.contains("(CAST(si#1 AS INT) + 1)"), "{text}");
     for sql in [
         "SELECT SUM(si + 1) FROM s",
@@ -111,10 +111,10 @@ fn many_shifted_sums_share_one_sum_and_one_count() {
     // The aggregate computes `sum(si)`, and for the 90 shifted sums one
     // `sum` and one `count` of the shared cast, computed once below it.
     let aggregate = aggregate_line(&text);
-    assert_eq!(aggregate.matches("count(cse_").count(), 1, "{text}");
-    assert_eq!(aggregate.matches("sum(cse_").count(), 1, "{text}");
+    assert_eq!(aggregate.matches("count(krishiv_cse_").count(), 1, "{text}");
+    assert_eq!(aggregate.matches("sum(krishiv_cse_").count(), 1, "{text}");
     assert_eq!(aggregate.matches("sum(si#1)").count(), 1, "{text}");
-    assert!(text.contains("CAST(si#1 AS INT) AS cse_"), "{text}");
+    assert!(text.contains("CAST(si#1 AS INT) AS krishiv_cse_"), "{text}");
 }
 
 #[test]
@@ -123,12 +123,12 @@ fn a_sum_of_the_column_already_there_is_reused() {
     // The aggregate's own `sum` serves both items; CSE computes the shared
     // cast once below the aggregate.
     assert_eq!(
-        aggregate_line(&text).matches("sum(cse_").count(),
+        aggregate_line(&text).matches("sum(krishiv_cse_").count(),
         1,
         "{text}"
     );
-    assert!(text.contains("count(cse_"), "{text}");
-    assert!(text.contains("CAST(si#1 AS INT) AS cse_"), "{text}");
+    assert!(text.contains("count(krishiv_cse_"), "{text}");
+    assert!(text.contains("CAST(si#1 AS INT) AS krishiv_cse_"), "{text}");
 }
 
 #[test]
@@ -210,5 +210,5 @@ fn an_expression_over_the_sum_is_left_as_it_is() {
 #[test]
 fn aggregates_in_subqueries_are_rewritten_too() {
     let text = plan("SELECT g FROM s WHERE g > (SELECT SUM(si + 1) FROM s)");
-    assert!(text.contains("count(cse_"), "{text}");
+    assert!(text.contains("count(krishiv_cse_"), "{text}");
 }
