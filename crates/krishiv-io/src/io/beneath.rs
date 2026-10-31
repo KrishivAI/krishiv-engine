@@ -432,25 +432,55 @@ fn child_path(base: &[String], rel: &[String], name: &str) -> StoreResult<Path> 
     Path::parse(&joined).map_err(|e| object_store::Error::InvalidPath { source: e })
 }
 
+/// How many times a listing re-reads a directory in which an entry vanished
+/// between the read and its `lstat`.
+const SETTLE_PASSES: usize = 8;
+
 /// Entries of the open directory `dir`: `(name, lstat)`.
+///
+/// An entry removed between the read of the names and its `lstat` is not
+/// dropped quietly: the pass is repeated (up to [`SETTLE_PASSES`]), because
+/// a quiet drop turns a replaced file into a file that never was. An
+/// overwrite writes its new files before it removes the old ones, so the
+/// pass that follows a vanished old file lists the new files too; skipping
+/// the old file alone would list an overwritten table as empty. After the
+/// last pass the entries that vanished are left out.
 fn entries(dir: &OwnedFd) -> StoreResult<Vec<(String, Stat)>> {
-    let listing = Dir::read_from(dir).map_err(|e| io_err(e.into()))?;
+    entries_with(dir, || {})
+}
+
+/// [`entries`], calling `between` after each read of the names and before
+/// their `lstat`s (a test replaces files there).
+fn entries_with(dir: &OwnedFd, mut between: impl FnMut()) -> StoreResult<Vec<(String, Stat)>> {
+    let mut listing = Dir::read_from(dir).map_err(|e| io_err(e.into()))?;
     let mut out = Vec::new();
-    for entry in listing {
-        let entry = entry.map_err(|e| io_err(e.into()))?;
-        let raw = entry.file_name().to_bytes();
-        if raw == b"." || raw == b".." {
-            continue;
+    for pass in 1..=SETTLE_PASSES {
+        out.clear();
+        let mut names = Vec::new();
+        for entry in &mut listing {
+            let entry = entry.map_err(|e| io_err(e.into()))?;
+            let raw = entry.file_name().to_bytes();
+            if raw == b"." || raw == b".." {
+                continue;
+            }
+            let name = std::str::from_utf8(raw)
+                .map_err(|_| io_err(std::io::Error::other("a file name that is not UTF-8")))?
+                .to_owned();
+            names.push(name);
         }
-        let name = std::str::from_utf8(raw)
-            .map_err(|_| io_err(std::io::Error::other("a file name that is not UTF-8")))?
-            .to_owned();
-        match statat(dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(st) => out.push((name, st)),
-            // Removed since the read.
-            Err(Errno::NOENT) => {}
-            Err(e) => return Err(io_err(e.into())),
+        between();
+        let mut vanished = false;
+        for name in names {
+            match statat(dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(st) => out.push((name, st)),
+                Err(Errno::NOENT) => vanished = true,
+                Err(e) => return Err(io_err(e.into())),
+            }
         }
+        if !vanished || pass == SETTLE_PASSES {
+            break;
+        }
+        listing.rewind();
     }
     Ok(out)
 }
