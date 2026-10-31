@@ -192,7 +192,7 @@ pub(super) fn resolve(
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
-    let root = super::subquery::rewrite(&root, &mut r.next_id)?;
+    let root = super::subquery::rewrite(&root, &mut r.next_id, &*ctx.functions, ctx.profile)?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
     let uses = b
         .securables

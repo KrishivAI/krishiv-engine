@@ -33,15 +33,17 @@ use krishiv_common::error::{
 };
 use krishiv_types::DataType;
 
-use super::AnalysisError;
 use super::bind::{addr, unsupported};
+use super::catalog::{FunctionLookup, FunctionRegistry};
 use super::exprs::{literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
+use super::{AnalysisError, SparkProfile};
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FrameUnits, FunctionId, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr,
-    ResolvedFunction, SortDirection, SubqueryKind,
+    ResolvedFunction, SortDirection, SubqueryKind, WindowExpr, WindowFrame, WindowSpec,
+    WindowSpecRef,
 };
 use krishiv_common::stack::{STEP, on_big_stack};
 
@@ -53,7 +55,12 @@ type Lifted = (Arc<LogicalPlan>, Vec<Arc<Expr>>, Vec<Arc<Expr>>);
 
 /// Rewrites the subqueries of `root`; `next_id` is one past every
 /// attribute id in use and is kept so.
-pub(super) fn rewrite(root: &Arc<LogicalPlan>, next_id: &mut u64) -> R<Arc<LogicalPlan>> {
+pub(super) fn rewrite(
+    root: &Arc<LogicalPlan>,
+    next_id: &mut u64,
+    functions: &dyn FunctionRegistry,
+    profile: SparkProfile,
+) -> R<Arc<LogicalPlan>> {
     if !has_subquery(Node::Plan(root)) {
         return Ok(Arc::clone(root));
     }
@@ -62,6 +69,10 @@ pub(super) fn rewrite(root: &Arc<LogicalPlan>, next_id: &mut u64) -> R<Arc<Logic
         done: HashMap::new(),
         correlated: HashMap::new(),
         depth: 0,
+        row_number: match functions.lookup(&["row_number".to_owned()], profile) {
+            FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
+            _ => None,
+        },
     };
     let out = r.plan(root)?;
     *next_id = r.next_id;
@@ -76,6 +87,8 @@ struct Rewriter {
     /// Whether a subquery plan refers to its enclosing query, by address.
     correlated: HashMap<usize, (Arc<LogicalPlan>, bool)>,
     depth: usize,
+    /// The registry's `row_number`, for a subquery's per-row `LIMIT`.
+    row_number: Option<(FunctionId, FunctionKind)>,
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -1042,11 +1055,112 @@ impl Rewriter {
             {
                 self.pull(input, false)
             }
+            // `IN (... WHERE k = o LIMIT n)` limits the rows per outer row:
+            // the first `n` of each `k` by the subquery's order, so a
+            // `row_number()` over `k` that keeps ranks up to `n`.
+            PlanNode::Limit { input, limit }
+                if keep && positive_literal(limit) && !has_outer(Node::Expr(limit)) =>
+            {
+                self.limited(plan, input, limit)
+            }
             _ => Err(unsupported(
                 "outer references below a join, aggregate, limit or set operation",
                 plan.origin,
             )),
         }
+    }
+
+    /// `LIMIT limit` over `input` (a subquery read for its values) with
+    /// its correlation lifted out: the rows ranked up to `limit` within
+    /// each value of the correlated keys, in `input`'s order.
+    fn limited(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        limit: &Arc<Expr>,
+    ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
+        let unsupported_limit =
+            || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
+        let (below, order) = match &input.node {
+            PlanNode::Sort { input, order, .. }
+                if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
+            {
+                (input, order.clone())
+            }
+            _ => (input, Vec::new()),
+        };
+        let (inner, corr) = self.pull(below, true)?;
+        let mut partition_by = Vec::new();
+        for c in &corr {
+            let ExprNode::Resolved(ResolvedExpr::Function(f)) = &c.node else {
+                return Err(unsupported_limit());
+            };
+            if f.id != FunctionId::Builtin(Builtin::Eq) || f.args.len() != 2 {
+                return Err(unsupported_limit());
+            }
+            let (a, b) = (&f.args[0], &f.args[1]);
+            match (has_outer(Node::Expr(a)), has_outer(Node::Expr(b))) {
+                (false, true) => partition_by.push(Arc::clone(a)),
+                (true, false) => partition_by.push(Arc::clone(b)),
+                _ => return Err(unsupported_limit()),
+            }
+        }
+        let Some((id, kind)) = self.row_number.clone() else {
+            return Err(unsupported_limit());
+        };
+        let out = output(&inner)?;
+        let rank = BoundColumn {
+            id: self.fresh(),
+            name: "row_number".to_owned(),
+            data_type: DataType::Integer,
+            nullable: false,
+        };
+        let function = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id,
+                kind,
+                args: Vec::new(),
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::Integer,
+                nullable: false,
+                deterministic: true,
+            },
+        ))));
+        let window = Arc::new(Expr::new(ExprNode::Window(WindowExpr {
+            function,
+            window: WindowSpecRef::Spec(WindowSpec {
+                partition_by: partition_by.clone(),
+                order_by: order.clone(),
+                frame: Some(WindowFrame::running(FrameUnits::Rows)),
+            }),
+        })));
+        let alias = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+            expr: window,
+            output: rank.clone(),
+        })));
+        let ranked = node(
+            PlanNode::Window {
+                input: inner,
+                exprs: vec![alias],
+                partition_by,
+                order_by: order,
+            },
+            plan.origin,
+        );
+        let keep = boolean(
+            Builtin::LtEq,
+            vec![col_expr(&rank, Origin::UNKNOWN), Arc::clone(limit)],
+        );
+        let filtered = node(
+            PlanNode::Filter {
+                input: ranked,
+                predicate: keep,
+            },
+            plan.origin,
+        );
+        Ok((columns(filtered, &out), corr))
     }
 
     /// `right`, renumbered where its attribute ids would meet `left`'s (so
