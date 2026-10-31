@@ -45,9 +45,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use krishiv_common::error::{
     CyclicFunctionReference, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, FailedToParseTooComplex,
-    KrishivError, RequiredParameterNotFound, UnexpectedPositionalArgument,
+    KrishivError, NotAScalarFunction, RequiredParameterNotFound, UnexpectedPositionalArgument,
     UnrecognizedParameterName, UserDefinedFunctionsCannotContainComplexFunctions,
-    WrongNumArgsWithoutSuggestion,
+    UserDefinedFunctionsReturnColumnCountMismatch, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
 use krishiv_types::DataType;
@@ -57,11 +57,11 @@ use super::bind::{same, unsupported};
 use super::catalog::quoted;
 use super::coerce;
 use super::exprs::{Bound, Cx, SPARK_DOC_ROOT, WindowUse, cast_error, pretty};
-use super::resolve::{Attr, Resolver};
+use super::resolve::{Attr, Rel, Resolver};
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, Origin, ResolvedExpr,
-    ResolvedFunction, SourceId,
+    AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, LogicalPlan, Origin, PlanNode,
+    ResolvedExpr, ResolvedFunction, SourceId,
 };
 
 /// A parameter of a [`SqlFunction`].
@@ -96,6 +96,11 @@ pub struct SqlFunction {
     /// body's own type (a function created without `RETURNS`, which the
     /// session types by resolving the body once).
     pub returns: Option<DataType>,
+    /// The columns of a table function (`RETURNS TABLE (...)`), whose body
+    /// is a query (a scalar subquery expression holding the plan); `None`
+    /// for a scalar function. Empty for `RETURNS TABLE` without a column
+    /// list: the columns are the query's own.
+    pub returns_table: Option<Vec<(String, DataType)>>,
     /// The body, unresolved.
     pub body: Arc<Expr>,
     /// The body as written, for `CANNOT_CONTAIN_COMPLEX_FUNCTIONS`.
@@ -116,6 +121,12 @@ impl SqlFunction {
         let mut parts = self.qualifier.clone();
         parts.push(self.name.clone());
         quoted(&parts)
+    }
+
+    /// The name with its qualifier, dotted and unquoted.
+    #[must_use]
+    pub fn qualified_name(&self) -> String {
+        self.path_key()
     }
 
     /// What tells two functions apart in the path of nested calls.
@@ -220,6 +231,14 @@ impl Resolver<'_> {
         kids: &[Bound],
     ) -> Result<Bound, AnalysisError> {
         let n = call.args.len();
+        if def.returns_table.is_some() {
+            return Err(AnalysisError::new(
+                NotAScalarFunction {
+                    function_name: def.routine_name(),
+                },
+                e.origin,
+            ));
+        }
         if call.distinct || call.filter.is_some() {
             return Err(unsupported(
                 "DISTINCT or FILTER on a SQL function",
@@ -291,6 +310,31 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         args: Vec<Bound>,
     ) -> Result<Bound, AnalysisError> {
+        let frame = Self::frame_of(def, args);
+        // The body sees no lambda variable of the calling query.
+        let outer_lambdas = std::mem::take(&mut self.lambdas);
+        let outer = self.frame.replace(Arc::clone(&frame));
+        let resolved = self.body(def, e);
+        self.frame = outer;
+        self.lambdas = outer_lambdas;
+        let body = resolved?;
+        for (p, fp) in def.params.iter().zip(&frame.params) {
+            if fp.reads.load(Ordering::Relaxed) > 1 && !is_deterministic(&fp.arg.expr) {
+                return Err(unsupported(
+                    format!(
+                        "a nondeterministic argument for parameter {} of function {}, which the body reads more than once",
+                        quoted(std::slice::from_ref(&p.name)),
+                        def.routine_name(),
+                    ),
+                    e.origin,
+                ));
+            }
+        }
+        Ok(body)
+    }
+
+    /// The frame of a call of `def`: its parameters standing for `args`.
+    fn frame_of(def: &SqlFunction, args: Vec<Bound>) -> Arc<Frame> {
         let params: Vec<FrameParam> = def
             .params
             .iter()
@@ -324,31 +368,124 @@ impl Resolver<'_> {
                 source: None,
             })
             .collect();
-        let frame = Arc::new(Frame {
+        Arc::new(Frame {
             name: def.name.clone(),
             params,
             attrs,
-        });
-        // The body sees no lambda variable of the calling query.
+        })
+    }
+
+    /// Replaces the table function call `FROM f(args)` of `def` by its body
+    /// query, resolved with the arguments bound to the parameters and its
+    /// columns renamed and cast to the declared ones.
+    pub(super) fn sql_table_call(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        def: &Arc<SqlFunction>,
+        args: &[Arc<Expr>],
+        env: &Arc<super::resolve::Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let o = p.origin;
+        let key = def.path_key();
+        if self.fn_path.iter().any(|f| f == &key) {
+            let mut path = self.fn_path.clone();
+            path.push(key);
+            return Err(cyclic(&path, o));
+        }
+        if self.fn_path.len() >= NESTING || self.sql_calls >= MAX_INLINED_CALLS {
+            return Err(AnalysisError::new(FailedToParseTooComplex {}, o));
+        }
+        self.sql_calls += 1;
+        let mut kids = Vec::with_capacity(args.len());
+        for a in args {
+            let mut cx = Self::cx(&[], &[], env, "Project");
+            cx.outer = false;
+            kids.push(self.bind(a, &cx)?);
+        }
+        let call = FunctionCall {
+            within_group: Vec::new(),
+            name: def.name.clone(),
+            qualifier: def.qualifier.clone(),
+            args: args.to_vec(),
+            arg_names: vec![None; args.len()],
+            distinct: false,
+            filter: None,
+        };
+        let e = Arc::new(Expr::new(ExprNode::Function(call.clone())).with_origin(o));
+        let bound = self.arguments(def, &e, &call, &kids)?;
+        let frame = Self::frame_of(def, bound);
+        let Some(columns) = &def.returns_table else {
+            return Err(unsupported("a scalar function as a table", o));
+        };
+        let ExprNode::Subquery { plan, .. } = &def.body.node else {
+            return Err(unsupported("this kind of table function body", o));
+        };
+        self.fn_path.push(def.path_key());
         let outer_lambdas = std::mem::take(&mut self.lambdas);
         let outer = self.frame.replace(Arc::clone(&frame));
-        let resolved = self.body(def, e);
+        let body_env = self.isolated_env();
+        let hop = self.fn_path.len().is_multiple_of(STEP);
+        let resolved = if hop {
+            on_big_stack(|| self.rel(plan, &body_env))
+                .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, o)))
+        } else {
+            self.rel(plan, &body_env)
+        };
         self.frame = outer;
         self.lambdas = outer_lambdas;
-        let body = resolved?;
-        for (p, fp) in def.params.iter().zip(&frame.params) {
-            if fp.reads.load(Ordering::Relaxed) > 1 && !is_deterministic(&fp.arg.expr) {
+        self.fn_path.pop();
+        let rel = resolved?;
+        // Spark evaluates an argument once per call. The body inlines it, so
+        // a nondeterministic one is accepted only where that is the same:
+        // read at most once, by a body that produces one row (a scan, a table
+        // function or a multi-row VALUES would evaluate it once per row).
+        let scans = visit_distinct(Node::Plan(plan), |node| match node {
+            Node::Plan(x)
+                if match &x.node {
+                    PlanNode::Read(_) | PlanNode::TableFunction { .. } => true,
+                    PlanNode::InlineTable { rows, .. } => rows.len() > 1,
+                    _ => false,
+                } =>
+            {
+                ControlFlow::Break(())
+            }
+            _ => ControlFlow::Continue(()),
+        })
+        .is_break();
+        for (param, fp) in def.params.iter().zip(&frame.params) {
+            if !is_deterministic(&fp.arg.expr) && (scans || fp.reads.load(Ordering::Relaxed) > 1) {
                 return Err(unsupported(
                     format!(
-                        "a nondeterministic argument for parameter {} of function {}, which the body reads more than once",
-                        quoted(std::slice::from_ref(&p.name)),
+                        "a nondeterministic argument for parameter {} of table function {}, which the body reads more than once or over a relation",
+                        quoted(std::slice::from_ref(&param.name)),
                         def.routine_name(),
                     ),
-                    e.origin,
+                    o,
                 ));
             }
         }
-        Ok(body)
+        if columns.is_empty() {
+            return Ok(rel);
+        }
+        if rel.out.len() != columns.len() {
+            return Err(AnalysisError::new(
+                UserDefinedFunctionsReturnColumnCountMismatch {
+                    name: def.qualified_name(),
+                    output_size: rel.out.len().to_string(),
+                    return_param_size: columns.len().to_string(),
+                },
+                o,
+            ));
+        }
+        let mut exprs = Vec::with_capacity(columns.len());
+        for (a, (name, ty)) in rel.out.iter().zip(columns) {
+            let cast = self.cast_arg(&super::ops::column_bound(a, o), ty, o)?;
+            exprs.push(Arc::new(Expr::new(ExprNode::Alias {
+                expr: cast.expr,
+                name: name.clone(),
+            })));
+        }
+        self.project_items(p, &rel, &exprs, env)
     }
 
     /// Resolves the body in its own scope and casts it to the return type.

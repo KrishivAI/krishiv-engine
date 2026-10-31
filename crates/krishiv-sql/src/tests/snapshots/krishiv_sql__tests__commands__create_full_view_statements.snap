@@ -513,7 +513,10 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: Some(
-            Binding,
+            SchemaBindingClause {
+                mode: Binding,
+                span: 14..33,
+            },
         ),
         partitioned_on: false,
         duplicate_clause: None,
@@ -592,7 +595,10 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: Some(
-            Evolution,
+            SchemaBindingClause {
+                mode: Evolution,
+                span: 14..35,
+            },
         ),
         partitioned_on: false,
         duplicate_clause: None,
@@ -671,7 +677,10 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: Some(
-            Compensation,
+            SchemaBindingClause {
+                mode: Compensation,
+                span: 14..38,
+            },
         ),
         partitioned_on: false,
         duplicate_clause: None,
@@ -750,7 +759,10 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: Some(
-            TypeEvolution,
+            SchemaBindingClause {
+                mode: TypeEvolution,
+                span: 14..40,
+            },
         ),
         partitioned_on: false,
         duplicate_clause: None,

@@ -698,10 +698,6 @@ fn what_is_not_supported_is_named() {
             "LANGUAGE python functions",
         ),
         (
-            "CREATE TEMPORARY FUNCTION p() RETURNS TABLE(a INT) RETURN SELECT 1",
-            "SQL table functions: RETURNS TABLE",
-        ),
-        (
             "EXPLAIN CREATE TEMPORARY FUNCTION p() RETURN 1",
             "EXPLAIN of this statement in sessions",
         ),
@@ -977,4 +973,149 @@ fn a_temporary_function_in_a_subquery_filter_is_found() {
     assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
     assert_eq!(params["tempObj"], "FUNCTION");
     assert_eq!(params["tempObjName"], "`tmp_g`");
+}
+
+#[test]
+fn a_table_function_returns_its_declared_columns() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE FUNCTION tf(a INT) RETURNS TABLE (c1 BIGINT, c2 STRING) RETURN SELECT a + 1, 'x'",
+    );
+    // Columns are renamed and cast to the declared ones.
+    let (schema, rows) = run(&s, "SELECT * FROM tf(1)").unwrap();
+    assert_eq!(schema, "struct<c1:bigint,c2:string>");
+    assert_eq!(rows, ["2\tx"]);
+    assert_eq!(ok(&s, "SELECT * FROM default.tf(5)"), ["6\tx"]);
+    assert_eq!(
+        ok(&s, "SELECT * FROM spark_catalog.default.tf(7)"),
+        ["8\tx"]
+    );
+    assert_eq!(
+        ok(&s, "SELECT t.c1 FROM tf(2) AS t WHERE t.c2 = 'x'"),
+        ["3"]
+    );
+    // A table function reads the table of the session by its own name and
+    // joins like any relation.
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT p.id, t.c1 FROM people p JOIN tf(0) t ON p.id = t.c1"
+        ),
+        ["1\t1"]
+    );
+    // Defaults and the arity check are the scalar ones.
+    ok(
+        &s,
+        "CREATE FUNCTION tf_d(a INT, b INT DEFAULT 10) RETURNS TABLE (s INT) RETURN SELECT a + b",
+    );
+    assert_eq!(ok(&s, "SELECT * FROM tf_d(1)"), ["11"]);
+    assert_eq!(ok(&s, "SELECT * FROM tf_d(1, 2)"), ["3"]);
+    let (class, _) = class_and_params(&fails(&s, "SELECT * FROM tf_d()"));
+    assert_eq!(class, "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
+    // Without a column list the columns are the query's own.
+    ok(
+        &s,
+        "CREATE FUNCTION tf_i() RETURNS TABLE RETURN SELECT 1 AS id, 'hello' AS name",
+    );
+    let (schema, rows) = run(&s, "SELECT * FROM tf_i()").unwrap();
+    assert_eq!(schema, "struct<id:int,name:string>");
+    assert_eq!(rows, ["1\thello"]);
+    // A temporary table function.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tt() RETURNS TABLE (c BIGINT) RETURN SELECT 7",
+    );
+    assert_eq!(ok(&s, "SELECT c + 1 FROM tt()"), ["8"]);
+    ok(&s, "DROP TEMPORARY FUNCTION tt");
+    let (class, _) = class_and_params(&fails(&s, "SELECT * FROM tt()"));
+    assert_eq!(class, "UNRESOLVABLE_TABLE_VALUED_FUNCTION");
+}
+
+#[test]
+fn a_table_function_is_checked_when_it_is_created() {
+    let s = session();
+    // Spark's parameters (sql-udf.sql.out, foo32 and foo33).
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION foo32() RETURNS TABLE(a INT) RETURN SELECT 1, 2",
+    ));
+    assert_eq!(class, "USER_DEFINED_FUNCTIONS.RETURN_COLUMN_COUNT_MISMATCH");
+    assert_eq!(params["name"], "spark_catalog.default.foo32");
+    assert_eq!(params["outputSize"], "2");
+    assert_eq!(params["returnParamSize"], "1");
+    let (_, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION foo33() RETURNS TABLE(a INT, b INT) RETURN SELECT 1",
+    ));
+    assert_eq!(params["outputSize"], "1");
+    assert_eq!(params["returnParamSize"], "2");
+    // A body that is not a query.
+    let (class, _) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION foo42() RETURNS TABLE(a INT) RETURN 1",
+    ));
+    assert_eq!(
+        class,
+        "USER_DEFINED_FUNCTIONS.SQL_TABLE_UDF_BODY_MUST_BE_A_QUERY"
+    );
+    // Recursion, directly and through another function.
+    let (class, _) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION rec(x INT) RETURNS TABLE (a INT) RETURN SELECT * FROM rec(x)",
+    ));
+    assert_eq!(class, "CYCLIC_FUNCTION_REFERENCE");
+    // A table function is not a scalar one, nor the other way round.
+    ok(
+        &s,
+        "CREATE FUNCTION tf2() RETURNS TABLE (a INT) RETURN SELECT 1",
+    );
+    ok(&s, "CREATE FUNCTION sf2() RETURNS INT RETURN 1");
+    // Spark's classes and parameters (sql-udf.sql.out, foo3_14a and foo3_14b).
+    let (class, params) = class_and_params(&fails(&s, "SELECT tf2()"));
+    assert_eq!(class, "NOT_A_SCALAR_FUNCTION");
+    assert_eq!(params["functionName"], "`spark_catalog`.`default`.`tf2`");
+    let (class, params) = class_and_params(&fails(&s, "SELECT * FROM sf2()"));
+    assert_eq!(class, "NOT_A_TABLE_FUNCTION");
+    assert_eq!(params["functionName"], "`spark_catalog`.`default`.`sf2`");
+    // A table function over another.
+    ok(
+        &s,
+        "CREATE FUNCTION tf3(x INT) RETURNS TABLE (a INT) RETURN SELECT a + x FROM tf2()",
+    );
+    assert_eq!(ok(&s, "SELECT * FROM tf3(10)"), ["11"]);
+}
+
+#[test]
+fn a_table_function_takes_deterministic_arguments_and_no_temporary_ones() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE FUNCTION tf_r(x DOUBLE) RETURNS TABLE (a DOUBLE, b DOUBLE) RETURN SELECT x, x",
+    );
+    let e = fails(&s, "SELECT * FROM tf_r(rand())");
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    // A stored function cannot call a temporary table function.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tmp_t() RETURNS TABLE (a INT) RETURN SELECT 1",
+    );
+    let (class, params) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION calls_tmp_t() RETURNS TABLE (a INT) RETURN SELECT * FROM tmp_t()",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    assert_eq!(params["tempObj"], "FUNCTION");
+    assert_eq!(params["tempObjName"], "`tmp_t`");
+    let (class, _) = class_and_params(&fails(
+        &s,
+        "CREATE FUNCTION calls_tmp_q() RETURNS TABLE (a INT) RETURN SELECT * FROM session.tmp_t()",
+    ));
+    assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE");
+    // A quoted name with a dot is one name.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION `d.t`() RETURNS TABLE (a INT) RETURN SELECT 5",
+    );
+    assert_eq!(ok(&s, "SELECT * FROM `d.t`()"), ["5"]);
 }

@@ -115,7 +115,10 @@ AlterView(
             },
         ),
         action: SetSchemaBinding(
-            Binding,
+            SchemaBindingClause {
+                mode: Binding,
+                span: 13..32,
+            },
         ),
         span: 0..32,
     },
@@ -136,7 +139,10 @@ AlterView(
             },
         ),
         action: SetSchemaBinding(
-            Evolution,
+            SchemaBindingClause {
+                mode: Evolution,
+                span: 13..34,
+            },
         ),
         span: 0..34,
     },
@@ -157,7 +163,10 @@ AlterView(
             },
         ),
         action: SetSchemaBinding(
-            Compensation,
+            SchemaBindingClause {
+                mode: Compensation,
+                span: 13..37,
+            },
         ),
         span: 0..37,
     },
@@ -178,7 +187,10 @@ AlterView(
             },
         ),
         action: SetSchemaBinding(
-            TypeEvolution,
+            SchemaBindingClause {
+                mode: TypeEvolution,
+                span: 13..39,
+            },
         ),
         span: 0..39,
     },

@@ -111,6 +111,9 @@ pub struct ParserOptions {
     /// `spark.sql.caseSensitive`: names in a script (labels, `FOR` variables, conditions) compare
     /// exactly instead of after lower-casing.
     pub case_sensitive: bool,
+    /// `spark.sql.legacy.viewSchemaBindingMode` (on by default): a view may
+    /// take `WITH SCHEMA ...`; off, the clause is `FEATURE_NOT_ENABLED`.
+    pub view_schema_binding: bool,
 }
 
 impl Default for ParserOptions {
@@ -151,6 +154,7 @@ impl ParserOptions {
                 true,
             ),
             case_sensitive: on("spark.sql.caseSensitive", false),
+            view_schema_binding: on("spark.sql.legacy.viewSchemaBindingMode", true),
         }
     }
 }

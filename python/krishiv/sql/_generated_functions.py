@@ -94,6 +94,7 @@ __all__ = [
     "date_add",
     "date_diff",
     "date_format",
+    "date_from_unix_date",
     "date_part",
     "date_sub",
     "date_trunc",
@@ -282,6 +283,9 @@ __all__ = [
     "sum",
     "tan",
     "tanh",
+    "timestamp_micros",
+    "timestamp_millis",
+    "timestamp_seconds",
     "toDegrees",
     "toRadians",
     "to_binary",
@@ -322,6 +326,9 @@ __all__ = [
     "unhex",
     "uniform",
     "unix_date",
+    "unix_micros",
+    "unix_millis",
+    "unix_seconds",
     "upper",
     "url_decode",
     "url_encode",
@@ -679,6 +686,11 @@ def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column:
 def date_format(date: ColumnOrName, format: str) -> Column:
     """Calls the registry function ``date_format``."""
     return _call("date_format", _named(date, "date"), _lit(format, "format"))
+
+
+def date_from_unix_date(days: ColumnOrName) -> Column:
+    """Calls the registry function ``date_from_unix_date``."""
+    return _call("date_from_unix_date", _named(days, "days"))
 
 
 def date_part(field: Column, source: ColumnOrName) -> Column:
@@ -1700,6 +1712,21 @@ def tanh(col: ColumnOrName) -> Column:
     return _call("tanh", _named(col, "col"))
 
 
+def timestamp_micros(col: ColumnOrName) -> Column:
+    """Calls the registry function ``timestamp_micros``."""
+    return _call("timestamp_micros", _named(col, "col"))
+
+
+def timestamp_millis(col: ColumnOrName) -> Column:
+    """Calls the registry function ``timestamp_millis``."""
+    return _call("timestamp_millis", _named(col, "col"))
+
+
+def timestamp_seconds(col: ColumnOrName) -> Column:
+    """Calls the registry function ``timestamp_seconds``."""
+    return _call("timestamp_seconds", _named(col, "col"))
+
+
 def toDegrees(col: ColumnOrName) -> Column:
     """Deprecated alias; calls the registry function ``degrees``."""
     _deprecated("Deprecated in 2.1, use degrees instead.")
@@ -1949,6 +1976,21 @@ def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Co
 def unix_date(col: ColumnOrName) -> Column:
     """Calls the registry function ``unix_date``."""
     return _call("unix_date", _named(col, "col"))
+
+
+def unix_micros(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_micros``."""
+    return _call("unix_micros", _named(col, "col"))
+
+
+def unix_millis(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_millis``."""
+    return _call("unix_millis", _named(col, "col"))
+
+
+def unix_seconds(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_seconds``."""
+    return _call("unix_seconds", _named(col, "col"))
 
 
 def upper(col: ColumnOrName) -> Column:

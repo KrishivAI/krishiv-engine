@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "date_from_unix_date#3fbe93be684b/ansi_on",
+      "reason": "SELECT date_from_unix_date(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "date_from_unix_date#3fbe93be684b/ansi_off",
+      "reason": "SELECT date_from_unix_date(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "date_from_unix_date#7149b8ac80a9/ansi_on",
+      "reason": "SELECT date_from_unix_date(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "date_from_unix_date#7149b8ac80a9/ansi_off",
+      "reason": "SELECT date_from_unix_date(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "date_from_unix_date"
+}
