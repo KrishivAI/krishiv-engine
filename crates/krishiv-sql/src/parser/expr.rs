@@ -654,6 +654,46 @@ impl Parser<'_> {
         self.postfix(e, start)
     }
 
+    /// Spark's `constant` or `DEFAULT` (the value of a `PARTITION (key = value)`): `NULL`, a parameter marker, an
+    /// interval, a typed literal, a number (negative included), a boolean or a string. Anything else is a
+    /// syntax error at its first token, as ANTLR reports it; operators after a constant fail at the
+    /// operator, in the caller.
+    pub(super) fn constant_or_default(&mut self) -> PR<Expr> {
+        let start = self.start();
+        let word = |p: &Self, w: &str| p.kw_at(0, w);
+        let ok = match self.kind(0) {
+            Some(TokenKind::Number(_) | TokenKind::String | TokenKind::Sym(Sym::Question)) => true,
+            Some(TokenKind::DoubleQuoted) => !self.opts.double_quoted_identifiers,
+            Some(TokenKind::Sym(Sym::Minus)) => matches!(self.kind(1), Some(TokenKind::Number(_))),
+            Some(TokenKind::Sym(Sym::Colon)) => {
+                matches!(self.kind(1), Some(TokenKind::Word | TokenKind::QuotedIdent))
+            }
+            Some(TokenKind::Word) => {
+                word(self, "NULL")
+                    || word(self, "TRUE")
+                    || word(self, "FALSE")
+                    || (word(self, "INTERVAL") && self.interval_follows())
+                    // `identifier EQ DEFAULT`.
+                    || (word(self, "DEFAULT")
+                        && (self.sym_at(1, Sym::Comma) || self.sym_at(1, Sym::RParen)))
+                    // `literalType singleStringLitWithoutMarker`.
+                    || self.single_string_at(1)
+            }
+            _ => false,
+        };
+        if !ok {
+            return self.fail();
+        }
+        if let Some(TokenKind::Number(kind)) = self.kind(1)
+            && self.sym_at(0, Sym::Minus)
+        {
+            self.bump();
+            let lit = self.number(kind, true);
+            return Ok(self.mk(ExprKind::Literal(lit), start));
+        }
+        self.primary()
+    }
+
     /// `:path` after a variant: `name`, `['key']` or `[0]`, then `.name`,
     /// `['key']`, `[0]` or `[name]` parts.
     #[inline(never)]

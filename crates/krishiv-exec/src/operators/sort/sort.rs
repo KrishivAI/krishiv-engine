@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use arrow_schema::SchemaRef;
+use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal};
@@ -30,7 +31,8 @@ use krishiv_types::batch::Batch;
 
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
-    Bucketing, Merger, SortedBatch, SpillRun, data_bytes, interleave_batches, write_run,
+    Bucketing, Merger, ParallelMerge, SortedBatch, SpillRun, data_bytes, interleave_batches,
+    merge_part, merge_splitters, parallel_merge, sort_slices, write_run,
 };
 use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
@@ -1749,7 +1751,40 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
             Take::Wait => changed.await,
         }
     };
+    let opened = match &batches {
+        Some(batches) => open_parallel(l, held, batches).await,
+        None => Ok(None),
+    };
+    let mut merger = match opened {
+        Ok(Some(opened)) => Some(opened),
+        Ok(None) => merger,
+        Err(e) => {
+            held.fail(e.clone());
+            return Err(e);
+        }
+    };
     let rows = l.batch_rows;
+    if let Some(m) = &mut merger {
+        let jobs = m.gather_jobs(rows);
+        if !jobs.is_empty() {
+            let gather = jobs
+                .into_iter()
+                .map(|job| blocking(&l.query, &l.executor, move || job.run()));
+            match futures::future::try_join_all(gather).await {
+                Ok(batches) => m.gathered(batches),
+                Err(e) => {
+                    held.fail(e.clone());
+                    return Err(e);
+                }
+            }
+        }
+        if let Some(batch) = m.pop_ready() {
+            if let Some(m) = merger {
+                held.put(b, Bucket::Merging(m));
+            }
+            return Ok(Step::Batch(batch));
+        }
+    }
     let (schema, encoder, handle) = (
         Arc::clone(&held.schema),
         Arc::clone(&held.encoder),
@@ -1783,6 +1818,77 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
             Err(e)
         }
     }
+}
+
+/// The merge of an unbucketed sort's wide in-memory result, computed as one
+/// blocking task per part, its output gathered a batch per part at once: a
+/// loser tree over thousands of batches costs a chain of cache misses per
+/// row, on one thread. `None`: the tree it is.
+async fn open_parallel(
+    l: &SortSource,
+    held: &Arc<Held>,
+    batches: &Arc<[Arc<SortedBatch>]>,
+) -> Result<Option<Box<Merger>>> {
+    let parallelism = l.executor.parallelism();
+    let Some(ParallelMerge {
+        memory,
+        parts,
+        sort_parts,
+        scratch,
+        ready_bytes,
+    }) = parallel_merge(batches, parallelism, l.batch_rows, &held.handle)
+    else {
+        return Ok(None);
+    };
+    let memory = Arc::new(memory);
+    let shared = Arc::clone(&memory);
+    let splitters = blocking(&l.query, &l.executor, move || {
+        merge_splitters(&shared, sort_parts)
+    })
+    .await?;
+    let lows = std::iter::once(None).chain(splitters.iter().copied().map(Some));
+    let highs = splitters.iter().copied().map(Some).chain([None]);
+    // Each running sort holds a share of `scratch`, so it outlives this
+    // future if the read is dropped.
+    let scratch = Arc::new(scratch);
+    let sorted = lows.zip(highs).map(|(lo, hi)| {
+        let query = Arc::clone(&l.query);
+        let memory = Arc::clone(&memory);
+        let scratch = Arc::clone(&scratch);
+        blocking(&l.query, &l.executor, move || {
+            let _scratch = scratch;
+            query.check_cancelled()?;
+            sort_slices(&merge_part(&memory, lo, hi)?)
+        })
+    });
+    let mut sorted = futures::stream::iter(sorted).buffered(parts);
+    // Every part, even after an error: a failed read frees `scratch` only
+    // once no sort is using it.
+    let mut orders = Vec::with_capacity(sort_parts);
+    let mut failed = None;
+    while let Some(part) = sorted.next().await {
+        match part {
+            Ok(order) => orders.push(order),
+            Err(e) => failed = failed.or(Some(e)),
+        }
+    }
+    drop(sorted);
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    let scratch = Arc::into_inner(scratch)
+        .ok_or_else(|| internal("a part sort outlived its read".to_owned()))?;
+    let mut order = Vec::with_capacity(orders.iter().map(Vec::len).sum());
+    orders.iter().for_each(|o| order.extend_from_slice(o));
+    drop(orders);
+    Ok(Some(Box::new(Merger::from_order(
+        Arc::clone(&held.schema),
+        Arc::clone(&held.encoder),
+        &memory,
+        order,
+        (scratch, ready_bytes),
+        parts,
+    ))))
 }
 
 /// Writes the rest of `merger` with `writer` in batches of `rows` rows,

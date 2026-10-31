@@ -397,11 +397,10 @@ uv run krishiv-bench report --suite micro            # re-render the parity tabl
   (`u` is a permutation).
 
 ### Criterion twins (PR gate, T118)
-Each case names the criterion bench of `krishiv-exec` that measures the same operator alone, in `result.micro.cases.<id>.twin`. **Only 21 of the 67 default cases have an
-existing twin**; the other 46 name one of the 13 stubs below, marked `stub:` in the result. The existing ones: hash join probe `hash_join/probe_1m_rows` (build `hash_join/build_1m_rows`), hash aggregation
-`aggregate/grouped_sum_64_keys` and `aggregate/grouped_sum_262144_keys`, sort `sort/in_memory_1m_rows/int`.
+Each case names the criterion bench of `krishiv-exec` that measures the same operator alone, in `result.micro.cases.<id>.twin`. Every default case has one. A name ending in
+`selectivity` or `predicate` is a family: the bench has one entry per setting (`/1_per_mille`, `/100_per_mille`, `/900_per_mille` for the selectivities; `/prefix`, `/equals` for the string predicate).
 
-| Existing twin | Cases |
+| Twin | Cases |
 |---|---|
 | `hash_join/probe_1m_rows` | int-key joins with build 1e3 and 1e5 |
 | `hash_join/build_1m_rows` | int-key joins with build 1e7 and 1e8 |
@@ -410,12 +409,13 @@ existing twin**; the other 46 name one of the 13 stubs below, marked `stub:` in 
 | `aggregate/decimal_sum_1_keys`, `aggregate/decimal_sum_64_keys`, `aggregate/decimal_sum_262144_keys` | `decimal_global`, `decimal_g1e2`, `decimal_g1e3` / `g1e4` (the closest key count) |
 | `sort/in_memory_1m_rows/int`, `sort/in_memory_1m_rows/string`, `sort/topn_k100_1m_rows` | `sort_int`, `sort_str`, `topn_k100_int` |
 | `operators/filter_1m_rows/50_percent` | `filter_rows_pm500` |
+| `hash_join/probe_string_keys_1m_rows`, `hash_join/probe_zipf_1m_rows` | string-key and Zipf-skewed joins |
+| `aggregate/grouped_sum_string_keys`, `aggregate/grouped_multi_agg`, `aggregate/grouped_sum_two_keys` | string-key, multi-aggregate and two-key group-bys |
+| `sort/in_memory_1m_rows/two_int_keys`, `sort/topn_k1000_float_1m_rows`, `sort/topn_k100_string_1m_rows` | two-key sort, float and string top-N |
+| `operators/filter_1m_rows/selectivity`, `operators/filter_count_1m_rows/selectivity`, `operators/filter_string_1m_rows/predicate` | filters by selectivity and string predicate |
+| `scan/parquet_int_1m_rows`, `scan/parquet_string_1m_rows` | Parquet scans |
 
-Remaining (stubs, not implemented): `hash_join/probe_string_keys_1m_rows`, `hash_join/probe_zipf_1m_rows`, `aggregate/grouped_sum_string_keys`,
-`aggregate/grouped_multi_agg`, `aggregate/grouped_sum_two_keys`, `sort/in_memory_1m_rows/two_int_keys`, `sort/topn_k1000_float_1m_rows`,
-`sort/topn_k100_string_1m_rows`, `operators/filter_1m_rows/selectivity`, `operators/filter_count_1m_rows/selectivity`,
-`operators/filter_string_1m_rows/predicate`, `scan/parquet_int_1m_rows`, `scan/parquet_string_1m_rows`.
-The harness test checks that every twin a case names is listed here and that the existing ones are still in the bench sources.
+The harness test checks that every twin a case names is listed here and that each is still in the bench sources.
 
 ## Reference engines, two methods (`reproduce`, P2-T156)
 ```bash

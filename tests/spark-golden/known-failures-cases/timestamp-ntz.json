@@ -13,12 +13,6 @@
     "depends-on-command": [
       32
     ],
-    "sql-commands": [
-      29,
-      30,
-      31,
-      33
-    ],
     "time-geo-types": [
       8,
       10,
