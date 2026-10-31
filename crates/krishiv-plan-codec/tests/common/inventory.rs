@@ -190,6 +190,19 @@ pub(crate) fn file_scan() -> ScanNode {
     }
 }
 
+/// A partial aggregate over a scan.
+pub(crate) fn partial_aggregate() -> PhysNode {
+    PhysNode::Aggregate {
+        input: boxed(scan()),
+        aggregate: AggregatePlan {
+            group_by: vec![0, 2],
+            distinct: vec![false; aggregate_exprs().len()],
+            aggregates: aggregate_exprs(),
+            output: AggregateOutput::Partial,
+        },
+    }
+}
+
 pub(crate) fn scan() -> PhysNode {
     PhysNode::Scan(table_scan())
 }
@@ -466,7 +479,7 @@ pub(crate) fn residual() -> Residual {
     }
 }
 
-fn join(join_type: JoinType) -> HashJoinPlan {
+pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
     HashJoinPlan {
         probe: boxed(scan()),
         build: boxed(PhysNode::Scan(file_scan())),
@@ -830,48 +843,55 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
-        ("hash_join", PhysNode::HashJoin(join(JoinType::Inner))),
+        ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
+        (
+            "partial_aggregate",
+            PhysNode::HashJoin(HashJoinPlan {
+                probe: boxed(partial_aggregate()),
+                ..join_plan(JoinType::Inner)
+            }),
+        ),
         (
             "hash_join_anti",
             PhysNode::HashJoin(HashJoinPlan {
                 residual: None,
                 runtime_filters: Vec::new(),
-                ..join(JoinType::NullAwareAnti)
+                ..join_plan(JoinType::NullAwareAnti)
             }),
         ),
         (
             "hash_join_right_semi",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::RightSemi)
+                ..join_plan(JoinType::RightSemi)
             }),
         ),
         (
             "hash_join_right_anti",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::RightAnti)
+                ..join_plan(JoinType::RightAnti)
             }),
         ),
         (
             "hash_join_right_outer",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::RightOuter)
+                ..join_plan(JoinType::RightOuter)
             }),
         ),
         (
             "hash_join_full_outer",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::FullOuter)
+                ..join_plan(JoinType::FullOuter)
             }),
         ),
         (
             "hash_join_partitioned",
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
-                ..join(JoinType::Inner)
+                ..join_plan(JoinType::Inner)
             }),
         ),
         (

@@ -2164,6 +2164,7 @@ impl Resolver<'_> {
                     Column(c) | OuterColumn(c) | LambdaVar(c) => column(c),
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+                    ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
                     ResolvedExpr::Field {
                         data_type,
                         nullable,
@@ -5210,6 +5211,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         // one is its expression (its output names the attribute).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
             format!("{}.{}", k[0], name)
         }

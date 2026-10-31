@@ -698,6 +698,7 @@ impl Resolver<'_> {
             | PlanNode::Sql { .. }
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
+            | PlanNode::PartialAggregate { .. }
             | PlanNode::Shift { .. }
             | PlanNode::ReplicateRows { .. }
             | PlanNode::Expand { .. }
@@ -838,6 +839,7 @@ impl Resolver<'_> {
             | PlanNode::WithColumns { .. }
             | PlanNode::Filter { .. }
             | PlanNode::Aggregate { .. }
+            | PlanNode::PartialAggregate { .. }
             | PlanNode::Join { .. }
             | PlanNode::Sort { .. }
             | PlanNode::Limit { .. }

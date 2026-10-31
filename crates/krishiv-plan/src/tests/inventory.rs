@@ -28,6 +28,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::WithColumns { .. } => "PlanNode::WithColumns",
         PlanNode::Filter { .. } => "PlanNode::Filter",
         PlanNode::Aggregate { .. } => "PlanNode::Aggregate",
+        PlanNode::PartialAggregate { .. } => "PlanNode::PartialAggregate",
         PlanNode::Join { .. } => "PlanNode::Join",
         PlanNode::Sort { .. } => "PlanNode::Sort",
         PlanNode::Limit { .. } => "PlanNode::Limit",
@@ -74,6 +75,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Resolved(ResolvedExpr::Function(_)) => "ResolvedExpr::Function",
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => "ResolvedExpr::Alias",
         ExprNode::Resolved(ResolvedExpr::Field { .. }) => "ResolvedExpr::Field",
+        ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => "ResolvedExpr::StateInput",
     });
     if let ExprNode::Subquery { plan, .. } = &expr.node {
         kinds(plan, out);

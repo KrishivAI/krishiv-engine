@@ -395,6 +395,15 @@ impl<'a> Estimator<'a> {
                     from_statistics: est.from_statistics,
                 }
             }
+            PlanNode::PartialAggregate { input, keys, .. } => {
+                let est = self.plan(input);
+                let rows = keys
+                    .iter()
+                    .map(|k| column_ndv(k, &est).unwrap_or(est.rows))
+                    .product::<f64>()
+                    .min(est.rows);
+                outputs(&est, keys, rows, self.propagate)
+            }
             _ => RelStats::unknown(DEFAULT_ROWS, ids()),
         }
     }

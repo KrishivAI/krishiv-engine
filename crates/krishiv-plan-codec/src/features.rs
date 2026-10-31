@@ -39,7 +39,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, is_moment};
+use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, is_moment};
 use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
@@ -132,6 +132,7 @@ registry! {
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
@@ -647,6 +648,9 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     if plan.env().zone_name.is_some() {
         out.insert(Feature::SessionZoneName);
     }
+    if partial_below_join(plan.root()) {
+        out.insert(Feature::PartialAggregate);
+    }
     let mut has_moment = false;
     let mut stack = vec![plan.root()];
     while let Some(node) = stack.pop() {
@@ -665,6 +669,25 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
         out.insert(Feature::LegacyStatisticalAggregate);
     }
     out
+}
+
+/// Whether a partial aggregate runs below a join under `root`.
+fn partial_below_join(root: &PhysNode) -> bool {
+    let mut stack = vec![(root, false)];
+    while let Some((node, below)) = stack.pop() {
+        if below
+            && matches!(
+                node,
+                PhysNode::Aggregate { aggregate, .. }
+                    if aggregate.output == AggregateOutput::Partial
+            )
+        {
+            return true;
+        }
+        let below = below || matches!(node, PhysNode::HashJoin(_) | PhysNode::NestedLoopJoin(_));
+        stack.extend(node.children().into_iter().map(|c| (c, below)));
+    }
+    false
 }
 
 /// The legacy `min_reader_version` of a plan that uses `features`.
