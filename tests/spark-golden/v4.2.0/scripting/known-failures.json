@@ -1,16 +1,6 @@
 {
-  "14": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
-  "18": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
-  "20": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
-  "29": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
   "3": "UNEXPLAINED: a table checksum differs after the script (not yet traced to a statement)",
-  "30": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
   "4": "needs ARRAY values in session and local variables",
-  "67": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
-  "74": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
   "75": "UNEXPLAINED: a table checksum differs after the script (not yet traced to a statement)",
-  "77": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
-  "79": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
-  "8": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet",
-  "90": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet"
+  "8": "needs timestampadd/timestampdiff (and the dateadd/datediff unit forms): datetime functions not implemented yet"
 }
