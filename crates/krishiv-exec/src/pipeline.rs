@@ -30,6 +30,7 @@
 //! per-query counters in itself, like a streaming `LIMIT`), so a plan runs
 //! once.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::context::OperatorId;
@@ -98,6 +99,8 @@ pub struct PipelineBuilder {
     names: Names,
     /// The plan nodes being built, innermost last.
     nodes: Vec<u32>,
+    /// The pipelines of shared plans built so far: the sink ending each and its draft, by plan number.
+    shared: HashMap<u64, (OperatorId, usize)>,
 }
 
 impl std::fmt::Debug for PipelineBuilder {
@@ -118,6 +121,7 @@ impl PipelineBuilder {
             next_id: 0,
             names: Vec::new(),
             nodes: Vec::new(),
+            shared: HashMap::new(),
         };
         let id = b.id(result.name(), OperatorRole::Sink);
         b.drafts.push(Draft {
@@ -288,6 +292,32 @@ impl PipelineBuilder {
             self.drafts[i].deps.push(index);
         }
         Ok(id)
+    }
+
+    /// The pipeline of the shared plan `shared` (design P2-T198): built once, ending in `sink`, however many
+    /// readers ask. Every reader's pipeline depends on it, so dependencies form a DAG, not a tree. Returns the
+    /// sink to name in [`set_breaker_source`](Self::set_breaker_source).
+    ///
+    /// # Errors
+    /// The body's build errors.
+    pub fn shared_pipeline(
+        &mut self,
+        shared: u64,
+        sink: Arc<dyn Sink>,
+        body: Arc<dyn ExecNode>,
+    ) -> Result<OperatorId> {
+        if let Some(&(op, index)) = self.shared.get(&shared) {
+            for i in self.frontier() {
+                if !self.drafts[i].deps.contains(&index) {
+                    self.drafts[i].deps.push(index);
+                }
+            }
+            return Ok(op);
+        }
+        let index = self.drafts.len();
+        let op = self.child_pipeline(sink, body)?;
+        self.shared.insert(shared, (op, index));
+        Ok(op)
     }
 
     /// Fans `inputs` in (`UNION ALL`): the first is built into the current

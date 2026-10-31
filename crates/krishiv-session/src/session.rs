@@ -1135,6 +1135,7 @@ impl Session {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
+                binding_enabled: crate::view_schema::binding_enabled(&env.config),
             }),
         )?;
         // A permanent view is inlined before binding, so the analyzer never asks the
@@ -1144,26 +1145,38 @@ impl Session {
         if let Some(e) = expansion.deferred {
             return Err(e);
         }
+        // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
+        // future counts.)
+        let synced = Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
         let plan = expansion.plan;
         let plan = Plan::try_new(plan)?;
-        let analyzed = DefaultAnalyzer
-            .analyze(&plan, &env.analysis)
-            .await
-            .map_err(|e| {
-                // An error inside a SQL function's body points into the
-                // statement that defined the function.
-                let own = e
-                    .origin
-                    .sql
-                    .and_then(|(source, _)| env.sql_functions.source_text(source));
-                attach_analysis(e, own.as_ref().or(text))
-            });
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
-        // a failure inside a view's text) is shown.
-        views.extend(self.authorize_body_reads(env).await?);
+        // a failure inside a view's text) is shown. One boxed future for both
+        // steps: `analyze_in` runs on the deepest stacks, where the size of
+        // its own future counts.
+        let (analyzed, body_views) = Box::pin(async {
+            let analyzed = DefaultAnalyzer.analyze(&plan, &env.analysis).await;
+            (analyzed, self.authorize_body_reads(env).await)
+        })
+        .await;
+        let analyzed = analyzed.map_err(|e| {
+            // An error inside a SQL function's body points into the
+            // statement that defined the function.
+            let own = e
+                .origin
+                .sql
+                .and_then(|(source, _)| env.sql_functions.source_text(source));
+            attach_analysis(e, own.as_ref().or(text))
+        });
+        views.extend(body_views?);
         // Analysis checks every read: its denials are the reads' denials.
         let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
+        // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
+        // concurrent change of the view wins (its entry is no longer the one the read found).
+        for (found, changed) in synced {
+            crate::store::CatalogStore::replace_table(&self.state.catalog.store, &found, changed);
+        }
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
             if !analyzed.securables.iter().any(|s| s.securable == securable) {
@@ -1194,13 +1207,48 @@ impl Session {
             let views = if reads.is_empty() {
                 Vec::new()
             } else {
-                self.authorize_reads(&reads, env).await?
+                Box::pin(self.authorize_reads(&reads, env)).await?
             };
             match deferred {
                 Some(e) => Err(e),
                 None => Ok(views),
             }
         })
+    }
+
+    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
+    /// views first. Returns the evolved entries to store once the whole query analyzed. A query that does not
+    /// analyze alone is left to the analysis of the whole query, which reports it as it would without views.
+    ///
+    /// # Errors
+    /// What [`crate::view_schema::check_read`] raises.
+    async fn check_stored_views(
+        &self,
+        reads: &[crate::view_schema::StoredRead],
+        env: &QueryEnv,
+    ) -> Result<Vec<(Arc<crate::store::CatalogTable>, crate::store::CatalogTable)>, KrishivError>
+    {
+        let compensation = crate::view_schema::compensation(&env.config);
+        let mut synced = Vec::new();
+        for read in reads {
+            // A view whose query does not analyze is left to the outer query, which raises that error itself;
+            // the views after it still get their checks.
+            let Ok(plan) = Plan::try_new(Arc::clone(&read.query)) else {
+                continue;
+            };
+            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
+                continue;
+            };
+            if let Some(changed) = crate::view_schema::check_read(
+                read,
+                &analyzed,
+                env.analysis.conf.case_sensitive,
+                compensation,
+            )? {
+                synced.push((Arc::clone(&read.entry), changed));
+            }
+        }
+        Ok(synced)
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -2079,7 +2127,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 10] = [
+const PARSER_KEYS: [&str; 11] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -2090,6 +2138,7 @@ const PARSER_KEYS: [&str; 10] = [
     "spark.sql.legacy.consecutiveStringLiterals.enabled",
     "spark.sql.sources.bucketing.maxBuckets",
     "spark.sql.parser.singleCharacterPipeOperator.enabled",
+    "spark.sql.legacy.viewSchemaBindingMode",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.

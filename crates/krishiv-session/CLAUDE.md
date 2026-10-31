@@ -14,6 +14,7 @@ Paths are relative to this crate.
 - `src/session.rs` `Session` and the query pipeline entry
 - `src/conf.rs` configuration snapshot taken per query
 - `src/catalog.rs` session catalog (temporary tables and views)
+- `src/view_schema.rs` schema binding modes of permanent views (`WITH SCHEMA BINDING|COMPENSATION|TYPE EVOLUTION|EVOLUTION`, Spark's `ViewSchemaMode`): the read projection per mode, the checks against the analyzed view query, the evolved schema stored after analysis; `tests/views_schema_binding.rs`
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
 - `src/access.rs` `StatementInfo` / `Session::statement_info` (class + read securables with columns), write/DDL checks (`authorize_statement`), the `krishiv::audit` denial record, `PathPrefixPolicy`
 - `src/explain.rs` EXPLAIN; `src/profile.rs` profile for EXPLAIN ANALYZE
@@ -32,6 +33,7 @@ Paths are relative to this crate.
 - SQL-bodied temporary functions live in a per-session map (`sql_functions.rs`) replaced on every change (never edited); a
   query takes the map when it starts and reads one snapshot, and every change bumps the registry version.
 - The IR is reachable only behind the `unstable-ir` feature (not covered by semver).
+- A read of a permanent view analyzes the view's query once on its own (`Session::check_stored_views`) before the whole query, so its binding mode can check types and names (`INCOMPATIBLE_VIEW_SCHEMA_CHANGE`, `CANNOT_UP_CAST_DATATYPE`); `TYPE EVOLUTION`/`EVOLUTION` views store their new schema only after the whole query analyzed, with a compare-and-swap (a concurrent change wins).
 - Access control: one principal and one `AccessPolicy` per session, for life. Reads are checked in analysis; what a statement writes, creates or drops (`krishiv_sql::statement_targets`) is checked in `sql` before it is dispatched, and `df.write` paths before `DirectoryWrite::begin`, all through `krishiv_plan::analyzer::authorize` (fail closed, 42501, no reason, no existence oracle). Permanent views are inlined before binding, so `authorize_reads` asks the policy about every catalog-store lookup in plan order before any read (name as written and folded, then the view securable); a failure inside a stored view's text is raised only after that. The views read by the body of a SQL function a query calls are asked about after Bind (`authorize_body_reads`; the denial comes before the result or any failure in the view's text, but the tables inside the view are loaded first). Every denial logs one `krishiv::audit` record. Deny-all and inverse matrices: `tests/access_policy.rs` (merge-blocking).
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class
   and SQLSTATE.

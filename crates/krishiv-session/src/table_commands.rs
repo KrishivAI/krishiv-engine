@@ -355,9 +355,11 @@ impl Session {
         let (None, Some(query)) = (&v.using, &v.query) else {
             return Err(unsupported("datasource views"));
         };
-        if v.schema_binding.is_some() {
-            return Err(unsupported("WITH SCHEMA binding modes of views"));
-        }
+        let schema_mode = crate::view_schema::create_mode(
+            v.schema_binding.map(|b| b.mode),
+            !v.columns.is_empty(),
+            &env.config,
+        );
         let name = self.table_name(&v.name, &env)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -503,6 +505,7 @@ impl Session {
                 sql,
                 namespace: self.state.catalog.current_namespace(),
                 query_columns,
+                schema_mode,
             }),
         };
         self.state.catalog.store.create_table(view, mode)?;
@@ -560,8 +563,8 @@ impl Session {
         }
     }
 
-    /// `ALTER VIEW name ...`: `AS query` and `SET|UNSET TBLPROPERTIES`; `RENAME TO` and the schema binding forms
-    /// are not executed yet.
+    /// `ALTER VIEW name ...`: `AS query`, `WITH SCHEMA ...` and `SET|UNSET TBLPROPERTIES`; `RENAME TO` is not
+    /// executed yet.
     pub(crate) async fn exec_alter_view(
         &self,
         a: &AlterView,
@@ -569,6 +572,14 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&a.name, &env)?;
+        if matches!(a.action, AlterViewAction::SetSchemaBinding(_))
+            && self.temp_entry_of(&name, &env)
+        {
+            return Err(
+                krishiv_common::error::UnsupportedFeatureTemporaryViewWithSchemaBindingMode {}
+                    .into(),
+            );
+        }
         let Some(existing) = self.state.catalog.store.table(&name.namespace, &name.name) else {
             return Err(name.not_found());
         };
@@ -620,6 +631,8 @@ impl Session {
                     .iter()
                     .map(|c| c.name.clone())
                     .collect();
+                // `ALTER VIEW ... AS` keeps the mode (`AlterViewAsCommand`).
+                let schema_mode = existing.view.as_ref().and_then(|v| v.schema_mode);
                 changed.view = Some(ViewDef {
                     sql: original
                         .get(query.span.start..query.span.end)
@@ -627,7 +640,21 @@ impl Session {
                         .to_owned(),
                     namespace: self.state.catalog.current_namespace(),
                     query_columns,
+                    schema_mode,
                 });
+            }
+            AlterViewAction::SetSchemaBinding(binding) => {
+                // `AlterViewSchemaBindingCommand`: the mode only (`EVOLUTION` stores no query names: the view's
+                // own names stand for them).
+                let mode = crate::view_schema::from_ast(binding.mode);
+                let names: Vec<String> = changed.columns.iter().map(|c| c.name.clone()).collect();
+                if let Some(view) = &mut changed.view {
+                    if mode == crate::store::ViewSchemaMode::Evolution {
+                        view.query_columns = names;
+                    }
+                    view.schema_mode = Some(mode);
+                }
+                self.forget_cached(&name);
             }
             AlterViewAction::SetTblProperties(props) => {
                 changed.properties.extend(options_of(props, original));

@@ -22,12 +22,6 @@
       38,
       40,
       42
-    ],
-    "sql-commands": [
-      37,
-      39,
-      41,
-      43
     ]
   },
   "file": "parse-query-correctness-old-behavior",
