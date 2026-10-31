@@ -75,6 +75,7 @@ def test_a_checksum_sees_values_swapped_between_rows():
     exprs = (micro._int("g"), micro._int("s"), micro._assoc("g", "s"))
     right = con.execute(micro.check_sql("SELECT * FROM (VALUES (1, 10), (2, 20)) t(g, s)", exprs)).fetchone()
     swapped = con.execute(micro.check_sql("SELECT * FROM (VALUES (1, 20), (2, 10)) t(g, s)", exprs)).fetchone()
+    assert right is not None and swapped is not None
     assert right[:3] == swapped[:3]
     assert right != swapped
 
