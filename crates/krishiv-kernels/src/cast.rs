@@ -21,6 +21,7 @@
 
 pub(crate) mod datetime;
 pub(crate) mod text;
+pub(crate) mod time;
 pub(crate) mod timestamp;
 
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType,
+    Int32Type, Int64Type, Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, GenericStringArray, OffsetSizeTrait,
@@ -82,6 +83,7 @@ pub fn spark_type_name(t: &DataType) -> String {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "STRING".to_owned(),
         DataType::Binary | DataType::LargeBinary => "BINARY".to_owned(),
         DataType::Date32 => "DATE".to_owned(),
+        DataType::Time64(TimeUnit::Nanosecond) => "TIME(6)".to_owned(),
         DataType::Timestamp(_, Some(_)) => "TIMESTAMP".to_owned(),
         DataType::Timestamp(_, None) => "TIMESTAMP_NTZ".to_owned(),
         other => other.to_string(),
@@ -601,6 +603,18 @@ pub fn cast(
         }};
     }
     match (from, to) {
+        // Whole seconds since midnight, which always fit an `int`.
+        (DataType::Time64(TimeUnit::Nanosecond), DataType::Int32 | DataType::Int64) => {
+            let t = input.as_primitive::<Time64NanosecondType>();
+            let secs = |i: usize| t.value(i).div_euclid(time::NANOS_PER_SECOND);
+            if *to == DataType::Int64 {
+                Ok(Arc::new(map_rows::<Int64Type>(input, |i| Ok(Some(secs(i))))?) as ArrayRef)
+            } else {
+                Ok(Arc::new(map_rows::<Int32Type>(input, |i| {
+                    Ok(i32::try_from(secs(i)).ok())
+                })?) as ArrayRef)
+            }
+        }
         (f, DataType::Int8) if is_numeric(f) => numeric_to_int!(Int8Type),
         (f, DataType::Int16) if is_numeric(f) => numeric_to_int!(Int16Type),
         (f, DataType::Int32) if is_numeric(f) => numeric_to_int!(Int32Type),
@@ -936,6 +950,14 @@ fn from_string<O: OffsetSizeTrait>(
             })?;
             decimal_out(out, p, sc)
         }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            let out =
+                map_rows::<Time64NanosecondType>(s, |i| match time::parse_time(s.value(i)) {
+                    Some(n) => Ok(Some(n)),
+                    None => fail(mode, None, || invalid(i)),
+                })?;
+            Ok(Arc::new(out))
+        }
         DataType::Date32 => {
             let out =
                 map_rows::<Date32Type>(s, |i| match text::parse_date(s.value(i).as_bytes()) {
@@ -1096,6 +1118,11 @@ fn to_string(input: &dyn Array, opts: &CastOptions<'_>) -> Result<StringArray, K
                 Num::Dec(v, s) => write_decimal_plain(v, s, &mut out),
                 Num::Float(v, is_f32) => out.push_str(&float_string(v, is_f32)),
             },
+            (DataType::Time64(TimeUnit::Nanosecond), _) => {
+                out.push_str(&time::format_time(
+                    input.as_primitive::<Time64NanosecondType>().value(i),
+                ));
+            }
             (DataType::Date32, _) => {
                 datetime::format_date(
                     i64::from(input.as_primitive::<Date32Type>().value(i)),
