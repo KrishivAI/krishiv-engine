@@ -272,3 +272,28 @@ fn outer_generators_keep_rows_of_maps_and_inline_too() {
         table(&[&["1", "NULL"]])
     );
 }
+
+#[test]
+fn a_generator_that_is_not_a_select_item_is_refused_as_spark_does() {
+    let s = Session::new().unwrap();
+    for (sql, class) in [
+        (
+            "select explode(explode(array(array(1, 2, 3))))",
+            "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
+        ),
+        (
+            "select 1 + explode(array(1, 2, 3))",
+            "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS",
+        ),
+        (
+            "select * from values (1) order by explode(array(1, 2, 3))",
+            "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
+        ),
+        (
+            "select * from values (array(1, 2, 3)) t(arr) where explode(arr) == 2",
+            "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
+        ),
+    ] {
+        assert_eq!(error_of(&s, sql).error_class().name(), class, "{sql}");
+    }
+}

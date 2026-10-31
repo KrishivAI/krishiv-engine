@@ -21,6 +21,30 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>>", "operator"),
     ("if", "no PySpark function"),
     (
+        "explode",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "explode_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "posexplode",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "posexplode_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "inline",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "inline_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
         "timestampadd",
         "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
     ),
