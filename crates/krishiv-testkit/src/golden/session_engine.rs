@@ -94,8 +94,15 @@ impl SessionEngine {
     /// # Errors
     /// When the executor or the harness's timer runtime cannot start.
     pub fn new() -> Result<Self, EngineError> {
+        // One compute thread: partial results then merge in one order, so a
+        // statement's verdict is the same on every run and on every machine
+        // (a baseline recorded on 16 cores must hold on a 4-core runner).
+        let config = ExecutorConfig {
+            compute_threads: 1,
+            ..ExecutorConfig::default()
+        };
         let executor: Arc<dyn Executor> =
-            TokioExecutor::new(&ExecutorConfig::default()).map_err(|e| engine_error(&e))?;
+            TokioExecutor::new(&config).map_err(|e| engine_error(&e))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -226,7 +233,10 @@ impl Engine for SessionEngine {
         self.session = None;
         let mut builder = Session::builder()
             .executor(Arc::clone(&self.executor))
-            .config("krishiv.memory.limit", SESSION_MEMORY_LIMIT);
+            .config("krishiv.memory.limit", SESSION_MEMORY_LIMIT)
+            // Group and unordered-`LIMIT` row order is the same on every run, so a
+            // statement's verdict does not change from run to run.
+            .config("krishiv.exec.seed", "1");
         for (k, v) in &setup.configs {
             builder = builder.config(k.clone(), v.clone());
         }

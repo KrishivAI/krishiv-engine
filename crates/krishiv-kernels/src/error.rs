@@ -36,10 +36,10 @@ use krishiv_common::error::{
     ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTimestamp, CastInvalidInput,
     CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion, DatetimeOverflow, DivideByZero,
     ErrorClass, IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd,
-    InvalidFormatEscInTheMiddle, InvalidUtf8String, KrishivDecimalRemainderImpossible,
-    KrishivError, KrishivUnsupportedFeature, NumericOutOfSupportedRange,
-    NumericValueOutOfRangeWithSuggestion, NumericValueOutOfRangeWithoutSuggestion, RemainderByZero,
-    UnableToAcquireMemory,
+    InvalidFormatEscInTheMiddle, InvalidFractionOfSecond, InvalidUtf8String,
+    KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
+    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
+    NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
 
 use crate::policy::Fault;
@@ -301,6 +301,15 @@ impl KernelError {
                 range_message: message,
             }
             .into(),
+        }
+    }
+
+    /// `INVALID_FRACTION_OF_SECOND`: a `make_timestamp` seconds value of 60
+    /// with a fraction.
+    pub(crate) fn invalid_fraction_of_second(row: usize, sec_and_micros: String) -> Self {
+        Self {
+            row: Some(row),
+            error: InvalidFractionOfSecond { sec_and_micros }.into(),
         }
     }
 

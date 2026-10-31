@@ -165,6 +165,82 @@ fn subqueries(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
+/// `e` without the origins of its nodes, so equal expressions written in
+/// two places compare equal.
+fn without_origins(e: &Arc<Expr>) -> Arc<Expr> {
+    let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
+        Ok::<_, std::convert::Infallible>(Arc::new(Expr::new(x.node.clone())))
+    });
+    out.unwrap_or_else(|never| match never {})
+}
+
+/// The disjuncts of a predicate.
+fn disjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
+    let mut out = Vec::new();
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.id == FunctionId::Builtin(Builtin::Or) =>
+            {
+                stack.extend(f.args.iter().rev().cloned());
+            }
+            _ => out.push(x),
+        }
+    }
+    out
+}
+
+/// `e` with the conjuncts every disjunct of a top-level `OR` holds taken
+/// out: `(a AND b) OR (a AND c)` is `a AND (b OR c)`, which is three-valued
+/// exact. `e` itself when it is no disjunction or the disjuncts share no
+/// conjunct. A nondeterministic predicate is left whole: factoring moves
+/// part of it below the join, where it would run once per inner row instead
+/// of once per joined pair.
+fn factor_or(e: &Arc<Expr>) -> Arc<Expr> {
+    let parts = disjuncts(e);
+    if parts.len() < 2 || !super::sqlfn::is_deterministic(e) {
+        return Arc::clone(e);
+    }
+    let rows: Vec<Vec<(Arc<Expr>, Arc<Expr>)>> = parts
+        .iter()
+        .map(|d| {
+            conjuncts(d)
+                .into_iter()
+                .map(|c| (without_origins(&c), c))
+                .collect()
+        })
+        .collect();
+    let common: Vec<Arc<Expr>> = rows[0]
+        .iter()
+        .filter(|(key, _)| rows[1..].iter().all(|r| r.iter().any(|(k, _)| k == key)))
+        .map(|(_, c)| Arc::clone(c))
+        .collect();
+    if common.is_empty() {
+        return Arc::clone(e);
+    }
+    let keys: Vec<Arc<Expr>> = common.iter().map(without_origins).collect();
+    let mut rests = Vec::new();
+    for row in &rows {
+        let rest: Vec<Arc<Expr>> = row
+            .iter()
+            .filter(|(k, _)| !keys.contains(k))
+            .map(|(_, c)| Arc::clone(c))
+            .collect();
+        // `a OR (a AND b)` is `a`.
+        match and_all(rest) {
+            Some(r) => rests.push(r),
+            None => return and_all(common).unwrap_or_else(|| Arc::clone(e)),
+        }
+    }
+    let disjunction = rests
+        .into_iter()
+        .reduce(|a, b| boolean(Builtin::Or, vec![a, b]));
+    let mut all = common;
+    all.extend(disjunction);
+    and_all(all).unwrap_or_else(|| Arc::clone(e))
+}
+
 /// The conjuncts of a predicate.
 fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     let mut out = Vec::new();
@@ -726,6 +802,10 @@ impl Rewriter {
         }
         match &plan.node {
             PlanNode::Filter { input, predicate } => {
+                // `(k = o AND p) OR (k = o AND q)` is `k = o AND (p OR q)`:
+                // the correlation reads as a conjunct (Spark's optimizer
+                // factors the common conjuncts of a disjunction too).
+                let predicate = &factor_or(predicate);
                 let (corr, rest): (Vec<_>, Vec<_>) = conjuncts(predicate)
                     .into_iter()
                     .partition(|c| has_outer(Node::Expr(c)));

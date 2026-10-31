@@ -18,6 +18,8 @@
 //! pivot columns stand for a struct, which the engine cannot value yet:
 //! they fail with `KRISHIV_UNSUPPORTED_FEATURE`, never a wrong result.
 
+use super::SessionZone;
+
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -477,7 +479,7 @@ fn column_refs(e: &Arc<Expr>, refs: &mut HashSet<AttrId>) {
 /// The `expression` parameter of `NON_LITERAL_PIVOT_VALUES`: the value as
 /// Spark's `toSQLExpr` prints it (double-quoted), keeping an alias as
 /// Spark's `Alias.sql` does (the alias field, or an `Alias` node).
-fn value_sql(e: &Arc<Expr>, alias: &Option<String>, zone: Option<i32>) -> String {
+fn value_sql(e: &Arc<Expr>, alias: &Option<String>, zone: Option<SessionZone>) -> String {
     let name = match &e.node {
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => Some(output.name.clone()),
         _ => alias.clone(),
@@ -524,9 +526,9 @@ fn part_name(b: &Bound, r: &Resolver<'_>) -> String {
     if let ExprNode::Literal(v) = &b.expr.node {
         return match v {
             Literal::Date(days) => crate::spark_fmt::date_value(*days),
-            Literal::Timestamp(us) => crate::spark_fmt::timestamp_value(
-                us.saturating_add(i64::from(zone.unwrap_or(0)).saturating_mul(1_000_000)),
-            ),
+            Literal::Timestamp(us) => {
+                crate::spark_fmt::timestamp_value(SessionZone::local_micros(zone, *us))
+            }
             Literal::TimestampNtz(us) => crate::spark_fmt::timestamp_value(*us),
             _ => pretty(&b.expr, zone),
         };
@@ -592,7 +594,7 @@ fn value_render(
 }
 
 /// The name of one pivot column part, for the struct pivot type.
-fn pivot_part_name(e: &Arc<Expr>, zone: Option<i32>) -> String {
+fn pivot_part_name(e: &Arc<Expr>, zone: Option<SessionZone>) -> String {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
             c.name.clone()
@@ -621,7 +623,7 @@ fn pivot_type_mismatch(
 /// The suffix of a pivot output with several aggregates: the aggregate's
 /// alias, or the aggregate as Spark's `toPrettySQL` prints it (which is
 /// what the aggregate machinery names it).
-fn agg_suffix(e: &Arc<Expr>, zone: Option<i32>) -> String {
+fn agg_suffix(e: &Arc<Expr>, zone: Option<SessionZone>) -> String {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
         _ => pretty(e, zone),

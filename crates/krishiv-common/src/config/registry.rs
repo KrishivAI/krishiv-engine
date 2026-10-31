@@ -21,6 +21,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_RADIX_BITS,
+    &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
@@ -82,6 +83,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
 /// A test checks the order and that it holds exactly the keys and aliases
 /// of [`REGISTRY`]; add new entries here in order.
 pub static INDEX: &[(&str, &ConfigEntry)] = &[
+    ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
@@ -433,6 +435,20 @@ pub static EXEC_JOIN_RADIX_BITS: ConfigEntry = ConfigEntry {
     doc: "Internal: a row-layout hash join build splits its rows into 2^bits partitions by \
           the top bits of the key hash (3 to 6) and indexes them in parallel. Results are \
           the same for every value.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// The seed of deterministic execution (tests and the golden harness).
+pub static EXEC_SEED: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.seed",
+    value_type: ValueType::Int,
+    default: None,
+    doc: "Internal, for tests: seeds the key hashes of grouped aggregations and joins and \
+          the order in which scan morsels are claimed, and runs aggregations in their \
+          deterministic mode, so that the order of groups and of unordered `LIMIT` rows is \
+          the same on every run. Unset, each query draws a random seed.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
