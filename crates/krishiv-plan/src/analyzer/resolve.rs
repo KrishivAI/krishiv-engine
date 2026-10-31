@@ -620,6 +620,25 @@ impl Resolver<'_> {
             PlanNode::Read(ReadSource::Table { name, options }) => self.read(p, name, options, env),
             PlanNode::OneRowRelation => Ok(self.wrap(Arc::clone(p), o.plan_id, Vec::new(), &[])),
             PlanNode::Project { input, exprs } => self.project(p, input, exprs, env),
+            PlanNode::Generate {
+                input,
+                kind,
+                outer,
+                arg,
+                output,
+                names,
+                qualifier,
+            } => self.generate_node(
+                o,
+                input,
+                *kind,
+                *outer,
+                arg,
+                output,
+                names,
+                qualifier.as_ref(),
+                env,
+            ),
             PlanNode::Filter { input, predicate } => self.filter(p, input, predicate, env),
             PlanNode::Aggregate {
                 input,
@@ -854,6 +873,7 @@ impl Resolver<'_> {
             | PlanNode::SetOp { .. }
             | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
+            | PlanNode::Generate { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
     }

@@ -434,6 +434,17 @@ pub enum Inputs {
     /// is an `INT`. No casts when there is none (the result rule reports
     /// `ARRAY_FUNCTION_DIFF_TYPES`).
     ArrayItem,
+    /// `array_contains(arr, value)`: the value meets the array's element
+    /// type without string promotion (Spark's
+    /// `findWiderTypeWithoutStringPromotionForTwo`) and both are cast to it.
+    /// No casts when there is none, or when either side is an untyped
+    /// `NULL` (the result rule reports `ARRAY_FUNCTION_DIFF_TYPES` and
+    /// `NULL_TYPE`).
+    ArrayContains,
+    /// `array_union(a, b)`: both arrays are cast to the wider of their
+    /// types; no casts when there is none (the result rule reports
+    /// `BINARY_ARRAY_DIFF_TYPES`).
+    ArrayPair,
     /// Every argument takes the type all of them meet at (`coalesce`);
     /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` when there is none.
     Common,
@@ -484,6 +495,8 @@ impl Inputs {
             | Self::MapConcat
             | Self::MapContainsKey
             | Self::ArrayItem
+            | Self::ArrayContains
+            | Self::ArrayPair
             | Self::Comparable { .. }
             | Self::NullSafeEqual
             | Self::Operator(_)

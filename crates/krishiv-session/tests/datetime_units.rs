@@ -431,12 +431,10 @@ fn an_unknown_zone_is_invalid_timezone_even_for_the_try_forms() {
             "{expr}"
         );
     }
-    // A session zone that names no region fails the calls that read it.
-    let bad = session_in("Europe/Pariss");
-    assert_eq!(
-        error_of(&bad, "date_format(DATE '2022-01-01', 'yyyy')").error_class(),
-        ErrorClass::InvalidTimezone
-    );
+    // A session zone that names no region is refused when it is set (see
+    // `session_time_zone.rs`), so no call ever reads one.
+    let e = block_on(s.sql("SET spark.sql.session.timeZone = Europe/Pariss")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InvalidConfValueTimeZone);
 }
 
 #[test]

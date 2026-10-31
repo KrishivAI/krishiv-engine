@@ -696,6 +696,39 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 subqueries: vec![subquery()],
             },
         ),
+        (
+            "generate_explode",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::Explode,
+                outer: false,
+                arg: col(2, "xs", DataType::Integer),
+                subqueries: Vec::new(),
+            },
+        ),
+        (
+            "generate_posexplode_outer",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::PosExplode,
+                outer: true,
+                arg: col(2, "xs", DataType::Integer),
+                subqueries: vec![subquery()],
+            },
+        ),
+        (
+            "generate_inline",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::Inline,
+                outer: false,
+                arg: col(2, "xs", DataType::Integer),
+                subqueries: Vec::new(),
+            },
+        ),
         ("expand_rollup", expand_rollup()),
         (
             "expand_single",

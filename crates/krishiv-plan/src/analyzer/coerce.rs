@@ -881,6 +881,8 @@ pub(super) fn inputs(
         Inputs::MapConcat => map_concat_casts(args, Rules::of(call)),
         Inputs::MapContainsKey => map_contains_key_casts(args, call),
         Inputs::ArrayItem => Ok(array_item_casts(args, Rules::of(call))),
+        Inputs::ArrayContains => Ok(array_contains_casts(args, call)),
+        Inputs::ArrayPair => Ok(array_pair_casts(args, Rules::of(call))),
         Inputs::CommonNoStrings => {
             let typed = args.iter().filter(|a| a.ty.is_some());
             let strings = typed
@@ -1115,6 +1117,45 @@ fn array_item_casts(args: &[Arg<'_>], rules: Rules) -> Vec<Option<DataType>> {
     }
     casts.push(cast_to(item.ty, Some(&meet)));
     casts
+}
+
+/// `array_contains(arr, value)`: the value and the element type meet at
+/// their wider type without string promotion, and both are cast to it; no
+/// casts when either side is an untyped `NULL` or they do not meet (the
+/// result rule reports those).
+fn array_contains_casts(args: &[Arg<'_>], call: &CallTypes<'_>) -> Vec<Option<DataType>> {
+    let none = vec![None; args.len()];
+    let [arr, value] = args else { return none };
+    let (Some(DataType::Array(a)), Some(v)) = (arr.ty, value.ty) else {
+        return none;
+    };
+    let Some(Some(wider)) = wider_type_without_string_promotion(
+        &elem(a.element_type()),
+        &elem(v),
+        call.case_sensitive(),
+    ) else {
+        return none;
+    };
+    let array: DataType = ArrayType::new(wider.clone(), a.contains_null()).into();
+    vec![
+        cast_to(arr.ty, Some(&array)),
+        cast_to(value.ty, Some(&wider)),
+    ]
+}
+
+/// `array_union(a, b)`: both arrays take the wider of their types, holding
+/// NULL when either did; no casts when they do not meet.
+fn array_pair_casts(args: &[Arg<'_>], rules: Rules) -> Vec<Option<DataType>> {
+    let none = vec![None; args.len()];
+    let [x, y] = args else { return none };
+    let (Some(DataType::Array(l)), Some(DataType::Array(r))) = (x.ty, y.ty) else {
+        return none;
+    };
+    let Some(Some(meet)) = tightest(l.element_type(), r.element_type(), rules) else {
+        return none;
+    };
+    let array: DataType = ArrayType::new(meet, l.contains_null() || r.contains_null()).into();
+    vec![cast_to(x.ty, Some(&array)), cast_to(y.ty, Some(&array))]
 }
 
 /// The literal `0` of `zeroifnull` and `nullifzero`.

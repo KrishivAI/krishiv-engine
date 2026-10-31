@@ -121,6 +121,7 @@ registry! {
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (join_full_outer, JoinFullOuter, POST_MIGRATION_READER_VERSION, Semantic, "The `FULL_OUTER` hash join: both sides preserved, with no equivalent plan without it."),
@@ -292,6 +293,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::HashJoin(j) => j.single_match.then_some(Feature::JoinSingleMatch),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
+            PhysNode::Generate { .. } => Some(Feature::Generate),
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
@@ -490,6 +492,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
         | PhysNode::ReplicateRows { .. }
+        | PhysNode::Generate { .. }
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
@@ -598,6 +601,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
             roots.extend(projections.iter().flat_map(|p| items(p)));
         }
         PhysNode::ReplicateRows { count, .. } => roots.push(count),
+        PhysNode::Generate { arg, .. } => roots.push(arg),
         PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
