@@ -14,6 +14,7 @@ Paths are relative to this crate.
 - `src/project.rs` projection rules; `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
   `InferWindowGroupLimit` decision (applied by the physical planner)
 - `src/restrict.rs` subquery restriction rules
+- `src/inline_cte.rs` CTE inlining (a nondeterministic definition read twice stays a `CteRef`); `src/share_cte.rs` `ShareCte` (P2-T198): equal deterministic instances with a pipeline breaker become one `WITH` definition, only when a session configuration is given and `krishiv.sql.optimizer.shareCteInstances` is on
 - `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads and the estimate types (`RelStats`, `AttrStats`, `StatSource`)
 - `src/estimate.rs` the `Estimator`: what each operator leaves known of its columns; `src/narrow.rs` predicates over estimates (selectivity and narrowed ranges); `src/plan_stats.rs` `PlanStats`, one pass over an optimized plan (physical planner, `EXPLAIN COST`)
 - `tests/it/plan_stats.rs` one test per propagation rule; `tests/it/qerror.rs` the q-error report (`cargo xtask qerror`)
