@@ -319,12 +319,13 @@ impl Engine for SessionEngine {
 }
 
 /// A DESCRIBE cell as Java's `String.format("%-20s", ...)` prints it, a NULL comment as empty.
+/// The width counts UTF-16 code units, as `String.length()` does.
 fn describe_cell(cell: Cell) -> Cell {
     let text = match cell {
         Cell::Str(s) => s,
         _ => String::new(),
     };
-    let width = 20_usize.saturating_sub(text.chars().count());
+    let width = 20_usize.saturating_sub(text.encode_utf16().count());
     Cell::Str(format!("{text}{}", " ".repeat(width)))
 }
 
@@ -1423,6 +1424,11 @@ mod tests {
             Cell::Str(format!("a{}", " ".repeat(19)))
         );
         assert_eq!(describe_cell(Cell::Null), Cell::Str(" ".repeat(20)));
+        // A supplementary character is two UTF-16 code units, so it takes two off the padding.
+        assert_eq!(
+            describe_cell(Cell::Str("\u{1F600}".to_owned())),
+            Cell::Str(format!("\u{1F600}{}", " ".repeat(18)))
+        );
         let long = "x".repeat(25);
         assert_eq!(describe_cell(Cell::Str(long.clone())), Cell::Str(long));
     }
