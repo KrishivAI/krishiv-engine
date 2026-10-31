@@ -71,6 +71,8 @@ pub(super) struct RangeKeys {
     /// The range of the key's integer type (none for decimals and dates).
     limits: Option<(i128, i128)>,
     ansi: bool,
+    /// The keys are `FLOAT`: the sum is rounded to a single.
+    single: bool,
 }
 
 enum Keys {
@@ -177,7 +179,18 @@ impl RangeKeys {
                 _ => None,
             },
             ansi,
+            single: ty == DataType::Float32,
         }))
+    }
+
+    /// `bound` as a value bound: `CURRENT ROW` is the distance 0, which
+    /// Spark's frames compare through the same bound ordering.
+    fn offset(&self, bound: FrameBound) -> FrameBound {
+        match (bound, &self.keys) {
+            (FrameBound::CurrentRow, Keys::Int(_)) => FrameBound::RangeInt(0),
+            (FrameBound::CurrentRow, _) => FrameBound::RangeFloat(0.0_f64.to_bits()),
+            (b, _) => b,
+        }
     }
 
     /// How row `j` orders against `target` (the current row's key moved by
@@ -248,9 +261,14 @@ impl RangeKeys {
             }
             (Keys::Float(k), FrameBound::RangeFloat(bits)) => {
                 let off = f64::from_bits(bits);
-                Ok(Some(Target::Float(
-                    k[i] + if self.descending { -off } else { off },
-                )))
+                let off = if self.descending { -off } else { off };
+                Ok(Some(Target::Float(if self.single {
+                    // Spark adds in the key's type (the bound was cast to it).
+                    #[expect(clippy::cast_possible_truncation, reason = "a FLOAT key and bound")]
+                    f64::from(k[i] as f32 + off as f32)
+                } else {
+                    k[i] + off
+                })))
             }
             _ => Err(internal(
                 "a range bound of another kind than its key".to_owned(),
@@ -259,6 +277,7 @@ impl RangeKeys {
     }
 }
 
+#[derive(Clone)]
 enum Target {
     Int(i128),
     Float(f64),
@@ -292,9 +311,14 @@ fn range_edge(
     bound: FrameBound,
     upper: bool,
 ) -> Result<usize> {
-    let target = order.target(i, bound)?;
+    // Computed only when a row is compared, as Spark's bound ordering does
+    // (the sum can overflow).
+    let mut target = None;
     while *at < pe {
-        let c = order.cmp(*at, target.as_ref())?;
+        if target.is_none() {
+            target = Some(order.target(i, bound)?);
+        }
+        let c = order.cmp(*at, target.as_ref().and_then(Option::as_ref))?;
         if if upper { c.is_gt() } else { c.is_ge() } {
             break;
         }
@@ -332,13 +356,31 @@ impl Sliding {
                 next: ps,
             };
         }
-        let lo = order.target(i, lower)?;
-        let hi = order.target(i, upper)?;
-        while self.head < self.tail && order.cmp(self.head, lo.as_ref())?.is_lt() {
+        // Each target is computed when a row is first compared with it
+        // (the sum can overflow, and Spark does not compute what it does
+        // not compare).
+        let (mut lo, mut hi) = (None, None);
+        let target =
+            |at: &mut Option<Option<Target>>, bound: FrameBound| -> Result<Option<Target>> {
+                if at.is_none() {
+                    *at = Some(order.target(i, bound)?);
+                }
+                Ok(at.clone().flatten())
+            };
+        while self.head < self.tail {
+            let t = target(&mut lo, lower)?;
+            if !order.cmp(self.head, t.as_ref())?.is_lt() {
+                break;
+            }
             self.head += 1;
         }
-        while self.next < pe && order.cmp(self.next, hi.as_ref())?.is_le() {
-            if order.cmp(self.next, lo.as_ref())?.is_ge() {
+        while self.next < pe {
+            let t = target(&mut hi, upper)?;
+            if !order.cmp(self.next, t.as_ref())?.is_le() {
+                break;
+            }
+            let t = target(&mut lo, lower)?;
+            if order.cmp(self.next, t.as_ref())?.is_ge() {
                 if self.head == self.tail {
                     self.head = self.next;
                 } else if self.next != self.tail {
@@ -365,7 +407,11 @@ pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u3
     // The sliding edges of the partition being walked.
     let (mut lower_at, mut upper_at) = (0, 0);
     let mut sliding = Sliding::default();
-    let both = is_range_offset(frame.lower) && is_range_offset(frame.upper);
+    let both = frame.units == FrameUnits::Range
+        && (is_range_offset(frame.lower) || is_range_offset(frame.upper))
+        && [frame.lower, frame.upper]
+            .into_iter()
+            .all(|b| is_range_offset(b) || b == FrameBound::CurrentRow);
     for i in 0..rows.n {
         let (ps, pe) = (rows.part)(i);
         let at = |k: i64| -> usize {
@@ -394,7 +440,12 @@ pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u3
             let Some(order) = rows.order else {
                 return Err(internal("a range bound without an ordering key".to_owned()));
             };
-            let (start, end) = sliding.window(order, i, (ps, pe), (frame.lower, frame.upper))?;
+            let (start, end) = sliding.window(
+                order,
+                i,
+                (ps, pe),
+                (order.offset(frame.lower), order.offset(frame.upper)),
+            )?;
             out.push((id(start)?, id(end)?));
             continue;
         }

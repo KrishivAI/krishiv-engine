@@ -195,3 +195,55 @@ fn range_frame_checks() {
         assert_eq!(class(&s, &q(over)), expected, "{over}");
     }
 }
+
+/// The bounds are computed only when a row is compared, and `CURRENT ROW` is a bound of the sliding frame too.
+#[test]
+fn sliding_frames_match_spark_at_the_edges_of_the_key_type() {
+    let s = session();
+    let q = |keys: &str, frame: &str| {
+        format!(
+            "SELECT concat_ws(',', cast(x AS string), c) FROM (SELECT x, count(*) OVER (ORDER BY x RANGE BETWEEN {frame}) c \
+             FROM VALUES {keys} AS b(x)) ORDER BY x"
+        )
+    };
+    // No row is compared with 28 + 100, so nothing overflows.
+    assert_eq!(
+        rows(
+            &s,
+            &q(
+                "(CAST(27 AS TINYINT)),(CAST(28 AS TINYINT))",
+                "100 PRECEDING AND 100 FOLLOWING"
+            )
+        ),
+        ["27,2", "28,2"]
+    );
+    block_on(async {
+        s.sql("SET spark.sql.ansi.enabled=false")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            &q(
+                "(CAST(126 AS TINYINT)),(CAST(127 AS TINYINT)),(CAST(-128 AS TINYINT))",
+                "1 PRECEDING AND CURRENT ROW"
+            )
+        ),
+        ["-128,0", "126,1", "127,2"]
+    );
+}
+
+/// A FLOAT key adds its bound in single precision.
+#[test]
+fn float_keys_add_in_single_precision() {
+    let s = session();
+    let got = rows(
+        &s,
+        "SELECT concat_ws(',', cast(x AS string), c) FROM (SELECT x, count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 0.2 FOLLOWING) c \
+         FROM VALUES (CAST(0.1 AS FLOAT)),(CAST(0.3 AS FLOAT)) AS b(x)) ORDER BY x",
+    );
+    assert_eq!(got, ["0.1,2", "0.3,1"]);
+}
