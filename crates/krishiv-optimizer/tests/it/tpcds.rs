@@ -56,7 +56,6 @@ pub(crate) const UNSUPPORTED: &[(usize, &str)] = &[
     (16, "double-quoted aliases do not parse"),
     (30, "column c_last_review_date_sk missing from schemas"),
     (32, "double-quoted aliases do not parse"),
-    (41, "correlated scalar subquery (non-equality correlation)"),
     (50, "double-quoted aliases do not parse"),
     (62, "double-quoted aliases do not parse"),
     (72, "date arithmetic"),

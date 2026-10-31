@@ -11,6 +11,7 @@
 )]
 
 mod conditionals;
+mod correlated_or;
 mod cse;
 mod exchanges;
 mod existence;
