@@ -4,17 +4,21 @@
 //! drivers read the partitions and however they race.
 #![cfg(test)]
 
+use std::ops::Range;
+use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray as _;
 use arrow_array::types::Int64Type;
-use arrow_array::{Int64Array, RecordBatch};
+use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_exec::{ExecutorConfig, TokioExecutor};
+use krishiv_io::split::{SplitConfig, SplitFile, plan};
 use krishiv_session::Session;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+use parquet::file::reader::{FileReader as _, SerializedFileReader};
 
 fn session(threads: usize) -> Session {
     let executor = TokioExecutor::new(&ExecutorConfig {
@@ -185,4 +189,261 @@ fn errors_and_a_dropped_stream_end_an_ordered_query() {
     }
     // The session still answers.
     assert_eq!(collect_in_order(&s, "SELECT id FROM range(3)"), [0, 1, 2]);
+}
+
+/// The `EXPLAIN ANALYZE` text of `sql`.
+fn analyzed(session: &Session, sql: &str) -> String {
+    let df = block_on(session.sql(&format!("EXPLAIN ANALYZE {sql}"))).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let col = batches[0].column(0);
+    match col.data_type() {
+        DataType::Utf8View => col.as_string_view().value(0).to_owned(),
+        _ => col.as_string::<i32>().value(0).to_owned(),
+    }
+}
+
+/// One Parquet file of 32 row groups cut into finer morsels than its
+/// splits (a small `openCostInBytes` lowers the morsel floor): every run
+/// returns the rows in file order, also for a filter that keeps one
+/// stretch of the file.
+#[test]
+fn finer_morsels_keep_the_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sorted.parquet");
+    let file = std::fs::File::create(&path).unwrap();
+    let batch = ids(0..80_000);
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2_500))
+        .build();
+    let mut w = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let path = path.to_str().unwrap().to_owned();
+    let all = format!("SELECT id FROM parquet.`{path}` WHERE id % 3 != 1");
+    let stretch = format!("SELECT id FROM parquet.`{path}` WHERE id >= 50000 AND id < 61000");
+    let want_all: Vec<i64> = (0..80_000).filter(|i| i % 3 != 1).collect();
+    let want_stretch: Vec<i64> = (50_000..61_000).collect();
+    for threads in [2, 8] {
+        let s = session(threads);
+        s.conf()
+            .set("spark.sql.files.openCostInBytes", "1024")
+            .unwrap();
+        // Four morsels per driver, each a piece of one of the `threads`
+        // planned splits.
+        let text = analyzed(&s, &all);
+        let pieces: usize = text
+            .split("scan_splits=")
+            .nth(1)
+            .and_then(|t| t.split(' ').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        assert!(pieces >= 4 * threads, "{text}");
+        repeat_under_load(&s, &all, &want_all);
+        repeat_under_load(&s, &stretch, &want_stretch);
+    }
+}
+
+/// Writes `groups` row groups of 2,500 rows, ids from `first`, and returns
+/// the row groups' `(ids, byte range)` as the reader plans them.
+fn write_groups(path: &Path, first: i64, groups: i64) -> Vec<(Range<i64>, Range<u64>)> {
+    let batch = ids(first..first + groups * 2_500);
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2_500))
+        .build();
+    let file = std::fs::File::create(path).unwrap();
+    let mut w = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let meta = SerializedFileReader::new(std::fs::File::open(path).unwrap())
+        .unwrap()
+        .metadata()
+        .clone();
+    let mut start = first;
+    meta.row_groups()
+        .iter()
+        .map(|rg| {
+            let (at, len) = rg.column(0).byte_range();
+            let rows = start..start + rg.num_rows();
+            start = rows.end;
+            (rows, at..at + len)
+        })
+        .collect()
+}
+
+/// Files of different sizes, cut into finer morsels than their splits:
+/// the rows come back in the order of the splits Spark's planner gives
+/// (the longest split first, whatever the file), however the drivers race.
+#[test]
+fn finer_morsels_keep_the_planned_split_order() {
+    let dir = tempfile::tempdir().unwrap();
+    // Neither the names nor the ids follow the sizes.
+    let shapes = [
+        ("a.parquet", 0, 8),
+        ("b.parquet", 20_000, 40),
+        ("c.parquet", 120_000, 20),
+    ];
+    let mut groups = Vec::new();
+    let mut files = Vec::new();
+    for (name, first, count) in shapes {
+        let path = dir.path().join(name);
+        groups.push(write_groups(&path, first, count));
+        files.push(SplitFile {
+            size: std::fs::metadata(&path).unwrap().len(),
+            splittable: true,
+        });
+    }
+    let sql = format!("SELECT id FROM parquet.`{}`", dir.path().display());
+    for threads in [2_usize, 8] {
+        let s = session(threads);
+        s.conf()
+            .set("spark.sql.files.openCostInBytes", "1024")
+            .unwrap();
+        let planned = plan(
+            &SplitConfig {
+                max_partition_bytes: 128 << 20,
+                open_cost_in_bytes: 1024,
+                min_partition_num: threads as u64,
+                max_partition_num: None,
+            },
+            &files,
+        );
+        let splits: Vec<_> = planned.iter().flat_map(|p| &p.splits).collect();
+        let want: Vec<i64> = splits
+            .iter()
+            .flat_map(|split| {
+                groups[split.file]
+                    .iter()
+                    .filter(|(_, bytes)| split.range.owns(bytes))
+                    .flat_map(|(rows, _)| rows.clone())
+            })
+            .collect();
+        assert_eq!(want.len(), 170_000);
+        assert!(!want.is_sorted(), "the plan must not follow the ids");
+        // The scan really read more pieces than the plan has splits.
+        let text = analyzed(&s, &sql);
+        let pieces: usize = text
+            .split("scan_splits=")
+            .nth(1)
+            .and_then(|t| t.split(' ').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        assert!(pieces > splits.len(), "{pieces} pieces: {text}");
+        repeat_under_load(&s, &sql, &want);
+    }
+}
+
+/// Under a tight limit the drivers ahead stop at their shares and the rows
+/// still come back in order; finer morsels only move a driver on sooner.
+#[test]
+fn finer_morsels_keep_the_order_under_a_tight_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sorted.parquet");
+    write_groups(&path, 0, 400);
+    let sql = format!("SELECT id FROM parquet.`{}`", path.display());
+    let executor = TokioExecutor::new(&ExecutorConfig {
+        compute_threads: 8,
+        io_threads: 1,
+        blocking_threads: 8,
+        io_blocking_threads: 2,
+    })
+    .unwrap();
+    let s = Session::builder()
+        .executor(executor)
+        .config("krishiv.memory.limit", "32m")
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.files.openCostInBytes", "1024")
+        .unwrap();
+    let want: Vec<i64> = (0..1_000_000).collect();
+    for _ in 0..5 {
+        assert_eq!(collect_in_order(&s, &sql), want);
+    }
+}
+
+/// A predicate that keeps half the rows, over a file cut into about one
+/// morsel per row group: each driver guesses the row filter on once, not
+/// once per morsel, and every matching row comes back in file order.
+#[test]
+fn drivers_keep_the_row_filter_measurement_across_morsels() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("half.parquet");
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Utf8, false),
+    ]));
+    let rows = 0..80_000_i64;
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(rows.clone())),
+            Arc::new(Int64Array::from_iter_values(rows.clone().map(|i| i % 2))),
+            Arc::new(StringArray::from_iter_values(
+                rows.map(|i| format!("a value long enough to outweigh the key {i}")),
+            )),
+        ],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2_500))
+        .build();
+    let file = std::fs::File::create(&path).unwrap();
+    let mut w = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let sql = format!("SELECT id, v FROM parquet.`{}` WHERE k = 0", path.display());
+    let threads = 4;
+    let s = session(threads);
+    s.conf()
+        .set("spark.sql.files.openCostInBytes", "1024")
+        .unwrap();
+    let want: Vec<i64> = (0..80_000).step_by(2).collect();
+    assert_eq!(collect_in_order(&s, &sql), want);
+    let text = analyzed(&s, &sql);
+    let counter = |name: &str| -> usize {
+        text.split(&format!("{name}="))
+            .nth(1)
+            .and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no {name}: {text}"))
+    };
+    assert!(counter("scan_splits") >= 4 * threads, "{text}");
+    let on = counter("row_filter_units");
+    assert!((1..=threads).contains(&on), "{on} guesses: {text}");
+}
+
+/// The `scan_splits` counter of `sql`'s `EXPLAIN ANALYZE`.
+fn scan_splits(session: &Session, sql: &str) -> usize {
+    let text = analyzed(session, sql);
+    text.split("scan_splits=")
+        .nth(1)
+        .and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no scan_splits: {text}"))
+}
+
+/// A text file cut into morsels mid-line: every line is read once, by the
+/// piece holding its start, in file order.
+#[test]
+fn finer_morsels_of_a_text_file_keep_its_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lines.csv");
+    let lines: String = (0..20_000)
+        .map(|i| format!("{i},row number {i}\n"))
+        .collect();
+    std::fs::write(&path, lines).unwrap();
+    let sql = format!(
+        "SELECT CAST(_c0 AS BIGINT) AS id FROM csv.`{}`",
+        path.display()
+    );
+    let want: Vec<i64> = (0..20_000).collect();
+    for threads in [2, 8] {
+        let s = session(threads);
+        s.conf()
+            .set("spark.sql.files.openCostInBytes", "1024")
+            .unwrap();
+        assert!(scan_splits(&s, &sql) >= 4 * threads);
+        repeat_under_load(&s, &sql, &want);
+    }
 }

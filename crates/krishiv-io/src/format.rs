@@ -384,6 +384,14 @@ pub trait Decoder: Send {
 
     /// Counters so far.
     fn metrics(&self) -> ScanUnitMetrics;
+
+    /// Whether the last unit's measurements ask for row-level filtering on
+    /// the next one, for a later piece of the file to start from
+    /// ([`ScanRequest::row_filter_start`]); `None` if nothing was measured
+    /// or the format decides nothing.
+    fn row_filter_measured(&self) -> Option<bool> {
+        None
+    }
 }
 
 /// What an encoder produced for one file.

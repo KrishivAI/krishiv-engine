@@ -597,6 +597,11 @@ pub struct ScanRequest {
     pub selection: Option<RowSelection>,
     /// Late-materialisation policy.
     pub row_filter: RowFilterPolicy,
+    /// How a [`RowFilterPolicy::Auto`] filter starts: what an earlier piece
+    /// of this file last measured
+    /// ([`ScanStream::row_filter_measured`](crate::ScanStream::row_filter_measured)),
+    /// `None` for the format's first guess.
+    pub row_filter_start: Option<bool>,
     /// What row-level stages may drop rows by.
     pub row_level: RowLevel,
     /// Most rows needed (a pushed `LIMIT` without a filter in between);
@@ -620,6 +625,7 @@ impl ScanRequest {
             dynamic: Vec::new(),
             selection: None,
             row_filter: RowFilterPolicy::Auto,
+            row_filter_start: None,
             row_level: RowLevel::Full,
             limit: None,
             metadata_cols: MetadataCols::default(),

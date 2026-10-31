@@ -35,6 +35,7 @@ pub use krishiv::UdfError
 pub use krishiv::UdfInputType
 pub use krishiv::UdfLibrary
 pub use krishiv::UdfProperties
+pub use krishiv::agent
 pub use krishiv::dot_of_profile
 pub use krishiv::functions
 pub use krishiv::mermaid_of_profile

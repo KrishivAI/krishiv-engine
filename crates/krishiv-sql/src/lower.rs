@@ -1561,6 +1561,18 @@ impl Lowerer {
                 // Spark's builder of `lag` and `lead`: `input` NULL, `offset`
                 // 1 and `default` NULL when not given.
                 let lname = name.value.to_ascii_lowercase();
+                // `datediff(unit, start, end)` (also `date_diff`) is `timestampdiff`; with two
+                // arguments it is the day difference of two dates.
+                let call_name = if matches!(lname.as_str(), "datediff" | "date_diff")
+                    && qualifier.is_empty()
+                    && matches!(
+                        f.args.as_slice(),
+                        [first, _, _] if matches!(first.expr.kind, ExprKind::Keyword(_))
+                    ) {
+                    "timestampdiff".to_owned()
+                } else {
+                    name.value.clone()
+                };
                 if matches!(lname.as_str(), "lag" | "lead") && args.len() < 3 {
                     let fill = [
                         IrLiteral::Null(None),
@@ -1622,7 +1634,7 @@ impl Lowerer {
                     .collect::<R<Vec<_>>>()?;
                 let call = self.ex(
                     ExprNode::Function(FunctionCall {
-                        name: name.value.clone(),
+                        name: call_name,
                         qualifier,
                         arg_names,
                         args,

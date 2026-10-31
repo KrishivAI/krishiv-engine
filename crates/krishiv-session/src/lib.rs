@@ -53,7 +53,9 @@ mod explain;
 mod explain_graph;
 pub mod functions;
 mod introspection;
+mod locals;
 mod profile;
+mod scripting;
 mod session;
 mod sql_functions;
 mod store;
@@ -63,6 +65,9 @@ mod variables;
 mod window;
 
 pub use access::{PathPrefixPolicy, StatementInfo};
+
+pub mod agent;
+
 pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{

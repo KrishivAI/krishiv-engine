@@ -1,0 +1,800 @@
+{
+ "cases": [
+  {
+   "name": "declare_default_inferred",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x DEFAULT 5L; SELECT x, typeof(x) AS t; END;",
+     "rows": [
+      [
+       5,
+       "bigint"
+      ]
+     ],
+     "schema": "struct<x:bigint,t:string>"
+    }
+   ]
+  },
+  {
+   "name": "declare_no_default_is_null",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT; SELECT x; END;",
+     "rows": [
+      [
+       null
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "declare_multi",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a, b INT DEFAULT 4; SELECT a, b; END;",
+     "rows": [
+      [
+       4,
+       4
+      ]
+     ],
+     "schema": "struct<a:int,b:int>"
+    }
+   ]
+  },
+  {
+   "name": "declare_variable_keyword_is_local",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE VARIABLE q INT DEFAULT 3; SELECT q; END;",
+     "rows": [
+      [
+       3
+      ]
+     ],
+     "schema": "struct<q:int>"
+    },
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`q`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "SELECT q;"
+    }
+   ]
+  },
+  {
+   "name": "declare_default_reads_earlier_local",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a INT DEFAULT 2; DECLARE b INT DEFAULT a * 10; SELECT b; END;",
+     "rows": [
+      [
+       20
+      ]
+     ],
+     "schema": "struct<b:int>"
+    }
+   ]
+  },
+  {
+   "name": "declare_default_reads_outer_same_name",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 1; BEGIN DECLARE x INT DEFAULT x + 1; SELECT x; END; END;",
+     "rows": [
+      [
+       2
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "declare_default_cast_string",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a INT DEFAULT '12'; SELECT a; END;",
+     "rows": [
+      [
+       12
+      ]
+     ],
+     "schema": "struct<a:int>"
+    }
+   ]
+  },
+  {
+   "name": "declare_default_cast_invalid",
+   "statements": [
+    {
+     "error": {
+      "class": "CAST_INVALID_INPUT",
+      "params": {
+       "ansiConfig": "\"spark.sql.ansi.enabled\"",
+       "expression": "'abc'",
+       "sourceType": "\"STRING\"",
+       "targetType": "\"INT\""
+      },
+      "sqlstate": "22018"
+     },
+     "query": "BEGIN DECLARE a INT DEFAULT 'abc'; SELECT a; END;"
+    }
+   ]
+  },
+  {
+   "name": "set_cast_invalid",
+   "statements": [
+    {
+     "error": {
+      "class": "CAST_INVALID_INPUT",
+      "params": {
+       "ansiConfig": "\"spark.sql.ansi.enabled\"",
+       "expression": "'q'",
+       "sourceType": "\"STRING\"",
+       "targetType": "\"INT\""
+      },
+      "sqlstate": "22018"
+     },
+     "query": "BEGIN DECLARE a INT; SET a = 'q'; SELECT a; END;"
+    }
+   ]
+  },
+  {
+   "name": "declare_overflow",
+   "statements": [
+    {
+     "error": {
+      "class": "CAST_OVERFLOW",
+      "params": {
+       "ansiConfig": "\"spark.sql.ansi.enabled\"",
+       "sourceType": "\"INT\"",
+       "targetType": "\"TINYINT\"",
+       "value": "300"
+      },
+      "sqlstate": "22003"
+     },
+     "query": "BEGIN DECLARE a TINYINT DEFAULT 300; SELECT a; END;"
+    }
+   ]
+  },
+  {
+   "name": "declare_decimal_rounding",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE d DECIMAL(5,2) DEFAULT 1.005; SELECT d; END;",
+     "rows": [
+      [
+       "1.01"
+      ]
+     ],
+     "schema": "struct<d:decimal(5,2)>"
+    }
+   ]
+  },
+  {
+   "name": "declare_null_default",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a INT DEFAULT NULL; SELECT a IS NULL AS n; END;",
+     "rows": [
+      [
+       true
+      ]
+     ],
+     "schema": "struct<n:boolean>"
+    }
+   ]
+  },
+  {
+   "name": "scope_shadow_and_gone",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 1; BEGIN DECLARE x INT DEFAULT 2; SET x = 3; END; SELECT x; END;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "qualified_by_label",
+   "statements": [
+    {
+     "query": "BEGIN lb: BEGIN DECLARE x INT DEFAULT 1; BEGIN DECLARE x INT DEFAULT 2; SELECT x, lb.x AS outer_x; END; END lb; END;",
+     "rows": [
+      [
+       2,
+       1
+      ]
+     ],
+     "schema": "struct<x:int,outer_x:int>"
+    }
+   ]
+  },
+  {
+   "name": "set_qualified_by_label",
+   "statements": [
+    {
+     "query": "BEGIN lb: BEGIN DECLARE x INT DEFAULT 1; BEGIN DECLARE x INT DEFAULT 2; SET lb.x = 5; SELECT x, lb.x AS outer_x; END; END lb; END;",
+     "rows": [
+      [
+       2,
+       5
+      ]
+     ],
+     "schema": "struct<x:int,outer_x:int>"
+    }
+   ]
+  },
+  {
+   "name": "case_insensitive",
+   "statements": [
+    {
+     "query": "BEGIN Lbl: BEGIN DECLARE Abc INT DEFAULT 4; SELECT aBC, LBL.abc AS q; END lbl; END;",
+     "rows": [
+      [
+       4,
+       4
+      ]
+     ],
+     "schema": "struct<aBC:int,q:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_first_then_session",
+   "statements": [
+    {
+     "query": "DECLARE sv INT DEFAULT 7;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "BEGIN DECLARE sv INT DEFAULT 1; SET sv = 8; SELECT sv, session.sv AS s1, system.session.sv AS s2; END;",
+     "rows": [
+      [
+       8,
+       7,
+       7
+      ]
+     ],
+     "schema": "struct<sv:int,s1:int,s2:int>"
+    },
+    {
+     "query": "SELECT sv;",
+     "rows": [
+      [
+       7
+      ]
+     ],
+     "schema": "struct<sv:int>"
+    }
+   ]
+  },
+  {
+   "name": "session_variable_set_from_script",
+   "statements": [
+    {
+     "query": "DECLARE v INT DEFAULT 1;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 42; SET session.v = k; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT v;",
+     "rows": [
+      [
+       42
+      ]
+     ],
+     "schema": "struct<v:int>"
+    }
+   ]
+  },
+  {
+   "name": "session_variable_read_unqualified",
+   "statements": [
+    {
+     "query": "DECLARE v2 INT DEFAULT 11;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "BEGIN SET v2 = v2 + 1; SELECT v2; END;",
+     "rows": [
+      [
+       12
+      ]
+     ],
+     "schema": "struct<v2:int>"
+    },
+    {
+     "query": "SELECT v2;",
+     "rows": [
+      [
+       12
+      ]
+     ],
+     "schema": "struct<v2:int>"
+    }
+   ]
+  },
+  {
+   "name": "set_multiple",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a INT; DECLARE b INT; SET a = 1, b = 2; SELECT a, b; END;",
+     "rows": [
+      [
+       1,
+       2
+      ]
+     ],
+     "schema": "struct<a:int,b:int>"
+    }
+   ]
+  },
+  {
+   "name": "set_tuple_subquery",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a INT; DECLARE b STRING; SET (a, b) = (SELECT 1, 'z'); SELECT a, b; END;",
+     "rows": [
+      [
+       1,
+       "z"
+      ]
+     ],
+     "schema": "struct<a:int,b:string>"
+    }
+   ]
+  },
+  {
+   "name": "set_default",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 7; SET x = 9; SET x = DEFAULT; SELECT x; END;",
+     "rows": [
+      [
+       7
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "set_rhs_evaluated_before_assign",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a INT DEFAULT 1; DECLARE b INT DEFAULT 2; SET a = b, b = a; SELECT a, b; END;",
+     "rows": [
+      [
+       2,
+       1
+      ]
+     ],
+     "schema": "struct<a:int,b:int>"
+    }
+   ]
+  },
+  {
+   "name": "set_config_is_assignment",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_VARIABLE",
+      "params": {
+       "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`<db>`]",
+       "variableName": "`spark`.`sql`.`ansi`.`enabled`"
+      },
+      "sqlstate": "42883"
+     },
+     "query": "BEGIN SET spark.sql.ansi.enabled = false; END;"
+    }
+   ]
+  },
+  {
+   "name": "set_unknown",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_VARIABLE",
+      "params": {
+       "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`<db>`]",
+       "variableName": "`nope`"
+      },
+      "sqlstate": "42883"
+     },
+     "query": "BEGIN SET nope = 1; END;"
+    }
+   ]
+  },
+  {
+   "name": "set_duplicate_targets",
+   "statements": [
+    {
+     "error": {
+      "class": "DUPLICATE_ASSIGNMENTS",
+      "params": {
+       "nameList": "`a`"
+      },
+      "sqlstate": "42701"
+     },
+     "query": "BEGIN DECLARE a INT; SET a = 1, a = 2; END;"
+    }
+   ]
+  },
+  {
+   "name": "set_too_many_rows",
+   "statements": [
+    {
+     "error": {
+      "class": "SCALAR_SUBQUERY_TOO_MANY_ROWS",
+      "exception": "SparkException",
+      "params": {},
+      "sqlstate": "21000"
+     },
+     "query": "BEGIN DECLARE a INT; SET a = (SELECT id FROM range(3)); END;"
+    }
+   ]
+  },
+  {
+   "name": "set_zero_rows",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE a INT DEFAULT 5; SET a = (SELECT id FROM range(3) WHERE id > 9); SELECT a; END;",
+     "rows": [
+      [
+       null
+      ]
+     ],
+     "schema": "struct<a:int>"
+    }
+   ]
+  },
+  {
+   "name": "variable_already_exists",
+   "statements": [
+    {
+     "error": {
+      "class": "VARIABLE_ALREADY_EXISTS",
+      "params": {
+       "variableName": "`<scope>`.`x`"
+      },
+      "sqlstate": "42723"
+     },
+     "query": "BEGIN DECLARE x INT; DECLARE x INT; END;"
+    }
+   ]
+  },
+  {
+   "name": "declare_subquery_default",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_DEFAULT_VALUE.SUBQUERY_EXPRESSION",
+      "params": {
+       "colName": "`local`.`<scope>`.`x`",
+       "defaultValue": "(SELECT 1)",
+       "statement": "DECLARE VARIABLE"
+      },
+      "sqlstate": "42623"
+     },
+     "query": "BEGIN DECLARE x INT DEFAULT (SELECT 1); END;"
+    }
+   ]
+  },
+  {
+   "name": "declare_no_type_no_default",
+   "statements": [
+    {
+     "error": {
+      "class": "INVALID_SQL_SYNTAX.VARIABLE_TYPE_OR_DEFAULT_REQUIRED",
+      "params": {},
+      "sqlstate": "42000"
+     },
+     "query": "BEGIN DECLARE x; END;"
+    }
+   ]
+  },
+  {
+   "name": "drop_temporary_variable",
+   "statements": [
+    {
+     "query": "DECLARE tv INT DEFAULT 1;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "error": {
+      "class": "UNSUPPORTED_FEATURE.SQL_SCRIPTING_DROP_TEMPORARY_VARIABLE",
+      "params": {},
+      "sqlstate": "0A000"
+     },
+     "query": "BEGIN DROP TEMPORARY VARIABLE tv; END;"
+    }
+   ]
+  },
+  {
+   "divergence": {
+    "krishiv_expected": [
+     "column name `typeof(x)` (named from the expression as written; Spark names it with a random internal scope id)"
+    ],
+    "spark_actual_not_expected": [
+     {
+      "query": "BEGIN DECLARE x INT DEFAULT 12; SELECT typeof(x); END;",
+      "rows": [
+       [
+        "int"
+       ]
+      ],
+      "schema": "struct<typeof(variablereference(local.`<scope>`.x=12)):string>"
+     }
+    ]
+   },
+   "name": "unaliased_column_name_over_local",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 12; SELECT typeof(x); END;",
+     "rows": [
+      [
+       "int"
+      ]
+     ],
+     "schema": "struct<typeof(variablereference(local.`<scope>`.x=12)):string>"
+    }
+   ]
+  },
+  {
+   "name": "unaliased_column_name_over_local_plain",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE x INT DEFAULT 12; SELECT x; END;",
+     "rows": [
+      [
+       12
+      ]
+     ],
+     "schema": "struct<x:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_in_insert_values",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 31; INSERT INTO s VALUES (k); END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT * FROM s;",
+     "rows": [
+      [
+       31
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_in_ctas",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 32; CREATE TABLE t2 AS SELECT k AS i; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT * FROM t2;",
+     "rows": [
+      [
+       32
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_in_explain",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 33; EXPLAIN SELECT k; END;",
+     "rows": [],
+     "schema": "struct<>"
+    }
+   ]
+  },
+  {
+   "name": "local_in_execute_immediate_using",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 5; EXECUTE IMMEDIATE 'SELECT ? + 1 AS r' USING k; END;",
+     "rows": [
+      [
+       6
+      ]
+     ],
+     "schema": "struct<r:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_in_execute_immediate_into",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT; EXECUTE IMMEDIATE 'SELECT 41 + 1' INTO k; SELECT k; END;",
+     "rows": [
+      [
+       42
+      ]
+     ],
+     "schema": "struct<k:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_not_in_execute_immediate_text",
+   "statements": [
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`k`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "BEGIN DECLARE k INT DEFAULT 5; EXECUTE IMMEDIATE 'SELECT k + 1'; END;"
+    }
+   ]
+  },
+  {
+   "name": "temp_function_over_local",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 7; CREATE TEMPORARY FUNCTION f() RETURNS INT RETURN k; SELECT f() AS r; END;",
+     "rows": [
+      [
+       7
+      ]
+     ],
+     "schema": "struct<r:int>"
+    },
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`k`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "SELECT f() AS r;"
+    }
+   ]
+  },
+  {
+   "name": "temp_view_over_local",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 7; CREATE TEMPORARY VIEW v AS SELECT k AS c; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`k`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "SELECT * FROM v;"
+    }
+   ]
+  },
+  {
+   "name": "temp_view_persists_after_script",
+   "statements": [
+    {
+     "query": "BEGIN CREATE TEMPORARY VIEW v2 AS SELECT 1 AS c; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT * FROM v2;",
+     "rows": [
+      [
+       1
+      ]
+     ],
+     "schema": "struct<c:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_in_where_over_table",
+   "statements": [
+    {
+     "query": "INSERT INTO s VALUES (1), (2), (3);",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 2; SELECT i FROM s WHERE i >= k ORDER BY i; END;",
+     "rows": [
+      [
+       2
+      ],
+      [
+       3
+      ]
+     ],
+     "schema": "struct<i:int>"
+    }
+   ]
+  },
+  {
+   "name": "local_in_cache_table",
+   "statements": [
+    {
+     "query": "BEGIN DECLARE k INT DEFAULT 3; CACHE TABLE ct AS SELECT k AS c; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "error": {
+      "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+      "params": {
+       "objectName": "`k`"
+      },
+      "sqlstate": "42703"
+     },
+     "query": "SELECT * FROM ct;"
+    }
+   ]
+  },
+  {
+   "name": "set_session_from_local_ddl_after",
+   "statements": [
+    {
+     "query": "DECLARE w STRING DEFAULT 'a';",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "BEGIN DECLARE k STRING DEFAULT 'z'; SET session.w = k; END;",
+     "rows": [],
+     "schema": "struct<>"
+    },
+    {
+     "query": "SELECT w;",
+     "rows": [
+      [
+       "z"
+      ]
+     ],
+     "schema": "struct<w:string>"
+    }
+   ]
+  }
+ ],
+ "file": "variables.sql",
+ "spark": "4.2.0"
+}

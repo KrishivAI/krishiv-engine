@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
+use krishiv_io::FilterId;
 use krishiv_types::batch::Batch;
 
 use crate::context::TaskContext;
@@ -94,6 +95,12 @@ pub trait Source: Send + Sync {
     fn position(&self, local: &LocalState) -> Option<u64> {
         let _ = local;
         None
+    }
+    /// The runtime filters this source applies: the pipeline starts after
+    /// the pipelines that publish them, where the dependencies allow it.
+    /// Default: none.
+    fn runtime_filters(&self) -> Vec<FilterId> {
+        Vec::new()
     }
     /// Source-specific `EXPLAIN ANALYZE` counters (name, value), read once
     /// the pipeline ended. Default: none.
@@ -274,6 +281,11 @@ pub trait Sink: Send + Sync {
     /// A name for metrics and memory consumers.
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
+    }
+    /// The runtime filters this sink publishes when it finalizes that are
+    /// worth a scan's wait (`runner.rs`, `with_filter_order`). Default: none.
+    fn published_filters(&self) -> Vec<FilterId> {
+        Vec::new()
     }
     /// Shared state, made once per pipeline run.
     ///

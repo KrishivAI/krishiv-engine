@@ -346,3 +346,21 @@ fn a_backquoted_variable_is_named_once_and_a_char_index_names_the_marker() {
     let (_, m) = failure(&s, "EXECUTE IMMEDIATE 'SELECT ''é'', ?'");
     assert!(m.contains("_12"), "{m}");
 }
+
+#[test]
+fn scripts_are_refused_inside_execute_immediate_and_when_switched_off() {
+    let s = session();
+    assert_eq!(
+        class(&s, "EXECUTE IMMEDIATE 'BEGIN SELECT 1; END'"),
+        "SQL_SCRIPT_IN_EXECUTE_IMMEDIATE"
+    );
+    s.conf()
+        .set("spark.sql.scripting.enabled", "false")
+        .unwrap();
+    assert_eq!(
+        class(&s, "BEGIN SELECT 1; END"),
+        "UNSUPPORTED_FEATURE.SQL_SCRIPTING"
+    );
+    s.conf().set("spark.sql.scripting.enabled", "true").unwrap();
+    assert_eq!(rows(&s, "BEGIN SELECT CAST(1 AS STRING); END"), [["1"]]);
+}
