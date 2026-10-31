@@ -31,8 +31,8 @@ use arrow_array::types::{
     Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, GenericStringArray,
-    OffsetSizeTrait, PrimitiveArray, StringArray, cast::AsArray,
+    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, GenericStringArray, OffsetSizeTrait,
+    PrimitiveArray, StringArray, cast::AsArray,
 };
 use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
@@ -621,19 +621,6 @@ pub fn cast(
         (f, DataType::Int16) if is_numeric(f) => numeric_to_int!(Int16Type),
         (f, DataType::Int32) if is_numeric(f) => numeric_to_int!(Int32Type),
         (f, DataType::Int64) if is_numeric(f) => numeric_to_int!(Int64Type),
-        // Non-zero is `true` (a NaN is non-zero); never fails.
-        (f, DataType::Boolean) if is_numeric(f) && *f != DataType::Boolean => {
-            let nums = nums.ok_or_else(unsupported)?;
-            let out: BooleanArray = (0..input.len())
-                .map(|i| {
-                    input.is_valid(i).then(|| match nums.get(i) {
-                        Num::Int(v) | Num::Dec(v, _) => v != 0,
-                        Num::Float(v, _) => v != 0.0,
-                    })
-                })
-                .collect();
-            Ok(Arc::new(out))
-        }
         (f, DataType::Float32 | DataType::Float64) if is_numeric(f) => {
             let f32_target = *to == DataType::Float32;
             let nums = nums.ok_or_else(unsupported)?;
@@ -1034,24 +1021,6 @@ fn from_string<O: OffsetSizeTrait>(
                 }
             })?;
             Ok(Arc::new(out.with_timezone_opt(zone.clone())))
-        }
-        DataType::Boolean => {
-            // Spark's `StringUtils.isTrueString` / `isFalseString` on the
-            // trimmed, lower-cased text.
-            let flags = map_rows::<Int8Type>(s, |i| {
-                // Bytes only, as `UTF8String.trimAll`: a Unicode space stays.
-                let t = text::trim_all(s.value(i).as_bytes());
-                let is = |word: &str| t.eq_ignore_ascii_case(word.as_bytes());
-                if ["t", "true", "y", "yes", "1"].iter().any(|w| is(w)) {
-                    Ok(Some(1))
-                } else if ["f", "false", "n", "no", "0"].iter().any(|w| is(w)) {
-                    Ok(Some(0))
-                } else {
-                    fail(mode, None, || invalid(i))
-                }
-            })?;
-            let out: BooleanArray = flags.iter().map(|v| v.map(|x| x != 0)).collect();
-            Ok(Arc::new(out))
         }
         _ => Err(KernelError::unsupported(format!(
             "CAST from STRING to {to_name}"
