@@ -349,6 +349,7 @@ __all__ = [
     "version",
     "weekday",
     "weekofyear",
+    "width_bucket",
     "xxhash64",
     "year",
     "zeroifnull",
@@ -2099,6 +2100,13 @@ def weekday(col: ColumnOrName) -> Column:
 def weekofyear(col: ColumnOrName) -> Column:
     """Calls the registry function ``weekofyear``."""
     return _call("weekofyear", _named(col, "col"))
+
+
+def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column:
+    """Calls the registry function ``width_bucket``."""
+    return _call(
+        "width_bucket", _named(v, "v"), _named(min, "min"), _named(max, "max"), _int_or_col(numBucket, "numBucket")
+    )
 
 
 def xxhash64(*cols: ColumnOrName) -> Column:

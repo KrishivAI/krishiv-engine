@@ -206,6 +206,10 @@ fn extremum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// `abs`, `positive`, `negative`: the argument's type (a string or NULL is `double`).
+fn always_nullable_long(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, true))
+}
+
 fn same_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType {
         data_type: Some(c.data_type(0).cloned().unwrap_or(DataType::Double)),
@@ -268,6 +272,18 @@ pub(super) fn specs() -> Vec<Spec> {
     // `log(base, x)` is NULL outside its domain too.
     out.extend(scalar(&["pow", "power", "atan2", "hypot"], &double, binary));
     out.extend(scalar(&["pi", "e"], &Inputs::Any, constant));
+    // `width_bucket(value, min, max, buckets)`: NULL outside its domain,
+    // so always nullable.
+    out.extend(scalar(
+        &["width_bucket"],
+        &Inputs::Expects(vec![
+            exact(DataType::Double),
+            exact(DataType::Double),
+            exact(DataType::Double),
+            exact(DataType::Long),
+        ]),
+        always_nullable_long,
+    ));
     let numeric = || InputType::Numeric { intervals: false };
     let rounding = Inputs::Expects(vec![numeric(), exact(DataType::Integer)]);
     out.extend(scalar(&["round"], &rounding, round_fn));

@@ -424,6 +424,10 @@ pub(super) fn rows() -> Vec<Row> {
             "col1: ColumnOrName | float, col2: ColumnOrName | float",
         ));
     }
+    rows.push(Row::new(
+        "width_bucket",
+        "v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int",
+    ));
     for name in ["bround", "ceil", "ceiling", "floor", "round"] {
         rows.push(Row::new(
             name,
