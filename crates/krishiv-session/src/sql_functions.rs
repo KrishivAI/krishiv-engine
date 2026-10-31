@@ -307,7 +307,7 @@ impl QueryFunctions {
         let Some(namespace) = def.qualifier.last() else {
             return Arc::clone(def);
         };
-        match self.qualify_calls(&def.body, namespace, profile) {
+        match self.qualify_calls(&def.body, namespace, &def.path, profile) {
             Some(body) => Arc::new(SqlFunction {
                 body,
                 ..(**def).clone()
@@ -318,13 +318,15 @@ impl QueryFunctions {
 }
 
 impl QueryFunctions {
-    /// `body` with each bare call that is not a built-in qualified by
-    /// `namespace`; `None` when nothing changed. Calls inside subquery
-    /// plans are not entered.
+    /// `body` with each bare call that is not a built-in qualified: by the
+    /// first schema of the function's frozen `path` holding a stored function
+    /// of that name, else by `namespace`; `None` when nothing changed. Calls
+    /// inside subquery plans are not entered.
     fn qualify_calls(
         &self,
         body: &Arc<Expr>,
         namespace: &str,
+        path: &[Vec<String>],
         profile: SparkProfile,
     ) -> Option<Arc<Expr>> {
         let out = Arc::clone(body)
@@ -346,7 +348,15 @@ impl QueryFunctions {
                         return Ok(e);
                     }
                     let mut call = call.clone();
-                    call.qualifier = vec![namespace.to_owned()];
+                    let name = fold(&call.name, self.case_sensitive);
+                    let from_path = path.iter().find_map(|entry| match entry.as_slice() {
+                        [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                            let n = fold(n, self.case_sensitive);
+                            self.stored.get(&n, &name).map(|_| n)
+                        }
+                        _ => None,
+                    });
+                    call.qualifier = vec![from_path.unwrap_or_else(|| namespace.to_owned())];
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
                     Ok(Arc::new(next))
