@@ -247,8 +247,7 @@
     ],
     "sql-commands": [
       5,
-      8,
-      24
+      8
     ]
   },
   "file": "pipe-operators",

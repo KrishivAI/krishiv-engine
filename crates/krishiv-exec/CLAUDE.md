@@ -54,7 +54,12 @@ Operators with work after their input (`needs_flush`) get `end_input` + a per-pi
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
 worker that runs it; the planner validates nodes with the same builders). `PhysicalPlan::shared` (P2-T198): subplans
-read by `PhysNode::SharedRead`, data and codec only so far; a walk over a plan starts at `PhysicalPlan::roots`. `Scheduler::submit` takes a
+read by `PhysNode::SharedRead`; a walk over a plan starts at `PhysicalPlan::roots`. `shared.rs` runs them: `SharedSink`
+ends the body's pipeline (built once through `PipelineBuilder::shared_pipeline`, so pipeline dependencies are a DAG),
+keeps the batches as segments (memory or spill file) under a consumer of its own whose `OutputSpill` hook writes every
+batch still in memory, and each `SharedSource` reads the whole list through its own cursor (own `SpillReader` per
+spilled segment). The planner (`planner/build.rs`) reads every `CteRef` of a nondeterministic definition from a shared
+plan, and a deterministic one (the optimizer's `ShareCte`) only in a second pass for the groups no runtime filter reaches. `Scheduler::submit` takes a
 `PhysicalPlan`; `QueryRunner::execute` runs an already instantiated `ExecNode` graph.
 `planner/aggregate.rs` also lowers `PlanNode::PartialAggregate` (P2-T167) onto a partial hash aggregate, and a call over
 `ResolvedExpr::StateInput` onto one merging its states; it refuses states the optimizer typed differently.

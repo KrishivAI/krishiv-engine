@@ -801,6 +801,28 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
+    // The decoder refuses what the analyzer and planner never produce, so the
+    // encoder refuses it too instead of writing a plan that cannot be read.
+    let bad_percentages = |ps: &[f64]| {
+        ps.iter()
+            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
+    };
+    let invalid = match &a.function {
+        AggregateFunction::Percentile { percentages, .. }
+        | AggregateFunction::PercentileDisc { percentages, .. } => bad_percentages(percentages),
+        AggregateFunction::PercentileApprox {
+            percentages,
+            accuracy,
+            ..
+        } => *accuracy <= 0 || bad_percentages(percentages),
+        AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
+        _ => false,
+    };
+    if invalid {
+        return Err(CodecError::Unsupported(
+            "a percentile aggregate with parameters out of range".to_owned(),
+        ));
+    }
     let (function, ignore_nulls) = match &a.function {
         AggregateFunction::Count => (pb::AggregateFunction::Count, false),
         AggregateFunction::Sum => (pb::AggregateFunction::Sum, false),
@@ -843,10 +865,76 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
                 listagg_delimiter: delimiter.clone(),
                 listagg_desc: orders.iter().map(|&(desc, _)| desc).collect(),
                 listagg_nulls_first: orders.iter().map(|&(_, nulls)| nulls).collect(),
+                ..Default::default()
             });
         }
         AggregateFunction::TrySum => (pb::AggregateFunction::TrySum, false),
         AggregateFunction::TryAvg => (pb::AggregateFunction::TryAvg, false),
+        AggregateFunction::Percentile {
+            percentages,
+            array,
+            reverse,
+        } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::Percentile,
+                percentages,
+                *array,
+                *reverse,
+                0,
+                false,
+                0,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::PercentileApprox {
+            percentages,
+            array,
+            accuracy,
+        } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::PercentileApprox,
+                percentages,
+                *array,
+                false,
+                *accuracy,
+                false,
+                0,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::PercentileDisc {
+            percentages,
+            array,
+            reverse,
+            legacy,
+        } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::PercentileDisc,
+                percentages,
+                *array,
+                *reverse,
+                0,
+                *legacy,
+                0,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ApproxCountDistinct { p } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ApproxCountDistinct,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                *p,
+                a,
+                nested,
+            ));
+        }
         // The format has no code for these yet.
         f @ (AggregateFunction::StddevSamp
         | AggregateFunction::StddevPop
@@ -878,6 +966,44 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         mask: a.mask.map(|m| m as u64),
         ..Default::default()
     })
+}
+
+/// An [`AggregateExpr`] of the percentile family or `approx_count_distinct`,
+/// with its folded parameters.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site, every folded parameter"
+)]
+fn percentile_expr(
+    function: pb::AggregateFunction,
+    percentages: &[f64],
+    array: bool,
+    reverse: bool,
+    accuracy: i64,
+    legacy: bool,
+    precision: u32,
+    a: &AggregateExpr,
+    nested: &Cell<bool>,
+) -> pb::AggregateExpr {
+    pb::AggregateExpr {
+        function: function as i32,
+        ignore_nulls: false,
+        args: indexes(&a.args),
+        input: match a.input {
+            AggInput::Raw => pb::AggregateInput::Raw,
+            AggInput::State => pb::AggregateInput::State,
+        } as i32,
+        arg_type: arrow_bytes(&a.arg_type, nested),
+        name: a.name.clone(),
+        percentages: percentages.to_vec(),
+        percentile_array: array,
+        percentile_reverse: reverse,
+        percentile_accuracy: accuracy,
+        percentile_legacy: legacy,
+        hll_precision: precision,
+        mask: a.mask.map(|m| m as u64),
+        ..Default::default()
+    }
 }
 
 fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {

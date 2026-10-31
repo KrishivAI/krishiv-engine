@@ -1304,7 +1304,7 @@ impl Lowerer {
                 if dynamic_name.is_some() {
                     return Err(unsupported("table-valued functions", tf.span));
                 }
-                if name.parts.len() != 1 {
+                if name.parts.len() > 3 {
                     return Err(unsupported("table-valued functions", tf.span));
                 }
                 for a in args {
@@ -1332,7 +1332,7 @@ impl Lowerer {
                     "inline" => Some(krishiv_plan::GeneratorKind::Inline),
                     _ => None,
                 };
-                if let Some(kind) = kind {
+                if let (Some(kind), 1) = (kind, name.parts.len()) {
                     let [arg] = &lowered[..] else {
                         return Err(err(
                             WrongNumArgsWithoutSuggestion {
@@ -1360,7 +1360,14 @@ impl Lowerer {
                 } else {
                     self.node(
                         PlanNode::TableFunction {
-                            name: name.parts[0].value.clone(),
+                            // A qualified name (`ns.f`) is kept as one string, its
+                            // parts joined by `TABLE_FUNCTION_NAME_SEP`.
+                            name: name
+                                .parts
+                                .iter()
+                                .map(|p| p.value.as_str())
+                                .collect::<Vec<_>>()
+                                .join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()),
                             args: lowered,
                         },
                         tf.span,

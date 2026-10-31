@@ -471,13 +471,13 @@ fn shared_expressions_are_encoded_once() {
     let start = Instant::now();
     let e = (0..30).fold(Arc::new(Expr::column(["a"])), |e, _| {
         Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+            within_group: Vec::new(),
             name: Builtin::And.name().to_owned(),
             qualifier: Vec::new(),
             arg_names: Vec::new(),
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,
-            within_group: Vec::new(),
         })))
     });
     let plan = Plan::try_new(LogicalPlan::table(["t"]).filter(e)).unwrap();
@@ -499,13 +499,13 @@ fn qualifier_and_arg_names_enter_the_key() {
         Plan::try_new(
             LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Function(
                 crate::FunctionCall {
+                    within_group: Vec::new(),
                     name: "mask".to_owned(),
                     qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
                     args: vec![arg(), arg()],
                     arg_names: names.into_iter().map(|n| n.map(str::to_owned)).collect(),
                     distinct: false,
                     filter: None,
-                    within_group: Vec::new(),
                 },
             ))]),
         )

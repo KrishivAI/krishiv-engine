@@ -1106,6 +1106,8 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) next_source: &'a dyn Fn() -> krishiv_plan::SourceId,
     /// The current namespace as the query snapshot saw it: bare names resolve here, whatever `USE` does later.
     pub(crate) namespace: String,
+    /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
+    pub(crate) binding_enabled: bool,
 }
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
@@ -1127,12 +1129,14 @@ pub(crate) fn expand_views(
         view_namespace: None,
         reads: Vec::new(),
         deferred: None,
+        stored_reads: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
     Ok(Expansion {
         plan,
         reads: expander.reads,
         deferred: expander.deferred,
+        stored_reads: expander.stored_reads,
     })
 }
 
@@ -1156,6 +1160,9 @@ pub(crate) struct Expansion {
     /// A failure inside a stored view's text (it no longer parses, reads itself, ...). It is raised only
     /// after the reads are authorized, so a principal who may not read the view never sees its text's errors.
     pub(crate) deferred: Option<KrishivError>,
+    /// The stored views inlined, inner views before the views that read them: their schema binding is checked
+    /// against their analyzed queries (`view_schema::check_read`).
+    pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
 }
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
@@ -1171,6 +1178,8 @@ struct Expander<'a> {
     reads: Vec<ReadCandidate>,
     /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
     deferred: Option<KrishivError>,
+    /// The stored views inlined so far, for [`Expansion::stored_reads`].
+    stored_reads: Vec<crate::view_schema::StoredRead>,
 }
 
 impl Expander<'_> {
@@ -1367,8 +1376,15 @@ impl Expander<'_> {
         let input = self.go(Arc::clone(lowered.root()), &mut Vec::new());
         self.view_namespace = previous;
         self.path.pop();
-        let columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
         let mut input = input?;
+        let mode = crate::view_schema::effective_mode(view.schema_mode, stored.binding_enabled);
+        self.stored_reads.push(crate::view_schema::StoredRead {
+            entry: Arc::clone(entry),
+            query: Arc::clone(&input),
+            mode,
+        });
+        let projection = crate::view_schema::projection(mode);
+        let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
         let unique = view
             .query_columns
             .iter()
@@ -1376,31 +1392,40 @@ impl Expander<'_> {
             .collect::<std::collections::BTreeSet<_>>()
             .len()
             == view.query_columns.len();
-        if unique && view.query_columns.len() == columns.len() {
-            // The stored columns, by their query names and in their stored types: a base table that gained
-            // columns since does not change what the view returns.
+        if projection == crate::view_schema::ReadProjection::Output {
+            // `EVOLUTION`: the view is its query's output, whatever the stored schema says.
+            columns.clear();
+        } else if unique && view.query_columns.len() == columns.len() {
+            // The stored columns, by their query names: a base table that gained columns since does not change
+            // what the view returns. In their stored types (the binding check ran on the analyzed query), or in
+            // the query's types under `TYPE EVOLUTION`.
             let exprs = view
                 .query_columns
                 .iter()
                 .zip(&entry.columns)
                 .map(|(q, c)| {
                     // The name is one part: `col(q)` would split a dot or read a trailing `*`.
-                    let stored = Expr::new(ExprNode::Column(krishiv_plan::ColumnRef {
-                        name: vec![q.clone()],
-                        plan_id: None,
-                    }));
-                    Arc::new(
-                        crate::column::Column::new(stored)
-                            .cast_ansi(c.data_type.clone())
-                            .alias(&c.name)
-                            .expr,
-                    )
+                    let stored = crate::column::Column::new(Expr::new(ExprNode::Column(
+                        krishiv_plan::ColumnRef {
+                            name: vec![q.clone()],
+                            plan_id: None,
+                        },
+                    )));
+                    let typed = if projection == crate::view_schema::ReadProjection::Cast {
+                        stored.cast_ansi(c.data_type.clone())
+                    } else {
+                        stored
+                    };
+                    Arc::new(typed.alias(&c.name).expr)
                 })
                 .collect();
             input = Arc::new(
                 LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
             );
         }
+        // Otherwise (a query that repeats a column name, or a column list of another length) the columns are only
+        // renamed by position: a repeated name cannot be cast, since `ColumnRef` has no ordinal. The binding check
+        // matches by name and ordinal as Spark does, so a type change under such a view is not cast here.
         Ok(Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
                 input,

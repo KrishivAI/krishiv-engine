@@ -95,6 +95,7 @@ pub mod profile;
 // `row-table-prototype` feature.
 pub mod rows;
 mod runner;
+pub(crate) mod shared;
 mod sync;
 pub mod testing;
 pub mod values;

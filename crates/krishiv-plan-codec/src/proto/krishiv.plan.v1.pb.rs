@@ -408,7 +408,7 @@ pub struct WindowGroupLimitNode {
     #[prost(uint64, tag = "5")]
     pub limit: u64,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WindowFunctionPlan {
     #[prost(message, optional, tag = "8")]
     pub frame: ::core::option::Option<WindowFrame>,
@@ -425,7 +425,7 @@ pub struct WindowFunctionPlan {
 }
 /// Nested message and enum types in `WindowFunctionPlan`.
 pub mod window_function_plan {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Function {
         #[prost(message, tag = "1")]
         RowNumber(super::Empty),
@@ -511,7 +511,7 @@ pub struct AggregateNode {
     #[prost(enumeration = "AggregateOutput", tag = "5")]
     pub output: i32,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExpr {
     #[prost(enumeration = "AggregateFunction", tag = "1")]
     pub function: i32,
@@ -544,6 +544,30 @@ pub struct AggregateExpr {
     /// key, in order: nulls first).
     #[prost(bool, repeated, tag = "10")]
     pub listagg_nulls_first: ::prost::alloc::vec::Vec<bool>,
+    /// feature: percentile_aggregates (`percentile`, `percentile_approx` and
+    /// `percentile_disc` only: the folded percentages, in order).
+    #[prost(double, repeated, tag = "11")]
+    pub percentages: ::prost::alloc::vec::Vec<f64>,
+    /// feature: percentile_aggregates (the percentile family only: the
+    /// percentage was an array, so the result is an array).
+    #[prost(bool, tag = "12")]
+    pub percentile_array: bool,
+    /// feature: percentile_aggregates (`percentile` and `percentile_disc`
+    /// only: descending order).
+    #[prost(bool, tag = "13")]
+    pub percentile_reverse: bool,
+    /// feature: percentile_aggregates (`percentile_approx` only: the folded
+    /// accuracy, a positive `int`).
+    #[prost(int64, tag = "14")]
+    pub percentile_accuracy: i64,
+    /// feature: percentile_aggregates (`percentile_disc` only: the legacy
+    /// continuous-lower-bound calculation).
+    #[prost(bool, tag = "15")]
+    pub percentile_legacy: bool,
+    /// feature: percentile_aggregates (`approx_count_distinct` only: the
+    /// folded HyperLogLog++ addressing bits).
+    #[prost(uint32, tag = "16")]
+    pub hll_precision: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {
@@ -1417,6 +1441,14 @@ pub enum AggregateFunction {
     TrySum = 28,
     /// feature: mode_regr_bit_listagg_aggs
     TryAvg = 29,
+    /// feature: percentile_aggregates
+    Percentile = 30,
+    /// feature: percentile_aggregates
+    PercentileApprox = 31,
+    /// feature: percentile_aggregates
+    PercentileDisc = 32,
+    /// feature: percentile_aggregates
+    ApproxCountDistinct = 33,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1455,6 +1487,10 @@ impl AggregateFunction {
             Self::Listagg => "AGGREGATE_FUNCTION_LISTAGG",
             Self::TrySum => "AGGREGATE_FUNCTION_TRY_SUM",
             Self::TryAvg => "AGGREGATE_FUNCTION_TRY_AVG",
+            Self::Percentile => "AGGREGATE_FUNCTION_PERCENTILE",
+            Self::PercentileApprox => "AGGREGATE_FUNCTION_PERCENTILE_APPROX",
+            Self::PercentileDisc => "AGGREGATE_FUNCTION_PERCENTILE_DISC",
+            Self::ApproxCountDistinct => "AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1490,6 +1526,10 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_LISTAGG" => Some(Self::Listagg),
             "AGGREGATE_FUNCTION_TRY_SUM" => Some(Self::TrySum),
             "AGGREGATE_FUNCTION_TRY_AVG" => Some(Self::TryAvg),
+            "AGGREGATE_FUNCTION_PERCENTILE" => Some(Self::Percentile),
+            "AGGREGATE_FUNCTION_PERCENTILE_APPROX" => Some(Self::PercentileApprox),
+            "AGGREGATE_FUNCTION_PERCENTILE_DISC" => Some(Self::PercentileDisc),
+            "AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT" => Some(Self::ApproxCountDistinct),
             _ => None,
         }
     }

@@ -112,7 +112,8 @@ pub(super) fn state_fields(f: &AggregateFunction, name: &str) -> Vec<Field> {
 }
 
 /// The arguments of an aggregate other than `count`: two for the pair
-/// statistics (`corr`, `covar_*`, `regr_*`), else one.
+/// statistics (`corr`, `covar_*`, `regr_*`) and the exact percentiles (the value
+/// and its per-row frequency), else one.
 pub(crate) fn arity(f: &AggregateFunction) -> usize {
     match f {
         AggregateFunction::CovarSamp
@@ -126,7 +127,8 @@ pub(crate) fn arity(f: &AggregateFunction) -> usize {
         | AggregateFunction::RegrSxy
         | AggregateFunction::RegrSlope
         | AggregateFunction::RegrIntercept
-        | AggregateFunction::RegrR2 => 2,
+        | AggregateFunction::RegrR2
+        | AggregateFunction::Percentile { .. } => 2,
         _ => 1,
     }
 }

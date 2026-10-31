@@ -1,0 +1,82 @@
+{
+  "entries": [
+    {
+      "id": "percentile#0aa12cd3fd57/ansi_on",
+      "reason": "SELECT percentile(col, CAST(NULL AS array<decimal(1,1)>)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#0aa12cd3fd57/ansi_off",
+      "reason": "SELECT percentile(col, CAST(NULL AS array<decimal(1,1)>)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#1348e40ceafc/ansi_on",
+      "reason": "SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile#1348e40ceafc/ansi_off",
+      "reason": "SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile#2cfe3f6c8849/ansi_on",
+      "reason": "SELECT percentile(col, CAST(array(NULL) AS array<decimal(1,1)>)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#2cfe3f6c8849/ansi_off",
+      "reason": "SELECT percentile(col, CAST(array(NULL) AS array<decimal(1,1)>)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#5200a8308814/ansi_on",
+      "reason": "SELECT percentile(col, 'abc') FROM VALUES (0), (10) AS tab(col) | CAST_INVALID_INPUT"
+    },
+    {
+      "id": "percentile#52659e856a74/ansi_on",
+      "reason": "SELECT percentile(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#52659e856a74/ansi_off",
+      "reason": "SELECT percentile(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#7015048ed1f3/ansi_on",
+      "reason": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile#7015048ed1f3/ansi_off",
+      "reason": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile#7ba7a12eb10c/ansi_on",
+      "reason": "SELECT percentile(col, CAST(array() AS array<decimal(1,1)>)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#7ba7a12eb10c/ansi_off",
+      "reason": "SELECT percentile(col, CAST(array() AS array<decimal(1,1)>)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#ae8bb87d0c40/ansi_on",
+      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile#ae8bb87d0c40/ansi_off",
+      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile#ed963f9b8486/ansi_on",
+      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile#ed963f9b8486/ansi_off",
+      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile#f106ca564764/ansi_on",
+      "reason": "SELECT percentile(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile#f106ca564764/ansi_off",
+      "reason": "SELECT percentile(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "percentile"
+}

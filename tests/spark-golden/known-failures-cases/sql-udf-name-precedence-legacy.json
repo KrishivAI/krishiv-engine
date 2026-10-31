@@ -6,9 +6,7 @@
     ],
     "sql-commands": [
       15,
-      24,
-      35,
-      39
+      35
     ]
   },
   "file": "sql-udf-name-precedence-legacy",

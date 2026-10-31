@@ -65,6 +65,11 @@ pub struct LogicalPlan {
     pub origin: Origin,
 }
 
+/// What joins the parts of a qualified table-function name in
+/// [`PlanNode::TableFunction`]: a control character no identifier holds, so a
+/// quoted name with a dot in it stays one part.
+pub const TABLE_FUNCTION_NAME_SEP: char = '\u{1f}';
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -352,7 +357,8 @@ pub enum PlanNode {
         columns: Vec<String>,
     },
     /// An unresolved table-valued function call (`FROM f(args)`), as
-    /// lowering shapes it: the name as written and the argument
+    /// lowering shapes it: the name as written (a qualified name `ns.f` has
+    /// its parts joined by [`TABLE_FUNCTION_NAME_SEP`]) and the argument
     /// expressions. Unresolved plans only: the analyzer resolves it
     /// through the [`crate::analyzer::TableFunctionRegistry`] into a
     /// [`PlanNode::Range`] (or an inline relation for `sql_keywords`),
@@ -360,7 +366,8 @@ pub enum PlanNode {
     /// lowering. The table alias (if any) wraps this node as a
     /// [`PlanNode::SubqueryAlias`], as for every other table factor.
     TableFunction {
-        /// The function name, as written.
+        /// The function name, as written; the parts of a qualified name are
+        /// joined by [`TABLE_FUNCTION_NAME_SEP`].
         name: String,
         /// The argument expressions.
         args: Vec<Arc<Expr>>,

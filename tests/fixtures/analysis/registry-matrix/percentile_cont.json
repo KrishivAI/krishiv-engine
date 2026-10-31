@@ -1,0 +1,42 @@
+{
+  "entries": [
+    {
+      "id": "percentile_cont#258fa0eaddbe/ansi_on",
+      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile_cont#258fa0eaddbe/ansi_off",
+      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile_cont#46e62cfffdaa/ansi_on",
+      "reason": "SELECT percentile_cont(INTERVAL '1 02:03:04' DAY TO SECOND) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_cont#46e62cfffdaa/ansi_off",
+      "reason": "SELECT percentile_cont(INTERVAL '1 02:03:04' DAY TO SECOND) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_cont#81a5fbe32798/ansi_on",
+      "reason": "SELECT percentile_cont('abc') WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | CAST_INVALID_INPUT"
+    },
+    {
+      "id": "percentile_cont#87c6f3d85839/ansi_on",
+      "reason": "SELECT percentile_cont(INTERVAL '1-2' YEAR TO MONTH) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_cont#87c6f3d85839/ansi_off",
+      "reason": "SELECT percentile_cont(INTERVAL '1-2' YEAR TO MONTH) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_cont#ecb3426beb04/ansi_on",
+      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile_cont#ecb3426beb04/ansi_off",
+      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    }
+  ],
+  "format_version": 1,
+  "function": "percentile_cont"
+}
