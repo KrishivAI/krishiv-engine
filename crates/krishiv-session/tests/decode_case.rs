@@ -8,6 +8,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use futures::executor::block_on;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_session::Session;
 
 fn session() -> Session {
@@ -207,4 +208,29 @@ fn format_string_errors() {
         };
         assert!(failed, "{q}");
     }
+}
+
+fn class_of(s: &Session, sql: &str) -> ErrorClass {
+    let err: KrishivError = match block_on(s.sql(sql)) {
+        Ok(df) => block_on(df.collect()).expect_err(sql),
+        Err(e) => e,
+    };
+    err.error_class()
+}
+
+#[test]
+fn format_string_error_classes() {
+    let s = session();
+    assert_eq!(
+        class_of(&s, "select format_string('Hello %s')"),
+        ErrorClass::KrishivInvalidFormatString
+    );
+    assert_eq!(
+        class_of(&s, "select format_string('%0$s', 'Hello')"),
+        ErrorClass::InvalidParameterValueZeroIndex
+    );
+    assert_eq!(
+        class_of(&s, "select format_string()"),
+        ErrorClass::WrongNumArgsWithoutSuggestion
+    );
 }
