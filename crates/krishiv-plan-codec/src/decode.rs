@@ -495,6 +495,18 @@ impl Decoder {
                 count: self.expr_ref(r.count)?,
                 subqueries: self.subqueries(&r.subqueries)?,
             },
+            Kind::Generate(g) => PhysNode::Generate {
+                input: self.boxed(g.input)?,
+                layout: layout(&g.layout),
+                kind: enum_map!(pb::GeneratorKind, g.kind, "generator kind", {
+                    Explode => krishiv_plan::GeneratorKind::Explode,
+                    PosExplode => krishiv_plan::GeneratorKind::PosExplode,
+                    Inline => krishiv_plan::GeneratorKind::Inline,
+                })?,
+                outer: g.outer,
+                arg: self.expr_ref(g.arg)?,
+                subqueries: self.subqueries(&g.subqueries)?,
+            },
             Kind::Expand(e) => {
                 expand_shape(e)?;
                 PhysNode::Expand {

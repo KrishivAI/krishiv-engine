@@ -908,6 +908,34 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 self.u8(u8::from(*include_nulls));
             }
+            PlanNode::Generate {
+                kind,
+                outer,
+                arg,
+                output,
+                names,
+                qualifier,
+                ..
+            } => {
+                self.u8(30);
+                self.u8(match kind {
+                    crate::GeneratorKind::Explode => 0,
+                    crate::GeneratorKind::PosExplode => 1,
+                    crate::GeneratorKind::Inline => 2,
+                });
+                self.u8(u8::from(*outer));
+                self.expr(arg);
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+                self.strs(names);
+                match qualifier {
+                    None => self.u8(0),
+                    Some(q) => {
+                        self.u8(1);
+                        self.str(q);
+                    }
+                }
+            }
             PlanNode::TableFunction { name, args } => {
                 self.u8(28);
                 self.str(name);

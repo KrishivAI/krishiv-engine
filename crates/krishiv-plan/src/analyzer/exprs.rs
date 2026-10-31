@@ -1243,6 +1243,15 @@ impl Resolver<'_> {
                 .scope
                 .iter()
                 .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                // The columns of a select-list generator are read by its own
+                // star, not by `*`.
+                .filter(|a| {
+                    !s.qualifier.is_empty()
+                        || !a
+                            .qual
+                            .iter()
+                            .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+                })
                 .cloned()
                 .collect(),
         };

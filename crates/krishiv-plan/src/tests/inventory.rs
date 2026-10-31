@@ -44,6 +44,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
         PlanNode::Expand { .. } => "PlanNode::Expand",
+        PlanNode::Generate { .. } => "PlanNode::Generate",
         PlanNode::Pivot { .. } => "PlanNode::Pivot",
         PlanNode::Unpivot { .. } => "PlanNode::Unpivot",
         PlanNode::InlineTable { .. } => "PlanNode::InlineTable",

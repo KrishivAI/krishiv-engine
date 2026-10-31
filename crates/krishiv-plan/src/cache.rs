@@ -770,6 +770,33 @@ impl Encoder {
                 self.expr(count, bias);
                 self.plan(input, bias);
             }
+            PlanNode::Generate {
+                input,
+                kind,
+                outer,
+                arg,
+                output,
+                names,
+                qualifier,
+            } => {
+                self.tag("Generate");
+                self.num(*kind as u64);
+                self.flag(*outer);
+                self.expr(arg, bias);
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
+                self.num(names.len() as u64);
+                for n in names {
+                    self.text(n);
+                }
+                self.flag(qualifier.is_some());
+                if let Some(q) = qualifier {
+                    self.text(q);
+                }
+                self.plan(input, bias);
+            }
             PlanNode::Expand {
                 input,
                 projections,
