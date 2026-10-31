@@ -423,6 +423,12 @@ pub enum Inputs {
     /// without string promotion, and both are cast to the wider key type;
     /// no casts when there is none (the result rule reports it).
     MapContainsKey,
+    /// `array_append(arr, item)`, `array_prepend(arr, item)` and
+    /// `array_insert(arr, pos, item)`: the item meets the array's element
+    /// type (Spark's `findTightestCommonType`) and both are cast to it; `pos`
+    /// is an `INT`. No casts when there is none (the result rule reports
+    /// `ARRAY_FUNCTION_DIFF_TYPES`).
+    ArrayItem,
     /// Every argument takes the type all of them meet at (`coalesce`);
     /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` when there is none.
     Common,
@@ -472,6 +478,7 @@ impl Inputs {
             | Self::Map
             | Self::MapConcat
             | Self::MapContainsKey
+            | Self::ArrayItem
             | Self::Comparable { .. }
             | Self::NullSafeEqual
             | Self::Operator(_)

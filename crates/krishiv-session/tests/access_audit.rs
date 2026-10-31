@@ -94,15 +94,14 @@ fn each_denial_leaves_one_audit_record() {
         "allowed statements leave no audit record"
     );
 
-    // A check that fails closed because it cannot name the object is
-    // recorded too.
+    // A name computed by `IDENTIFIER(...)` is recorded as the name it gives.
     assert_eq!(unplaceable.len(), 1, "{unplaceable:?}");
     assert!(
-        unplaceable[0].contains("error_class=KRISHIV_UNSUPPORTED_FEATURE"),
+        unplaceable[0].contains("error_class=KRISHIV_INSUFFICIENT_PERMISSIONS"),
         "{unplaceable:?}"
     );
     assert!(
-        unplaceable[0].contains("statement_class=DDL"),
+        unplaceable[0].contains("statement_class=DDL") && unplaceable[0].contains("`ab`"),
         "{unplaceable:?}"
     );
 
