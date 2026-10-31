@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use arrow_schema::SchemaRef;
+use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal};
@@ -1832,6 +1833,7 @@ async fn open_parallel(
     let Some(ParallelMerge {
         memory,
         parts,
+        sort_parts,
         scratch,
         ready_bytes,
     }) = parallel_merge(batches, parallelism, l.batch_rows, &held.handle)
@@ -1841,20 +1843,41 @@ async fn open_parallel(
     let memory = Arc::new(memory);
     let shared = Arc::clone(&memory);
     let splitters = blocking(&l.query, &l.executor, move || {
-        merge_splitters(&shared, parts)
+        merge_splitters(&shared, sort_parts)
     })
     .await?;
     let lows = std::iter::once(None).chain(splitters.iter().copied().map(Some));
     let highs = splitters.iter().copied().map(Some).chain([None]);
+    // Each running sort holds a share of `scratch`, so it outlives this
+    // future if the read is dropped.
+    let scratch = Arc::new(scratch);
     let sorted = lows.zip(highs).map(|(lo, hi)| {
         let query = Arc::clone(&l.query);
         let memory = Arc::clone(&memory);
+        let scratch = Arc::clone(&scratch);
         blocking(&l.query, &l.executor, move || {
+            let _scratch = scratch;
             query.check_cancelled()?;
             sort_slices(&merge_part(&memory, lo, hi)?)
         })
     });
-    let orders = futures::future::try_join_all(sorted).await?;
+    let mut sorted = futures::stream::iter(sorted).buffered(parts);
+    // Every part, even after an error: a failed read frees `scratch` only
+    // once no sort is using it.
+    let mut orders = Vec::with_capacity(sort_parts);
+    let mut failed = None;
+    while let Some(part) = sorted.next().await {
+        match part {
+            Ok(order) => orders.push(order),
+            Err(e) => failed = failed.or(Some(e)),
+        }
+    }
+    drop(sorted);
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    let scratch = Arc::into_inner(scratch)
+        .ok_or_else(|| internal("a part sort outlived its read".to_owned()))?;
     let mut order = Vec::with_capacity(orders.iter().map(Vec::len).sum());
     orders.iter().for_each(|o| order.extend_from_slice(o));
     drop(orders);

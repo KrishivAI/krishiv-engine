@@ -413,11 +413,23 @@ pub(super) fn sort_slices(memory: &[Slice]) -> Result<Vec<(u32, u32)>> {
     Ok(keyed.into_iter().map(|(_, s, r)| (s, r)).collect())
 }
 
+/// The most rows one part sort holds, about: a sort cannot stop part way, so
+/// this bounds how long a cancelled query waits for it.
+const SORT_PART_ROWS: usize = 1 << 20;
+
+/// The parts to sort `rows` in with `parallelism` threads: one per thread,
+/// or more when those would pass [`SORT_PART_ROWS`].
+pub(super) fn sort_parts(rows: usize, parallelism: usize) -> usize {
+    parallelism.max(rows.div_ceil(SORT_PART_ROWS))
+}
+
 /// A wide in-memory merge to run in parallel.
 pub(super) struct ParallelMerge {
     pub(super) memory: Vec<Slice>,
-    /// The parts to sort, and the output batches to gather at once.
+    /// The threads to use, and the output batches to gather at once.
     pub(super) parts: usize,
+    /// The parts to sort, at most `parts` of them at a time.
+    pub(super) sort_parts: usize,
     /// Holds the keyed rows, the order and the output batches gathered ahead.
     pub(super) scratch: Reservation,
     /// Of `scratch`, the bytes of the output batches gathered ahead.
@@ -463,6 +475,7 @@ pub(super) fn parallel_merge(
     Some(ParallelMerge {
         memory,
         parts,
+        sort_parts: sort_parts(rows, parts),
         scratch,
         ready_bytes,
     })

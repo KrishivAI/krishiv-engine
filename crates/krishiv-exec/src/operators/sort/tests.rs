@@ -24,7 +24,7 @@ use super::Sort;
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
     Bucketing, Merger, Slice, SortedBatch, interleave_batches, merge_part, merge_splitters,
-    parallel_merge, sort_slices,
+    parallel_merge, sort_parts, sort_slices,
 };
 use crate::context::{ExecConfig, OperatorId, QueryContext, QueryId, TaskContext};
 use crate::executor::{Executor, TokioExecutor, WorkloadClass};
@@ -803,6 +803,14 @@ fn equal_keys_spread_over_the_parts() {
         let rows: usize = part.iter().map(|(_, r)| r.len()).sum();
         assert!((2000..=3000).contains(&rows), "{rows} rows in a part");
     }
+}
+
+#[test]
+fn part_sorts_stay_small_enough_to_cancel() {
+    assert_eq!(sort_parts(1 << 16, 8), 8);
+    assert_eq!(sort_parts(8 << 20, 8), 8);
+    assert_eq!(sort_parts((8 << 20) + 1, 8), 9);
+    assert_eq!(sort_parts(60_000_000, 12), 58);
 }
 
 #[test]
