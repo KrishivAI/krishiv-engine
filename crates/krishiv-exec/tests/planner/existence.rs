@@ -301,7 +301,7 @@ fn shapes_that_need_unnesting_stay_refused() {
     let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
     assert_eq!(
         e.error.error_class().name(),
-        "KRISHIV_UNSUPPORTED_FEATURE",
+        "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.UNSUPPORTED_CORRELATED_EXPRESSION_IN_JOIN_CONDITION",
         "{body}: {e}"
     );
 }
