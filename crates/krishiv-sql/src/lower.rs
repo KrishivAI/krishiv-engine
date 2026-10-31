@@ -1151,7 +1151,7 @@ impl Lowerer {
                 if dynamic_name.is_some() {
                     return Err(unsupported("table-valued functions", tf.span));
                 }
-                if name.parts.len() != 1 {
+                if name.parts.len() > 3 {
                     return Err(unsupported("table-valued functions", tf.span));
                 }
                 for a in args {
@@ -1168,7 +1168,14 @@ impl Lowerer {
                     .collect::<R<Vec<_>>>()?;
                 self.node(
                     PlanNode::TableFunction {
-                        name: name.parts[0].value.clone(),
+                        // A qualified name (`ns.f`) is kept as one string, its
+                        // parts joined by dots; the analyzer splits it.
+                        name: name
+                            .parts
+                            .iter()
+                            .map(|p| p.value.as_str())
+                            .collect::<Vec<_>>()
+                            .join("."),
                         args: lowered,
                     },
                     tf.span,

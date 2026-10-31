@@ -1014,14 +1014,12 @@ impl Session {
                 }
                 .into());
             }
-            (_, true) => {
-                return Err(unsupported("SQL table functions: RETURNS TABLE"));
-            }
             (FunctionBodyKind::Expr(e), false) => {
                 krishiv_sql::lower_expression(e, source).map_err(lower_err)?
             }
-            // A scalar function's query body is a scalar subquery.
-            (FunctionBodyKind::Query(q), false) => {
+            // A function's query body is a scalar subquery: for a scalar
+            // function its value, for a table function its rows.
+            (FunctionBodyKind::Query(q), _) => {
                 let plan = krishiv_sql::lower(q, source).map_err(lower_err)?;
                 PlanExpr::new(ExprNode::Subquery {
                     kind: SubqueryKind::Scalar,
@@ -1031,9 +1029,19 @@ impl Session {
             }
             _ => return Err(unsupported("this kind of function body")),
         };
+        let returns_table = match returned {
+            Some(columns) => Some(
+                columns
+                    .iter()
+                    .map(|c| Ok((c.name.value.clone(), data_type(&c.data_type)?)))
+                    .collect::<Result<Vec<_>, KrishivError>>()?,
+            ),
+            None => None,
+        };
         let def = SqlFunction {
             name: name.to_owned(),
             qualifier: Vec::new(),
+            returns_table,
             params: out_params,
             returns,
             body: Arc::new(body),
@@ -1057,10 +1065,27 @@ impl Session {
         env: QueryEnv,
         redacted: &RedactedSql,
     ) -> Result<DataType, KrishivError> {
-        let args = def.params[..def.required()]
+        let args: Vec<PlanExpr> = def.params[..def.required()]
             .iter()
             .map(|p| PlanExpr::literal(Literal::Null(Some(p.data_type.clone()))))
             .collect();
+        // A table function is probed by reading its rows; only the check
+        // matters, its columns are declared.
+        if def.returns_table.is_some() {
+            let name: Vec<&str> = qualifier
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(def.name.as_str()))
+                .collect();
+            let plan = Arc::new(LogicalPlan::new(PlanNode::TableFunction {
+                name: name.join("."),
+                args: args.into_iter().map(Arc::new).collect(),
+            }));
+            DataFrame::new(self.clone(), plan)
+                .analyzed_in_with_text(env, Some(redacted))
+                .await?;
+            return Ok(DataType::Null);
+        }
         let mut call = PlanExpr::function(def.name.clone(), args);
         if let ExprNode::Function(function) = &mut call.node {
             function.qualifier = qualifier.to_vec();

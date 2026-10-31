@@ -36,12 +36,22 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
         match self.ctx.table_functions.lookup(name, self.ctx.profile) {
-            TableFunctionLookup::NotFound => Err(AnalysisError::new(
-                UnresolvableTableValuedFunction {
-                    name: format!("`{name}`"),
-                },
-                o,
-            )),
+            TableFunctionLookup::NotFound => {
+                // A SQL-bodied table function of the session or its catalog.
+                let parts: Vec<String> = name.split('.').map(str::to_owned).collect();
+                if let super::FunctionLookup::Sql(def) =
+                    self.ctx.functions.lookup(&parts, self.ctx.profile)
+                    && def.returns_table.is_some()
+                {
+                    return self.sql_table_call(p, &def, args, env);
+                }
+                Err(AnalysisError::new(
+                    UnresolvableTableValuedFunction {
+                        name: format!("`{name}`"),
+                    },
+                    o,
+                ))
+            }
             TableFunctionLookup::Found(TableFunctionKind::UnsupportedGenerator) => {
                 Err(super::bind::unsupported("table-valued functions", o))
             }
