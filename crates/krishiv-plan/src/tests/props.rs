@@ -376,10 +376,23 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 28 };
+        let kinds = if depth == 0 { 4 } else { 29 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
+            28 => PlanNode::Generate {
+                input: self.input(d),
+                kind: [
+                    crate::GeneratorKind::Explode,
+                    crate::GeneratorKind::PosExplode,
+                    crate::GeneratorKind::Inline,
+                ][usize::from(self.pick(3))],
+                outer: self.flag(),
+                arg: Arc::new(self.expr(1)),
+                output: self.many(0, 2, Gen::bound),
+                names: self.many(0, 2, Gen::name),
+                qualifier: self.flag().then(|| self.name()),
+            },
             27 => PlanNode::PartialAggregate {
                 input: self.input(d),
                 keys: self.exprs(),
@@ -1072,6 +1085,35 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
         | PlanNode::Limit { input, limit: e }
         | PlanNode::Offset { input, offset: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
+        PlanNode::Generate {
+            input,
+            outer,
+            arg,
+            output,
+            names,
+            qualifier,
+            ..
+        } => {
+            site!(w, *outer = !*outer);
+            site!(w, names.push("n".to_owned()));
+            site!(
+                w,
+                *qualifier = match qualifier.take() {
+                    Some(_) => None,
+                    None => Some("q".to_owned()),
+                }
+            );
+            site!(
+                w,
+                output.push(output.first().cloned().unwrap_or(BoundColumn {
+                    id: AttrId(0),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                }))
+            );
+            m_expr(arg, w) || output.iter_mut().any(|c| m_bound(c, w)) || m_plan(input, w)
+        }
         PlanNode::Expand {
             input,
             projections,

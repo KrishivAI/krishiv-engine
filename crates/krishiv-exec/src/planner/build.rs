@@ -42,8 +42,8 @@ use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op, filter_op, project_op,
-    replicate_op, scan_filter, sort_op, top_n_op,
+    SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op, filter_op,
+    generate_op, project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
 use crate::values::{LocalValues, ValueService};
 
@@ -415,6 +415,17 @@ impl<'a> Planner<'a> {
             PlanNode::ReplicateRows { input, count } => {
                 let input = self.plan(input)?;
                 self.replicate(input, count)
+            }
+            PlanNode::Generate {
+                input,
+                kind,
+                outer,
+                arg,
+                output,
+                ..
+            } => {
+                let input = self.plan(input)?;
+                self.generate(input, *kind, *outer, arg, output)
             }
             PlanNode::Expand {
                 input,
@@ -906,6 +917,57 @@ impl<'a> Planner<'a> {
             },
         );
         // The replication count is computed over groups the filter cuts.
+        planned.sites.clear();
+        Ok(planned)
+    }
+
+    /// Each row once per element of `arg` (`explode`, `posexplode`,
+    /// `inline`): the input's columns, then the generated ones.
+    fn generate(
+        &mut self,
+        input: Planned,
+        kind: krishiv_plan::GeneratorKind,
+        outer: bool,
+        arg: &Expr,
+        output: &[BoundColumn],
+    ) -> Result<Planned> {
+        let prepared = self.prepare(&[arg])?;
+        let e = prepared
+            .exprs
+            .first()
+            .cloned()
+            .ok_or_else(|| internal("a generator without an argument"))?;
+        let op = generate_op(
+            &input.schema,
+            &input.layout,
+            kind,
+            outer,
+            &e,
+            &self.values(&prepared),
+        )?;
+        if op.schema().fields().len() != input.schema.fields().len() + output.len() {
+            return Err(internal("a generator of the wrong width"));
+        }
+        let mut layout = input.layout.clone();
+        layout.extend(output.iter().map(|c| c.id));
+        let name = format!("{}{}", kind.name(), if outer { "_outer" } else { "" });
+        let mut planned = Self::attach(
+            input,
+            prepared,
+            op.schema(),
+            layout,
+            ("Generate", format!("{name}({arg})")),
+            |input, layout, subqueries| PhysNode::Generate {
+                input,
+                layout,
+                kind,
+                outer,
+                arg: e,
+                subqueries,
+            },
+        );
+        // Rows are repeated, dropped or padded with NULLs: no runtime filter
+        // may reach a scan through the generator.
         planned.sites.clear();
         Ok(planned)
     }

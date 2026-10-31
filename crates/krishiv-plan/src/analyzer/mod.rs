@@ -77,6 +77,7 @@ mod coerce;
 mod exprs;
 mod fold;
 mod fold_ops;
+mod generate;
 mod hints;
 mod hof;
 pub(crate) mod legacy;

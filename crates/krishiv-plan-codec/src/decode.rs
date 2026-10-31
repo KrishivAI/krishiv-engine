@@ -495,6 +495,19 @@ impl Decoder {
                 count: self.expr_ref(r.count)?,
                 subqueries: self.subqueries(&r.subqueries)?,
             },
+            Kind::Generate(g) => PhysNode::Generate {
+                input: self.boxed(g.input)?,
+                layout: layout(&g.layout),
+                kind: match pb::GeneratorKind::try_from(g.kind) {
+                    Ok(pb::GeneratorKind::Explode) => krishiv_plan::GeneratorKind::Explode,
+                    Ok(pb::GeneratorKind::PosExplode) => krishiv_plan::GeneratorKind::PosExplode,
+                    Ok(pb::GeneratorKind::Inline) => krishiv_plan::GeneratorKind::Inline,
+                    _ => return Err(CodecError::Corrupt("an unknown generator kind".to_owned())),
+                },
+                outer: g.outer,
+                arg: self.expr_ref(g.arg)?,
+                subqueries: self.subqueries(&g.subqueries)?,
+            },
             Kind::Expand(e) => {
                 expand_shape(e)?;
                 PhysNode::Expand {

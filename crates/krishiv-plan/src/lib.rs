@@ -86,6 +86,7 @@
 //! | `PlanNode::Pivot` | U | - | - |
 //! | `PlanNode::Unpivot` | U | - | - |
 //! | `PlanNode::Expand` | R | - | - |
+//! | `PlanNode::Generate` | U, R | - | - |
 //! | `PlanNode::InlineTable` | U | - | - |
 //! | `PlanNode::Window` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
@@ -144,8 +145,8 @@ pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
 pub use plan::{
-    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan,
-    PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
+    Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy,
+    LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
     UnpivotColumnSet,
 };
 pub use raises::{conjuncts, may_raise};

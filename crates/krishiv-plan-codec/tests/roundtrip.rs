@@ -43,6 +43,7 @@ variants!(
     Project,
     Limit,
     ReplicateRows,
+    Generate,
     Expand,
     Sort,
     TopN,
@@ -66,6 +67,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Project { .. } => Variant::Project,
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
+        PhysNode::Generate { .. } => Variant::Generate,
         PhysNode::Expand { .. } => Variant::Expand,
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
@@ -487,6 +489,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "window_frames"
             | "window_offset_values"
             | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
+            n if n.starts_with("generate_") => 6,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");

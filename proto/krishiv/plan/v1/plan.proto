@@ -140,6 +140,8 @@ message Node {
     RangeNode range = 18;
     // feature: shared_subplan
     SharedReadNode shared_read = 19;
+    // feature: generate
+    GenerateNode generate = 20;
   }
 }
 
@@ -235,6 +237,27 @@ message ReplicateRowsNode {
   repeated uint64 layout = 2;
   uint32 count = 3;
   repeated SubqueryPlan subqueries = 4;
+}
+
+// feature: generate
+// Each input row once per element of an array or map (explode, posexplode,
+// inline): the input's columns, then the generated ones.
+message GenerateNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  GeneratorKind kind = 3;
+  // Keep a row whose argument has no element, with NULL columns.
+  bool outer = 4;
+  uint32 arg = 5;
+  repeated SubqueryPlan subqueries = 6;
+}
+
+// feature: generate
+enum GeneratorKind {
+  GENERATOR_KIND_UNSPECIFIED = 0;
+  GENERATOR_KIND_EXPLODE = 1;
+  GENERATOR_KIND_POS_EXPLODE = 2;
+  GENERATOR_KIND_INLINE = 3;
 }
 
 // feature: expand
