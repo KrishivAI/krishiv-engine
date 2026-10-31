@@ -22,6 +22,7 @@ pub mod setup;
 pub mod sorted;
 pub mod sql_parse;
 pub mod sql_spans;
+pub mod test_udfs;
 pub mod value;
 
 use std::collections::BTreeSet;

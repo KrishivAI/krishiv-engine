@@ -1,8 +1,10 @@
 {
   "cases": {
-    "fn-array": [
-      59,
-      60
+    "nested-interval-types": [
+      2,
+      3,
+      22,
+      23
     ]
   },
   "file": "nonansi/array",

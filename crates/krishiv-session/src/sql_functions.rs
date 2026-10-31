@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{FunctionLookup, FunctionRegistry, SparkProfile, SqlFunction};
-use krishiv_plan::{Expr, LogicalPlan, PlanNode, SourceId};
+use krishiv_plan::function::Builtin;
+use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, SourceId};
 
 use crate::catalog::{ReadCandidate, SessionCatalog, StoredViews, expand_views_in};
 use crate::store::{CatalogStore, StoredFunctions};
@@ -208,7 +209,11 @@ impl QueryFunctions {
     /// a temporary function, and the permanent ones of its namespace for a
     /// stored one (which sees no temporary view: it could not have been
     /// created reading one).
-    fn expanded(&self, def: &Arc<SqlFunction>) -> Arc<SqlFunction> {
+    ///
+    /// A stored function's bare function names resolve in its own
+    /// namespace, not the caller's, so no temporary function or session
+    /// UDF of the same name shadows them.
+    fn expanded(&self, def: &Arc<SqlFunction>, profile: SparkProfile) -> Arc<SqlFunction> {
         let mut cache = self.expanded.lock().unwrap_or_else(PoisonError::into_inner);
         let key = cache_key(def);
         if let Some(hit) = cache.get(&key) {
@@ -216,8 +221,9 @@ impl QueryFunctions {
         }
         let stored_in = def.qualifier.get(1).cloned();
         if stored_in.is_some() && self.views.is_none() {
-            cache.insert(key, Arc::clone(def));
-            return Arc::clone(def);
+            let out = self.qualified(def, profile);
+            cache.insert(key, Arc::clone(&out));
+            return out;
         }
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
         let next_source = |views: &ViewSource| (views.next_source)();
@@ -270,8 +276,63 @@ impl QueryFunctions {
             }),
             _ => Arc::clone(def),
         };
+        let out = self.qualified(&out, profile);
         cache.insert(key, Arc::clone(&out));
         out
+    }
+
+    /// `def` with, for a stored function, its bare calls qualified.
+    fn qualified(&self, def: &Arc<SqlFunction>, profile: SparkProfile) -> Arc<SqlFunction> {
+        let Some(namespace) = def.qualifier.last() else {
+            return Arc::clone(def);
+        };
+        match self.qualify_calls(&def.body, namespace, profile) {
+            Some(body) => Arc::new(SqlFunction {
+                body,
+                ..(**def).clone()
+            }),
+            None => Arc::clone(def),
+        }
+    }
+}
+
+impl QueryFunctions {
+    /// `body` with each bare call that is not a built-in qualified by
+    /// `namespace`; `None` when nothing changed. Calls inside subquery
+    /// plans are not entered.
+    fn qualify_calls(
+        &self,
+        body: &Arc<Expr>,
+        namespace: &str,
+        profile: SparkProfile,
+    ) -> Option<Arc<Expr>> {
+        let out = Arc::clone(body)
+            .transform_up(
+                &mut |e: Arc<Expr>| -> Result<Arc<Expr>, std::convert::Infallible> {
+                    let ExprNode::Function(call) = &e.node else {
+                        return Ok(e);
+                    };
+                    // Canonical operators and built-ins stay bare; anything
+                    // else, session UDFs included, is a user function.
+                    let builtin = ["system".to_owned(), "builtin".to_owned(), call.name.clone()];
+                    if !call.qualifier.is_empty()
+                        || Builtin::from_name(&call.name).is_some()
+                        || !matches!(
+                            self.base.lookup(&builtin, profile),
+                            FunctionLookup::NotFound
+                        )
+                    {
+                        return Ok(e);
+                    }
+                    let mut call = call.clone();
+                    call.qualifier = vec![namespace.to_owned()];
+                    let mut next = (*e).clone();
+                    next.node = ExprNode::Function(call);
+                    Ok(Arc::new(next))
+                },
+            )
+            .unwrap_or_else(|never| match never {});
+        (!Arc::ptr_eq(&out, body)).then_some(out)
     }
 }
 
@@ -290,12 +351,12 @@ impl FunctionRegistry for QueryFunctions {
         let temporary = |f: &String| {
             self.map
                 .get(f)
-                .map(|entry| FunctionLookup::Sql(self.expanded(&entry.def)))
+                .map(|entry| FunctionLookup::Sql(self.expanded(&entry.def, profile)))
         };
         let stored = |namespace: &str, f: &String| {
             self.stored
                 .get(namespace, f)
-                .map(|stored| FunctionLookup::Sql(self.expanded(&stored.entry.def)))
+                .map(|stored| FunctionLookup::Sql(self.expanded(&stored.entry.def, profile)))
         };
         let found = match lower.as_slice() {
             [f] => temporary(f).or_else(|| stored(&self.namespace, f)),

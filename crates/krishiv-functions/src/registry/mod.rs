@@ -22,6 +22,7 @@ mod conditional;
 mod csv;
 mod defs;
 mod element;
+mod generator;
 mod hashing;
 mod hof;
 mod json;
@@ -74,6 +75,10 @@ pub enum Execution {
     /// `float(x)`, `int(x)`, ...); the plan only ever holds the `Cast`
     /// node, so this is never executed and never bound.
     Cast,
+    /// Lowered to a `Generate` node (`explode`, `posexplode`, `inline` and
+    /// their `_outer` forms); the plan never holds the call, so this is
+    /// never bound.
+    Generator,
 }
 
 /// The aggregates the executor implements.
