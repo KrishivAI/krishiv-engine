@@ -1164,3 +1164,58 @@ async fn null_typed_input_collects() {
     };
     assert_eq!(run_ordered(single()).await, ["1|NULL"]);
 }
+
+/// A NULL state, an unmatched outer join row's, is an empty state whatever its
+/// slots hold: merging it changes nothing.
+#[test]
+fn null_states_merge_as_empty_whatever_their_slots_hold() {
+    use arrow_array::{BooleanArray, Decimal128Array, Float64Array, Int64Array};
+    use arrow_buffer::NullBuffer;
+
+    let second_null = || Some(NullBuffer::from(vec![true, false]));
+    let counts = || -> ArrayRef { Arc::new(Int64Array::new(vec![2, 99].into(), second_null())) };
+    let doubles =
+        || -> ArrayRef { Arc::new(Float64Array::new(vec![4.0, 5.0].into(), second_null())) };
+    let decimals = || -> ArrayRef {
+        Arc::new(
+            Decimal128Array::new(vec![200, 77].into(), second_null())
+                .with_precision_and_scale(20, 2)
+                .unwrap(),
+        )
+    };
+    let nonempty =
+        || -> ArrayRef { Arc::new(BooleanArray::new(vec![true, true].into(), second_null())) };
+    let merged = |raw: &AggregateExpr, cols: &[ArrayRef], rows: usize| {
+        let merging = raw.merging(0);
+        let mut f = Accumulator::new(&merging, true).unwrap();
+        f.resize(1);
+        let cols: Vec<ArrayRef> = cols.iter().map(|c| c.slice(0, rows)).collect();
+        f.merge(&vec![0; rows], &cols).unwrap();
+        f.evaluate(&[0]).unwrap()
+    };
+    let dec = DataType::Decimal128(10, 2);
+    let cases: [(AggregateExpr, Vec<ArrayRef>); 4] = [
+        (
+            AggregateExpr::new(AggregateFunction::Count, 0, DataType::Int64, "c"),
+            vec![counts()],
+        ),
+        (
+            AggregateExpr::new(AggregateFunction::Avg, 0, DataType::Float64, "a"),
+            vec![doubles(), counts()],
+        ),
+        (
+            AggregateExpr::new(AggregateFunction::Avg, 0, dec.clone(), "a"),
+            vec![decimals(), counts()],
+        ),
+        (
+            AggregateExpr::new(AggregateFunction::Sum, 0, dec, "s"),
+            vec![decimals(), nonempty()],
+        ),
+    ];
+    for (raw, cols) in cases {
+        let both = merged(&raw, &cols, 2);
+        let one = merged(&raw, &cols, 1);
+        assert_eq!(both.as_ref(), one.as_ref(), "{:?}", raw.function);
+        assert!(both.is_valid(0), "{:?}", raw.function);
+    }
+}

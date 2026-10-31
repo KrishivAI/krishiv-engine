@@ -61,17 +61,13 @@ fn with_state(e: &Arc<Expr>, arg: Arc<Expr>) -> Arc<Expr> {
 }
 
 /// An aggregate over `input` split around its join: the calls run in a partial
-/// aggregate over the scan holding the first key, and merge above.
+/// aggregate over `f`'s side, keyed by `f.k`, and merge above.
 fn split(
     input: &Arc<LogicalPlan>,
     keys: &[Arc<Expr>],
     outputs: &[Arc<Expr>],
     states_of: &dyn Fn(Vec<BoundColumn>) -> Vec<BoundColumn>,
 ) -> Arc<LogicalPlan> {
-    let key_id = match &keys[0].node {
-        ExprNode::Resolved(ResolvedExpr::Column(c)) => c.id,
-        other => panic!("not a column key: {other:?}"),
-    };
     let mut next = 1_u64 << 40;
     let mut calls = Vec::new();
     let mut states = Vec::new();
@@ -99,10 +95,15 @@ fn split(
         states.extend(columns);
     }
     let states = states_of(states);
+    let k_of = |side: &Arc<LogicalPlan>| {
+        side.resolved_output()
+            .and_then(|o| o.iter().find(|c| c.name == "k").cloned())
+    };
     let partial = |side: &Arc<LogicalPlan>| {
+        let k = k_of(side).unwrap();
         Arc::new(LogicalPlan::new(PlanNode::PartialAggregate {
             input: Arc::clone(side),
-            keys: keys.to_vec(),
+            keys: vec![resolved(ResolvedExpr::Column(k))],
             aggregates: calls.clone(),
             states: states.clone(),
         }))
@@ -121,9 +122,7 @@ fn split(
     else {
         panic!("not a join: {join:?}");
     };
-    let in_left = left
-        .resolved_output()
-        .is_some_and(|o| o.iter().any(|c| c.id == key_id));
+    let in_left = k_of(left).is_some();
     let below = Arc::new(LogicalPlan::new(PlanNode::Join {
         left: if in_left {
             partial(left)
@@ -216,6 +215,11 @@ fn weights(keys: &[i64]) -> RecordBatch {
     .unwrap()
 }
 
+/// `f` on a join's null-supplying side: an unmatched `w` row gets NULL states.
+const OUTER: &str = "SELECT w.wk, count(f.i), sum(f.i), avg(f.i), sum(f.d), avg(f.d), \
+                     min(f.i), max(f.d), min(f.s), max(f.s) \
+                     FROM w LEFT JOIN f ON w.wk = f.k GROUP BY w.wk";
+
 const QUERY: &str = "SELECT f.k, count(f.i), count(*), sum(f.i), avg(f.i), sum(f.d), avg(f.d), \
                      min(f.i), max(f.d), min(f.s), max(f.s) \
                      FROM f JOIN w ON f.k = w.wk GROUP BY f.k";
@@ -263,11 +267,13 @@ proptest! {
         let rt = runtime();
         let dir = tempfile::tempdir().unwrap();
         let t = tables(dir.path(), &rows, &keys, &rt);
-        let plan = t.optimized(QUERY, Order::Statistics).unwrap();
-        let single = sorted(&run(&physical(&t, &plan).unwrap()).unwrap());
-        let split = physical(&t, &eager(&plan, &|s| s)).unwrap();
-        prop_assert!(split.to_string().contains("PartialHashAggregate"), "{}", split);
-        prop_assert_eq!(sorted(&run(&split).unwrap()), single);
+        for q in [QUERY, OUTER] {
+            let plan = t.optimized(q, Order::Statistics).unwrap();
+            let single = sorted(&run(&physical(&t, &plan).unwrap()).unwrap());
+            let split = physical(&t, &eager(&plan, &|s| s)).unwrap();
+            prop_assert!(split.to_string().contains("PartialHashAggregate"), "{}", split);
+            prop_assert_eq!(sorted(&run(&split).unwrap()), single);
+        }
     }
 }
 
@@ -305,6 +311,101 @@ fn join_matches_weigh_the_states() {
     assert_eq!(got.len(), 2, "{got:?}");
     assert!(got[0].starts_with("1|4|4|12|3"), "{got:?}");
     assert!(got[1].starts_with("2|0|1|NULL|NULL"), "{got:?}");
+}
+
+/// An unmatched outer row's NULL states are empty states: `count` is 0 and
+/// the others NULL, not whatever the NULL slots hold.
+#[test]
+fn null_states_of_an_outer_join_are_empty() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(
+        dir.path(),
+        &[
+            (1, Some(2), Some(100), Some(1)),
+            (1, Some(4), Some(300), Some(2)),
+        ],
+        &[1, 3],
+        &rt,
+    );
+    let q = "SELECT w.wk, count(f.i), sum(f.i), avg(f.i), sum(f.d), avg(f.d), min(f.s) \
+             FROM w LEFT JOIN f ON w.wk = f.k GROUP BY w.wk";
+    let plan = t.optimized(q, Order::Statistics).unwrap();
+    let got = sorted(&run(&physical(&t, &eager(&plan, &|s| s)).unwrap()).unwrap());
+    assert_eq!(got, sorted(&run(&physical(&t, &plan).unwrap()).unwrap()));
+    assert!(
+        got[1].starts_with("3|0|NULL|NULL|NULL|NULL|NULL"),
+        "{got:?}"
+    );
+}
+
+/// A change to a partial aggregate's keys and calls.
+type Edit<'a> = dyn Fn(&mut Vec<Arc<Expr>>, &mut Vec<Arc<Expr>>) + 'a;
+
+/// `plan`'s partial aggregate with `edit` applied to its keys and calls.
+fn with_partial(plan: &Plan, edit: &Edit<'_>) -> Plan {
+    let top = Arc::clone(plan.root())
+        .transform_up(&mut |p: Arc<LogicalPlan>| {
+            Ok::<_, Infallible>(match &p.node {
+                PlanNode::PartialAggregate {
+                    input,
+                    keys,
+                    aggregates,
+                    states,
+                } => {
+                    let (mut keys, mut aggregates) = (keys.clone(), aggregates.clone());
+                    edit(&mut keys, &mut aggregates);
+                    Arc::new(LogicalPlan::new(PlanNode::PartialAggregate {
+                        input: Arc::clone(input),
+                        keys,
+                        aggregates,
+                        states: states.clone(),
+                    }))
+                }
+                _ => p,
+            })
+        })
+        .unwrap();
+    Plan::try_new(LogicalPlan::clone(&top)).unwrap()
+}
+
+/// Only the optimizer builds the node, so a malformed one is an internal
+/// error, naming what is wrong.
+#[test]
+fn a_malformed_partial_aggregate_is_refused() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = sample(&rt, dir.path());
+    let plan = t.optimized(QUERY, Order::Statistics).unwrap();
+    let split = eager(&plan, &|s| s);
+    let literal = || {
+        Arc::new(Expr::new(ExprNode::Literal(
+            krishiv_plan::Literal::Integer(1),
+        )))
+    };
+    let filtered = |e: &Arc<Expr>| {
+        let mut f = call_of(e).clone();
+        f.filter = Some(Arc::new(Expr::new(ExprNode::Literal(
+            krishiv_plan::Literal::Boolean(true),
+        ))));
+        resolved(ResolvedExpr::Function(f))
+    };
+    let distinct = |e: &Arc<Expr>| {
+        let mut f = call_of(e).clone();
+        f.distinct = true;
+        resolved(ResolvedExpr::Function(f))
+    };
+    let cases: [(&Edit<'_>, &str); 4] = [
+        (&|k, _| k[0] = literal(), "key that is not a column"),
+        (&|_, a| a[0] = literal(), "is not a partial aggregate call"),
+        (&|_, a| a[0] = filtered(&a[0]), "cannot run as a partial"),
+        (&|_, a| a[0] = distinct(&a[0]), "cannot run as a partial"),
+    ];
+    for (edit, want) in cases {
+        let e = physical(&t, &with_partial(&split, edit)).err().unwrap();
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+        assert!(e.to_string().contains(want), "{e}");
+    }
 }
 
 #[test]

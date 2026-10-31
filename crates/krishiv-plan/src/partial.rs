@@ -7,19 +7,24 @@
 
 use krishiv_types::{DataType, DecimalType};
 
-use crate::{AttrId, BoundColumn, ResolvedFunction};
+use crate::{AttrId, BoundColumn, FunctionId, FunctionKind, ResolvedFunction};
 
 /// The state columns of `call` over a raw argument of type `raw_type`, numbered
 /// from `first`, or `None` when its state cannot be computed apart from its
-/// result: anything but `count`, `sum`, `avg`, `min` and `max`, a `DISTINCT`
-/// or a `FILTER`.
+/// result: anything but the registry's aggregates `count`, `sum`, `avg`, `min`
+/// and `max`, a `DISTINCT` or a `FILTER`.
 #[must_use]
 pub fn partial_state_columns(
     call: &ResolvedFunction,
     raw_type: &DataType,
     first: AttrId,
 ) -> Option<Vec<BoundColumn>> {
-    if call.distinct || call.filter.is_some() {
+    if call.distinct
+        || call.filter.is_some()
+        || !call.within_group.is_empty()
+        || call.kind != FunctionKind::Aggregate
+        || !matches!(call.id, FunctionId::Registry { .. })
+    {
         return None;
     }
     let name = call.id.name();
@@ -63,7 +68,6 @@ fn avg_sum_type(raw_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FunctionId, FunctionKind};
 
     fn call(name: &str, data_type: DataType) -> ResolvedFunction {
         ResolvedFunction {
@@ -155,5 +159,11 @@ mod tests {
             crate::ExprNode::Literal(crate::Literal::Boolean(true)),
         )));
         assert!(partial_state_columns(&filtered, &raw, AttrId(0)).is_none());
+        let mut window = call("sum", raw.clone());
+        window.kind = FunctionKind::Window;
+        assert!(partial_state_columns(&window, &raw, AttrId(0)).is_none());
+        let mut builtin = call("sum", raw.clone());
+        builtin.id = FunctionId::Builtin(crate::Builtin::Add);
+        assert!(partial_state_columns(&builtin, &raw, AttrId(0)).is_none());
     }
 }
