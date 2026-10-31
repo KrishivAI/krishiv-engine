@@ -89,10 +89,7 @@ impl TestKind {
         };
         // The suite runs with the `TIME` type enabled (Spark's test session
         // turns it on; its default is off).
-        let time = (
-            "spark.sql.timeType.enabled".to_owned(),
-            "true".to_owned(),
-        );
+        let time = ("spark.sql.timeType.enabled".to_owned(), "true".to_owned());
         [zone, time].into_iter().chain(own).collect()
     }
 

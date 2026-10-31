@@ -15,7 +15,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal128Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, TimestampMicrosecondArray,
@@ -23,7 +23,7 @@ use arrow_array::{
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_kernels::OverflowMode;
-use krishiv_kernels::cast::{CastMode, CastOptions, cast};
+use krishiv_kernels::cast::{CastMode, CastOptions, cast, time_diff, time_trunc};
 use krishiv_kernels::datetime::{
     DatePart, ParsePolicy, ZoneRef, Zones, convert_timezone, current_date, date_add,
     date_add_months, date_diff, date_sub, day_name, extract_date, extract_timestamp,
@@ -86,6 +86,8 @@ pub(super) const NAMES: &[&str] = &[
     "timestampdiff",
     "months_between",
     "make_date",
+    "time_trunc",
+    "time_diff",
     "from_utc_timestamp",
     "to_utc_timestamp",
     "convert_timezone",
@@ -788,6 +790,29 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(trunc_date(&x.dates(0)?, &x.strings(1)?, ansi)?) as ArrayRef)
             })
         }
+        ("time_trunc", [s, DataType::Time64(TimeUnit::Nanosecond)]) if is_string(s) => {
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    let times = x.array::<Time64NanosecondType>(1)?;
+                    Ok(Arc::new(time_trunc(&x.strings(0)?, &times)?) as ArrayRef)
+                },
+            )
+        }
+        (
+            "time_diff",
+            [
+                s,
+                DataType::Time64(TimeUnit::Nanosecond),
+                DataType::Time64(TimeUnit::Nanosecond),
+            ],
+        ) if is_string(s) => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+            let (start, end) = (
+                x.array::<Time64NanosecondType>(1)?,
+                x.array::<Time64NanosecondType>(2)?,
+            );
+            Ok(Arc::new(time_diff(&x.strings(0)?, &start, &end)?) as ArrayRef)
+        }),
         ("date_trunc", [s, t]) if is_string(s) && is_timestamp(t) => {
             let ntz = *t == ntz_type();
             let ansi = opts.ansi;

@@ -205,6 +205,27 @@ fn always_null_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Timestamp, true))
 }
 
+/// The `TIME` types a time function takes: the first is what an untyped
+/// `NULL` becomes.
+fn any_time() -> InputType {
+    InputType::StrictOneOf(
+        [6, 0, 1, 2, 3, 4, 5]
+            .into_iter()
+            .map(|precision| DataType::Time { precision })
+            .collect(),
+    )
+}
+
+/// `time_trunc(unit, time)`: the time's own type.
+fn time_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let t = c
+        .args()
+        .get(1)
+        .and_then(|a| a.data_type.clone())
+        .unwrap_or(DataType::Time { precision: 6 });
+    typed(t, c)
+}
+
 fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Double, c)
 }
@@ -832,6 +853,16 @@ fn datetime() -> Vec<Spec> {
         &["date_trunc"],
         &Inputs::Built(InputBuilder(date_trunc_inputs)),
         always_null_timestamp,
+    ));
+    out.extend(scalar(
+        &["time_trunc"],
+        &Inputs::Expects(vec![exact(DataType::String), any_time()]),
+        time_trunc_result,
+    ));
+    out.extend(scalar(
+        &["time_diff"],
+        &Inputs::Expects(vec![exact(DataType::String), any_time(), any_time()]),
+        long,
     ));
     out.extend(scalar(
         &["timestampadd"],

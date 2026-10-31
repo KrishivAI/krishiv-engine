@@ -2291,8 +2291,7 @@ impl Resolver<'_> {
                 // Spark's parser rejects the `TIME` type before any cast
                 // is checked (`spark.sql.timeType.enabled` is false by
                 // default; TIME cannot be evaluated here either way).
-                if !self.ctx.conf.time_type
-                    && to.any_type(&|t| matches!(t, DataType::Time { .. }))
+                if !self.ctx.conf.time_type && to.any_type(&|t| matches!(t, DataType::Time { .. }))
                 {
                     return Err(AnalysisError::new(
                         krishiv_common::error::UnsupportedTimeType {},

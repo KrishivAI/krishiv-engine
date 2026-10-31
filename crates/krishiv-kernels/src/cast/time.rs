@@ -5,9 +5,15 @@
 //! (design P2-T181 section 2). Behaviour here is from Spark 4.2.0 probes:
 //! surrounding whitespace and a leading `T` are accepted; hour and minute
 //! are 1 or 2 digits, seconds are optional, a fraction of any length is
-//! truncated to nanoseconds (`12:34:56.` is valid); an `AM`/`PM` suffix is
+//! truncated to microseconds (`TIME(6)` is the widest time) (`12:34:56.` is valid); an `AM`/`PM` suffix is
 //! read (`01:02:03 PM` is 13:02:03); `24:00` and `60` minutes or seconds
 //! are malformed.
+
+use arrow_array::types::Time64NanosecondType;
+use arrow_array::{Array, PrimitiveArray, StringArray};
+use krishiv_common::error::InvalidParameterValueTimeUnit;
+
+use crate::error::KernelError;
 
 /// Nanoseconds in a second.
 pub(crate) const NANOS_PER_SECOND: i64 = 1_000_000_000;
@@ -37,7 +43,7 @@ pub fn parse_time(text: &str) -> Option<i64> {
                 return None;
             }
             let mut nanos = 0_i64;
-            for (i, d) in fraction.bytes().take(9).enumerate() {
+            for (i, d) in fraction.bytes().take(6).enumerate() {
                 let scale = 10_i64.checked_pow(u32::try_from(8_usize.checked_sub(i)?).ok()?)?;
                 nanos = nanos.checked_add(i64::from(d - b'0').checked_mul(scale)?)?;
             }
@@ -69,6 +75,107 @@ pub fn format_time(nanos: i64) -> String {
     out
 }
 
+/// A time unit of `time_trunc` and `time_diff`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeTruncUnit {
+    /// `HOUR`.
+    Hour,
+    /// `MINUTE`.
+    Minute,
+    /// `SECOND`.
+    Second,
+    /// `MILLISECOND`.
+    Millisecond,
+    /// `MICROSECOND`.
+    Microsecond,
+}
+
+impl TimeTruncUnit {
+    /// The unit a name denotes: Spark's five, in any case and no aliases
+    /// (`MS` and a blank are `INVALID_PARAMETER_VALUE.TIME_UNIT`).
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_uppercase().as_str() {
+            "HOUR" => Self::Hour,
+            "MINUTE" => Self::Minute,
+            "SECOND" => Self::Second,
+            "MILLISECOND" => Self::Millisecond,
+            "MICROSECOND" => Self::Microsecond,
+            _ => return None,
+        })
+    }
+
+    /// Nanoseconds in one unit.
+    fn nanos(self) -> i64 {
+        match self {
+            Self::Hour => 3_600 * NANOS_PER_SECOND,
+            Self::Minute => 60 * NANOS_PER_SECOND,
+            Self::Second => NANOS_PER_SECOND,
+            Self::Millisecond => 1_000_000,
+            Self::Microsecond => 1_000,
+        }
+    }
+}
+
+/// `INVALID_PARAMETER_VALUE.TIME_UNIT` for the unit `name` of `function`.
+fn bad_unit(row: usize, function: &str, name: &str) -> KernelError {
+    KernelError::with_row(
+        Some(row),
+        InvalidParameterValueTimeUnit {
+            function_name: format!("`{function}`"),
+            parameter: "`unit`".to_owned(),
+            invalid_value: format!("'{name}'"),
+        }
+        .into(),
+    )
+}
+
+/// `time_trunc(unit, time)`: `time` cut down to a whole `unit`. A NULL unit
+/// or time is NULL; an unknown unit raises for a non-NULL row.
+///
+/// # Errors
+/// `INVALID_PARAMETER_VALUE.TIME_UNIT`.
+pub fn time_trunc(
+    units: &StringArray,
+    times: &PrimitiveArray<Time64NanosecondType>,
+) -> Result<PrimitiveArray<Time64NanosecondType>, KernelError> {
+    let mut out = Vec::with_capacity(times.len());
+    for i in 0..times.len() {
+        if units.is_null(i) || times.is_null(i) {
+            out.push(None);
+            continue;
+        }
+        let unit = TimeTruncUnit::parse(units.value(i))
+            .ok_or_else(|| bad_unit(i, "time_trunc", units.value(i)))?;
+        let n = times.value(i);
+        out.push(Some(n - n % unit.nanos()));
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// `time_diff(unit, start, end)`: whole `unit`s from `start` to `end`
+/// (negative when `end` is earlier), counted toward zero.
+///
+/// # Errors
+/// `INVALID_PARAMETER_VALUE.TIME_UNIT`.
+pub fn time_diff(
+    units: &StringArray,
+    start: &PrimitiveArray<Time64NanosecondType>,
+    end: &PrimitiveArray<Time64NanosecondType>,
+) -> Result<PrimitiveArray<arrow_array::types::Int64Type>, KernelError> {
+    let mut out = Vec::with_capacity(start.len());
+    for i in 0..start.len() {
+        if units.is_null(i) || start.is_null(i) || end.is_null(i) {
+            out.push(None);
+            continue;
+        }
+        let unit = TimeTruncUnit::parse(units.value(i))
+            .ok_or_else(|| bad_unit(i, "time_diff", units.value(i)))?;
+        out.push(Some((end.value(i) - start.value(i)) / unit.nanos()));
+    }
+    Ok(out.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,8 +190,8 @@ mod tests {
             ("T12:34", Some((12 * 60 + 34) * 60 * S)),
             ("1:2:3", Some(3723 * S)),
             ("12:34:56.", Some(45296 * S)),
-            ("12:34:56.1234567", Some(45296 * S + 123_456_700)),
-            ("12:34:56.1234567890", Some(45296 * S + 123_456_789)),
+            ("12:34:56.1234567", Some(45296 * S + 123_456_000)),
+            ("12:34:56.1234567890", Some(45296 * S + 123_456_000)),
             ("01:02:03 PM", Some((13 * 3600 + 2 * 60 + 3) * S)),
             ("12:00 AM", Some(0)),
             ("12:34 PM", Some((12 * 60 + 34) * 60 * S)),

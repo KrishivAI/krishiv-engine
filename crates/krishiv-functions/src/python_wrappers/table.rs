@@ -20,6 +20,8 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    ("time_diff", "TIME has no Python mapping yet (P2-T181)"),
+    ("time_trunc", "TIME has no Python mapping yet (P2-T181)"),
     (
         "timestampadd",
         "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
