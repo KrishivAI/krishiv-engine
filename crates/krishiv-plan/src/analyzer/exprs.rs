@@ -3849,6 +3849,21 @@ impl Resolver<'_> {
     ) -> Result<Bound, AnalysisError> {
         let n = f.args.len();
         if matches!(which, Conditional::Decode) {
+            // A scalar function has no `DISTINCT` or `FILTER` form.
+            for (present, syntax) in [
+                (f.distinct, "DISTINCT"),
+                (f.filter.is_some(), "FILTER CLAUSE"),
+            ] {
+                if present {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: "`decode`".to_owned(),
+                            syntax: syntax.to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
+            }
             return self.decode_case(e, &kids[..n]);
         }
         // The arity and the input checks quote the call as written.

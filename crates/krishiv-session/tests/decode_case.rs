@@ -108,6 +108,8 @@ fn decode_picks_the_first_match_or_the_default() {
     assert_eq!(case("select typeof(decode(1, 1, 2, 3, 4L))"), "bigint");
     // Without a default the CASE ends in a string NULL.
     assert_eq!(case("select typeof(decode(1, 2, 2, 3))"), "int");
+    assert_eq!(case("select typeof(decode(1, 1, 2))"), "bigint");
+    assert_eq!(case("select decode(1, 1, 2)"), "2");
     assert_eq!(case("select typeof(decode(1, 1, 'a'))"), "string");
 }
 
@@ -187,29 +189,6 @@ fn format_string_matches_java() {
     }
 }
 
-#[test]
-fn format_string_errors() {
-    let s = session();
-    for q in [
-        "format_string('Hello %s')",
-        "format_string('%1$s %4$s', 1, 2, 3)",
-        "format_string('%d', 1.5D)",
-        "format_string('%.1f', 1.5)",
-        "format_string('>>%-s<<', 'Hello')",
-        "format_string('>>%10L<<', NULL)",
-        "format_string('%1$', 1)",
-        "format_string('%0$s', 'Hello')",
-        "format_string()",
-    ] {
-        let df = futures::executor::block_on(s.sql(&format!("select {q}")));
-        let failed = match df {
-            Err(_) => true,
-            Ok(df) => futures::executor::block_on(df.collect()).is_err(),
-        };
-        assert!(failed, "{q}");
-    }
-}
-
 fn class_of(s: &Session, sql: &str) -> ErrorClass {
     let err: KrishivError = match block_on(s.sql(sql)) {
         Ok(df) => block_on(df.collect()).expect_err(sql),
@@ -220,17 +199,53 @@ fn class_of(s: &Session, sql: &str) -> ErrorClass {
 
 #[test]
 fn format_string_error_classes() {
+    use ErrorClass::{
+        InvalidParameterValueZeroIndex as Zero, KrishivInvalidFormatString as Bad,
+        WrongNumArgsWithoutSuggestion as Arity,
+    };
     let s = session();
-    assert_eq!(
-        class_of(&s, "select format_string('Hello %s')"),
-        ErrorClass::KrishivInvalidFormatString
-    );
-    assert_eq!(
-        class_of(&s, "select format_string('%0$s', 'Hello')"),
-        ErrorClass::InvalidParameterValueZeroIndex
-    );
-    assert_eq!(
-        class_of(&s, "select format_string()"),
-        ErrorClass::WrongNumArgsWithoutSuggestion
-    );
+    for (q, want) in [
+        ("format_string('Hello %s')", Bad),
+        ("format_string('%1$s %4$s', 1, 2, 3)", Bad),
+        ("format_string('%d', 1.5D)", Bad),
+        ("format_string('%.1f', 1.5)", Bad),
+        ("format_string('>>%-s<<', 'Hello')", Bad),
+        ("format_string('>>%10L<<', NULL)", Bad),
+        ("format_string('%1$', 1)", Bad),
+        ("format_string('%0$s', 'Hello')", Zero),
+        ("format_string()", Arity),
+    ] {
+        assert_eq!(class_of(&s, &format!("select {q}")), want, "{q}");
+    }
+}
+
+#[test]
+fn decode_refuses_distinct_and_filter() {
+    let s = session();
+    for q in [
+        "decode(DISTINCT 1, 1, 2)",
+        "decode(1, 1, 2) FILTER (WHERE true)",
+    ] {
+        assert_eq!(
+            class_of(&s, &format!("select {q}")),
+            ErrorClass::InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+            "{q}"
+        );
+    }
+}
+
+/// Each level of nesting puts the inner `decode` in every search condition.
+/// The inner expression is shared, not copied, and compiled once per use, so
+/// depth with several searches must stay cheap.
+#[test]
+fn nested_decode_stays_linear_to_plan() {
+    let s = session();
+    let mut q = String::from("x + 0");
+    for _ in 0..12 {
+        q = format!("decode({q}, 1, 2, 2, 3, 3, 4, 4, 5)");
+    }
+    let start = std::time::Instant::now();
+    let df = block_on(s.sql(&format!("select {q} from values (1) t(x)"))).expect("plans");
+    block_on(df.collect()).expect("runs");
+    assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
 }
