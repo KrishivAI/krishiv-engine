@@ -119,3 +119,45 @@ fn a_subscript_of_another_type_is_refused() {
     let err = run(&s, "SELECT named_struct('a', 1)[1]").unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InvalidExtractFieldType);
 }
+
+#[test]
+fn an_array_index_must_be_integral() {
+    let s = Session::new().unwrap();
+    for ansi in ["true", "false"] {
+        block_on(s.sql(&format!("SET spark.sql.ansi.enabled = {ansi}"))).unwrap();
+        for expr in ["array(1, 2)['1']", "array(1, 2)[1.0]", "array(1, 2)['x']"] {
+            let err = run(&s, &format!("SELECT {expr}")).unwrap_err();
+            assert_eq!(
+                err.error_class(),
+                ErrorClass::DatatypeMismatchUnexpectedInputType,
+                "{expr}"
+            );
+        }
+    }
+    // Any integral type is an index.
+    assert_eq!(
+        run(
+            &s,
+            "SELECT array(1, 2)[1L], array(1, 2)[cast(0 as tinyint)]"
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn a_field_of_an_array_of_structs_is_refused_not_misread() {
+    let s = Session::new().unwrap();
+    for expr in [
+        "array(named_struct('a', 1))['a']",
+        "arrays_zip(array(1, 2), array('x', 'y'))['1']",
+    ] {
+        let err = run(&s, &format!("SELECT {expr}")).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{expr}"
+        );
+    }
+}

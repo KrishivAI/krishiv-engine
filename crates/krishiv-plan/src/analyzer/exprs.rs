@@ -2089,6 +2089,25 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
+                // `array_of_structs['a']` is Spark's `GetArrayStructFields` (the
+                // field of every element); not built yet, so it is refused
+                // rather than read as a position.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && matches!(
+                        &kids[0].ty.data_type,
+                        Some(DataType::Array(a)) if matches!(a.element_type(), DataType::Struct(_))
+                    )
+                    && matches!(&kids[1].expr.node, ExprNode::Literal(Literal::String(_)))
+                {
+                    return Err(AnalysisError::new(
+                        KrishivUnsupportedFeature {
+                            feature: "subscripts of an array of structs by field name".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `arrays_zip(a, b)` names its struct fields after columns,
                 // struct fields and aliases (`0`, `1`, ... otherwise): the
