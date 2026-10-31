@@ -244,6 +244,14 @@ impl Display for NodeLine<'_> {
                 f.write_str("]")
             }
             PlanNode::Filter { predicate, .. } => write!(f, "Filter {}", Text(predicate)),
+            PlanNode::PartialAggregate {
+                keys, aggregates, ..
+            } => write!(
+                f,
+                "PartialAggregate [{}], [{}]",
+                List(keys),
+                List(aggregates)
+            ),
             PlanNode::Aggregate {
                 grouping,
                 aggregates,
@@ -790,6 +798,11 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                     }
                 }
             }
+            out.push(Piece::Str(")"));
+        }
+        ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
+            out.push(Piece::Str("state("));
+            list(columns, out);
             out.push(Piece::Str(")"));
         }
         ExprNode::Resolved(ResolvedExpr::Field {

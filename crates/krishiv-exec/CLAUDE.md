@@ -56,6 +56,8 @@ Operators with work after their input (`needs_flush`) get `end_input` + a per-pi
 worker that runs it; the planner validates nodes with the same builders). `PhysicalPlan::shared` (P2-T198): subplans
 read by `PhysNode::SharedRead`, data and codec only so far; a walk over a plan starts at `PhysicalPlan::roots`. `Scheduler::submit` takes a
 `PhysicalPlan`; `QueryRunner::execute` runs an already instantiated `ExecNode` graph.
+`planner/aggregate.rs` also lowers `PlanNode::PartialAggregate` (P2-T167) onto a partial hash aggregate, and a call over
+`ResolvedExpr::StateInput` onto one merging its states; it refuses states the optimizer typed differently.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet; on one worker instantiation lowers each exchange into the operators around it.

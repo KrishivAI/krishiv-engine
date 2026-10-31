@@ -1564,6 +1564,20 @@ impl Resolver<'_> {
                 // `session.f` / `system.session.f` reach a session UDF only;
                 // any other qualifier is an unresolved routine.
                 // Grouping functions are never qualified.
+                // A function stored in a namespace of the session's catalog,
+                // named by its qualifier (`default.f`, `spark_catalog.default.f`).
+                if !f.qualifier.is_empty()
+                    && !super::bind::is_session_qualifier(&f.qualifier)
+                    && !super::bind::is_builtin_qualifier(&f.qualifier)
+                {
+                    let mut named = f.qualifier.clone();
+                    named.push(f.name.clone());
+                    if let FunctionLookup::Sql(def) =
+                        self.ctx.functions.lookup(&named, self.ctx.profile)
+                    {
+                        return self.sql_call(&def, e, f, kids);
+                    }
+                }
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
                 let session_qualified = super::bind::is_session_qualifier(&f.qualifier);
                 let lookup_name = builtin.as_deref().unwrap_or(&f.name);
@@ -2220,6 +2234,7 @@ impl Resolver<'_> {
                     Column(c) | OuterColumn(c) | LambdaVar(c) => column(c),
                     ResolvedExpr::Alias { output, .. } => column(output),
                     ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+                    ResolvedExpr::StateInput { raw_type, .. } => arg_type(raw_type.clone(), true),
                     ResolvedExpr::Field {
                         data_type,
                         nullable,
@@ -5326,6 +5341,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         // one is its expression (its output names the attribute).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
             format!("{}.{}", k[0], name)
         }

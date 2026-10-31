@@ -19,6 +19,7 @@ use krishiv_plan::analyzer::{FunctionLookup, FunctionRegistry, SparkProfile, Sql
 use krishiv_plan::{Expr, LogicalPlan, PlanNode, SourceId};
 
 use crate::catalog::{SessionCatalog, expand_temp_views};
+use crate::store::{CatalogStore, StoredFunctions};
 
 /// A defined function and the statement that defined it.
 #[derive(Clone)]
@@ -118,6 +119,10 @@ pub(crate) struct QueryFunctions {
     map: Arc<FunctionMap>,
     catalog: Arc<SessionCatalog>,
     case_sensitive: bool,
+    /// The functions stored in the catalog's namespaces, as of the start of
+    /// the query, and the namespace a bare name resolves in.
+    stored: Arc<StoredFunctions>,
+    namespace: String,
     expanded: Mutex<HashMap<String, Arc<SqlFunction>>>,
 }
 
@@ -128,12 +133,25 @@ impl QueryFunctions {
         catalog: Arc<SessionCatalog>,
         case_sensitive: bool,
     ) -> Self {
+        let stored = catalog.store.functions();
+        let namespace = fold(&catalog.current_namespace(), case_sensitive);
         Self {
             base,
             map,
             catalog,
             case_sensitive,
+            stored,
+            namespace,
             expanded: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// This registry over `stored` instead (the candidate functions a new
+    /// stored definition is checked in).
+    pub(crate) fn over_stored(&self, stored: Arc<StoredFunctions>) -> Self {
+        Self {
+            stored,
+            ..self.over(Arc::clone(&self.map))
         }
     }
 
@@ -153,6 +171,7 @@ impl QueryFunctions {
         self.map
             .entries
             .values()
+            .chain(self.stored.iter().map(|f| &f.entry))
             .find(|e| e.def.source == id)
             .map(|e| e.text.clone())
     }
@@ -160,8 +179,15 @@ impl QueryFunctions {
     /// `def` with the temporary views its body reads inlined.
     fn expanded(&self, def: &Arc<SqlFunction>) -> Arc<SqlFunction> {
         let mut cache = self.expanded.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(hit) = cache.get(&def.name) {
+        let key = cache_key(def);
+        if let Some(hit) = cache.get(&key) {
             return Arc::clone(hit);
+        }
+        // A stored function reads the catalog, not the caller's temporary
+        // views (it could not have been created reading one).
+        if !def.qualifier.is_empty() {
+            cache.insert(key, Arc::clone(def));
+            return Arc::clone(def);
         }
         let wrapper = one_row_project(vec![Arc::clone(&def.body)]);
         // A body no view expansion can read (a snapshot name, a cycle)
@@ -180,7 +206,7 @@ impl QueryFunctions {
             }),
             _ => Arc::clone(def),
         };
-        cache.insert(def.name.clone(), Arc::clone(&out));
+        cache.insert(key, Arc::clone(&out));
         out
     }
 }
@@ -192,18 +218,30 @@ impl FunctionRegistry for QueryFunctions {
             found => return found,
         }
         // Temporary functions also answer under `session.f` and
-        // `system.session.f`, as session UDFs do.
+        // `system.session.f`, as session UDFs do; stored ones under their
+        // namespace (`default.f`, `spark_catalog.default.f`), and a bare
+        // name after the temporary ones, in the current namespace.
         let lower: Vec<String> = name.iter().map(|p| p.to_lowercase()).collect();
-        let name = match lower.as_slice() {
-            [f] => f,
-            [q, f] if q == "session" => f,
-            [s, q, f] if s == "system" && q == "session" => f,
-            _ => return FunctionLookup::NotFound,
+        let ns = |i: usize| fold(&name[i], self.case_sensitive);
+        let temporary = |f: &String| {
+            self.map
+                .get(f)
+                .map(|entry| FunctionLookup::Sql(self.expanded(&entry.def)))
         };
-        match self.map.get(name) {
-            Some(entry) => FunctionLookup::Sql(self.expanded(&entry.def)),
-            None => FunctionLookup::NotFound,
-        }
+        let stored = |namespace: &str, f: &String| {
+            self.stored
+                .get(namespace, f)
+                .map(|stored| FunctionLookup::Sql(self.expanded(&stored.entry.def)))
+        };
+        let found = match lower.as_slice() {
+            [f] => temporary(f).or_else(|| stored(&self.namespace, f)),
+            [q, f] if q == "session" => temporary(f),
+            [s, q, f] if s == "system" && q == "session" => temporary(f),
+            [_, f] => stored(&ns(0), f),
+            [c, _, f] if c == crate::catalog::CATALOG => stored(&ns(1), f),
+            _ => None,
+        };
+        found.unwrap_or(FunctionLookup::NotFound)
     }
 
     fn spark_deterministic(&self, name: &str) -> Option<bool> {
@@ -221,7 +259,37 @@ impl FunctionRegistry for QueryFunctions {
             .version()
             .wrapping_mul(0x9e37_79b9_7f4a_7c15)
             .wrapping_add(self.map.version())
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .wrapping_add(self.stored.version())
     }
+}
+
+/// The temporary view a function body reads, if any: a stored function
+/// may not depend on an object of the session.
+pub(crate) fn reads_temporary_view(
+    catalog: &SessionCatalog,
+    body: &Arc<Expr>,
+    case_sensitive: bool,
+) -> Option<String> {
+    crate::catalog::reads_temporary(
+        catalog,
+        &one_row_project(vec![Arc::clone(body)]),
+        case_sensitive,
+    )
+}
+
+/// A namespace name as the session compares them.
+fn fold(namespace: &str, case_sensitive: bool) -> String {
+    if case_sensitive {
+        namespace.to_owned()
+    } else {
+        namespace.to_lowercase()
+    }
+}
+
+/// What a function is cached under: its qualifier and name.
+fn cache_key(def: &SqlFunction) -> String {
+    format!("{}.{}", def.qualifier.join("."), def.name)
 }
 
 /// A `Project` of `exprs` over one row.
@@ -243,6 +311,7 @@ mod tests {
         Entry {
             def: Arc::new(SqlFunction {
                 name: name.to_owned(),
+                qualifier: Vec::new(),
                 params: Vec::new(),
                 returns: None,
                 body: Arc::new(Expr::literal(Literal::Integer(value))),

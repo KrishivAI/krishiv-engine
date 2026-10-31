@@ -468,6 +468,23 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         }
     );
     assert_eq!(ReaderFeatures::default(), ReaderFeatures::all());
+    // A reader without `partial_aggregate` refuses states computed below a
+    // join.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "partial_aggregate")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["partial_aggregate".to_owned()]
+        }
+    );
     // A reader without `shared_subplan` refuses a plan with shared plans.
     let bytes = encode(
         &cases()
@@ -1129,6 +1146,46 @@ fn range_nodes_with_a_zero_step_or_zero_slices_are_corrupt() {
     assert!(decode(&edit(&|_| {}).encode_to_vec()).is_ok());
     corrupt(&edit(&|r| r.step = 0), "a range with step 0");
     corrupt(&edit(&|r| r.num_slices = Some(0)), "a range with 0 slices");
+}
+
+/// `partial_aggregate` is a partial aggregate below a join, on either side
+/// and through other nodes; one above any join stays the older, plain form.
+#[test]
+fn a_partial_aggregate_is_a_feature_only_below_a_join() {
+    use inventory::{join_plan, partial_aggregate};
+    use krishiv_exec::JoinType;
+    use krishiv_exec::physical::HashJoinPlan;
+    use krishiv_plan_codec::features::plan_features;
+
+    let has = |root: PhysNode| plan_features(&plan_of(root)).contains(&Feature::PartialAggregate);
+    assert!(!has(partial_aggregate()));
+    assert!(!has(PhysNode::HashJoin(join_plan(JoinType::Inner))));
+    assert!(has(PhysNode::HashJoin(HashJoinPlan {
+        probe: Box::new(partial_aggregate()),
+        ..join_plan(JoinType::Inner)
+    })));
+    assert!(has(PhysNode::HashJoin(HashJoinPlan {
+        build: Box::new(PhysNode::Limit {
+            input: Box::new(partial_aggregate()),
+            offset: 0,
+            limit: 1,
+        }),
+        ..join_plan(JoinType::Inner)
+    })));
+    // In a shared plan too: every tree of the plan counts.
+    let shared = plan_of(PhysNode::OneRow)
+        .with_shared(vec![krishiv_exec::physical::SharedPlan {
+            id: krishiv_exec::physical::SharedId(0),
+            plan: PhysNode::HashJoin(HashJoinPlan {
+                probe: Box::new(partial_aggregate()),
+                ..join_plan(JoinType::Inner)
+            }),
+            explain: krishiv_exec::planner::ExplainNode::leaf("HashJoin", ""),
+            deterministic: true,
+            ordered: false,
+        }])
+        .unwrap();
+    assert!(plan_features(&shared).contains(&Feature::PartialAggregate));
 }
 
 /// The header covers what a shared plan holds, and a listed plan with no
