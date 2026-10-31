@@ -242,6 +242,7 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
+                    path: self.path.clone(),
                     next_source: &|| next_source(views),
                     namespace: stored_in
                         .clone()

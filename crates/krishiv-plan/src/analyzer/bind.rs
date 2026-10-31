@@ -691,10 +691,18 @@ async fn load(
             }
         }
         if candidates.is_empty() {
-            candidates.push(ident.clone());
+            // A path with no schema of this catalog finds a bare name only
+            // among the session's temporary views.
+            let session = |e: &Vec<String>| {
+                matches!(e.as_slice(), [s, q]
+                    if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"))
+            };
+            if name.len() > 1 || scan || ctx.catalogs.sql_path().iter().any(session) {
+                candidates.push(ident.clone());
+            }
         }
         let mut meta = None;
-        let mut ident = candidates[0].clone();
+        let mut ident = candidates.first().cloned().unwrap_or_else(|| ident.clone());
         for (i, candidate) in candidates.into_iter().enumerate() {
             if i > 0 {
                 ident = candidate;

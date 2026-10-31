@@ -1144,6 +1144,7 @@ impl Session {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
+                path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
             }),
         )?;

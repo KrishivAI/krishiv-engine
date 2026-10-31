@@ -1147,6 +1147,8 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) next_source: &'a dyn Fn() -> krishiv_plan::SourceId,
     /// The current namespace as the query snapshot saw it: bare names resolve here, whatever `USE` does later.
     pub(crate) namespace: String,
+    /// The SQL path as the query snapshot saw it: a bare name belongs to the first of its schemas that has it.
+    pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
 }
@@ -1350,7 +1352,33 @@ impl Expander<'_> {
             return Ok(plan);
         }
         let (namespace, table) = match name.as_slice() {
-            [table] => (stored.namespace.clone(), table),
+            [table] => {
+                // Outside a stored view, the first schema of the path holding the name; inside one,
+                // the view's own namespace.
+                let from_path = self
+                    .view_namespace
+                    .is_none()
+                    .then(|| {
+                        stored.path.iter().find_map(|entry| match entry.as_slice() {
+                            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
+                                let key = if self.case_sensitive {
+                                    (n.clone(), table.clone())
+                                } else {
+                                    (n.to_lowercase(), table.to_lowercase())
+                                };
+                                self.catalog.store.table(&key.0, &key.1).map(|_| n.clone())
+                            }
+                            _ => None,
+                        })
+                    })
+                    .flatten();
+                match (from_path, &self.view_namespace) {
+                    (Some(namespace), _) => (namespace, table),
+                    (None, Some(_)) => (stored.namespace.clone(), table),
+                    // No schema of the path holds the name: no view to inline.
+                    (None, None) => return Ok(plan),
+                }
+            }
             [namespace, table] => (namespace.clone(), table),
             [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
                 (namespace.clone(), table)
