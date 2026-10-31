@@ -51,3 +51,39 @@ fn generated(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     };
     Ok(ArgType::new(data_type, true))
 }
+
+#[cfg(test)]
+mod tests {
+    use krishiv_types::{ArrayType, MapType};
+
+    use super::*;
+
+    fn generated_type(args: &[ArgType]) -> DataType {
+        generated(&CallTypes::new(args, &[]))
+            .expect("total")
+            .data_type
+            .expect("typed")
+    }
+
+    #[test]
+    fn generated_row_type() {
+        let array = DataType::Array(ArrayType::new(DataType::Integer, true).into());
+        let map = DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into());
+        assert_eq!(
+            generated_type(&[ArgType::new(array, false)]),
+            DataType::Integer
+        );
+        assert_eq!(
+            generated_type(&[ArgType::new(map, false)]),
+            DataType::Struct(StructType::new(vec![
+                StructField::new("key", DataType::String, false),
+                StructField::new("value", DataType::Integer, true),
+            ]))
+        );
+        assert_eq!(
+            generated_type(&[ArgType::new(DataType::Long, false)]),
+            DataType::Long
+        );
+        assert_eq!(generated_type(&[]), DataType::Null);
+    }
+}
