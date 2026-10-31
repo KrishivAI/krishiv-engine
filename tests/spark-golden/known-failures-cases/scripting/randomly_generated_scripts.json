@@ -3,11 +3,8 @@
     "sql-commands": [
       27,
       29,
-      51,
       66,
-      69,
-      87,
-      97
+      87
     ]
   },
   "file": "scripting/randomly_generated_scripts",
