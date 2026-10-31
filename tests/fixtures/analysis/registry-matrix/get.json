@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "get#255181a86eb7/ansi_on",
+      "reason": "SELECT get(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#255181a86eb7/ansi_off",
+      "reason": "SELECT get(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#2909aa52cc25/ansi_on",
+      "reason": "SELECT get(array(1, 2, 3), 1) | int where Spark has int not null"
+    },
+    {
+      "id": "get#2909aa52cc25/ansi_off",
+      "reason": "SELECT get(array(1, 2, 3), 1) | int where Spark has int not null"
+    },
+    {
+      "id": "get#33394edea87b/ansi_on",
+      "reason": "SELECT get(array(1, 2, 3), 0) | int where Spark has int not null"
+    },
+    {
+      "id": "get#33394edea87b/ansi_off",
+      "reason": "SELECT get(array(1, 2, 3), 0) | int where Spark has int not null"
+    },
+    {
+      "id": "get#5115d94f614a/ansi_on",
+      "reason": "SELECT get(INTERVAL '1-2' YEAR TO MONTH, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#5115d94f614a/ansi_off",
+      "reason": "SELECT get(INTERVAL '1-2' YEAR TO MONTH, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#759ad7a62030/ansi_on",
+      "reason": "SELECT get(array(1, 2, 3), 1L) | int where Spark has int not null"
+    },
+    {
+      "id": "get#759ad7a62030/ansi_off",
+      "reason": "SELECT get(array(1, 2, 3), 1L) | int where Spark has int not null"
+    },
+    {
+      "id": "get#9a9fccc321bb/ansi_on",
+      "reason": "SELECT get(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#9a9fccc321bb/ansi_off",
+      "reason": "SELECT get(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#cf9aa66f34ad/ansi_on",
+      "reason": "SELECT get(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#cf9aa66f34ad/ansi_off",
+      "reason": "SELECT get(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "get#d8550a71d5c3/ansi_on",
+      "reason": "SELECT get(array(1, 2, 3), CAST(1 AS TINYINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "get#d8550a71d5c3/ansi_off",
+      "reason": "SELECT get(array(1, 2, 3), CAST(1 AS TINYINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "get#da08828f585d/ansi_on",
+      "reason": "SELECT get(array(1, 2, 3), CAST(1 AS SMALLINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "get#da08828f585d/ansi_off",
+      "reason": "SELECT get(array(1, 2, 3), CAST(1 AS SMALLINT)) | int where Spark has int not null"
+    },
+    {
+      "id": "get#e92542954478/ansi_on",
+      "reason": "SELECT get(array(1, 2), 0) | int where Spark has int not null"
+    },
+    {
+      "id": "get#e92542954478/ansi_off",
+      "reason": "SELECT get(array(1, 2), 0) | int where Spark has int not null"
+    }
+  ],
+  "format_version": 1,
+  "function": "get"
+}

@@ -2,131 +2,131 @@
   "entries": [
     {
       "id": "greatest/ARRAY<INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/INT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/INT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/STRING/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "greatest/ARRAY<INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"ARRAY<INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "greatest/BIGINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BIGINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BIGINT/BINARY/ansi_off",
@@ -154,11 +154,11 @@
     },
     {
       "id": "greatest/BIGINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BIGINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BIGINT/STRING/ansi_off",
@@ -170,11 +170,11 @@
     },
     {
       "id": "greatest/BIGINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BIGINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BIGINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BIGINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BIGINT/TIMESTAMP/ansi_off",
@@ -194,11 +194,11 @@
     },
     {
       "id": "greatest/BINARY/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BINARY/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BINARY/BIGINT/ansi_off",
@@ -258,11 +258,11 @@
     },
     {
       "id": "greatest/BINARY/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BINARY/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BINARY/SMALLINT/ansi_off",
@@ -282,11 +282,11 @@
     },
     {
       "id": "greatest/BINARY/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BINARY/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BINARY\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BINARY), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BINARY/TIMESTAMP/ansi_off",
@@ -314,11 +314,11 @@
     },
     {
       "id": "greatest/BOOLEAN/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BOOLEAN/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BOOLEAN/BIGINT/ansi_off",
@@ -378,11 +378,11 @@
     },
     {
       "id": "greatest/BOOLEAN/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BOOLEAN/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BOOLEAN/SMALLINT/ansi_off",
@@ -402,11 +402,11 @@
     },
     {
       "id": "greatest/BOOLEAN/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BOOLEAN/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"BOOLEAN\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
     },
     {
       "id": "greatest/BOOLEAN/TIMESTAMP/ansi_off",
@@ -434,11 +434,11 @@
     },
     {
       "id": "greatest/DATE/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DATE/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DATE/BIGINT/ansi_off",
@@ -498,11 +498,11 @@
     },
     {
       "id": "greatest/DATE/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DATE/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DATE/SMALLINT/ansi_off",
@@ -522,11 +522,11 @@
     },
     {
       "id": "greatest/DATE/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DATE/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DATE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DATE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DATE/TINYINT/ansi_off",
@@ -538,11 +538,11 @@
     },
     {
       "id": "greatest/DECIMAL(10,2)/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DECIMAL(10,2)/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DECIMAL(10,2)/BINARY/ansi_off",
@@ -570,11 +570,11 @@
     },
     {
       "id": "greatest/DECIMAL(10,2)/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DECIMAL(10,2)/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DECIMAL(10,2)/STRING/ansi_off",
@@ -586,11 +586,11 @@
     },
     {
       "id": "greatest/DECIMAL(10,2)/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DECIMAL(10,2)/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DECIMAL(10,2)\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DECIMAL(10,2)/TIMESTAMP/ansi_off",
@@ -610,11 +610,11 @@
     },
     {
       "id": "greatest/DOUBLE/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DOUBLE/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DOUBLE/BINARY/ansi_off",
@@ -642,11 +642,11 @@
     },
     {
       "id": "greatest/DOUBLE/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DOUBLE/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DOUBLE/STRING/ansi_off",
@@ -658,11 +658,11 @@
     },
     {
       "id": "greatest/DOUBLE/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DOUBLE/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"DOUBLE\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
     },
     {
       "id": "greatest/DOUBLE/TIMESTAMP/ansi_off",
@@ -682,11 +682,11 @@
     },
     {
       "id": "greatest/FLOAT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/FLOAT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/FLOAT/BINARY/ansi_off",
@@ -714,11 +714,11 @@
     },
     {
       "id": "greatest/FLOAT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/FLOAT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/FLOAT/STRING/ansi_off",
@@ -730,11 +730,11 @@
     },
     {
       "id": "greatest/FLOAT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/FLOAT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"FLOAT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS FLOAT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/FLOAT/TIMESTAMP/ansi_off",
@@ -754,11 +754,11 @@
     },
     {
       "id": "greatest/INT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/INT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/INT/BINARY/ansi_off",
@@ -786,11 +786,11 @@
     },
     {
       "id": "greatest/INT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/INT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/INT/STRING/ansi_off",
@@ -802,11 +802,11 @@
     },
     {
       "id": "greatest/INT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/INT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"INT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS INT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/INT/TIMESTAMP/ansi_off",
@@ -826,75 +826,75 @@
     },
     {
       "id": "greatest/MAP<STRING,INT>/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/INT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/INT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/MAP<STRING,INT>/ansi_off",
@@ -906,51 +906,51 @@
     },
     {
       "id": "greatest/MAP<STRING,INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/STRING/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"MAP<STRING, INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "greatest/MAP<STRING,INT>/VOID/ansi_off",
@@ -962,11 +962,11 @@
     },
     {
       "id": "greatest/SMALLINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/SMALLINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/SMALLINT/BINARY/ansi_off",
@@ -994,11 +994,11 @@
     },
     {
       "id": "greatest/SMALLINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/SMALLINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/SMALLINT/STRING/ansi_off",
@@ -1010,11 +1010,11 @@
     },
     {
       "id": "greatest/SMALLINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/SMALLINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"SMALLINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/SMALLINT/TIMESTAMP/ansi_off",
@@ -1034,11 +1034,11 @@
     },
     {
       "id": "greatest/STRING/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRING/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRING/BIGINT/ansi_off",
@@ -1106,11 +1106,11 @@
     },
     {
       "id": "greatest/STRING/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRING/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRING/SMALLINT/ansi_off",
@@ -1122,11 +1122,11 @@
     },
     {
       "id": "greatest/STRING/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRING/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRING), NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRING/TIMESTAMP/ansi_off",
@@ -1154,131 +1154,131 @@
     },
     {
       "id": "greatest/STRUCT<a INT>/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BIGINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BINARY\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"BOOLEAN\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DATE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DECIMAL(10,2)\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"DOUBLE\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"FLOAT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/INT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/INT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, NULL)\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"SMALLINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/STRING/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"STRING\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TIMESTAMP_NTZ\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "greatest/STRUCT<a INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRUCT<a: INT>\\\", \\\"TINYINT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(NULL, CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP/BIGINT/ansi_off",
@@ -1338,11 +1338,11 @@
     },
     {
       "id": "greatest/TIMESTAMP/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP/SMALLINT/ansi_off",
@@ -1362,11 +1362,11 @@
     },
     {
       "id": "greatest/TIMESTAMP/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP/TINYINT/ansi_off",
@@ -1378,11 +1378,11 @@
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/BIGINT/ansi_off",
@@ -1442,11 +1442,11 @@
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/SMALLINT/ansi_off",
@@ -1466,11 +1466,11 @@
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TIMESTAMP_NTZ\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TIMESTAMP_NTZ/TINYINT/ansi_off",
@@ -1482,11 +1482,11 @@
     },
     {
       "id": "greatest/TINYINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TINYINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"ARRAY<INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TINYINT/BINARY/ansi_off",
@@ -1514,11 +1514,11 @@
     },
     {
       "id": "greatest/TINYINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TINYINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"MAP<STRING, INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TINYINT/STRING/ansi_off",
@@ -1530,11 +1530,11 @@
     },
     {
       "id": "greatest/TINYINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TINYINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+      "reason": "SELECT typeof(greatest(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"TINYINT\\\", \\\"STRUCT<a: INT>\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(CAST(NULL AS TINYINT), NULL)\\\"\"}"
     },
     {
       "id": "greatest/TINYINT/TIMESTAMP/ansi_off",

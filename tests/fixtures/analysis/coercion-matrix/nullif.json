@@ -2,131 +2,131 @@
   "entries": [
     {
       "id": "nullif/ARRAY<INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/INT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/INT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/STRING/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "nullif/ARRAY<INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "nullif/BIGINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BIGINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BIGINT/BINARY/ansi_off",
@@ -150,19 +150,19 @@
     },
     {
       "id": "nullif/BIGINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BIGINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BIGINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BIGINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BIGINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BIGINT/TIMESTAMP/ansi_off",
@@ -182,11 +182,11 @@
     },
     {
       "id": "nullif/BINARY/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BINARY/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BINARY/BIGINT/ansi_off",
@@ -246,11 +246,11 @@
     },
     {
       "id": "nullif/BINARY/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BINARY/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BINARY/SMALLINT/ansi_off",
@@ -262,11 +262,11 @@
     },
     {
       "id": "nullif/BINARY/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BINARY/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BINARY), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BINARY/TIMESTAMP/ansi_off",
@@ -294,11 +294,11 @@
     },
     {
       "id": "nullif/BOOLEAN/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BOOLEAN/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BOOLEAN/BIGINT/ansi_on",
@@ -338,11 +338,11 @@
     },
     {
       "id": "nullif/BOOLEAN/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BOOLEAN/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BOOLEAN/SMALLINT/ansi_on",
@@ -350,11 +350,11 @@
     },
     {
       "id": "nullif/BOOLEAN/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BOOLEAN/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS BOOLEAN), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/BOOLEAN/TIMESTAMP/ansi_off",
@@ -378,11 +378,11 @@
     },
     {
       "id": "nullif/DATE/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DATE/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DATE/BIGINT/ansi_off",
@@ -442,11 +442,11 @@
     },
     {
       "id": "nullif/DATE/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DATE/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DATE/SMALLINT/ansi_off",
@@ -458,11 +458,11 @@
     },
     {
       "id": "nullif/DATE/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DATE/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DATE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DATE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DATE/TINYINT/ansi_off",
@@ -474,11 +474,11 @@
     },
     {
       "id": "nullif/DECIMAL(10,2)/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DECIMAL(10,2)/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DECIMAL(10,2)/BINARY/ansi_off",
@@ -502,19 +502,19 @@
     },
     {
       "id": "nullif/DECIMAL(10,2)/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DECIMAL(10,2)/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DECIMAL(10,2)/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DECIMAL(10,2)/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DECIMAL(10,2)/TIMESTAMP/ansi_off",
@@ -534,11 +534,11 @@
     },
     {
       "id": "nullif/DOUBLE/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DOUBLE/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DOUBLE/BINARY/ansi_off",
@@ -562,19 +562,19 @@
     },
     {
       "id": "nullif/DOUBLE/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DOUBLE/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DOUBLE/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DOUBLE/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS DOUBLE), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/DOUBLE/TIMESTAMP/ansi_off",
@@ -594,11 +594,11 @@
     },
     {
       "id": "nullif/FLOAT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/FLOAT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/FLOAT/BINARY/ansi_off",
@@ -622,19 +622,19 @@
     },
     {
       "id": "nullif/FLOAT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/FLOAT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/FLOAT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/FLOAT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS FLOAT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/FLOAT/TIMESTAMP/ansi_off",
@@ -654,11 +654,11 @@
     },
     {
       "id": "nullif/INT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/INT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/INT/BINARY/ansi_off",
@@ -682,19 +682,19 @@
     },
     {
       "id": "nullif/INT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/INT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/INT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/INT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS INT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/INT/TIMESTAMP/ansi_off",
@@ -714,147 +714,147 @@
     },
     {
       "id": "nullif/MAP<STRING,INT>/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/INT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/INT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/STRING/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/VOID/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS VOID))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS VOID))\\\"\"}"
     },
     {
       "id": "nullif/MAP<STRING,INT>/VOID/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS VOID))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS VOID))\\\"\"}"
     },
     {
       "id": "nullif/SMALLINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/SMALLINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/SMALLINT/BINARY/ansi_off",
@@ -878,19 +878,19 @@
     },
     {
       "id": "nullif/SMALLINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/SMALLINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/SMALLINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/SMALLINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS SMALLINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/SMALLINT/TIMESTAMP/ansi_off",
@@ -910,155 +910,155 @@
     },
     {
       "id": "nullif/STRING/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRING/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRING/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRING/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRING/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRING/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRING), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/BIGINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/BIGINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BIGINT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/BINARY/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/BINARY/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BINARY))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/BOOLEAN/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/BOOLEAN/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/DATE/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/DATE/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DATE))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/DECIMAL(10,2)/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/DOUBLE/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS DOUBLE))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/FLOAT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/FLOAT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS FLOAT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/INT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/INT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS INT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/SMALLINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS SMALLINT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/STRING/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/STRING/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/TIMESTAMP/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/TINYINT/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "nullif/STRUCT<a INT>/TINYINT/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"nullif(NULL, CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = CAST(NULL AS TINYINT))\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP/BIGINT/ansi_off",
@@ -1118,11 +1118,11 @@
     },
     {
       "id": "nullif/TIMESTAMP/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP/SMALLINT/ansi_off",
@@ -1134,11 +1134,11 @@
     },
     {
       "id": "nullif/TIMESTAMP/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP/TINYINT/ansi_off",
@@ -1150,11 +1150,11 @@
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/BIGINT/ansi_off",
@@ -1214,11 +1214,11 @@
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/SMALLINT/ansi_off",
@@ -1230,11 +1230,11 @@
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TIMESTAMP_NTZ/TINYINT/ansi_off",
@@ -1246,11 +1246,11 @@
     },
     {
       "id": "nullif/TINYINT/ARRAY<INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TINYINT/ARRAY<INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TINYINT/BINARY/ansi_off",
@@ -1274,19 +1274,19 @@
     },
     {
       "id": "nullif/TINYINT/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TINYINT/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TINYINT/STRUCT<a INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TINYINT/STRUCT<a INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS TINYINT), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/TINYINT/TIMESTAMP/ansi_off",

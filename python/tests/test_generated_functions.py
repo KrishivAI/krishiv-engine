@@ -268,6 +268,25 @@ PYSPARK_CALLS = [
         lambda: F.convert_timezone(None, F.lit("Asia/Hong_Kong"), "ts"),
         ("call", "convert_timezone", (("lit", "Asia/Hong_Kong"), ("col", "ts"))),
     ),
+    # The regression functions take the dependent variable first; `listagg` leaves the
+    # delimiter out when it is omitted; `mode` always sends its flag, as Spark Connect does.
+    (lambda: F.regr_slope("y", "x"), ("call", "regr_slope", (("col", "y"), ("col", "x")))),
+    (lambda: F.regr_r2("y", F.col("x")), ("call", "regr_r2", (("col", "y"), ("col", "x")))),
+    (lambda: F.listagg("v"), ("call", "listagg", (("col", "v"),))),
+    (lambda: F.listagg("v", ","), ("call", "listagg", (("col", "v"), ("lit", ",")))),
+    (lambda: F.listagg("v", F.col("d")), ("call", "listagg", (("col", "v"), ("col", "d")))),
+    (lambda: F.mode("v"), ("call", "mode", (("col", "v"), ("lit", False)))),
+    (lambda: F.mode("v", True), ("call", "mode", (("col", "v"), ("lit", True)))),
+    (lambda: F.try_sum("v"), ("call", "try_sum", (("col", "v"),))),
+    (lambda: F.count_if("v"), ("call", "count_if", (("col", "v"),))),
+    # An int position or index is a literal, any other value a column; the extraction of
+    # `try_element_at` is always a column while `element_at`'s is a literal.
+    (lambda: F.get("a", 1), ("call", "get", (("col", "a"), ("lit", 1)))),
+    (lambda: F.get("a", "i"), ("call", "get", (("col", "a"), ("col", "i")))),
+    (lambda: F.array_insert("a", 2, "v"), ("call", "array_insert", (("col", "a"), ("lit", 2), ("lit", "v")))),
+    (lambda: F.array_insert("a", "p", 1), ("call", "array_insert", (("col", "a"), ("col", "p"), ("lit", 1)))),
+    (lambda: F.try_element_at("a", "k"), ("call", "try_element_at", (("col", "a"), ("col", "k")))),
+    (lambda: F.element_at("a", "k"), ("call", "element_at", (("col", "a"), ("lit", "k")))),
 ]
 
 

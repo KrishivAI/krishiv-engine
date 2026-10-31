@@ -83,8 +83,11 @@ struct Fresh<'a> {
 impl Fresh<'_> {
     fn get(&mut self) -> &mut u64 {
         let root = self.root;
-        self.next
-            .get_or_insert_with(|| max_id(root, &mut HashMap::new()).saturating_add(1))
+        self.next.get_or_insert_with(|| {
+            max_id(root, &mut HashMap::new())
+                .saturating_add(1)
+                .max(CSE_BASE)
+        })
     }
 }
 
@@ -162,15 +165,28 @@ fn rewrite_node(node: Arc<LogicalPlan>, next: &mut Fresh<'_>) -> Arc<LogicalPlan
     }
 }
 
+/// The first attribute id CSE hands out. The analyzer numbers attributes
+/// from zero and a plan never holds billions of them, so an id from this
+/// band marks a column the pass made: a user alias spelled `cse_3` has a
+/// small id and is a user column.
+const CSE_BASE: u64 = 1 << 32;
+
+/// The name prefix of an extracted column. A user alias spelled `cse_3` is
+/// not one; a shifted copy of a user column keeps its name but must not
+/// pass for a CSE column, so the prefix is one no query writes.
+const CSE_PREFIX: &str = "krishiv_cse_";
+
 /// Whether `c` is a column CSE extracted (see `fresh_columns`).
 ///
-/// The name is `cse_<id>` of the id the column was created with; a
-/// self-join's `Shift` renumbers the column upward and keeps its name, so
-/// the id may exceed the number in the name, never fall below it.
+/// It is named `cse_<n>`, created with the id `CSE_BASE + n`. A self-join's
+/// `Shift` renumbers the column upward and keeps its name, so the id may
+/// exceed `CSE_BASE + n`, never fall below it.
 pub(crate) fn is_cse_column(c: &BoundColumn) -> bool {
     c.name
-        .strip_prefix("cse_")
-        .is_some_and(|n| n.parse::<u64>().is_ok_and(|id| c.id.0 >= id))
+        .strip_prefix(CSE_PREFIX)
+        .and_then(|n| n.parse::<u64>().ok())
+        .and_then(|n| CSE_BASE.checked_add(n))
+        .is_some_and(|least| c.id.0 >= least)
 }
 
 /// `p` without the columns CSE extracted into its output: a filter passes
@@ -931,7 +947,7 @@ fn fresh_columns(extracted: &[Arc<Expr>], next: &mut u64) -> Option<Vec<BoundCol
         *next += 1;
         cols.push(BoundColumn {
             id,
-            name: format!("cse_{}", id.0),
+            name: format!("{CSE_PREFIX}{}", id.0 - CSE_BASE),
             data_type,
             nullable,
         });
@@ -1311,13 +1327,21 @@ mod tests {
             data_type: krishiv_types::DataType::Boolean,
             nullable: true,
         };
-        assert!(is_cse_column(&col("cse_9", 9)));
+        let base = CSE_BASE;
+        assert!(is_cse_column(&col("krishiv_cse_9", base + 9)));
         // A self-join's `Shift` renumbers upward and keeps the name.
-        assert!(is_cse_column(&col("cse_9", 11)));
-        assert!(!is_cse_column(&col("cse_9", 3)));
-        assert!(!is_cse_column(&col("cse_x", 9)));
-        assert!(!is_cse_column(&col("cse_", 9)));
-        assert!(!is_cse_column(&col("total", 9)));
+        assert!(is_cse_column(&col("krishiv_cse_9", base + 11)));
+        assert!(!is_cse_column(&col("krishiv_cse_9", base + 3)));
+        // A user alias has a small id, whatever it is called.
+        assert!(!is_cse_column(&col("krishiv_cse_9", 9)));
+        assert!(!is_cse_column(&col("krishiv_cse_9", 11)));
+        // A user alias spelled like the old prefix, renumbered into the band
+        // by a `Shift` on re-optimisation, is still a user column.
+        assert!(!is_cse_column(&col("cse_0", base + 7)));
+        assert!(!is_cse_column(&col("cse_9", base + 11)));
+        assert!(!is_cse_column(&col("krishiv_cse_x", base + 9)));
+        assert!(!is_cse_column(&col("krishiv_cse_", base + 9)));
+        assert!(!is_cse_column(&col("total", base + 9)));
     }
 
     #[test]
@@ -1421,7 +1445,7 @@ mod tests {
             expr: Arc::clone(&a),
             output: BoundColumn {
                 id: AttrId(99),
-                name: "cse_99".to_owned(),
+                name: "krishiv_cse_99".to_owned(),
                 data_type: DataType::Integer,
                 nullable: true,
             },

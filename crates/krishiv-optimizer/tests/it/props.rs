@@ -256,7 +256,7 @@ fn pushable(pred: &Expr, child: &LogicalPlan) -> bool {
     if let PlanNode::Project { exprs, .. } = &child.node {
         let cse = exprs.iter().any(|e| match &e.node {
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
-                output.name.starts_with("cse_")
+                output.name.starts_with("krishiv_cse_")
             }
             _ => false,
         });
