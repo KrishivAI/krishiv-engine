@@ -333,6 +333,8 @@ pub(crate) struct QueryCatalog {
     /// CTE results), by the address of the plan's root; released when the
     /// run ends.
     scoped: Mutex<HashMap<usize, Vec<String>>>,
+    /// Memory held for pinned tables, by hidden name; released with them.
+    held: Mutex<HashMap<String, krishiv_memory::Reservation>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -382,6 +384,7 @@ impl QueryCatalog {
             cache,
             pinned: Mutex::new(HashMap::new()),
             scoped: Mutex::new(HashMap::new()),
+            held: Mutex::new(HashMap::new()),
             files,
             scans,
             loaded: Mutex::new(HashMap::new()),
@@ -398,6 +401,14 @@ impl QueryCatalog {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(name, table);
+    }
+
+    /// Keeps `memory` reserved for as long as `name` stays pinned.
+    pub(crate) fn hold_reservation(&self, name: String, memory: krishiv_memory::Reservation) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name, memory);
     }
 
     /// Records that the plan rooted at `plan` reads the pinned `names`.
@@ -422,8 +433,10 @@ impl QueryCatalog {
     /// Releases the snapshots pinned under the hidden `names`.
     pub(crate) fn unpin_cached(&self, names: &[String]) {
         let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         for n in names {
             pinned.remove(n);
+            held.remove(n);
         }
     }
 

@@ -1302,6 +1302,14 @@ impl Session {
         Ok((optimized, physical))
     }
 
+    /// An empty reservation in a pool of its own under the session's, for
+    /// the rows a recursive CTE keeps.
+    pub(crate) fn recursion_reservation(&self) -> krishiv_memory::Reservation {
+        let pool = self.state.memory.child("recursive-cte", None);
+        let consumer = pool.register("recursive-cte", None);
+        krishiv_memory::Reservation::new(pool, consumer)
+    }
+
     /// As [`Self::physical`] for a plan that is only inspected (EXPLAIN,
     /// estimates): a recursive CTE is not run and reads as an empty table.
     pub(crate) async fn physical_inspected(

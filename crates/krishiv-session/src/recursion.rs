@@ -107,7 +107,10 @@ fn found_in(
             return Some(found);
         }
     }
-    let here = matches!(p.node, PlanNode::UnionLoop { .. }).then(|| (Arc::clone(p), defs.clone()));
+    // A loop that reads the current round of an enclosing one waits for it:
+    // that round's rows run it (`Session::run_rounds`).
+    let here = (matches!(p.node, PlanNode::UnionLoop { .. }) && free_refs(p, defs).is_empty())
+        .then(|| (Arc::clone(p), defs.clone()));
     defs.truncate(before);
     here
 }
@@ -120,22 +123,20 @@ fn subquery_plans(e: &Arc<krishiv_plan::Expr>, out: &mut Vec<Arc<LogicalPlan>>) 
     e.for_each_child(&mut |c| subquery_plans(c, out));
 }
 
-/// `plan` with `node` (a loop) replaced by `scan`, in subquery plans too.
-fn replace_loop(
+/// `plan` with every relation `f` rewrites replaced, in subquery plans too.
+fn rewrite(
     plan: Arc<LogicalPlan>,
-    node: &Arc<LogicalPlan>,
-    scan: &Arc<LogicalPlan>,
+    f: &mut dyn FnMut(Arc<LogicalPlan>) -> Arc<LogicalPlan>,
 ) -> Arc<LogicalPlan> {
     fn in_expr(
         e: Arc<krishiv_plan::Expr>,
-        node: &Arc<LogicalPlan>,
-        scan: &Arc<LogicalPlan>,
+        f: &mut dyn FnMut(Arc<LogicalPlan>) -> Arc<LogicalPlan>,
     ) -> Arc<krishiv_plan::Expr> {
         let e = e
-            .map_children(|c| Ok::<_, std::convert::Infallible>(in_expr(c, node, scan)))
+            .map_children(|c| Ok::<_, std::convert::Infallible>(in_expr(c, f)))
             .unwrap_or_else(|never| match never {});
         if let krishiv_plan::ExprNode::Subquery { kind, plan } = &e.node {
-            let replaced = replace_loop(Arc::clone(plan), node, scan);
+            let replaced = rewrite(Arc::clone(plan), f);
             if !Arc::ptr_eq(&replaced, plan) {
                 return Arc::new(krishiv_plan::Expr {
                     node: krishiv_plan::ExprNode::Subquery {
@@ -149,17 +150,90 @@ fn replace_loop(
         e
     }
     plan.transform_up(&mut |n| {
-        let n = if Arc::ptr_eq(&n, node) {
-            Arc::clone(scan)
-        } else {
-            n
-        };
+        let n = f(n);
         Ok::<_, std::convert::Infallible>(
-            n.map_expressions(|e| Ok::<_, std::convert::Infallible>(in_expr(e, node, scan)))
+            n.map_expressions(|e| Ok::<_, std::convert::Infallible>(in_expr(e, f)))
                 .unwrap_or_else(|never| match never {}),
         )
     })
     .unwrap_or_else(|never| match never {})
+}
+
+/// `plan` with `node` (a loop) replaced by `scan`.
+fn replace_loop(
+    plan: Arc<LogicalPlan>,
+    node: &Arc<LogicalPlan>,
+    scan: &Arc<LogicalPlan>,
+) -> Arc<LogicalPlan> {
+    rewrite(plan, &mut |n| {
+        if Arc::ptr_eq(&n, node) {
+            Arc::clone(scan)
+        } else {
+            n
+        }
+    })
+}
+
+/// The loop references `p` reads that no loop inside `p` defines: the
+/// rounds of enclosing loops. A read of a CTE counts as a read of what its
+/// definition reads; `scope` holds the definitions around `p`.
+fn free_refs(p: &Arc<LogicalPlan>, scope: &[krishiv_plan::Cte]) -> HashSet<u32> {
+    struct Walk {
+        defs: Vec<krishiv_plan::Cte>,
+        bound: Vec<u32>,
+        free: HashSet<u32>,
+        seen: HashSet<usize>,
+    }
+    fn walk(p: &Arc<LogicalPlan>, w: &mut Walk) {
+        if !w.seen.insert(Arc::as_ptr(p) as usize) {
+            return;
+        }
+        let before = w.defs.len();
+        let mut bound_here = false;
+        match &p.node {
+            PlanNode::UnionLoopRef { id, .. } if !w.bound.contains(id) => {
+                w.free.insert(*id);
+            }
+            PlanNode::UnionLoop { id, .. } => {
+                w.bound.push(*id);
+                bound_here = true;
+            }
+            PlanNode::CteRef(r) => {
+                if let Some(i) = w
+                    .defs
+                    .iter()
+                    .rposition(|c| c.name.eq_ignore_ascii_case(&r.name))
+                {
+                    let def = Arc::clone(&w.defs[i].plan);
+                    for id in free_refs(&def, &w.defs[..i]) {
+                        if !w.bound.contains(&id) {
+                            w.free.insert(id);
+                        }
+                    }
+                }
+            }
+            PlanNode::WithCte { ctes, .. } => w.defs.extend(ctes.iter().cloned()),
+            _ => {}
+        }
+        let mut kids = Vec::new();
+        p.for_each_child(&mut |c| kids.push(Arc::clone(c)));
+        p.for_each_expr(&mut |e| subquery_plans(e, &mut kids));
+        for k in &kids {
+            walk(k, w);
+        }
+        w.defs.truncate(before);
+        if bound_here {
+            w.bound.pop();
+        }
+    }
+    let mut w = Walk {
+        defs: scope.to_vec(),
+        bound: Vec::new(),
+        free: HashSet::new(),
+        seen: HashSet::new(),
+    };
+    walk(p, &mut w);
+    w.free
 }
 
 /// Whether `p` holds a recursive CTE.
@@ -305,7 +379,10 @@ impl Session {
         run: bool,
     ) -> Result<(AnalyzedPlan, Vec<String>), KrishivError> {
         let mut pins = Vec::new();
-        match self.expand_pinning(analyzed, env, run, &mut pins).await {
+        match self
+            .expand_pinning(analyzed, &[], env, run, &mut pins)
+            .await
+        {
             Ok(expanded) => Ok((expanded, pins)),
             Err(e) => {
                 env.catalog.unpin_cached(&pins);
@@ -314,16 +391,18 @@ impl Session {
         }
     }
 
+    /// `outer`: the CTE definitions in scope around `analyzed`'s plan.
     async fn expand_pinning(
         &self,
         analyzed: &AnalyzedPlan,
+        outer: &[krishiv_plan::Cte],
         env: &QueryEnv,
         run: bool,
         pins: &mut Vec<String>,
     ) -> Result<AnalyzedPlan, KrishivError> {
         let mut plan = Arc::clone(analyzed.plan.root());
         let limit = pushed_limits(&plan);
-        while let Some((node, defs)) = found_in(&plan, &mut HashSet::new(), &mut Vec::new()) {
+        while let Some((node, defs)) = found_in(&plan, &mut HashSet::new(), &mut outer.to_vec()) {
             let scan = if run {
                 self.run_loop(&node, &defs, analyzed, env, pins, &limit)
                     .await?
@@ -384,6 +463,28 @@ impl Session {
         result
     }
 
+    /// One round: `next` with its nested loops expanded, then run.
+    async fn run_round(
+        &self,
+        next: Arc<LogicalPlan>,
+        defs: &[krishiv_plan::Cte],
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+        pins: &mut Vec<String>,
+    ) -> Result<Vec<RecordBatch>, KrishivError> {
+        let next = if has_loop(&next) {
+            let sub = AnalyzedPlan {
+                plan: Plan::try_new(next)?,
+                ..analyzed.clone()
+            };
+            let expanded = Box::pin(self.expand_pinning(&sub, defs, env, true, pins)).await?;
+            Arc::clone(expanded.plan.root())
+        } else {
+            next
+        };
+        self.run_plan(next, defs, analyzed, env).await
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "one loop run: its plan, scope, limits and pins"
@@ -410,6 +511,7 @@ impl Session {
         };
         let schema = loop_schema(output);
         let (level_limit, row_limit) = limits(env, *max_level);
+        let mut held = self.recursion_reservation();
         let mut last = self
             .run_plan(Arc::clone(anchor), defs, analyzed, env)
             .await?;
@@ -433,6 +535,9 @@ impl Session {
                 .map(|b| RecordBatch::try_new(Arc::clone(&schema), b.columns().to_vec()))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| crate::session::internal(format!("a recursive round: {e}")))?;
+            // The rows kept for the result count against the memory pool, so
+            // `krishiv.memory.limit` bounds a recursion (it does not spill).
+            held.try_grow(fixed.iter().map(RecordBatch::get_array_memory_size).sum())?;
             all.extend(fixed.iter().cloned());
             if wanted.is_some_and(|n| total >= n) {
                 break;
@@ -451,17 +556,19 @@ impl Session {
             env.catalog
                 .pin_cached(round_name.to_owned(), Arc::new(table));
             let name = round_name.to_owned();
-            let next = Arc::clone(recursive)
-                .transform_up(&mut |n| {
-                    Ok::<_, std::convert::Infallible>(match &n.node {
-                        PlanNode::UnionLoopRef { id: r, output } if r == id => {
-                            scan_of(n.origin, name.clone(), output.clone())
-                        }
-                        _ => n,
-                    })
-                })
-                .unwrap_or_else(|_| Arc::clone(recursive));
-            last = self.run_plan(next, defs, analyzed, env).await?;
+            let next = rewrite(Arc::clone(recursive), &mut |n| match &n.node {
+                PlanNode::UnionLoopRef { id: r, output } if r == id => {
+                    scan_of(n.origin, name.clone(), output.clone())
+                }
+                _ => n,
+            });
+            // Loops inside the term that read this round run now.
+            let mut round_pins = Vec::new();
+            let result = self
+                .run_round(next, defs, analyzed, env, &mut round_pins)
+                .await;
+            env.catalog.unpin_cached(&round_pins);
+            last = result?;
         }
         let result = hidden_name();
         pins.push(result.clone());
@@ -472,6 +579,8 @@ impl Session {
                 all.into_iter().map(Batch::new).collect(),
             )),
         );
+        // The rows stay accounted while the table is pinned.
+        env.catalog.hold_reservation(result.clone(), held);
         Ok(scan_of(node.origin, result, output.clone()))
     }
 }

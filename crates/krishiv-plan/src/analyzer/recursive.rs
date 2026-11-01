@@ -49,10 +49,12 @@ impl Resolver<'_> {
         let r = self.rel(recursive, env);
         self.loops.pop();
         let r = r?;
-        if let PlanNode::WithCte { ctes, .. } = &r.plan.node
+        // From inside the wrapper: its own definition of the name is the
+        // reference being checked, not a shadow of it.
+        if let PlanNode::WithCte { input, ctes } = &r.plan.node
             && let [def] = ctes.as_slice()
         {
-            check_places(&r.plan, &def.name, o)?;
+            check_places(input, &def.name, o)?;
         }
         let kids = self.widen_inputs(&[a, r], "UNION", o)?;
         // The reference was typed by the anchor: a recursive term whose
@@ -109,7 +111,18 @@ fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), An
             return *b;
         }
         let mut found = matches!(&p.node, PlanNode::CteRef(r) if r.name.eq_ignore_ascii_case(name));
-        p.for_each_child(&mut |c| found |= has(c, name, memo));
+        if let PlanNode::WithCte { input, ctes } = &p.node {
+            // A definition of `name` hides the recursive CTE from what
+            // follows it: the later definitions and the body.
+            let mut hidden = false;
+            for c in ctes {
+                found |= !hidden && has(&c.plan, name, memo);
+                hidden |= c.name.eq_ignore_ascii_case(name);
+            }
+            found |= !hidden && has(input, name, memo);
+        } else {
+            p.for_each_child(&mut |c| found |= has(c, name, memo));
+        }
         p.for_each_expr(&mut |e| found |= expr_has(e, name, memo));
         memo.insert(key, found);
         found
@@ -156,7 +169,22 @@ fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), An
             }
             _ => {}
         }
-        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        if let PlanNode::WithCte { input, ctes } = &p.node {
+            // What a redefinition of `name` hides is not the recursive
+            // reference's scope.
+            let mut hidden = false;
+            for c in ctes {
+                if !hidden {
+                    stack.push(Arc::clone(&c.plan));
+                }
+                hidden |= c.name.eq_ignore_ascii_case(name);
+            }
+            if !hidden {
+                stack.push(Arc::clone(input));
+            }
+        } else {
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
     }
     Ok(())
 }

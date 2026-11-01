@@ -427,14 +427,20 @@ impl Lowerer {
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
         reject_organization(q)?;
+        // Kept for the definitions as well as the body: a later definition
+        // may read a recursive one under `LIMIT ALL`.
         let recursive = q.with.as_ref().is_some_and(|w| w.recursive);
         self.recursive += usize::from(recursive);
-        let body = self.with_windows(&q.windows, |l| {
+        let planned = self.query_with(q);
+        self.recursive -= usize::from(recursive);
+        planned
+    }
+
+    fn query_with(&mut self, q: &Query) -> R<LogicalPlan> {
+        let mut plan = self.with_windows(&q.windows, |l| {
             let plan = l.body(&q.body)?;
             l.organize(plan, q)
-        });
-        self.recursive -= usize::from(recursive);
-        let mut plan = body?;
+        })?;
         if let Some(with) = &q.with {
             let mut ctes = Vec::new();
             for c in &with.ctes {

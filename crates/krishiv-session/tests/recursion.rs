@@ -307,3 +307,53 @@ fn limit_all_on_every_read_lifts_the_row_limit() {
         ErrorClass::RecursionRowLimitExceeded
     );
 }
+
+#[test]
+fn a_later_definition_keeps_limit_all_on_a_recursive_sibling() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.cteRecursionRowLimit=3")).unwrap();
+    let got = rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5), \
+         b AS (SELECT * FROM r LIMIT ALL) SELECT count(*) FROM b",
+    );
+    assert_eq!(got, vec![vec!["5".to_owned()]]);
+}
+
+#[test]
+fn a_nested_definition_of_the_name_is_not_a_recursive_reference() {
+    let s = Session::new().unwrap();
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT r.n + 1 FROM r CROSS JOIN \
+         (WITH r AS (SELECT 1 AS n) SELECT max(n) AS k FROM r) x WHERE r.n < 3) SELECT * FROM r",
+    ));
+    assert_eq!(got, ["1", "2", "3"]);
+}
+
+#[test]
+fn a_nested_loop_reading_the_enclosing_round_runs_within_it() {
+    let s = Session::new().unwrap();
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n FROM \
+         (WITH RECURSIVE s(n) AS (SELECT n + 1 FROM r WHERE n < 3 UNION ALL \
+          SELECT n FROM s WHERE false) SELECT n FROM s)) SELECT * FROM r",
+    ));
+    assert_eq!(got, ["1", "2", "3"]);
+}
+
+#[test]
+fn the_rows_a_recursion_keeps_count_against_the_memory_limit() {
+    let s = Session::builder()
+        .config("krishiv.memory.limit", "4MB")
+        .build()
+        .unwrap();
+    // Wide rows: each round fits, the accumulated rows do not.
+    let class = class_of(
+        &s,
+        "WITH RECURSIVE r(n, pad) MAX RECURSION LEVEL 100 AS (SELECT 1, repeat('x', 100000) \
+         UNION ALL SELECT n + 1, pad FROM r WHERE n < 100) SELECT count(*) FROM r",
+    );
+    assert_eq!(class, ErrorClass::UnableToAcquireMemory);
+}
