@@ -1280,3 +1280,23 @@ fn a_table_function_takes_named_arguments() {
     // A built-in table function takes none.
     fails(&s, "SELECT * FROM range(end => 3)");
 }
+
+/// Spark's sql-udf-name-precedence golden: a parameter named `grouping__id`
+/// loses to the grouping id, which is unsupported outside an aggregate, so the
+/// function is never created.
+#[test]
+fn a_parameter_named_grouping_id_is_refused() {
+    let s = session();
+    let e = fails(
+        &s,
+        "CREATE OR REPLACE TEMPORARY FUNCTION g(grouping__id INT) RETURNS INT RETURN grouping__id",
+    );
+    assert!(
+        format!("{e:?}").contains("UnsupportedGroupingExpression"),
+        "{e:?}"
+    );
+    let e = fails(&s, "SELECT g(42)");
+    assert!(format!("{e:?}").contains("UnresolvedRoutine"), "{e:?}");
+    let e = fails(&s, "DROP TEMPORARY FUNCTION g");
+    assert!(format!("{e:?}").contains("RoutineNotFound"), "{e:?}");
+}

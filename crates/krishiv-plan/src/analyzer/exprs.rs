@@ -34,8 +34,8 @@ use krishiv_common::error::{
     KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1104, NamedParametersNotSupported,
     NestedAggregateFunction, NonFoldableArgument, RequiredParameterNotFound, UnexpectedInputType,
     UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
-    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithSuggestion,
-    WrongNumArgsWithoutSuggestion,
+    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, UnsupportedGroupingExpression,
+    WrongNumArgsWithSuggestion, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
 use krishiv_types::{ArrayType, DataType, DecimalType, StructField, StructType};
@@ -5008,6 +5008,17 @@ impl Resolver<'_> {
                 self.used(&a);
                 return self.resolve_attr(&a, used, &c.name, origin, Some(level));
             }
+        }
+        // `grouping__id` is the grouping id Spark's aggregate rule reads
+        // before a function parameter of that name can: outside a grouping
+        // context it is `UNSUPPORTED_GROUPING_EXPRESSION`.
+        if let [name] = &c.name[..]
+            && name.eq_ignore_ascii_case("grouping__id")
+            && !cx.grouping
+            && !self.ctx.conf.udf_parameter_shadows_function
+            && self.has_parameter(name)
+        {
+            return Err(AnalysisError::new(UnsupportedGroupingExpression {}, origin));
         }
         // The parameters of the SQL function being resolved rank after
         // everything else, but before a session variable.
