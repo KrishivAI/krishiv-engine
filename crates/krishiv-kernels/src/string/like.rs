@@ -3,7 +3,11 @@
 //! character (a code point, newlines included), and `escape` makes the next
 //! character literal (only `%`, `_` and the escape itself may follow it).
 
-use arrow_array::{Array, BooleanArray, GenericStringArray, OffsetSizeTrait, Scalar};
+use arrow_array::{
+    Array, BooleanArray, GenericStringArray, OffsetSizeTrait, Scalar, StringViewArray,
+};
+use arrow_buffer::BooleanBuffer;
+use memchr::memmem::Finder;
 
 use super::{Slot, StrOperand, bool_result, row_count};
 use crate::error::KernelError;
@@ -18,15 +22,17 @@ enum Token {
     Many,
 }
 
-/// A compiled `LIKE` pattern. Patterns made only of literals and `%` at the
-/// ends take plain string comparisons; the rest run a linear backtracking
-/// matcher over the code points.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A compiled `LIKE` pattern. Patterns made only of literals and `%` work on
+/// bytes: comparisons at the ends and substring searches between them. UTF-8
+/// finds a valid needle only at a character boundary, so these agree with a
+/// match over code points. Patterns with `_` run a linear backtracking matcher
+/// over the code points.
+#[derive(Debug, Clone)]
 pub struct LikePattern {
     shape: Shape,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum Shape {
     /// `%`: everything.
     All,
@@ -37,8 +43,41 @@ enum Shape {
     /// `%abc`.
     Suffix(String),
     /// `%abc%`.
-    Contains(String),
+    Contains(Box<Finder<'static>>),
+    /// `ab%cd%ef`, either end possibly empty.
+    Segments(Segments),
     General(Vec<Token>),
+}
+
+/// The literal runs of a pattern with at least two `%` and no `_`.
+#[derive(Debug, Clone)]
+struct Segments {
+    prefix: Vec<u8>,
+    /// Between the `%`s, in order; none is empty.
+    middle: Vec<Finder<'static>>,
+    suffix: Vec<u8>,
+}
+
+impl Segments {
+    /// The earliest place for each run leaves the most room for the next, so
+    /// a greedy search needs no backtracking.
+    fn matches(&self, s: &[u8]) -> bool {
+        let Some(rest) = s.strip_prefix(self.prefix.as_slice()) else {
+            return false;
+        };
+        let Some(mut rest) = rest.strip_suffix(self.suffix.as_slice()) else {
+            return false;
+        };
+        for finder in &self.middle {
+            let Some(at) = finder.find(rest) else {
+                return false;
+            };
+            rest = rest
+                .get(at.saturating_add(finder.needle().len())..)
+                .unwrap_or_default();
+        }
+        true
+    }
 }
 
 impl LikePattern {
@@ -49,27 +88,8 @@ impl LikePattern {
     /// `INVALID_FORMAT.ESC_IN_THE_MIDDLE` for an escape before any other
     /// character.
     pub fn compile(pattern: &str, escape: char, row: usize) -> Result<Self, KernelError> {
-        let mut tokens: Vec<Token> = Vec::new();
-        let mut chars = pattern.chars();
-        while let Some(c) = chars.next() {
-            let token = if c == escape {
-                match chars.next() {
-                    None => return Err(KernelError::like_escape_at_end(row, pattern)),
-                    Some(n) if n == '_' || n == '%' || n == escape => Token::Literal(n),
-                    Some(n) => return Err(KernelError::like_escape_before(row, pattern, n)),
-                }
-            } else {
-                match c {
-                    '%' if tokens.last() == Some(&Token::Many) => continue,
-                    '%' => Token::Many,
-                    '_' => Token::One,
-                    other => Token::Literal(other),
-                }
-            };
-            tokens.push(token);
-        }
         Ok(Self {
-            shape: Shape::of(&tokens),
+            shape: Shape::of(&tokenize(pattern, escape, row)?),
         })
     }
 
@@ -81,10 +101,52 @@ impl LikePattern {
             Shape::Equals(p) => s == p,
             Shape::Prefix(p) => s.starts_with(p.as_str()),
             Shape::Suffix(p) => s.ends_with(p.as_str()),
-            Shape::Contains(p) => s.contains(p.as_str()),
+            Shape::Contains(f) => f.find(s.as_bytes()).is_some(),
+            Shape::Segments(g) => g.matches(s.as_bytes()),
             Shape::General(tokens) => general_match(tokens, s),
         }
     }
+
+    /// Whether each row of `column` matches; a NULL row's bit means nothing.
+    /// The shape is chosen once, not per row.
+    #[must_use]
+    pub fn matches_views(&self, column: &StringViewArray) -> BooleanBuffer {
+        fn run(column: &StringViewArray, f: impl Fn(&str) -> bool) -> BooleanBuffer {
+            BooleanBuffer::collect_bool(column.len(), |i| f(column.value(i)))
+        }
+        match &self.shape {
+            Shape::All => BooleanBuffer::new_set(column.len()),
+            Shape::Equals(p) => run(column, |s| s == p),
+            Shape::Prefix(p) => run(column, |s| s.starts_with(p.as_str())),
+            Shape::Suffix(p) => run(column, |s| s.ends_with(p.as_str())),
+            Shape::Contains(f) => run(column, |s| f.find(s.as_bytes()).is_some()),
+            Shape::Segments(g) => run(column, |s| g.matches(s.as_bytes())),
+            Shape::General(tokens) => run(column, |s| general_match(tokens, s)),
+        }
+    }
+}
+
+fn tokenize(pattern: &str, escape: char, row: usize) -> Result<Vec<Token>, KernelError> {
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        let token = if c == escape {
+            match chars.next() {
+                None => return Err(KernelError::like_escape_at_end(row, pattern)),
+                Some(n) if n == '_' || n == '%' || n == escape => Token::Literal(n),
+                Some(n) => return Err(KernelError::like_escape_before(row, pattern, n)),
+            }
+        } else {
+            match c {
+                '%' if tokens.last() == Some(&Token::Many) => continue,
+                '%' => Token::Many,
+                '_' => Token::One,
+                other => Token::Literal(other),
+            }
+        };
+        tokens.push(token);
+    }
+    Ok(tokens)
 }
 
 impl Shape {
@@ -100,8 +162,8 @@ impl Shape {
         match tokens {
             [] => Self::Equals(String::new()),
             [Token::Many] => Self::All,
-            [Token::Many, mid @ .., Token::Many] if !mid.is_empty() => {
-                literals(mid).map_or_else(|| Self::General(tokens.to_vec()), Self::Contains)
+            _ if tokens.iter().filter(|t| **t == Token::Many).count() >= 2 => {
+                Self::segments(tokens).unwrap_or_else(|| Self::General(tokens.to_vec()))
             }
             [Token::Many, rest @ ..] => {
                 literals(rest).map_or_else(|| Self::General(tokens.to_vec()), Self::Suffix)
@@ -111,6 +173,37 @@ impl Shape {
             }
             all => literals(all).map_or_else(|| Self::General(tokens.to_vec()), Self::Equals),
         }
+    }
+
+    /// A pattern of literal runs between at least two `%`; `None` with a `_`.
+    fn segments(tokens: &[Token]) -> Option<Self> {
+        let mut runs = tokens
+            .split(|t| *t == Token::Many)
+            .map(|run| {
+                run.iter()
+                    .map(|t| match t {
+                        Token::Literal(c) => Some(*c),
+                        _ => None,
+                    })
+                    .collect::<Option<String>>()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let suffix = runs.pop()?.into_bytes();
+        let mut runs = runs.into_iter();
+        let prefix = runs.next()?.into_bytes();
+        let middle: Vec<Finder<'static>> = runs
+            .map(|run| Finder::new(run.as_bytes()).into_owned())
+            .collect();
+        Some(match middle.as_slice() {
+            [only] if prefix.is_empty() && suffix.is_empty() => {
+                Self::Contains(Box::new(only.clone()))
+            }
+            _ => Self::Segments(Segments {
+                prefix,
+                middle,
+                suffix,
+            }),
+        })
     }
 }
 
@@ -259,6 +352,43 @@ mod tests {
         assert!(m("é%", "éa") && !m("É", "é"));
         assert!(m("\\%", "%") && m("\\_", "_") && m("\\\\", "\\"));
         assert!(!m("\\%", "a"));
+    }
+
+    #[test]
+    fn segments_match_in_order_without_overlap() {
+        assert!(m("%special%requests%", "xx special yy requests zz"));
+        assert!(!m("%special%requests%", "requests special"));
+        assert!(m("a%b%c", "a b c") && m("a%b%c", "abc"));
+        assert!(!m("ab%b%bc", "abbc") && m("ab%b%bc", "abbbc"));
+        assert!(!m("a%a", "a") && m("a%a", "aa"));
+        assert!(m("%é%😀", "xéy😀") && !m("%é%😀", "😀é"));
+        assert!(m("%aa%aa%", "aaaa") && !m("%aa%aa%", "aaa"));
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            cases: if cfg!(miri) { 2 } else { 256 },
+            failure_persistence: None,
+            ..proptest::prelude::ProptestConfig::default()
+        })]
+
+        /// Every shape answers as the code-point matcher does, for one row
+        /// and over a view column.
+        #[test]
+        fn shapes_agree_with_the_matcher(
+            pattern in "[ab%_é😀]{0,8}",
+            rows in proptest::collection::vec("[abé😀]{0,16}", 1..8),
+        ) {
+            let tokens = tokenize(&pattern, '\\', 0).unwrap();
+            let compiled = LikePattern::compile(&pattern, '\\', 0).unwrap();
+            let column = StringViewArray::from_iter_values(&rows);
+            let bits = compiled.matches_views(&column);
+            for (i, row) in rows.iter().enumerate() {
+                let want = general_match(&tokens, row);
+                proptest::prop_assert_eq!(compiled.matches(row), want, "{} on {}", pattern, row);
+                proptest::prop_assert_eq!(bits.value(i), want, "{} on {}", pattern, row);
+            }
+        }
     }
 
     #[test]

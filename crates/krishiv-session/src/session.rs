@@ -864,7 +864,11 @@ impl Session {
                 b.schema()
             )));
         }
-        let batches: Vec<Batch> = batches.into_iter().map(Batch::new).collect();
+        let schema = crate::carrier::canonical_schema(schema);
+        let batches = batches
+            .into_iter()
+            .map(|b| crate::carrier::recarried(&b, &schema).map(Batch::new))
+            .collect::<Result<Vec<Batch>, KrishivError>>()?;
         // The batches as content-addressed IPC in the session's store: the
         // table's scans split into batch ranges that workers resolve
         // through it. The table holds the lease but not the batches, so
