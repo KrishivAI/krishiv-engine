@@ -79,6 +79,7 @@ fn func(name: &str, params: Vec<SqlParam>, returns: Option<DataType>, body: Expr
         source: SourceId(1),
         deterministic: true,
         reads_data: false,
+        ansi: None,
     }
 }
 
