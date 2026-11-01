@@ -359,6 +359,51 @@ fn the_legacy_time_parser_reads_and_prints_legacy_patterns() {
     );
 }
 
+/// The legacy parser is not lenient but stops where the pattern does, the
+/// legacy printer knows the week letters, and region offsets before 1900
+/// are `java.util.TimeZone`'s raw offset (each as Spark 4.2.0 answers).
+#[test]
+fn the_legacy_time_parser_matches_spark_edges() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    for (expr, want) in [
+        ("try_to_timestamp('2020-13-01', 'yyyy-MM-dd')", None),
+        (
+            "try_to_timestamp('2020-01-01 25:00', 'yyyy-MM-dd HH:mm')",
+            None,
+        ),
+        (
+            "unix_timestamp('2020-01-01x', 'yyyy-MM-dd')",
+            Some("1577836800"),
+        ),
+        (
+            "try_to_timestamp('2020-01-01 trailing', 'yyyy-MM-dd')",
+            Some("2020-01-01 00:00:00"),
+        ),
+        (
+            "date_format(TIMESTAMP '2020-01-05 10:00:00', 'YYYY ww W u F E')",
+            Some("2020 02 2 7 1 Sun"),
+        ),
+    ] {
+        assert_eq!(column(&s, expr, ""), text(&[want]), "{expr}");
+    }
+    block_on(s.sql("SET spark.sql.session.timeZone = Asia/Kolkata")).unwrap();
+    for (at, want) in [
+        ("1850-06-01 00:00:00", "1850-06-01 00:00:00 +0530"),
+        ("1900-06-01 00:00:00", "1900-06-01 00:00:00 +0521"),
+    ] {
+        assert_eq!(
+            column(
+                &s,
+                &format!("date_format(TIMESTAMP '{at}', 'yyyy-MM-dd HH:mm:ss Z')"),
+                ""
+            ),
+            text(&[Some(want)]),
+            "{at}"
+        );
+    }
+}
+
 /// `current_timezone()` returns the configured string and the patterns
 /// print its zone id, as Spark 4.2.0 does for each of these.
 #[test]

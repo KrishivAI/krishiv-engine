@@ -219,6 +219,13 @@ impl TimeZoneRules for SessionZone {
             Self::Region(r) => r.zone.offset_for_local(local_seconds),
         }
     }
+
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        match self {
+            Self::Fixed(off) => *off,
+            Self::Region(r) => r.zone.legacy_offset_at_utc(utc_seconds),
+        }
+    }
 }
 
 /// How nested `WITH` definitions with the same name resolve
@@ -322,8 +329,8 @@ pub struct ResolutionConf {
     /// (`current_user`) is the parameter, not the function.
     pub udf_parameter_shadows_function: bool,
     /// `spark.sql.legacy.timeParserPolicy = LEGACY`: Spark's
-    /// `SimpleDateFormat` parser, which Krishiv does not implement (the
-    /// datetime functions with a pattern are refused).
+    /// `SimpleDateFormat` parser. Resolution does not read it; it stays in
+    /// the fingerprint because the pattern functions bind differently.
     pub legacy_time_parser: bool,
     /// `spark.sql.timeType.enabled`: the `TIME` type may appear in a plan.
     /// Spark 4.2 defaults it to false; Krishiv refuses a `TIME` anywhere
