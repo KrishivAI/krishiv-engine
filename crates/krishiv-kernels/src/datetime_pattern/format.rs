@@ -316,7 +316,7 @@ fn write_localized(full: bool, offset: i32, out: &mut String) {
 }
 
 /// `z` / `zzzz` for the zones known without the time-zone database.
-fn zone_name(id: &str, offset: i32, full: bool) -> Result<String, KrishivError> {
+pub(super) fn zone_name(id: &str, offset: i32, full: bool) -> Result<String, KrishivError> {
     Ok(match id {
         "UTC" | "Etc/UTC" => if full {
             "Coordinated Universal Time"
