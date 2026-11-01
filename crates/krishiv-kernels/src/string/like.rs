@@ -366,6 +366,12 @@ mod tests {
     }
 
     proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            cases: if cfg!(miri) { 2 } else { 256 },
+            failure_persistence: None,
+            ..proptest::prelude::ProptestConfig::default()
+        })]
+
         /// Every shape answers as the code-point matcher does, for one row
         /// and over a view column.
         #[test]
