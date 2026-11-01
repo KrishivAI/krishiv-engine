@@ -8,6 +8,7 @@ extend-exclude = [
     "crates/*/tests/fixtures/**",
     "crates/krishiv-common/vendored/spark-error-conditions.json",
     "crates/krishiv-types/vendored/collations.tsv",
+    "crates/krishiv-kernels/src/datetime_pattern/zone_names.rs", # generated Java zone-name table (PONT, TAHT)
     "proto/spark-connect/**",
     "crates/krishiv-connect/src/proto/**",
     "tests/sqllogictest/**",
