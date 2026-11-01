@@ -302,7 +302,8 @@ fn a_literal_call_is_folded_to_one_iv() {
 /// A key that is itself a call over constants (`unhex`) is still foldable.
 #[test]
 fn a_constant_expression_argument_is_folded_too() {
-    let from = "range(10)";
+    // Batches of several rows: the key call must not depend on their length.
+    let from = "range(0, 10000, 1, 4)";
     let s = Session::new().unwrap();
     let df = block_on(s.sql(&format!(
         "SELECT count(DISTINCT hex(aes_encrypt('Spark', unhex('6162636465666768696A6B6C6D6E6F70')))) FROM {from}"

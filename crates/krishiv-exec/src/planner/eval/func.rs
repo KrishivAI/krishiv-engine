@@ -318,6 +318,11 @@ impl PhysExpr for Call {
             let row = cell.get_or_init(|| one);
             return Ok(Value::Scalar(Arc::clone(row)));
         }
+        if self.constant {
+            // A pure call over constants is one value: a one-row scalar, so
+            // an enclosing call sees every argument at the same length.
+            return Ok(Value::Scalar(self.call(batch, partition, 1)?));
+        }
         Ok(Value::Array(self.call(
             batch,
             partition,
