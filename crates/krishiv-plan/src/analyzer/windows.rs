@@ -248,8 +248,7 @@ fn range_value(x: &Arc<Expr>, key: &krishiv_types::DataType) -> Option<RangeValu
 /// Spark casts `UnaryMinus(n)` (so `128 PRECEDING` fits a TINYINT key).
 #[expect(
     clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    reason = "a bound is cast to its key's type as Spark's cast does: doubles truncate to whole numbers and decimals become doubles"
+    reason = "a bound is cast to its key's type as Spark's cast does: doubles truncate to whole numbers"
 )]
 fn range_value_signed(
     x: &Arc<Expr>,
@@ -299,7 +298,9 @@ fn range_value_signed(
         T::Integer | T::Date => fits(truncated(&lit)?, i32::MIN.into(), i32::MAX.into()),
         T::Long => fits(truncated(&lit)?, i64::MIN.into(), i64::MAX.into()),
         T::Float | T::Double => Some(match lit {
-            Lit::Exact(v, s) => RangeValue::Float(v as f64 / 10_f64.powi(i32::from(s))),
+            // Parsed from decimal text so the result is correctly rounded, as
+            // BigDecimal.doubleValue is (no double rounding for wide unscaled values).
+            Lit::Exact(v, s) => RangeValue::Float(format!("{v}e-{s}").parse::<f64>().ok()?),
             Lit::Double(d) => RangeValue::Float(d),
         })
         // A FLOAT key's bounds are single precision before they are ordered.

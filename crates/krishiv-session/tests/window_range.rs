@@ -321,3 +321,16 @@ fn a_descending_bound_is_negated_in_the_key_type() {
                FROM VALUES (CAST(-1 AS TINYINT)) AS t(x)";
     assert_eq!(class(&s, sql), "ARITHMETIC_OVERFLOW");
 }
+
+/// A wide decimal bound on a DOUBLE key is rounded once, as `BigDecimal.doubleValue` does
+/// (dividing the unscaled value as a double would round twice and land one ulp high).
+#[test]
+fn a_wide_decimal_bound_on_a_double_key_is_correctly_rounded() {
+    let s = session();
+    let got = pairs(
+        &s,
+        "SELECT x, count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 0.49741166850405868 FOLLOWING) c, 0 e \
+         FROM VALUES (0.0D),(0.49741166850405866D) AS m(x)",
+    );
+    assert_eq!(got, ["0.0,2,0", "0.49741166850405866,1,0"]);
+}
