@@ -250,6 +250,9 @@ fn the_key_never_reaches_an_error_message() {
         "SELECT aes_decrypt(unhex('00'), map('secretkey-123456', 1))",
         "SELECT aes_encrypt(DISTINCT 1, 'secretkey-123456')",
         "SELECT aes_decrypt(DISTINCT unhex('00'), 'secretkey-123456')",
+        "SELECT aes_encrypt('Spark', CAST(array('secretkey-123456') AS BINARY))",
+        "SELECT try_aes_decrypt(unhex('00'), CAST(map('secretkey-123456', 1) AS BINARY))",
+        "SELECT aes_encrypt('Spark', CAST(CAST(struct('secretkey-123456') AS ARRAY<INT>) AS BINARY))",
     ] {
         let err = one(&s, sql).expect_err(sql);
         assert!(

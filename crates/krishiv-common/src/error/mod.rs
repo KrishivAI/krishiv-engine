@@ -164,6 +164,20 @@ impl KrishivError {
         }
     }
 
+    /// This error with every message parameter replaced by `***` and the
+    /// message rendered again: for an error that arose inside an argument
+    /// that must not be printed (an AES key, ADR 0042). The class, the
+    /// SQLSTATE and the query contexts are kept; a cause is dropped.
+    #[must_use]
+    pub fn with_redacted_parameters(mut self) -> Self {
+        for (_, value) in &mut self.parameters {
+            "***".clone_into(value);
+        }
+        self.message = template::render(self.class.message_template(), &self.parameters);
+        self.cause = None;
+        self
+    }
+
     /// The same error caused by `cause` (replacing any earlier cause).
     #[must_use]
     pub fn with_cause(mut self, cause: KrishivError) -> Self {

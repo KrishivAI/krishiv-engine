@@ -909,12 +909,27 @@ impl Resolver<'_> {
         // Rewritten calls stay alive for the pass: `done` is keyed by
         // address.
         let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
+        // The key argument of an AES call and everything under it: an
+        // error raised there never shows the key (ADR 0042), so its
+        // message parameters are masked.
+        let mut secret: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut stack = vec![Step::Enter(Arc::clone(e), top)];
         while let Some(step) = stack.pop() {
             match step {
                 Step::Enter(x, ctx) => {
                     if done.contains_key(&(addr(&*x), ctx)) {
                         continue;
+                    }
+                    if let ExprNode::Function(f) = &x.node
+                        && super::is_aes_function(&f.name)
+                        && let Some(key) = f.args.get(1)
+                    {
+                        secret.insert(addr(&**key));
+                    }
+                    if secret.contains(&addr(&*x)) {
+                        x.for_each_child(&mut |c| {
+                            secret.insert(addr(&**c));
+                        });
                     }
                     if let Some(rewritten) = self.star_args(&x, cx)? {
                         rewritten_calls.push(Arc::clone(&rewritten));
@@ -981,7 +996,14 @@ impl Resolver<'_> {
                         .iter()
                         .filter_map(|(c, k)| done.get(&(addr(&**c), *k)).cloned())
                         .collect();
-                    let b = self.expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx)?;
+                    let b = self
+                        .expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx)
+                        .map_err(|mut err| {
+                            if secret.contains(&addr(&*x)) {
+                                err.error = err.error.with_redacted_parameters();
+                            }
+                            err
+                        })?;
                     done.insert((addr(&*x), ctx), b);
                 }
             }
