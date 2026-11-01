@@ -39,8 +39,8 @@ use krishiv_plan::{
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
     DataTypeSpec, DdlName, DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind,
-    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Refresh, RefreshKind, Reset, Set,
-    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
+    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset,
+    Set, SetExprKind, SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
 };
 use krishiv_types::{DataType, DecimalType};
 
@@ -704,11 +704,18 @@ impl Session {
                 let inner = original
                     .get(query.span.start..query.span.end)
                     .unwrap_or_default();
-                let inner_sql = padded_select("", inner, query.span.start, "");
-                let inner_analysis = self
-                    .analyze_variable_query(&inner_sql)
-                    .await
-                    .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
+                let mut inner_sql = padded_select("", inner, query.span.start, "");
+                let mut first = self.analyze_variable_query(&inner_sql).await;
+                // A bare `DEFAULT` that is no column of the query reads the target's default.
+                if let Err(e) = &first
+                    && e.error_class().name().starts_with("UNRESOLVED_COLUMN")
+                    && let Some(rewritten) = default_row_query(query, inner, &stored)
+                {
+                    inner_sql = padded_select("", &rewritten, query.span.start, "");
+                    first = self.analyze_variable_query(&inner_sql).await;
+                }
+                let inner_analysis =
+                    first.map_err(|e| map_variable_error(e, text, v.span, query.span))?;
                 let width = inner_analysis.analyzed.output.len();
                 if width != targets.len() {
                     return Err(AssignmentArityMismatch {
@@ -1953,6 +1960,34 @@ fn decimal_type(precision: u8, scale: i8) -> Result<DecimalType, KrishivError> {
 
 /// Whether `e` is exactly the bare `DEFAULT` keyword (through
 /// parentheses): `SET var = DEFAULT` reads the variable's default.
+/// The text of the row query `query` (`inner`) with each bare `DEFAULT` of its select list replaced by
+/// the default of the variable it is assigned to; `None` unless the query is a plain `SELECT` with one
+/// item per target and at least one bare `DEFAULT`.
+fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> Option<String> {
+    let SetExprKind::Select(select) = &query.body.kind else {
+        return None;
+    };
+    if select.projection.len() != stored.len()
+        || !select.projection.iter().any(|i| is_bare_default(&i.expr))
+    {
+        return None;
+    }
+    let mut text = inner.to_owned();
+    for (item, var) in select.projection.iter().zip(stored).rev() {
+        if !is_bare_default(&item.expr) {
+            continue;
+        }
+        let replacement = match &var.default_query {
+            Some(q) => format!("({q})"),
+            None => format!("CAST(NULL AS {})", var.data_type.simple_string()),
+        };
+        let start = item.expr.span.start.checked_sub(query.span.start)?;
+        let end = item.expr.span.end.checked_sub(query.span.start)?;
+        text.replace_range(start..end, &replacement);
+    }
+    Some(text)
+}
+
 pub(crate) fn is_bare_default(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Nested(inner) => is_bare_default(inner),
