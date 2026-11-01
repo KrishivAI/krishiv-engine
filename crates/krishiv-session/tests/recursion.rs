@@ -573,3 +573,28 @@ fn case_sensitive_cte_names_are_distinct_from_the_recursive_one() {
         .unwrap();
     assert_eq!(rows(&s, q), vec![vec!["1".to_owned()]]);
 }
+
+#[test]
+fn recursive_term_types_follow_the_anchor() {
+    let s = Session::new().unwrap();
+    // A narrower recursive term is cast to the anchor's type.
+    assert_eq!(
+        column(rows(
+            &s,
+            "WITH RECURSIVE t(n) AS (SELECT CAST(1 AS BIGINT) UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT * FROM t"
+        )),
+        vec!["1", "2", "3"]
+    );
+    // A wider or different one cannot merge with the anchor.
+    for q in [
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 0.5 FROM t WHERE n < 3) SELECT * FROM t",
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT CAST(n + 1 AS BIGINT) FROM t WHERE n < 3) SELECT * FROM t",
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT CAST(n + 1 AS STRING) FROM t WHERE n < 3) SELECT * FROM t",
+    ] {
+        assert_eq!(
+            class_of(&s, q),
+            ErrorClass::CannotMergeIncompatibleDataType,
+            "{q}"
+        );
+    }
+}
