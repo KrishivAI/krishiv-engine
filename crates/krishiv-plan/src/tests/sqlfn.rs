@@ -65,6 +65,7 @@ fn param(name: &str, t: DataType, default: Option<Expr>) -> SqlParam {
 fn func(name: &str, params: Vec<SqlParam>, returns: Option<DataType>, body: Expr) -> SqlFunction {
     SqlFunction {
         qualifier: Vec::new(),
+        path: Vec::new(),
         returns_table: None,
         name: name.to_owned(),
         params,
