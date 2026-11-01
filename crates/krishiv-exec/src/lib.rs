@@ -72,6 +72,7 @@
 
 pub mod aggregate;
 mod cancel;
+pub mod carrier;
 mod channel;
 pub mod console;
 mod context;

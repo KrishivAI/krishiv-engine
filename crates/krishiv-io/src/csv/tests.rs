@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType,
+    Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -96,7 +96,10 @@ fn ddl_type(t: &str) -> DataType {
             let (p, s) = d["decimal(".len()..d.len() - 1]
                 .split_once(',')
                 .expect("decimal(p,s)");
-            DataType::Decimal128(p.trim().parse().expect("p"), s.trim().parse().expect("s"))
+            krishiv_types::arrow::canonical_arrow_type(&DataType::Decimal128(
+                p.trim().parse().expect("p"),
+                s.trim().parse().expect("s"),
+            ))
         }
         other => panic!("unknown type {other}"),
     }
@@ -136,7 +139,7 @@ fn type_name(dt: &DataType) -> String {
         DataType::Boolean => "boolean".into(),
         DataType::Date32 => "date".into(),
         DataType::Timestamp(_, Some(_)) => "timestamp".into(),
-        DataType::Decimal128(p, s) => format!("decimal({p},{s})"),
+        DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => format!("decimal({p},{s})"),
         other => panic!("{other}"),
     }
 }
@@ -187,6 +190,9 @@ fn render(a: &dyn Array, i: usize) -> Option<String> {
         DataType::Int64 => a.as_primitive::<Int64Type>().value(i).to_string(),
         DataType::Float32 => java_float_string32(a.as_primitive::<Float32Type>().value(i)),
         DataType::Float64 => java_double_string(a.as_primitive::<Float64Type>().value(i)),
+        DataType::Decimal64(_, s) => {
+            plain_decimal(i128::from(a.as_primitive::<Decimal64Type>().value(i)), *s)
+        }
         DataType::Decimal128(_, s) => {
             plain_decimal(a.as_primitive::<Decimal128Type>().value(i), *s)
         }
