@@ -357,7 +357,26 @@ impl QueryFunctions {
                         }
                         _ => None,
                     });
-                    call.qualifier = from_path.unwrap_or_else(|| vec![namespace.to_owned()]);
+                    // A session UDF no stored routine of the path shadows answers bare.
+                    if !matches!(
+                        self.base.lookup(std::slice::from_ref(&call.name), profile),
+                        FunctionLookup::NotFound
+                    ) && from_path.is_none()
+                    {
+                        return Ok(e);
+                    }
+                    // A routine gone from the frozen path stays unresolved: it
+                    // is looked up in the path's first schema, never the
+                    // namespace outside the path.
+                    let first = path.iter().find_map(|entry| match entry.as_slice() {
+                        [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                            Some(vec![c.clone(), fold(n, self.case_sensitive)])
+                        }
+                        _ => None,
+                    });
+                    call.qualifier = from_path
+                        .or(first)
+                        .unwrap_or_else(|| vec![namespace.to_owned()]);
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
                     Ok(Arc::new(next))

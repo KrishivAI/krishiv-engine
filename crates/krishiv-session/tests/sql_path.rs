@@ -298,3 +298,25 @@ fn a_session_only_path_reaches_temporary_views_not_stored_tables() {
         "{err:?}"
     );
 }
+
+#[test]
+fn a_view_does_not_fall_back_to_its_namespace_for_a_routine_gone_from_its_path() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA gfa",
+        "CREATE FUNCTION gfa.pick() RETURNS INT RETURN 1",
+        "CREATE FUNCTION default.pick() RETURNS INT RETURN 2",
+        "SET PATH = spark_catalog.gfa, system.builtin",
+        "CREATE VIEW default.gone_view AS SELECT pick() AS x",
+        "DROP FUNCTION gfa.pick",
+    ] {
+        run(&s, sql);
+    }
+    let read = block_on(async {
+        s.sql("SELECT x FROM default.gone_view")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(read.is_err(), "{read:?}");
+}
