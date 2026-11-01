@@ -103,6 +103,10 @@ const ROWS: &[(&str, &str)] = &[
     ("sequence(1, '3')", "[1, 2, 3]"),
     ("sequence(1, 3, '1')", "[1, 2, 3]"),
     ("sequence(NULL, NULL, 1)", "NULL"),
+    ("sequence('1', '3', 1)", "[1, 2, 3]"),
+    ("sequence('1', 3, '1')", "[1, 2, 3]"),
+    ("sequence(NULL, '3', 1)", "NULL"),
+    ("sequence(1, NULL, '1')", "NULL"),
     ("typeof(sequence(1, '3'))", "array<bigint>"),
     ("sequence(1, NULL)", "NULL"),
     ("sequence(1, 5, NULL)", "NULL"),
@@ -156,6 +160,18 @@ const ERRORS: &[(&str, &str)] = &[
         "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
     ),
     ("sequence('a', 3)", "CAST_INVALID_INPUT"),
+    (
+        "sequence('1', '3', '1')",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    (
+        "sequence(NULL, '3')",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    (
+        "sequence(NULL, NULL, '1')",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
     ("sequence(1)", "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"),
     ("sequence(1, 2, 3, 4)", "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"),
     (

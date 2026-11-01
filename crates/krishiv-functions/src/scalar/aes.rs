@@ -56,12 +56,13 @@ enum Mode {
 /// `(mode, padding)` as written, validated: ECB and CBC take `PKCS` or
 /// `DEFAULT`, GCM takes `DEFAULT`.
 fn mode(mode: &str, padding: &str) -> Result<Mode, KrishivError> {
-    let (m, p) = (mode.to_ascii_uppercase(), padding.to_ascii_uppercase());
-    match (m.as_str(), p.as_str()) {
-        ("ECB", "PKCS" | "DEFAULT") => Ok(Mode::Ecb),
-        ("CBC", "PKCS" | "DEFAULT") => Ok(Mode::Cbc),
-        ("GCM", "DEFAULT") => Ok(Mode::Gcm),
-        _ => Err(UnsupportedFeatureAesMode {
+    let m = |name: &str| mode.eq_ignore_ascii_case(name);
+    let p = |name: &str| padding.eq_ignore_ascii_case(name);
+    match () {
+        () if m("ECB") && (p("PKCS") || p("DEFAULT")) => Ok(Mode::Ecb),
+        () if m("CBC") && (p("PKCS") || p("DEFAULT")) => Ok(Mode::Cbc),
+        () if m("GCM") && (p("DEFAULT") || p("NONE")) => Ok(Mode::Gcm),
+        () => Err(UnsupportedFeatureAesMode {
             mode: mode.to_owned(),
             padding: padding.to_owned(),
             function_name: BOTH.to_owned(),
@@ -239,13 +240,6 @@ fn encrypt_row(
         }
         .into());
     }
-    if md != Mode::Gcm && !aad.is_empty() {
-        return Err(UnsupportedFeatureAesModeAad {
-            function_name: "`aes_encrypt`".to_owned(),
-            mode: m.to_owned(),
-        }
-        .into());
-    }
     let want = match md {
         Mode::Ecb => 0,
         Mode::Cbc => 16,
@@ -256,6 +250,13 @@ fn encrypt_row(
             parameter: "`iv`".to_owned(),
             function_name: BOTH.to_owned(),
             actual_length: iv.len().to_string(),
+            mode: m.to_owned(),
+        }
+        .into());
+    }
+    if md != Mode::Gcm && !aad.is_empty() {
+        return Err(UnsupportedFeatureAesModeAad {
+            function_name: "`aes_encrypt`".to_owned(),
             mode: m.to_owned(),
         }
         .into());

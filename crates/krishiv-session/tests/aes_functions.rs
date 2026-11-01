@@ -108,6 +108,12 @@ fn rows_follow_spark() {
             ),
             "Spark",
         ),
+        (
+            format!(
+                "hex(aes_encrypt('Spark', {K}, 'GCM', 'NONE', unhex('000000000000000000000000')))"
+            ),
+            "00000000000000000000000045D5E9F7BD0392ACD0CFB20FC68C2CD3985AEA422D",
+        ),
         (format!("aes_encrypt(NULL, {K})"), "NULL"),
         ("aes_encrypt('Spark', NULL)".to_owned(), "NULL"),
         (format!("aes_encrypt('Spark', {K}, NULL)"), "NULL"),
@@ -181,6 +187,10 @@ fn errors_follow_spark() {
         (
             format!("aes_encrypt('Spark', {K}, 'ECB', 'DEFAULT', unhex('00'))"),
             "UNSUPPORTED_FEATURE.AES_MODE_IV",
+        ),
+        (
+            format!("aes_encrypt('Spark', {K}, 'CBC', 'DEFAULT', unhex('00'), 'x')"),
+            "INVALID_PARAMETER_VALUE.AES_IV_LENGTH",
         ),
         (
             format!("aes_encrypt('Spark', {K}, 'CBC', 'PKCS', {ZERO16}, 'aad')"),

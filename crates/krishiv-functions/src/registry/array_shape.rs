@@ -100,32 +100,32 @@ fn rank(t: &DataType) -> Option<u8> {
 }
 
 /// The widest integral type among the typed arguments, or `None` when an
-/// argument is not integral (Spark: start and stop both strings, or no typed
-/// argument at all, is `SEQUENCE_WRONG_INPUT_TYPES`). A string beside an
-/// integral argument is cast to `BIGINT` under ANSI, as Spark's implicit cast
-/// does; with `spark.sql.ansi.enabled=false` it is a type error.
+/// argument is not integral or no argument is an integral anchor (Spark:
+/// `SEQUENCE_WRONG_INPUT_TYPES`; `sequence('1', '3')` and `sequence(NULL,
+/// NULL, '1')` have none, `sequence('1', '3', 1)` has the step). A string
+/// beside an integral anchor is cast to `BIGINT` under ANSI, as Spark's
+/// implicit cast does; with `spark.sql.ansi.enabled=false` it is a type
+/// error.
 fn sequence_type(c: &CallTypes<'_>) -> Option<DataType> {
     let is_string = |i: usize| matches!(c.data_type(i), Some(DataType::String));
-    if is_string(0) && is_string(1) {
-        return None;
-    }
-    if !c.ansi() && (0..c.args().len()).any(is_string) {
+    let strings = (0..c.args().len()).any(is_string);
+    if strings && !c.ansi() {
         return None;
     }
     let mut widest: Option<DataType> = None;
-    for i in 0..c.args().len() {
+    for i in (0..c.args().len()).filter(|i| !is_string(*i)) {
         let Some(t) = c.data_type(i) else { continue };
-        let t = if matches!(t, DataType::String) {
-            &DataType::Long
-        } else {
-            t
-        };
         let r = rank(t)?;
         if widest.as_ref().is_none_or(|w| rank(w) < Some(r)) {
             widest = Some(t.clone());
         }
     }
-    widest
+    let widest = widest?;
+    Some(if strings && rank(&widest) < Some(3) {
+        DataType::Long
+    } else {
+        widest
+    })
 }
 
 /// `sequence`'s inputs: every argument is cast to the widest integral type.
