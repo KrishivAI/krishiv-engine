@@ -338,12 +338,21 @@ fn common_in(
         _ if is_numeric(x) && is_numeric(y) => T::Double,
         (T::String, n) | (n, T::String) if integral_digits(n).is_some() => T::Long,
         (T::String, n) | (n, T::String) if is_numeric(n) => T::Double,
-        (T::String, t @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary))
-        | (t @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary), T::String) => {
-            t.clone()
-        }
-        (T::Date, t @ (T::Timestamp | T::TimestampNtz))
+        (
+            T::String,
+            t
+            @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary | T::Time { .. }),
+        )
+        | (
+            t
+            @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary | T::Time { .. }),
+            T::String,
+        )
+        | (T::Date, t @ (T::Timestamp | T::TimestampNtz))
         | (t @ (T::Timestamp | T::TimestampNtz), T::Date) => t.clone(),
+        (T::Time { precision: p }, T::Time { precision: q }) => T::Time {
+            precision: *p.max(q),
+        },
         (T::Timestamp, T::TimestampNtz) | (T::TimestampNtz, T::Timestamp) => T::Timestamp,
         _ => return None,
     };
@@ -1306,6 +1315,15 @@ pub(super) fn can_cast(
     if *from == T::String || *to == T::String {
         return Ok(());
     }
+    // A time casts to another time and to the integral types (seconds).
+    // Spark also casts it to `decimal`; that is not built yet (T181 U1
+    // follow-up), so it is refused here like the rest.
+    if matches!(from, T::Time { .. }) || matches!(to, T::Time { .. }) {
+        return match (from, to) {
+            (T::Time { .. }, T::Time { .. } | T::Byte | T::Short | T::Integer | T::Long) => Ok(()),
+            _ => Err(BadCast::Without),
+        };
+    }
     match (from, to) {
         (f, T::Binary) if integral_digits(f).is_some() => conf(),
         (T::Binary, _) | (_, T::Binary) => Err(BadCast::Without),
@@ -1386,7 +1404,11 @@ pub(super) fn force_nullable(from: &DataType, to: &DataType) -> bool {
         | (_, T::String)
         | (T::Timestamp, T::Date)
         | (T::Date, T::Timestamp) => false,
-        (T::String | T::Date, _) | (T::Float | T::Double, T::Timestamp) | (_, T::Date) => true,
+        // The seconds of a time may not fit a `tinyint` or `smallint`.
+        (T::String | T::Date, _)
+        | (T::Float | T::Double, T::Timestamp)
+        | (_, T::Date)
+        | (T::Time { .. }, T::Byte | T::Short) => true,
         (_, T::Decimal(d)) => !null_safe_decimal(from, *d),
         (T::Float | T::Double | T::Decimal(_), t) => integral_digits(t).is_some(),
         (T::Timestamp, t) => integral_digits(t).is_some_and(|p| p < 20),

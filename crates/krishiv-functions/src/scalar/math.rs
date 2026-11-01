@@ -106,6 +106,44 @@ fn unary_fn(name: &str) -> Option<UnaryFn> {
     })
 }
 
+/// Spark's `WidthBucket.computeBucketNumber`: the 1-based bucket of `value`
+/// among `buckets` equal-width buckets between `min` and `max` (either
+/// order); 0 below the range and `buckets + 1` above it. NULL for a
+/// non-positive or `Long.MaxValue` bucket count, a `NaN` value, equal
+/// bounds, or a bound that is not finite.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Java's (long) of a double saturates and truncates toward zero, as `as` does"
+)]
+fn width_bucket(value: f64, min: f64, max: f64, buckets: i64) -> Option<i64> {
+    if buckets <= 0
+        || buckets == i64::MAX
+        || value.is_nan()
+        || min == max
+        || !min.is_finite()
+        || !max.is_finite()
+    {
+        return None;
+    }
+    let (lower, upper) = if min < max { (min, max) } else { (max, min) };
+    let n = buckets as f64;
+    Some(if min < max {
+        if value < lower {
+            0
+        } else if value >= upper {
+            buckets + 1
+        } else {
+            ((n * (value - lower) / (upper - lower)) as i64).wrapping_add(1)
+        }
+    } else if value > upper {
+        0
+    } else if value <= lower {
+        buckets + 1
+    } else {
+        ((n * (upper - value) / (upper - lower)) as i64).wrapping_add(1)
+    })
+}
+
 /// The overflow policy of integral math under the session's ANSI mode.
 pub(super) fn overflow_mode(opts: &BindOptions) -> OverflowMode {
     if opts.ansi {
@@ -136,43 +174,6 @@ fn scale_of(arg: Option<&BindArg>, function: &str) -> Result<Option<i32>, Krishi
 fn constant(v: f64) -> Binding {
     Binding::new(DataType::Float64, move |x: &Inputs<'_>| {
         Ok(Arc::new(Float64Array::from(vec![v; x.rows()])) as ArrayRef)
-    })
-}
-
-/// Spark's `WidthBucket.computeBucketNumber`: NULL for a bad bucket count,
-/// a NaN value or a NaN, infinite or empty range.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    reason = "Spark converts the bucket count and the position with JVM casts"
-)]
-fn width_bucket(value: f64, min: f64, max: f64, buckets: i64) -> Option<i64> {
-    if buckets <= 0
-        || buckets == i64::MAX
-        || value.is_nan()
-        || min == max
-        || !min.is_finite()
-        || !max.is_finite()
-    {
-        return None;
-    }
-    let (lower, upper) = (min.min(max), min.max(max));
-    // `as i64` saturates like the JVM's `toLong`.
-    let scaled = |num: f64| ((buckets as f64 * num / (upper - lower)) as i64).wrapping_add(1);
-    Some(if min < max {
-        if value < lower {
-            0
-        } else if value >= upper {
-            buckets + 1
-        } else {
-            scaled(value - lower)
-        }
-    } else if value > upper {
-        0
-    } else if value <= lower {
-        buckets + 1
-    } else {
-        scaled(upper - value)
     })
 }
 
@@ -422,16 +423,21 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 DataType::Int64,
             ],
         ) => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
-            let v = x.array::<Float64Type>(0)?;
-            let lo = x.array::<Float64Type>(1)?;
-            let hi = x.array::<Float64Type>(2)?;
-            let n = x.array::<Int64Type>(3)?;
-            let out: Int64Array = (0..x.rows())
+            let value = x.array::<Float64Type>(0)?;
+            let min = x.array::<Float64Type>(1)?;
+            let max = x.array::<Float64Type>(2)?;
+            let buckets = x.array::<Int64Type>(3)?;
+            let out: Int64Array = (0..value.len())
                 .map(|i| {
-                    if v.is_null(i) || lo.is_null(i) || hi.is_null(i) || n.is_null(i) {
-                        return None;
+                    let all = value.is_valid(i)
+                        && min.is_valid(i)
+                        && max.is_valid(i)
+                        && buckets.is_valid(i);
+                    if all {
+                        width_bucket(value.value(i), min.value(i), max.value(i), buckets.value(i))
+                    } else {
+                        None
                     }
-                    width_bucket(v.value(i), lo.value(i), hi.value(i), n.value(i))
                 })
                 .collect();
             Ok(Arc::new(out) as ArrayRef)

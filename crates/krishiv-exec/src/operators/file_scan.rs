@@ -50,7 +50,7 @@ use arrow_array::{
     TimestampMicrosecondArray,
 };
 use arrow_buffer::{Buffer, ScalarBuffer};
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::split::{FilePartition, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile};
@@ -92,6 +92,10 @@ pub struct FileScan {
     format_options: FormatOptions,
     scan_options: ScanOptions,
     partitions: Partitions,
+    /// The partition columns (the last columns of `table`): constant per
+    /// file, read from the `name=value` directories above it, never from
+    /// the file.
+    partition_columns: Arc<[FieldRef]>,
     /// The smallest morsel: `spark.sql.files.openCostInBytes`.
     min_morsel_bytes: u64,
 }
@@ -126,8 +130,18 @@ impl FileScan {
             format_options,
             scan_options,
             partitions: Partitions::Plan(splits),
+            partition_columns: Arc::from([]),
             min_morsel_bytes: splits.open_cost_in_bytes,
         }
+    }
+
+    /// The same scan with `columns` as its partition columns: the last
+    /// columns of the table, whose values are the `name=value` directories
+    /// above each file (Spark's partition discovery).
+    #[must_use]
+    pub fn with_partition_columns(mut self, columns: Vec<FieldRef>) -> Self {
+        self.partition_columns = columns.into();
+        self
     }
 
     /// The same scan reading exactly `partitions` (split file indexes refer
@@ -208,6 +222,9 @@ impl ScanPushdown for FileScan {
     }
 
     fn filter_pushdown(&self, filter: &PushedFilter) -> FilterPushdown {
+        if reads_partition_column(self, filter) {
+            return FilterPushdown::Unsupported;
+        }
         // Pruning keeps a superset of the matching rows; the row evaluator
         // is never run by the scan.
         if filter.expr.is_some() {
@@ -235,7 +252,7 @@ impl ScanPushdown for FileScan {
 
     fn output_schema(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
         check_capabilities(self, pushdowns)?;
-        Ok(table_request(self, pushdowns)?.2)
+        Ok(table_request(self, pushdowns)?.output)
     }
 }
 
@@ -332,6 +349,11 @@ pub struct FileScanSource {
     output: SchemaRef,
     /// The decoded batches' schema (`output` before `_metadata`).
     mapped: SchemaRef,
+    /// The partition columns as the table types them.
+    partition_fields: Arc<[FieldRef]>,
+    /// Where each column of `mapped` comes from; empty without partition
+    /// columns (the decoded batch is `mapped`).
+    layout: Vec<Slot>,
     runtime: super::RuntimeFilters,
     metrics: Mutex<FileScanMetrics>,
 }
@@ -362,6 +384,9 @@ struct Current {
     file: usize,
     /// The planned split the piece belongs to (for `_metadata`).
     split: ByteRange,
+    /// The file's partition values, one row each, as the partition fields
+    /// type them.
+    partition_values: Vec<ArrayRef>,
 }
 
 type MetadataFuture = BoxFuture<'static, krishiv_io::Result<Arc<dyn FileMetadata>>>;
@@ -404,35 +429,177 @@ fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
     Ok(())
 }
 
+/// Whether the typed tree of `filter` reads a partition column of `scan`
+/// (a filter without one prunes nothing).
+fn reads_partition_column(scan: &FileScan, filter: &PushedFilter) -> bool {
+    if scan.partition_columns.is_empty() {
+        return false;
+    }
+    filter.expr.as_ref().is_some_and(|e| {
+        e.columns()
+            .iter()
+            .any(|c| scan.partition_columns.iter().any(|p| p.name() == c.root()))
+    })
+}
+
+/// Where a column of a partitioned scan's output comes from.
+#[derive(Clone, Copy, Debug)]
+enum Slot {
+    /// The decoded batch's column.
+    Data(usize),
+    /// The partition column (index into the scan's partition fields).
+    Partition(usize),
+}
+
+/// What [`table_request`] decides for a scan.
+struct TableRequest {
+    request: ScanRequest,
+    /// The output before `_metadata`, partition columns included.
+    mapped: SchemaRef,
+    /// The output with `_metadata`.
+    output: SchemaRef,
+    partition_fields: Arc<[FieldRef]>,
+    layout: Vec<Slot>,
+}
+
 /// The table-level request of a scan of `scan` with `p`, the schema its
 /// columns map to (the mapped output does not depend on the file: it maps
 /// onto the table) and the output schema (with `_metadata`).
-fn table_request(
-    scan: &FileScan,
-    p: &ScanPushdowns,
-) -> Result<(ScanRequest, SchemaRef, SchemaRef)> {
-    let projection = p.projection.clone().unwrap_or_else(|| {
+///
+/// Partition columns are not in the files: the format is asked for the
+/// data columns only (a CSV reader would otherwise find every record
+/// short), and the partition columns are added from each file's path.
+fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
+    let projection: Vec<ColumnPath> = p.projection.clone().unwrap_or_else(|| {
         scan.table
             .fields()
             .iter()
             .map(|f| ColumnPath::new(f.name()))
             .collect()
     });
-    let exprs: Vec<PushdownExpr> = p.filters.iter().filter_map(|f| f.expr.clone()).collect();
-    let mut request = ScanRequest::new(Arc::clone(&scan.table), projection);
+    // The partition columns with the types the table (the analyzer's
+    // binding) gives them, which may differ from this listing's.
+    let partition_fields: Arc<[FieldRef]> = scan
+        .partition_columns
+        .iter()
+        .map(|f| {
+            scan.table
+                .field_with_name(f.name())
+                .map_or_else(|_| Arc::clone(f), |t| Arc::new(t.clone()))
+        })
+        .collect();
+    let partition_of = |c: &ColumnPath| {
+        partition_fields
+            .iter()
+            .position(|f| c.0.len() == 1 && f.name() == c.root())
+    };
+    let data_table: SchemaRef = if partition_fields.is_empty() {
+        Arc::clone(&scan.table)
+    } else {
+        Arc::new(Schema::new_with_metadata(
+            scan.table
+                .fields()
+                .iter()
+                .filter(|f| !partition_fields.iter().any(|p| p.name() == f.name()))
+                .cloned()
+                .collect::<Vec<_>>(),
+            scan.table.metadata().clone(),
+        ))
+    };
+    let data_projection: Vec<ColumnPath> = projection
+        .iter()
+        .filter(|c| partition_of(c).is_none())
+        .cloned()
+        .collect();
+    // A filter on a partition column is not applied here, nor any filter
+    // written after it: the filter above evaluates all of them.
+    let usable: Vec<PushedFilter> = p
+        .filters
+        .iter()
+        .take_while(|f| !reads_partition_column(scan, f))
+        .cloned()
+        .collect();
+    let exprs: Vec<PushdownExpr> = usable.iter().filter_map(|f| f.expr.clone()).collect();
+    let mut request = ScanRequest::new(Arc::clone(&data_table), data_projection);
     request.predicate = match exprs.len() {
         0 => None,
         1 => exprs.into_iter().next(),
         _ => Some(PushdownExpr::And(exprs)),
     };
-    request.row_level = row_level(&p.filters);
+    request.row_level = scan_row_level(&p.filters, usable.len());
     request.limit = p.limit.filter(|_| p.filters.is_empty());
     request.metadata_cols = p.metadata;
     request.mapping = p.mapping.clone();
-    let mapped =
-        Arc::clone(SchemaMapper::new(&request, Arc::clone(&scan.table), "")?.output_schema());
+    let decoded = Arc::clone(SchemaMapper::new(&request, data_table, "")?.output_schema());
+    let (mapped, layout) = if partition_fields.is_empty() {
+        (decoded, Vec::new())
+    } else {
+        // The decoded batch has one column per distinct top-level column
+        // of the projection, in order of first appearance (nested paths
+        // of one column merge into it).
+        let mut fields: Vec<FieldRef> = Vec::new();
+        let mut layout = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
+        let mut data = 0;
+        for c in &projection {
+            if seen.contains(&c.root()) {
+                continue;
+            }
+            seen.push(c.root());
+            if let Some(k) = partition_of(c) {
+                fields.push(Arc::new(
+                    partition_fields[k].as_ref().clone().with_nullable(true),
+                ));
+                layout.push(Slot::Partition(k));
+            } else {
+                fields.push(Arc::clone(&decoded.fields()[data]));
+                layout.push(Slot::Data(data));
+                data += 1;
+            }
+        }
+        // What the format adds after the projection (the row index).
+        for i in data..decoded.fields().len() {
+            fields.push(Arc::clone(&decoded.fields()[i]));
+            layout.push(Slot::Data(i));
+        }
+        (
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                decoded.metadata().clone(),
+            )),
+            layout,
+        )
+    };
     let output = with_metadata_column(&mapped, &request.metadata_cols);
-    Ok((request, mapped, output))
+    Ok(TableRequest {
+        request,
+        mapped,
+        output,
+        partition_fields,
+        layout,
+    })
+}
+
+/// [`row_level`] over the first `usable` of `filters`, the rest being left
+/// to the filter above the scan. A filter left out that may raise must
+/// still see every row it could raise on, so then no runtime filter and no
+/// later conjunct may drop rows: the prefix is all the scan has.
+fn scan_row_level(filters: &[PushedFilter], usable: usize) -> RowLevel {
+    let level = row_level(&filters[..usable]);
+    let left_out_may_raise = filters[usable..]
+        .iter()
+        .any(|f| matches!(f.rows, RowLevel::Prefix(_)));
+    if !matches!(level, RowLevel::Full) || !left_out_may_raise {
+        return level;
+    }
+    let mut parts: Vec<PushdownExpr> = filters[..usable]
+        .iter()
+        .filter_map(|f| f.expr.clone())
+        .collect();
+    RowLevel::Prefix(match parts.len() {
+        0 | 1 => parts.pop(),
+        _ => Some(PushdownExpr::And(parts)),
+    })
 }
 
 /// What the scan may drop rows by, over the pushed `filters` (a
@@ -459,7 +626,13 @@ fn row_level(filters: &[PushedFilter]) -> RowLevel {
 impl FileScanSource {
     fn new(scan: &FileScan, p: ScanPushdowns) -> Result<Self> {
         check_capabilities(scan, &p)?;
-        let (request, mapped, output) = table_request(scan, &p)?;
+        let TableRequest {
+            request,
+            mapped,
+            output,
+            partition_fields,
+            layout,
+        } = table_request(scan, &p)?;
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),
@@ -471,6 +644,8 @@ impl FileScanSource {
             format_options: scan.format_options.clone(),
             scan_options: scan.scan_options,
             output,
+            partition_fields,
+            layout,
             mapped,
             runtime: p.dynamic,
             metrics: Mutex::new(FileScanMetrics::default()),
@@ -572,6 +747,7 @@ impl FileScanSource {
             drop(fut.await);
         }
         let f = self.file(file)?.clone();
+        let partition_values = self.partition_values(&f)?;
         let row_filter_start = local
             .row_filter
             .and_then(|(last, on)| (last == file).then_some(on));
@@ -603,6 +779,7 @@ impl FileScanSource {
             stream,
             file,
             split,
+            partition_values,
         });
         Ok(())
     }
@@ -626,6 +803,7 @@ impl FileScanSource {
                 match cur.stream.next_batch().await? {
                     Some(b) => {
                         let file = self.file(cur.file)?;
+                        let b = self.with_partition_columns(b, &cur.partition_values)?;
                         let b = local.rows.apply(b)?;
                         let b = self.append_metadata(b, file, cur.split)?;
                         g.returned.fetch_add(b.num_rows() as u64, Ordering::Relaxed);
@@ -665,6 +843,47 @@ impl FileScanSource {
                 local.rows.start_partition();
             }
         }
+    }
+
+    /// The values of `file`'s partition columns, one row each.
+    fn partition_values(&self, file: &FileRef) -> Result<Vec<ArrayRef>> {
+        if self.layout.is_empty() {
+            return Ok(Vec::new());
+        }
+        let texts = krishiv_io::file_values(&file.path, self.partition_fields.len())?;
+        self.partition_fields
+            .iter()
+            .zip(&texts)
+            .map(|(field, text)| krishiv_io::constant_column(field, text.as_deref(), 1))
+            .collect()
+    }
+
+    /// The decoded `batch` as the mapped output: the partition columns
+    /// between its data columns, each `values` repeated.
+    fn with_partition_columns(
+        &self,
+        batch: RecordBatch,
+        values: &[ArrayRef],
+    ) -> Result<RecordBatch> {
+        if self.layout.is_empty() {
+            return Ok(batch);
+        }
+        let rows = batch.num_rows();
+        let zeros = arrow_array::UInt32Array::from(vec![0_u32; rows]);
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.layout.len());
+        for slot in &self.layout {
+            columns.push(match *slot {
+                Slot::Data(i) => Arc::clone(batch.column(i)),
+                Slot::Partition(k) => arrow_select::take::take(&values[k], &zeros, None)
+                    .map_err(|e| internal(format!("partition column of {rows} rows: {e}")))?,
+            });
+        }
+        RecordBatch::try_new_with_options(
+            Arc::clone(&self.mapped),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(rows)),
+        )
+        .map_err(|e| internal(format!("invalid partition columns: {e}")))
     }
 
     /// `batch` (the mapped table-level output) with the `_metadata` column.
@@ -871,7 +1090,8 @@ impl Source for FileScanSource {
         // evaluates its runtime filter as the filter's last conjunct, so it
         // skips no split, row group or row that conjunct still has to see.
         if request.row_level.runtime_filters() {
-            request.dynamic = self.runtime.scan_filters(&self.request.table_schema);
+            let table = &self.request.table_schema;
+            request.dynamic = self.runtime.scan_filters(table);
         }
         let morsels = self.morsels(ctx);
         Ok(Arc::new(FileScanGlobal {
@@ -1036,5 +1256,56 @@ mod tests {
                 .unwrap_or_else(|| unreachable!());
             assert_eq!(a.iter().collect::<Vec<_>>(), [Some(s); 3]);
         }
+    }
+}
+
+#[cfg(test)]
+mod row_level_tests {
+    use arrow_array::BooleanArray;
+
+    use super::*;
+    use crate::operators::expr::FnPredicate;
+
+    fn filter(rows: RowLevel) -> PushedFilter {
+        let predicate: Arc<dyn super::super::expr::Predicate> =
+            Arc::new(FnPredicate(|b: &RecordBatch| {
+                Ok(BooleanArray::from(vec![true; b.num_rows()]))
+            }));
+        PushedFilter {
+            predicate,
+            expr: Some(PushdownExpr::Constant(true)),
+            rows,
+        }
+    }
+
+    #[test]
+    fn a_filter_left_out_that_may_raise_keeps_runtime_filters_off() {
+        let safe = filter(RowLevel::Full);
+        let raising = filter(RowLevel::Prefix(None));
+        // Nothing left out: as `row_level`.
+        assert!(matches!(
+            scan_row_level(std::slice::from_ref(&safe), 1),
+            RowLevel::Full
+        ));
+        // A safe filter left out changes nothing.
+        assert!(matches!(
+            scan_row_level(&[safe.clone(), safe.clone()], 1),
+            RowLevel::Full
+        ));
+        // A raising filter left out: only the usable prefix may drop rows.
+        let level = scan_row_level(&[safe.clone(), raising.clone()], 1);
+        assert!(
+            matches!(&level, RowLevel::Prefix(Some(PushdownExpr::Constant(true)))),
+            "{level:?}"
+        );
+        assert!(matches!(
+            scan_row_level(std::slice::from_ref(&raising), 0),
+            RowLevel::Prefix(None)
+        ));
+        // A later raising filter counts too.
+        assert!(matches!(
+            scan_row_level(&[safe.clone(), safe, raising], 1),
+            RowLevel::Prefix(Some(_))
+        ));
     }
 }

@@ -17,10 +17,10 @@ use crate::{ExprNode, Literal, LogicalPlan, PlanNode, ResolvedExpr};
 /// The feature name of the `TIME` type.
 const TIME: &str = "the TIME data type";
 
-fn feature(t: &DataType) -> Option<&'static str> {
+fn feature(t: &DataType, time_type: bool) -> Option<&'static str> {
     // The first unevaluable type in the type or inside it (an array
     // element, a map key or value, a struct field).
-    if t.any_type(&|x| matches!(x, DataType::Time { .. })) {
+    if !time_type && t.any_type(&|x| matches!(x, DataType::Time { .. })) {
         Some(TIME)
     } else if t.any_type(&|x| matches!(x, DataType::Geometry { .. })) {
         Some("the GEOMETRY data type")
@@ -33,7 +33,7 @@ fn feature(t: &DataType) -> Option<&'static str> {
 
 /// Fails on the first node of `root` (in pre-order) that holds a type the
 /// engine cannot evaluate.
-pub(super) fn check(root: &LogicalPlan) -> Result<(), AnalysisError> {
+pub(super) fn check(root: &LogicalPlan, time_type: bool) -> Result<(), AnalysisError> {
     let mut error = None;
     let _ = visit_distinct(Node::Plan(root), |node| {
         // A generator the select-list rewrite did not take (in a filter, a
@@ -74,7 +74,7 @@ pub(super) fn check(root: &LogicalPlan) -> Result<(), AnalysisError> {
                 (t.into_iter().collect(), e.origin)
             }
         };
-        match types.into_iter().find_map(feature) {
+        match types.into_iter().find_map(|t| feature(t, time_type)) {
             // Spark rejects `TIME` with its own class while
             // `spark.sql.timeType.enabled` is false (the default; the type
             // cannot be evaluated here either way).

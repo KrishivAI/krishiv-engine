@@ -41,6 +41,17 @@ fn dec(p: u32, s: u32) -> DataType {
     DataType::Decimal(DecimalType::try_new(p, s).unwrap())
 }
 
+/// The input of the time fields: either timestamp, or a time of any
+/// precision.
+fn timestamp_or_time() -> InputType {
+    InputType::OneOf(
+        [DataType::Timestamp, DataType::TimestampNtz]
+            .into_iter()
+            .chain((0..=6).map(|precision| DataType::Time { precision }))
+            .collect(),
+    )
+}
+
 #[test]
 fn every_definition_is_in_sparks_catalog() {
     let r = builtins();
@@ -296,7 +307,7 @@ fn datetime_signatures() {
     assert_eq!(err.error_class(), ErrorClass::NonFoldableArgument);
     // The source's cast follows the field.
     let inputs = |c: Option<Constant>| def("extract").inputs.expected(&CallTypes::new(&args, &[c]));
-    let ts = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    let ts = timestamp_or_time();
     assert_eq!(inputs(field("hour")).unwrap()[1], ts);
     assert_eq!(
         inputs(field("year")).unwrap()[1],
@@ -441,7 +452,7 @@ fn calendar_signatures() {
         );
     }
     // The time fields read either timestamp; a date is cast to the first.
-    let any_ts = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    let any_ts = timestamp_or_time();
     for name in ["hour", "minute", "second"] {
         assert_eq!(
             inputs(name, std::slice::from_ref(&date)),

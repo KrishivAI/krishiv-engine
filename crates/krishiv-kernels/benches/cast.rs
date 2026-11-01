@@ -14,7 +14,7 @@
 
 use std::hint::black_box;
 
-use arrow_array::{Decimal128Array, Int64Array, StringArray};
+use arrow_array::{Decimal128Array, Int64Array, StringArray, Time64NanosecondArray};
 use arrow_schema::DataType;
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
@@ -52,6 +52,25 @@ fn casts(c: &mut Criterion) {
     bench("decimal_to_string", &d, DataType::Utf8);
     let l: Int64Array = (0..ROWS).map(Some).collect();
     bench("bigint_to_decimal_20_2", &l, DataType::Decimal128(20, 2));
+    let times: StringArray = (0..ROWS)
+        .map(|i| {
+            Some(format!(
+                "{:02}:{:02}:{:02}.{:06}",
+                i % 24,
+                i % 60,
+                i * 7 % 60,
+                i * 7919 % 1_000_000
+            ))
+        })
+        .collect();
+    bench(
+        "string_to_time",
+        &times,
+        DataType::Time64(arrow_schema::TimeUnit::Nanosecond),
+    );
+    let t: Time64NanosecondArray = (0..ROWS).map(|i| Some(i * 1_319_000)).collect();
+    bench("time_to_string", &t, DataType::Utf8);
+    bench("time_to_bigint", &t, DataType::Int64);
 }
 
 criterion_group!(benches, casts);

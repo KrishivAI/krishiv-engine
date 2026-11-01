@@ -583,6 +583,82 @@ pub fn list_create(
     ))
 }
 
+/// Nanoseconds since midnight for the text of a `TIME`, read one byte at a
+/// time (the grammar of [`crate::cast::parse_time`] written as a scanner):
+/// `[T]h[h]:m[m][:s[s][.digits]][ AM|PM]` inside ASCII whitespace, a fraction
+/// cut to microseconds, 12-hour clock hours 1 to 12.
+#[must_use]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the oracle: positions are bounded by the text, fields by two digits"
+)]
+pub fn time_parse(text: &str) -> Option<i64> {
+    let b = text
+        .trim_matches(|c: char| c.is_ascii_whitespace())
+        .as_bytes();
+    let mut at = usize::from(b.first() == Some(&b'T'));
+    let number = |at: &mut usize| -> Option<i64> {
+        let start = *at;
+        while *at < b.len() && *at - start < 2 && b[*at].is_ascii_digit() {
+            *at += 1;
+        }
+        let digits = b.get(start..*at)?;
+        let mut v = 0_i64;
+        for d in digits {
+            v = v * 10 + i64::from(d - b'0');
+        }
+        (!digits.is_empty()).then_some(v)
+    };
+    let hour = number(&mut at)?;
+    if b.get(at) != Some(&b':') {
+        return None;
+    }
+    at += 1;
+    let minute = number(&mut at)?;
+    let (mut second, mut nanos) = (0, 0);
+    if b.get(at) == Some(&b':') {
+        at += 1;
+        second = number(&mut at)?;
+        if b.get(at) == Some(&b'.') {
+            at += 1;
+            let mut scale = 100_000_000_i64;
+            while at < b.len() && b[at].is_ascii_digit() {
+                if scale >= 1_000 {
+                    nanos += i64::from(b[at] - b'0') * scale;
+                    scale /= 10;
+                }
+                at += 1;
+            }
+        }
+    }
+    let mut pm = None;
+    if at < b.len() {
+        while b.get(at).is_some_and(u8::is_ascii_whitespace) {
+            at += 1;
+        }
+        let tail = b.get(at..)?;
+        if !b[at - 1].is_ascii_whitespace() {
+            return None;
+        }
+        pm = if tail.eq_ignore_ascii_case(b"AM") {
+            Some(false)
+        } else if tail.eq_ignore_ascii_case(b"PM") {
+            Some(true)
+        } else {
+            return None;
+        };
+    }
+    if minute > 59 || second > 59 {
+        return None;
+    }
+    let hour = match pm {
+        None if hour < 24 => hour,
+        Some(is_pm) if (1..=12).contains(&hour) => hour % 12 + if is_pm { 12 } else { 0 },
+        _ => return None,
+    };
+    Some(((hour * 60 + minute) * 60 + second) * 1_000_000_000 + nanos)
+}
+
 #[cfg(test)]
 mod tests {
     use arrow_array::{Float32Array, Int64Array};
