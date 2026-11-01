@@ -33,17 +33,34 @@ const ROW_LIMIT: usize = 1_000_000;
 
 /// The first loop (children before parents) that holds no other loop.
 fn innermost(p: &Arc<LogicalPlan>, seen: &mut HashSet<usize>) -> Option<Arc<LogicalPlan>> {
+    found_in(p, seen, &mut Vec::new()).map(|(node, _)| node)
+}
+
+/// As [`innermost`], with the CTE definitions in scope at the loop (those of
+/// the enclosing `WITH`s that hold no loop): its rounds run as plans of
+/// their own and still read them.
+fn found_in(
+    p: &Arc<LogicalPlan>,
+    seen: &mut HashSet<usize>,
+    defs: &mut Vec<krishiv_plan::Cte>,
+) -> Option<(Arc<LogicalPlan>, Vec<krishiv_plan::Cte>)> {
     if !seen.insert(Arc::as_ptr(p) as usize) {
         return None;
+    }
+    let before = defs.len();
+    if let PlanNode::WithCte { ctes, .. } = &p.node {
+        defs.extend(ctes.iter().filter(|c| !has_loop(&c.plan)).cloned());
     }
     let mut kids = Vec::new();
     p.for_each_child(&mut |c| kids.push(Arc::clone(c)));
     for k in &kids {
-        if let Some(found) = innermost(k, seen) {
+        if let Some(found) = found_in(k, seen, defs) {
             return Some(found);
         }
     }
-    matches!(p.node, PlanNode::UnionLoop { .. }).then(|| Arc::clone(p))
+    let here = matches!(p.node, PlanNode::UnionLoop { .. }).then(|| (Arc::clone(p), defs.clone()));
+    defs.truncate(before);
+    here
 }
 
 /// Whether `p` holds a recursive CTE.
@@ -94,6 +111,9 @@ fn pushed_limit(root: &Arc<LogicalPlan>) -> Option<(u32, usize)> {
                 p = input;
             }
             PlanNode::CteRef(r) => {
+                if count_refs(root, &r.name) != 1 {
+                    return None;
+                }
                 let def = defs
                     .iter()
                     .rev()
@@ -114,6 +134,36 @@ fn pushed_limit(root: &Arc<LogicalPlan>) -> Option<(u32, usize)> {
     }
 }
 
+/// How many reads of the CTE `name` the plan holds (subqueries included).
+fn count_refs(root: &Arc<LogicalPlan>, name: &str) -> usize {
+    fn plan(p: &Arc<LogicalPlan>, name: &str, seen: &mut HashSet<usize>) -> usize {
+        // A shared read (a reference reached again through a `Shift` in a
+        // subquery) counts every time it is reached.
+        let read = usize::from(
+            matches!(&p.node, PlanNode::CteRef(r) if r.name.eq_ignore_ascii_case(name)),
+        );
+        if !seen.insert(Arc::as_ptr(p) as usize) {
+            return read;
+        }
+        let mut n = read;
+        // The loop's own terms read the name too: not outside readers.
+        if !matches!(p.node, PlanNode::UnionLoop { .. }) {
+            p.for_each_child(&mut |c| n += plan(c, name, seen));
+        }
+        p.for_each_expr(&mut |e| n += expr(e, name, seen));
+        n
+    }
+    fn expr(e: &Arc<krishiv_plan::Expr>, name: &str, seen: &mut HashSet<usize>) -> usize {
+        let mut n = match &e.node {
+            krishiv_plan::ExprNode::Subquery { plan: p, .. } => plan(p, name, seen),
+            _ => 0,
+        };
+        e.for_each_child(&mut |c| n += expr(c, name, seen));
+        n
+    }
+    plan(root, name, &mut HashSet::new())
+}
+
 impl Session {
     /// `analyzed` with every recursive CTE evaluated and replaced by a scan
     /// of its rows.
@@ -125,9 +175,9 @@ impl Session {
         let mut plan = Arc::clone(analyzed.plan.root());
         let mut tables = 0_u32;
         let limit = pushed_limit(&plan);
-        while let Some(node) = innermost(&plan, &mut HashSet::new()) {
+        while let Some((node, defs)) = found_in(&plan, &mut HashSet::new(), &mut Vec::new()) {
             let scan = self
-                .run_loop(&node, analyzed, env, &mut tables, limit)
+                .run_loop(&node, &defs, analyzed, env, &mut tables, limit)
                 .await?;
             plan = Arc::clone(&plan)
                 .transform_up(&mut |n| {
@@ -148,9 +198,18 @@ impl Session {
     async fn run_plan(
         &self,
         plan: Arc<LogicalPlan>,
+        defs: &[krishiv_plan::Cte],
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<Vec<RecordBatch>, KrishivError> {
+        let plan = if defs.is_empty() {
+            plan
+        } else {
+            Arc::new(LogicalPlan::new(PlanNode::WithCte {
+                input: plan,
+                ctes: defs.to_vec(),
+            }))
+        };
         let sub = AnalyzedPlan {
             plan: Plan::try_new(plan)?,
             ..analyzed.clone()
@@ -167,6 +226,7 @@ impl Session {
     async fn run_loop(
         &self,
         node: &Arc<LogicalPlan>,
+        defs: &[krishiv_plan::Cte],
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
         tables: &mut u32,
@@ -194,7 +254,9 @@ impl Session {
             format!("{CACHE_PREFIX}loop{tables}")
         };
         let round_name = hidden(tables);
-        let mut last = self.run_plan(Arc::clone(anchor), analyzed, env).await?;
+        let mut last = self
+            .run_plan(Arc::clone(anchor), defs, analyzed, env)
+            .await?;
         let mut all: Vec<RecordBatch> = Vec::new();
         let (mut total, mut level) = (0_usize, 0_u32);
         loop {
@@ -242,7 +304,7 @@ impl Session {
                     })
                 })
                 .unwrap_or_else(|_| Arc::clone(recursive));
-            last = self.run_plan(next, analyzed, env).await?;
+            last = self.run_plan(next, defs, analyzed, env).await?;
         }
         let result = hidden(tables);
         env.catalog.pin_cached(

@@ -146,3 +146,26 @@ fn a_reference_in_a_forbidden_place_is_refused() {
         );
     }
 }
+
+#[test]
+fn a_limit_is_not_pushed_when_the_cte_is_read_twice() {
+    let s = Session::new().unwrap();
+    let got = rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 10) \
+         SELECT n, (SELECT count(*) FROM r) FROM r LIMIT 3",
+    );
+    assert_eq!(got.len(), 3);
+    assert!(got.iter().all(|r| r[1] == "10"), "{got:?}");
+}
+
+#[test]
+fn a_recursive_term_reads_an_earlier_cte() {
+    let s = Session::new().unwrap();
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE one AS (SELECT 1 AS k), r(n) AS (SELECT 1 UNION ALL SELECT n + k FROM r, one WHERE n < 3) \
+         SELECT n FROM r",
+    ));
+    assert_eq!(got, ["1", "2", "3"]);
+}

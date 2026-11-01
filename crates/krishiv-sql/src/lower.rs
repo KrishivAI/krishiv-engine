@@ -76,7 +76,6 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
         depth: 0,
         root: query.span,
         windows: Vec::new(),
-        loops: 0,
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -96,7 +95,6 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
         depth: 0,
         root: expr.span,
         windows: Vec::new(),
-        loops: 0,
     };
     l.expr(expr)
 }
@@ -112,7 +110,6 @@ pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> 
         depth: 0,
         root: item.span,
         windows: Vec::new(),
-        loops: 0,
     };
     l.select_item(item)
 }
@@ -219,8 +216,6 @@ struct Lowerer {
     /// last; `None` stands for a subquery expression's boundary (Spark's
     /// `WindowsSubstitution` does not enter subquery plans).
     windows: Vec<Option<Arc<WindowDefs>>>,
-    /// Recursive CTEs lowered so far: the next one's loop id.
-    loops: u32,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -491,8 +486,10 @@ impl Lowerer {
             }
             _ => return Err(err(InvalidRecursiveCte {}, c.span)),
         };
-        let id = self.loops;
-        self.loops += 1;
+        // Unique per process: loops of separately lowered plans (views,
+        // SQL functions, DataFrames) meet in one analysis.
+        static NEXT_LOOP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let id = NEXT_LOOP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut reference = self.node(
             PlanNode::UnionLoopRef {
                 id,
