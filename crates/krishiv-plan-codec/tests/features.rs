@@ -1238,6 +1238,40 @@ fn a_decoded_interval_type_is_checked() {
         t.ym_start = pb::YearMonthField::Month as i32;
     });
     corrupt(&on_int, "a type parameter on a type that has none");
+    let missing = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::YearMonthInterval as i32;
+        t.ym_start = 0;
+        t.ym_end = pb::YearMonthField::Month as i32;
+    });
+    corrupt(&missing, "an unknown interval field");
+}
+
+/// A literal's fields are external input too, for both field families.
+#[test]
+fn a_decoded_interval_literal_is_checked() {
+    let edit = |change: &dyn Fn(&mut pb::literal::Kind)| {
+        let mut m = message("interval_literals");
+        for e in &mut m.exprs {
+            if let Some(pb::expr::Kind::Literal(pb::Literal { kind: Some(k) })) = &mut e.kind {
+                change(k);
+            }
+        }
+        m
+    };
+    let year_month = edit(&|k: &mut pb::literal::Kind| {
+        if let pb::literal::Kind::YearMonth(v) = k {
+            v.start = pb::YearMonthField::Month as i32;
+            v.end = pb::YearMonthField::Year as i32;
+        }
+    });
+    corrupt(&year_month, "an invalid interval literal");
+    let day_time = edit(&|k: &mut pb::literal::Kind| {
+        if let pb::literal::Kind::DayTime(v) = k {
+            v.start = pb::DayTimeField::Second as i32;
+            v.end = pb::DayTimeField::Hour as i32;
+        }
+    });
+    corrupt(&day_time, "an invalid interval literal");
 }
 
 /// A time inside an array is a time plan: the header names `time_type`

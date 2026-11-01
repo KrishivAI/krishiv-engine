@@ -1332,16 +1332,26 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
         Kind::Date(v) => Literal::Date(*v),
         Kind::Timestamp(v) => Literal::Timestamp(*v),
         Kind::TimestampNtz(v) => Literal::TimestampNtz(*v),
-        Kind::YearMonth(v) => Literal::YearMonthInterval {
-            months: v.months,
-            start: year_month_field(v.start)?,
-            end: year_month_field(v.end)?,
-        },
-        Kind::DayTime(v) => Literal::DayTimeInterval {
-            micros: v.micros,
-            start: day_time_field(v.start)?,
-            end: day_time_field(v.end)?,
-        },
+        Kind::YearMonth(v) => {
+            let (start, end) = (year_month_field(v.start)?, year_month_field(v.end)?);
+            DataType::year_month_interval(start, end)
+                .map_err(|_| corrupt("an invalid interval literal"))?;
+            Literal::YearMonthInterval {
+                months: v.months,
+                start,
+                end,
+            }
+        }
+        Kind::DayTime(v) => {
+            let (start, end) = (day_time_field(v.start)?, day_time_field(v.end)?);
+            DataType::day_time_interval(start, end)
+                .map_err(|_| corrupt("an invalid interval literal"))?;
+            Literal::DayTimeInterval {
+                micros: v.micros,
+                start,
+                end,
+            }
+        }
         Kind::Calendar(v) => Literal::CalendarInterval {
             months: v.months,
             days: v.days,
