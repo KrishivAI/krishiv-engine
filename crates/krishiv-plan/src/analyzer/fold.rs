@@ -389,6 +389,12 @@ fn fold_cast(
     if inner.null_count() > 0 || inner.data_type() == &ArrowType::Null {
         return Some(Ok(new_null_array(&to.to_arrow(), 1)));
     }
+    // A cast to `time(p)` drops the digits below `p`, but every `TIME` has
+    // the same Arrow carrier, so the shortcut below would keep them: the
+    // executor truncates, so a cast to a narrower time stays unfolded.
+    if matches!(to, DataType::Time { precision } if *precision < 6) {
+        return None;
+    }
     // A cast to the value's own type is the value (the kernels below do
     // not cover every target, e.g. arrays of literals).
     if inner.data_type() == &to.to_arrow() {
