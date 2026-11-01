@@ -728,6 +728,20 @@ pub fn cast(
             .map_err(|e| KernelError::internal(e.to_string()))?;
             Ok(Arc::new(out))
         }
+        // Without ANSI an integral is its big-endian bytes at its own width
+        // (Spark's `Cast.castToBinary`); the analyzer refuses it otherwise.
+        (DataType::Int8, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int8Type>(), i8::to_be_bytes)
+        }
+        (DataType::Int16, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int16Type>(), i16::to_be_bytes)
+        }
+        (DataType::Int32, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int32Type>(), i32::to_be_bytes)
+        }
+        (DataType::Int64, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int64Type>(), i64::to_be_bytes)
+        }
         (DataType::Utf8, DataType::Binary) => {
             // A `STRING` carrier holds bytes: reinterpreting them as
             // `BINARY` never fails (Spark's `CAST(string AS BINARY)` is the
@@ -1078,6 +1092,22 @@ fn from_string<O: OffsetSizeTrait>(
             "CAST from STRING to {to_name}"
         ))),
     }
+}
+
+/// The big-endian bytes of each value of `a`; NULL stays NULL.
+fn integral_bytes<T: ArrowPrimitiveType, const N: usize>(
+    a: &PrimitiveArray<T>,
+    bytes: fn(T::Native) -> [u8; N],
+) -> Result<ArrayRef, KernelError> {
+    let mut out =
+        arrow_array::builder::BinaryBuilder::with_capacity(a.len(), a.len().saturating_mul(N));
+    for v in a.iter() {
+        match v {
+            Some(x) => out.append_value(bytes(x)),
+            None => out.append_null(),
+        }
+    }
+    Ok(Arc::new(out.finish()))
 }
 
 /// `DATE` ↔ `TIMESTAMP` ↔ `TIMESTAMP_NTZ`; `None` for other targets.

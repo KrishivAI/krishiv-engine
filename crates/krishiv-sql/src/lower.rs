@@ -2201,10 +2201,8 @@ impl Lowerer {
                     sp,
                 )
             }
-            ExprKind::Row(_) => {
-                return Err(unsupported("row and struct constructors", sp));
-            }
-            ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
+            // `(a, b)` is `struct(a, b)` to Spark's `AstBuilder`.
+            ExprKind::Row(items) | ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
             // Every variant is lowered above; the wildcard stays because
             // `ExprKind` is non-exhaustive.
             #[expect(unreachable_patterns, reason = "every ExprKind variant is lowered")]
