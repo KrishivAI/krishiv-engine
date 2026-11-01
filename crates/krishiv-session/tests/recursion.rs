@@ -195,3 +195,115 @@ fn the_row_limit_applies() {
         ErrorClass::RecursionRowLimitExceeded
     );
 }
+
+#[test]
+fn the_limits_follow_the_settings() {
+    let s = Session::new().unwrap();
+    let q = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 10) \
+             SELECT count(*) FROM r";
+    block_on(s.sql("SET krishiv.sql.cteRecursionRowLimit=3")).unwrap();
+    assert_eq!(class_of(&s, q), ErrorClass::RecursionRowLimitExceeded);
+    block_on(s.sql("SET spark.sql.cteRecursionRowLimit=-1")).unwrap();
+    block_on(s.sql("SET spark.sql.cteRecursionLevelLimit=2")).unwrap();
+    assert_eq!(class_of(&s, q), ErrorClass::RecursionLevelLimitExceeded);
+    // MAX RECURSION LEVEL overrides the setting.
+    let got = rows(
+        &s,
+        "WITH RECURSIVE r(n) MAX RECURSION LEVEL 50 AS \
+         (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 10) SELECT count(*) FROM r",
+    );
+    assert_eq!(got, vec![vec!["10".to_owned()]]);
+    block_on(s.sql("SET spark.sql.cteRecursionLevelLimit=-1")).unwrap();
+    let got = rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 150) \
+         SELECT count(*) FROM r",
+    );
+    assert_eq!(got, vec![vec!["150".to_owned()]]);
+}
+
+#[test]
+fn local_definitions_scope_over_both_terms() {
+    let s = Session::new().unwrap();
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (WITH x AS (SELECT 1 AS k) \
+         SELECT k FROM x UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r",
+    ));
+    assert_eq!(got, ["1", "2", "3"]);
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH RECURSIVE r(n) AS (WITH x AS (SELECT * FROM r) \
+             SELECT 1 UNION ALL SELECT n + 1 FROM x) SELECT * FROM r"
+        ),
+        ErrorClass::InvalidRecursiveCte
+    );
+}
+
+#[test]
+fn an_inner_definition_of_the_name_shadows_the_outer() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "WITH r AS (WITH r AS (SELECT 1 AS a) SELECT * FROM r) SELECT * FROM r",
+        "WITH RECURSIVE r(n) AS (WITH r AS (SELECT 5 AS n) SELECT * FROM r) SELECT * FROM r",
+    ] {
+        assert_eq!(rows(&s, sql).len(), 1, "{sql}");
+    }
+}
+
+#[test]
+fn a_recursive_cte_inside_an_expression_subquery() {
+    let s = Session::new().unwrap();
+    let got = rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) \
+         SELECT n, (SELECT max(m) FROM (WITH RECURSIVE q(m) AS \
+         (SELECT 1 UNION ALL SELECT m + 1 FROM q WHERE m < 4) SELECT * FROM q)) FROM r",
+    );
+    let want: Vec<Vec<String>> = (1..=3)
+        .map(|n| vec![n.to_string(), "4".to_owned()])
+        .collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn explain_and_estimate_do_not_run_the_loop() {
+    let s = Session::new().unwrap();
+    // Never ends if run: the only bound is the (huge) level limit.
+    let q = "WITH RECURSIVE r(n) MAX RECURSION LEVEL 4000000 AS \
+             (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT * FROM r";
+    let df = block_on(s.sql(q)).unwrap();
+    block_on(df.explain(krishiv_session::ExplainMode::Extended)).unwrap();
+    block_on(df.estimate()).unwrap();
+    block_on(s.sql(&format!("EXPLAIN {q}")))
+        .and_then(|d| block_on(d.collect()))
+        .unwrap();
+}
+
+#[test]
+fn limit_all_on_every_read_lifts_the_row_limit() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.cteRecursionRowLimit=50")).unwrap();
+    let cte = "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 60) ";
+    let all = rows(
+        &s,
+        &format!("{cte} SELECT count(*) FROM (SELECT n FROM t LIMIT ALL)"),
+    );
+    assert_eq!(all, vec![vec!["60".to_owned()]]);
+    let both = rows(
+        &s,
+        &format!(
+            "{cte} SELECT count(*) FROM ((SELECT n FROM t LIMIT ALL) UNION ALL (SELECT n FROM t LIMIT ALL))"
+        ),
+    );
+    assert_eq!(both, vec![vec!["120".to_owned()]]);
+    // One read without a limit keeps the row limit.
+    assert_eq!(
+        class_of(
+            &s,
+            &format!("{cte} (SELECT n FROM t LIMIT ALL) UNION ALL (SELECT n FROM t)")
+        ),
+        ErrorClass::RecursionRowLimitExceeded
+    );
+}

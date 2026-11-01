@@ -329,6 +329,10 @@ pub(crate) struct QueryCatalog {
     /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
     /// from under the query between substitution and planning.
     pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
+    /// The hidden tables a planned query reads while it runs (recursive
+    /// CTE results), by the address of the plan's root; released when the
+    /// run ends.
+    scoped: Mutex<HashMap<usize, Vec<String>>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -377,6 +381,7 @@ impl QueryCatalog {
             session,
             cache,
             pinned: Mutex::new(HashMap::new()),
+            scoped: Mutex::new(HashMap::new()),
             files,
             scans,
             loaded: Mutex::new(HashMap::new()),
@@ -393,6 +398,33 @@ impl QueryCatalog {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(name, table);
+    }
+
+    /// Records that the plan rooted at `plan` reads the pinned `names`.
+    pub(crate) fn scope_pins(&self, plan: usize, names: Vec<String>) {
+        if !names.is_empty() {
+            self.scoped
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(plan, names);
+        }
+    }
+
+    /// The names [`Self::scope_pins`] recorded for `plan`, forgotten.
+    pub(crate) fn take_scoped(&self, plan: usize) -> Vec<String> {
+        self.scoped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&plan)
+            .unwrap_or_default()
+    }
+
+    /// Releases the snapshots pinned under the hidden `names`.
+    pub(crate) fn unpin_cached(&self, names: &[String]) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        for n in names {
+            pinned.remove(n);
+        }
     }
 
     /// The entry a scan of `name` (as the analyzer kept it) reads: a

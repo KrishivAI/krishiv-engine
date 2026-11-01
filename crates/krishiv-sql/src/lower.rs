@@ -76,6 +76,7 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
         depth: 0,
         root: query.span,
         windows: Vec::new(),
+        recursive: 0,
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -95,6 +96,7 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
         depth: 0,
         root: expr.span,
         windows: Vec::new(),
+        recursive: 0,
     };
     l.expr(expr)
 }
@@ -110,6 +112,7 @@ pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> 
         depth: 0,
         root: item.span,
         windows: Vec::new(),
+        recursive: 0,
     };
     l.select_item(item)
 }
@@ -190,7 +193,22 @@ fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
                 {
                     return true;
                 }
-                p.for_each_child(&mut |c| stack.push(Step::Plan(c)));
+                if let PlanNode::WithCte { input, ctes } = &p.node {
+                    // A definition of `name` hides the outer one from what
+                    // follows it: the later definitions and the body.
+                    let mut hidden = false;
+                    for c in ctes {
+                        if !hidden {
+                            stack.push(Step::Plan(&c.plan));
+                        }
+                        hidden |= c.name.eq_ignore_ascii_case(name);
+                    }
+                    if !hidden {
+                        stack.push(Step::Plan(input));
+                    }
+                } else {
+                    p.for_each_child(&mut |c| stack.push(Step::Plan(c)));
+                }
                 p.for_each_expr(&mut |e| stack.push(Step::Expr(e)));
             }
             Step::Expr(e) => {
@@ -216,6 +234,10 @@ struct Lowerer {
     /// last; `None` stands for a subquery expression's boundary (Spark's
     /// `WindowsSubstitution` does not enter subquery plans).
     windows: Vec<Option<Arc<WindowDefs>>>,
+    /// How many `WITH RECURSIVE` queries enclose the body being lowered:
+    /// there `LIMIT ALL` stays a limit (of `i32::MAX` rows), because it
+    /// lifts the recursion row limit of the CTE it reads.
+    recursive: usize,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -405,10 +427,14 @@ impl Lowerer {
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
         reject_organization(q)?;
-        let mut plan = self.with_windows(&q.windows, |l| {
+        let recursive = q.with.as_ref().is_some_and(|w| w.recursive);
+        self.recursive += usize::from(recursive);
+        let body = self.with_windows(&q.windows, |l| {
             let plan = l.body(&q.body)?;
             l.organize(plan, q)
-        })?;
+        });
+        self.recursive -= usize::from(recursive);
+        let mut plan = body?;
         if let Some(with) = &q.with {
             let mut ctes = Vec::new();
             for c in &with.ctes {
@@ -465,7 +491,17 @@ impl Lowerer {
         max_level: Option<u32>,
     ) -> R<LogicalPlan> {
         let name = &c.name.value;
-        let (anchor, recursive) = match &body.node {
+        // `WITH x AS (..) anchor UNION ALL recursive`: the local definitions
+        // are in scope of both terms and may not read the name themselves.
+        let (mut locals, mut inner) = (Vec::new(), body);
+        while let PlanNode::WithCte { input, ctes } = &inner.node {
+            locals.extend(ctes.iter().cloned());
+            inner = input;
+        }
+        if locals.iter().any(|l| reads_table(&l.plan, name)) {
+            return Err(err(InvalidRecursiveCte {}, c.span));
+        }
+        let (anchor, recursive) = match &inner.node {
             PlanNode::Union {
                 inputs,
                 by_name: false,
@@ -485,6 +521,20 @@ impl Lowerer {
                 return Err(err(UnionNotSupportedInRecursiveCte {}, c.span));
             }
             _ => return Err(err(InvalidRecursiveCte {}, c.span)),
+        };
+        let (anchor, recursive) = if locals.is_empty() {
+            (anchor, recursive)
+        } else {
+            let scoped = |input| {
+                arc(self.node(
+                    PlanNode::WithCte {
+                        input,
+                        ctes: locals.clone(),
+                    },
+                    c.span,
+                ))
+            };
+            (scoped(anchor), scoped(recursive))
         };
         // Unique per process: loops of separately lowered plans (views,
         // SQL functions, DataFrames) meet in one analysis.
@@ -860,9 +910,12 @@ impl Lowerer {
             );
         }
         if let Some(limit) = q.limit
-            && let Some(v) = &limit.value
+            && (limit.value.is_some() || self.recursive > 0)
         {
-            let limit_expr = arc(self.expr(v)?);
+            let limit_expr = match &limit.value {
+                Some(v) => arc(self.expr(v)?),
+                None => arc(IrExpr::literal(IrLiteral::Integer(i32::MAX))),
+            };
             plan = self.node(
                 PlanNode::Limit {
                     input: arc(plan),

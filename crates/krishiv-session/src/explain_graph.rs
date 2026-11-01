@@ -464,7 +464,7 @@ impl DataFrame {
                 let analysis = frame.analysis().await?;
                 let (_, physical) = frame
                     .session
-                    .physical(&analysis.analyzed, &analysis.env)
+                    .physical_inspected(&analysis.analyzed, &analysis.env)
                     .await?;
                 Ok(render(&physical.explain_all()))
             })

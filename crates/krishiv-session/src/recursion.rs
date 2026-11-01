@@ -7,16 +7,17 @@
 //! round's rows, until a round is empty. Every round is an ordinary query
 //! run: its rows become an in-memory table scanned under a hidden name (the
 //! relation cache's mechanism), and the loop's node is replaced by a scan of
-//! the rows of all rounds. The level and row limits are Spark's defaults
-//! (`spark.sql.cteRecursionLevelLimit` 100, `cteRecursionRowLimit`
-//! 1,000,000); `MAX RECURSION LEVEL n` overrides the first.
+//! the rows of all rounds. The level and row limits are the
+//! `spark.sql.cteRecursionLevelLimit` / `cteRecursionRowLimit` settings;
+//! `MAX RECURSION LEVEL n` overrides the first.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
 use futures::StreamExt;
+use krishiv_common::config::{CTE_RECURSION_LEVEL_LIMIT, CTE_RECURSION_ROW_LIMIT, ConfigValue};
 use krishiv_common::error::{KrishivError, RecursionLevelLimitExceeded, RecursionRowLimitExceeded};
 use krishiv_exec::planner::MemoryTable;
 use krishiv_plan::analyzer::AnalyzedPlan;
@@ -26,10 +27,57 @@ use krishiv_types::batch::Batch;
 use crate::cache::CACHE_PREFIX;
 use crate::session::{QueryEnv, Session};
 
-/// `spark.sql.cteRecursionLevelLimit`.
-const LEVEL_LIMIT: u32 = 100;
-/// `spark.sql.cteRecursionRowLimit`.
-const ROW_LIMIT: usize = 1_000_000;
+/// The level and row limits of a loop: `MAX RECURSION LEVEL` over
+/// `spark.sql.cteRecursionLevelLimit`, and `spark.sql.cteRecursionRowLimit`
+/// (-1: none).
+fn limits(env: &QueryEnv, max_level: Option<u32>) -> (u32, usize) {
+    let conf = |entry| env.config.get(entry).and_then(ConfigValue::as_int);
+    let bound = |v: Option<i64>, default: i64| match v.unwrap_or(default) {
+        n if n < 0 => i64::MAX,
+        n => n,
+    };
+    let level = max_level.unwrap_or_else(|| {
+        u32::try_from(bound(conf(&CTE_RECURSION_LEVEL_LIMIT), 100)).unwrap_or(u32::MAX)
+    });
+    let rows =
+        usize::try_from(bound(conf(&CTE_RECURSION_ROW_LIMIT), 1_000_000)).unwrap_or(usize::MAX);
+    (level, rows)
+}
+
+/// A fresh hidden table name. Process-wide: concurrent actions on one
+/// analysis share its catalog.
+fn hidden_name() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{CACHE_PREFIX}loop{n}")
+}
+
+fn loop_schema(output: &[BoundColumn]) -> SchemaRef {
+    Arc::new(Schema::new(
+        output
+            .iter()
+            .map(|c| c.data_type.to_arrow_field(c.name.clone(), true))
+            .collect::<Vec<_>>(),
+    ))
+}
+
+/// A loop that is not run: a scan of an empty table of its schema.
+fn empty_loop(
+    node: &Arc<LogicalPlan>,
+    env: &QueryEnv,
+    pins: &mut Vec<String>,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let PlanNode::UnionLoop { output, .. } = &node.node else {
+        return Err(crate::session::internal("not a recursive CTE".to_owned()));
+    };
+    let name = hidden_name();
+    pins.push(name.clone());
+    env.catalog.pin_cached(
+        name.clone(),
+        Arc::new(MemoryTable::new(loop_schema(output), Vec::new())),
+    );
+    Ok(scan_of(node.origin, name, output.clone()))
+}
 
 /// The first loop (children before parents) that holds no other loop.
 fn innermost(p: &Arc<LogicalPlan>, seen: &mut HashSet<usize>) -> Option<Arc<LogicalPlan>> {
@@ -53,6 +101,7 @@ fn found_in(
     }
     let mut kids = Vec::new();
     p.for_each_child(&mut |c| kids.push(Arc::clone(c)));
+    p.for_each_expr(&mut |e| subquery_plans(e, &mut kids));
     for k in &kids {
         if let Some(found) = found_in(k, seen, defs) {
             return Some(found);
@@ -61,6 +110,56 @@ fn found_in(
     let here = matches!(p.node, PlanNode::UnionLoop { .. }).then(|| (Arc::clone(p), defs.clone()));
     defs.truncate(before);
     here
+}
+
+/// The plans of the subqueries inside `e`.
+fn subquery_plans(e: &Arc<krishiv_plan::Expr>, out: &mut Vec<Arc<LogicalPlan>>) {
+    if let krishiv_plan::ExprNode::Subquery { plan, .. } = &e.node {
+        out.push(Arc::clone(plan));
+    }
+    e.for_each_child(&mut |c| subquery_plans(c, out));
+}
+
+/// `plan` with `node` (a loop) replaced by `scan`, in subquery plans too.
+fn replace_loop(
+    plan: Arc<LogicalPlan>,
+    node: &Arc<LogicalPlan>,
+    scan: &Arc<LogicalPlan>,
+) -> Arc<LogicalPlan> {
+    fn in_expr(
+        e: Arc<krishiv_plan::Expr>,
+        node: &Arc<LogicalPlan>,
+        scan: &Arc<LogicalPlan>,
+    ) -> Arc<krishiv_plan::Expr> {
+        let e = e
+            .map_children(|c| Ok::<_, std::convert::Infallible>(in_expr(c, node, scan)))
+            .unwrap_or_else(|never| match never {});
+        if let krishiv_plan::ExprNode::Subquery { kind, plan } = &e.node {
+            let replaced = replace_loop(Arc::clone(plan), node, scan);
+            if !Arc::ptr_eq(&replaced, plan) {
+                return Arc::new(krishiv_plan::Expr {
+                    node: krishiv_plan::ExprNode::Subquery {
+                        kind: kind.clone(),
+                        plan: replaced,
+                    },
+                    origin: e.origin,
+                });
+            }
+        }
+        e
+    }
+    plan.transform_up(&mut |n| {
+        let n = if Arc::ptr_eq(&n, node) {
+            Arc::clone(scan)
+        } else {
+            n
+        };
+        Ok::<_, std::convert::Infallible>(
+            n.map_expressions(|e| Ok::<_, std::convert::Infallible>(in_expr(e, node, scan)))
+                .unwrap_or_else(|never| match never {}),
+        )
+    })
+    .unwrap_or_else(|never| match never {})
 }
 
 /// Whether `p` holds a recursive CTE.
@@ -87,107 +186,151 @@ fn scan_of(
     )
 }
 
-/// The row count an outer `LIMIT` over the loop `id` needs: Spark pushes it
-/// into the loop, so an unbounded recursion under `LIMIT n` ends. Found
-/// only when the query is `LIMIT n` over projections of one reference to
-/// the CTE whose definition is the loop.
-fn pushed_limit(root: &Arc<LogicalPlan>) -> Option<(u32, usize)> {
-    let mut p = root;
-    let mut limit: Option<usize> = None;
-    let mut defs: Vec<&krishiv_plan::Cte> = Vec::new();
-    loop {
+/// The row count each loop needs when every read of its CTE sits under a
+/// `LIMIT n` (through projections and aliases only): Spark pushes the
+/// largest into the loop, so an unbounded recursion under `LIMIT n` ends and
+/// `LIMIT ALL` (here `i32::MAX`) lifts the row limit. A loop with a read
+/// outside any limit (another recursive CTE's included) is absent. Reads in
+/// the loop's own recursive term are not outside readers: there the name is
+/// defined as the loop's reference, which shadows the CTE.
+fn pushed_limits(root: &Arc<LogicalPlan>) -> HashMap<u32, usize> {
+    /// Per loop id: the largest limit over its reads, `None` once one read
+    /// has none.
+    type Reads = HashMap<u32, Option<usize>>;
+
+    fn through(p: &Arc<LogicalPlan>) -> &Arc<LogicalPlan> {
+        let mut d = p;
+        while let PlanNode::SubqueryAlias { input, .. } | PlanNode::Project { input, .. } = &d.node
+        {
+            d = input;
+        }
+        d
+    }
+
+    fn plan(
+        p: &Arc<LogicalPlan>,
+        limit: Option<usize>,
+        defs: &mut Vec<(String, Option<u32>)>,
+        reads: &mut Reads,
+        seen: &mut HashSet<(usize, Option<usize>)>,
+    ) {
+        if !seen.insert((Arc::as_ptr(p) as usize, limit)) {
+            return;
+        }
         match &p.node {
-            PlanNode::Limit { input, limit: l } => {
-                if let krishiv_plan::ExprNode::Literal(krishiv_plan::Literal::Integer(n)) = &l.node
-                {
-                    let n = usize::try_from(*n).ok()?;
-                    limit = Some(limit.map_or(n, |m| m.min(n)));
-                }
-                p = input;
-            }
-            PlanNode::Project { input, .. } | PlanNode::SubqueryAlias { input, .. } => p = input,
-            PlanNode::WithCte { input, ctes } => {
-                defs.extend(ctes.iter());
-                p = input;
-            }
             PlanNode::CteRef(r) => {
                 let def = defs
                     .iter()
                     .rev()
-                    .find(|c| c.name.eq_ignore_ascii_case(&r.name))?;
-                let mut d = &def.plan;
-                while let PlanNode::SubqueryAlias { input, .. } | PlanNode::Project { input, .. } =
-                    &d.node
-                {
-                    d = input;
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&r.name));
+                if let Some((_, Some(id))) = def {
+                    reads
+                        .entry(*id)
+                        .and_modify(|m| *m = m.zip(limit).map(|(a, b)| a.max(b)))
+                        .or_insert(limit);
                 }
-                let PlanNode::UnionLoop { id, .. } = &d.node else {
-                    return None;
-                };
-                if count_refs(root, &r.name, *id) != 1 {
-                    return None;
-                }
-                return Some((*id, limit?));
             }
-            _ => return None,
+            PlanNode::WithCte { input, ctes } => {
+                let before = defs.len();
+                for c in ctes {
+                    plan(&c.plan, None, defs, reads, seen);
+                    let id = match &through(&c.plan).node {
+                        PlanNode::UnionLoop { id, .. } => Some(*id),
+                        _ => None,
+                    };
+                    defs.push((c.name.clone(), id));
+                }
+                plan(input, limit, defs, reads, seen);
+                defs.truncate(before);
+            }
+            PlanNode::Limit { input, limit: l } => {
+                let n = match &l.node {
+                    krishiv_plan::ExprNode::Literal(krishiv_plan::Literal::Integer(n)) => {
+                        usize::try_from(*n).ok()
+                    }
+                    _ => None,
+                };
+                let next = match (n, limit) {
+                    (Some(n), Some(m)) => Some(n.min(m)),
+                    (Some(n), None) => Some(n),
+                    (None, m) => m,
+                };
+                plan(input, next, defs, reads, seen);
+                p.for_each_expr(&mut |e| expr(e, defs, reads, seen));
+            }
+            PlanNode::Project { input, .. } | PlanNode::SubqueryAlias { input, .. } => {
+                plan(input, limit, defs, reads, seen);
+                p.for_each_expr(&mut |e| expr(e, defs, reads, seen));
+            }
+            _ => {
+                p.for_each_child(&mut |c| plan(c, None, defs, reads, seen));
+                p.for_each_expr(&mut |e| expr(e, defs, reads, seen));
+            }
         }
     }
-}
 
-/// How many reads of the CTE `name` the plan holds (subqueries included).
-fn count_refs(root: &Arc<LogicalPlan>, name: &str, own: u32) -> usize {
-    fn plan(p: &Arc<LogicalPlan>, name: &str, own: u32, seen: &mut HashSet<usize>) -> usize {
-        // A shared read (a reference reached again through a `Shift` in a
-        // subquery) counts every time it is reached.
-        let read = usize::from(
-            matches!(&p.node, PlanNode::CteRef(r) if r.name.eq_ignore_ascii_case(name)),
-        );
-        if !seen.insert(Arc::as_ptr(p) as usize) {
-            return read;
+    fn expr(
+        e: &Arc<krishiv_plan::Expr>,
+        defs: &mut Vec<(String, Option<u32>)>,
+        reads: &mut Reads,
+        seen: &mut HashSet<(usize, Option<usize>)>,
+    ) {
+        if let krishiv_plan::ExprNode::Subquery { plan: p, .. } = &e.node {
+            plan(p, None, defs, reads, seen);
         }
-        let mut n = read;
-        // The loop's own terms read the name too: not outside readers.
-        if !matches!(&p.node, PlanNode::UnionLoop { id, .. } if *id == own) {
-            p.for_each_child(&mut |c| n += plan(c, name, own, seen));
-        }
-        p.for_each_expr(&mut |e| n += expr(e, name, own, seen));
-        n
+        e.for_each_child(&mut |c| expr(c, defs, reads, seen));
     }
-    fn expr(e: &Arc<krishiv_plan::Expr>, name: &str, own: u32, seen: &mut HashSet<usize>) -> usize {
-        let mut n = match &e.node {
-            krishiv_plan::ExprNode::Subquery { plan: p, .. } => plan(p, name, own, seen),
-            _ => 0,
-        };
-        e.for_each_child(&mut |c| n += expr(c, name, own, seen));
-        n
-    }
-    plan(root, name, own, &mut HashSet::new())
+
+    let mut reads = Reads::new();
+    plan(root, None, &mut Vec::new(), &mut reads, &mut HashSet::new());
+    reads
+        .into_iter()
+        .filter_map(|(id, n)| n.map(|n| (id, n)))
+        .collect()
 }
 
 impl Session {
     /// `analyzed` with every recursive CTE evaluated and replaced by a scan
     /// of its rows.
+    ///
+    /// Returns the hidden tables the result scans: the caller unpins them
+    /// (`QueryCatalog::unpin_cached`) once the physical plan has resolved
+    /// them. With `run` false (a plan only inspected: EXPLAIN, estimates) no
+    /// loop runs and each is replaced by a scan of an empty table of its
+    /// schema.
     pub(crate) async fn expand_loops(
         &self,
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
+        run: bool,
+    ) -> Result<(AnalyzedPlan, Vec<String>), KrishivError> {
+        let mut pins = Vec::new();
+        match self.expand_pinning(analyzed, env, run, &mut pins).await {
+            Ok(expanded) => Ok((expanded, pins)),
+            Err(e) => {
+                env.catalog.unpin_cached(&pins);
+                Err(e)
+            }
+        }
+    }
+
+    async fn expand_pinning(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+        run: bool,
+        pins: &mut Vec<String>,
     ) -> Result<AnalyzedPlan, KrishivError> {
         let mut plan = Arc::clone(analyzed.plan.root());
-        let mut tables = 0_u32;
-        let limit = pushed_limit(&plan);
+        let limit = pushed_limits(&plan);
         while let Some((node, defs)) = found_in(&plan, &mut HashSet::new(), &mut Vec::new()) {
-            let scan = self
-                .run_loop(&node, &defs, analyzed, env, &mut tables, limit)
-                .await?;
-            plan = Arc::clone(&plan)
-                .transform_up(&mut |n| {
-                    Ok::<_, std::convert::Infallible>(if Arc::ptr_eq(&n, &node) {
-                        Arc::clone(&scan)
-                    } else {
-                        n
-                    })
-                })
-                .unwrap_or(plan);
+            let scan = if run {
+                self.run_loop(&node, &defs, analyzed, env, pins, &limit)
+                    .await?
+            } else {
+                empty_loop(&node, env, pins)?
+            };
+            plan = replace_loop(Arc::clone(&plan), &node, &scan);
         }
         Ok(AnalyzedPlan {
             plan: Plan::try_new(plan)?,
@@ -229,8 +372,31 @@ impl Session {
         defs: &[krishiv_plan::Cte],
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
-        tables: &mut u32,
-        limit: Option<(u32, usize)>,
+        pins: &mut Vec<String>,
+        limit: &HashMap<u32, usize>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let round_name = hidden_name();
+        let result = self
+            .run_rounds(node, defs, analyzed, env, limit, &round_name, pins)
+            .await;
+        // The rounds' table is only read while the loop runs.
+        env.catalog.unpin_cached(std::slice::from_ref(&round_name));
+        result
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one loop run: its plan, scope, limits and pins"
+    )]
+    async fn run_rounds(
+        &self,
+        node: &Arc<LogicalPlan>,
+        defs: &[krishiv_plan::Cte],
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+        limit: &HashMap<u32, usize>,
+        round_name: &str,
+        pins: &mut Vec<String>,
     ) -> Result<Arc<LogicalPlan>, KrishivError> {
         let PlanNode::UnionLoop {
             id,
@@ -242,20 +408,8 @@ impl Session {
         else {
             return Err(crate::session::internal("not a recursive CTE".to_owned()));
         };
-        let schema: SchemaRef = Arc::new(Schema::new(
-            output
-                .iter()
-                .map(|c| c.data_type.to_arrow_field(c.name.clone(), true))
-                .collect::<Vec<_>>(),
-        ));
-        let level_limit = max_level.unwrap_or(LEVEL_LIMIT);
-        // Process-wide: concurrent actions on one analysis share its catalog.
-        let hidden = |_: &mut u32| {
-            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            format!("{CACHE_PREFIX}loop{n}")
-        };
-        let round_name = hidden(tables);
+        let schema = loop_schema(output);
+        let (level_limit, row_limit) = limits(env, *max_level);
         let mut last = self
             .run_plan(Arc::clone(anchor), defs, analyzed, env)
             .await?;
@@ -267,10 +421,10 @@ impl Session {
                 break;
             }
             total += rows;
-            let wanted = limit.filter(|(i, _)| i == id).map(|(_, n)| n);
-            if total > ROW_LIMIT && wanted.is_none_or(|n| total - rows >= n) {
+            let wanted = limit.get(id).copied();
+            if total > row_limit && wanted.is_none_or(|n| total - rows >= n) {
                 return Err(RecursionRowLimitExceeded {
-                    row_limit: ROW_LIMIT.to_string(),
+                    row_limit: row_limit.to_string(),
                 }
                 .into());
             }
@@ -294,8 +448,9 @@ impl Session {
                 Arc::clone(&schema),
                 fixed.into_iter().map(Batch::new).collect(),
             );
-            env.catalog.pin_cached(round_name.clone(), Arc::new(table));
-            let name = round_name.clone();
+            env.catalog
+                .pin_cached(round_name.to_owned(), Arc::new(table));
+            let name = round_name.to_owned();
             let next = Arc::clone(recursive)
                 .transform_up(&mut |n| {
                     Ok::<_, std::convert::Infallible>(match &n.node {
@@ -308,7 +463,8 @@ impl Session {
                 .unwrap_or_else(|_| Arc::clone(recursive));
             last = self.run_plan(next, defs, analyzed, env).await?;
         }
-        let result = hidden(tables);
+        let result = hidden_name();
+        pins.push(result.clone());
         env.catalog.pin_cached(
             result.clone(),
             Arc::new(MemoryTable::new(

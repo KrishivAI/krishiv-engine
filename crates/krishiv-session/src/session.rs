@@ -68,6 +68,36 @@ use crate::variables::SessionVariables;
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
 
+/// Unpins a run's per-execution tables when dropped: the run's stream ends
+/// or is dropped, or starting it failed.
+struct Release {
+    catalog: Arc<crate::catalog::QueryCatalog>,
+    names: Vec<String>,
+}
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.catalog.unpin_cached(&self.names);
+    }
+}
+
+/// A run's stream, holding the [`Release`] of its tables.
+struct Released {
+    inner: RecordBatchStream,
+    _release: Release,
+}
+
+impl futures::Stream for Released {
+    type Item = Result<RecordBatch, KrishivError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
+}
+
 /// A stream of result batches; dropping it cancels the query.
 pub type RecordBatchStream = BoxStream<'static, Result<RecordBatch, KrishivError>>;
 
@@ -1272,6 +1302,17 @@ impl Session {
         Ok((optimized, physical))
     }
 
+    /// As [`Self::physical`] for a plan that is only inspected (EXPLAIN,
+    /// estimates): a recursive CTE is not run and reads as an empty table.
+    pub(crate) async fn physical_inspected(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false, false).await?;
+        Ok((optimized, physical))
+    }
+
     /// As [`Self::physical`]; with `trace`, also every optimizer rule
     /// application that changed the plan (`EXPLAIN VERBOSE`).
     pub(crate) async fn physical_traced(
@@ -1280,12 +1321,53 @@ impl Session {
         env: &QueryEnv,
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
+        self.physical_with(analyzed, env, trace, true).await
+    }
+
+    /// `run_loops` false: recursive CTEs are not run (see
+    /// [`Self::physical_inspected`]).
+    async fn physical_with(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+        trace: bool,
+        run_loops: bool,
+    ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
+        let mut pins = Vec::new();
+        let planned = self
+            .physical_pinned(analyzed, env, trace, run_loops, &mut pins)
+            .await;
+        match planned {
+            // The plan reads the loops' tables when it runs: whoever runs it
+            // releases them (`Self::run_on_query`).
+            Ok((optimized, physical, steps)) if run_loops => {
+                env.catalog
+                    .scope_pins(std::ptr::from_ref(physical.root()) as usize, pins);
+                Ok((optimized, physical, steps))
+            }
+            other => {
+                env.catalog.unpin_cached(&pins);
+                other
+            }
+        }
+    }
+
+    async fn physical_pinned(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+        trace: bool,
+        run_loops: bool,
+        pins: &mut Vec<String>,
+    ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         // Planning makes no spill directory: a query gets its scope when
         // its plan is instantiated (`Self::worker`), so a plan that is only
         // inspected (EXPLAIN, warnings) makes none.
         let expanded;
         let analyzed = if crate::recursion::has_loop(analyzed.plan.root()) {
-            expanded = self.expand_loops(analyzed, env).await?;
+            let (plan, hidden) = self.expand_loops(analyzed, env, run_loops).await?;
+            pins.extend(hidden);
+            expanded = plan;
             &expanded
         } else {
             analyzed
@@ -1399,6 +1481,31 @@ impl Session {
 
     /// Runs `physical` instantiated with `worker`.
     async fn run_on_query(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+        detailed: bool,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
+        let release = Release {
+            catalog: Arc::clone(&env.catalog),
+            names: env
+                .catalog
+                .take_scoped(std::ptr::from_ref(physical.root()) as usize),
+        };
+        let (stream, query) = self
+            .run_on_query_inner(physical, worker, env, detailed)
+            .await?;
+        Ok((
+            Box::pin(Released {
+                inner: stream,
+                _release: release,
+            }),
+            query,
+        ))
+    }
+
+    async fn run_on_query_inner(
         &self,
         physical: &PhysicalPlan,
         worker: WorkerContext,
