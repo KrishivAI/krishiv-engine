@@ -85,14 +85,48 @@ fn in_value_on_the_right_side_of_a_join_condition() -> R {
         )?,
         ["1|1|10"]
     );
-    // The subquery reads both sides: a named refusal, not an internal error.
-    let err = run(
-        &s,
-        "select * from x join y on x1 = y1 and y2 in (select z1 from z where z1 = x1)",
-    )
-    .err()
-    .map(|e| e.to_string())
-    .unwrap_or_default();
-    assert!(!err.is_empty() && !err.contains("INTERNAL_ERROR"), "{err}");
+    // A tuple's values count too.
+    assert_eq!(
+        run(
+            &s,
+            "select * from x join y on x1 = y1 and (y1, y2) in (select 1, z1 from z)"
+        )?,
+        ["1|1|10"]
+    );
+    // The subquery reads both sides: Spark's refusal.
+    for both in [
+        "y2 in (select z1 from z where z1 = x1)",
+        "(x1, y2) in (select 1, z1 from z)",
+    ] {
+        let err = run(&s, &format!("select * from x join y on x1 = y1 and {both}"))
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            err.contains("UNSUPPORTED_CORRELATED_EXPRESSION_IN_JOIN_CONDITION"),
+            "{both}: {err}"
+        );
+    }
+    Ok(())
+}
+
+/// The rewrite of a correlated `LIMIT` moves the select list above the
+/// ranking, so a nondeterministic one must not take it.
+#[test]
+fn a_correlated_limit_over_a_nondeterministic_select_list_is_refused() -> R {
+    let s = session()?;
+    let q = |select: &str| {
+        format!(
+            "select x1 from x where x1 in \
+             (table y |> where y1 = x1 |> order by y2 |> select {select} as r |> limit 1)"
+        )
+    };
+    // The same shape with a deterministic select list takes the rewrite.
+    assert_eq!(run(&s, &q("y1"))?, ["1", "2"]);
+    let err = run(&s, &q("cast(rand(1) * 2 as int)"))
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("LIMIT of this form"), "{err}");
     Ok(())
 }

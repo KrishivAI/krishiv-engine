@@ -1,7 +1,6 @@
 {
   "cases": {
     "nested-interval-types": [
-      8,
       15,
       16,
       24,
