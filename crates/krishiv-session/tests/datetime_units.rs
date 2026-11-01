@@ -469,3 +469,20 @@ fn make_timestamp_ntz_without_ansi_gives_null_for_a_bad_field() {
         Some("2021-02-28 06:30:45")
     );
 }
+
+/// With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('c1')` is a
+/// column reference, qualified and backquoted forms included.
+#[test]
+fn legacy_identifier_function_names_a_column() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    for (expr, want) in [
+        ("IDENTIFIER('c1')", "1"),
+        ("IDENTIFIER('t.c1')", "1"),
+        ("IDENTIFIER('`c1`')", "1"),
+        ("IDENTIFIER('c1') + 1", "2"),
+    ] {
+        let got = column(&s, expr, "FROM VALUES(1) AS T(c1)");
+        assert_eq!(got, vec![Some(want.to_owned())], "{expr}");
+    }
+}

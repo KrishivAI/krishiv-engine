@@ -2095,6 +2095,18 @@ impl Lowerer {
                     }
                     [] => return Err(unsupported("a function name", f.name.span)),
                 };
+                // With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('a.b')`
+                // is an ordinary call (the parser builds `dynamic_name` only
+                // otherwise): Spark resolves a constant string argument to the
+                // column it names.
+                if qualifier.is_empty()
+                    && name.value.eq_ignore_ascii_case("identifier")
+                    && f.args.len() == 1
+                    && let ExprKind::Literal(Literal::String(text)) = &f.args[0].expr.kind
+                    && let Some(parts) = multipart_identifier(text)
+                {
+                    return Ok(self.column(parts, sp));
+                }
                 // `WITHIN GROUP (ORDER BY ...)` rides along for the analyzer:
                 // the ordered-set aggregates lower it into their arguments,
                 // any other function keeps Spark's
@@ -2441,4 +2453,45 @@ fn number(text: &str, kind: NumKind, sp: Span) -> R<IrLiteral> {
             data_type: DecimalType::try_new(precision, scale).map_err(|e| err(e, sp))?,
         },
     })
+}
+
+/// Spark's `parseMultipartIdentifier`: dot-separated parts, each bare or in
+/// backticks (a doubled backtick is one). `None` for an empty or malformed
+/// string, which stays an unresolved call.
+fn multipart_identifier(text: &str) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut chars = text.chars().peekable();
+    loop {
+        let mut part = String::new();
+        if chars.peek() == Some(&'`') {
+            chars.next();
+            loop {
+                match chars.next()? {
+                    '`' if chars.peek() == Some(&'`') => {
+                        chars.next();
+                        part.push('`');
+                    }
+                    '`' => break,
+                    c => part.push(c),
+                }
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if c == '.' {
+                    break;
+                }
+                part.push(c);
+                chars.next();
+            }
+            if part.is_empty() {
+                return None;
+            }
+        }
+        parts.push(part);
+        match chars.next() {
+            None => return Some(parts),
+            Some('.') => {}
+            Some(_) => return None,
+        }
+    }
 }
