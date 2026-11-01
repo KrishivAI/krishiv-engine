@@ -496,6 +496,15 @@ impl Session {
 
     pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let config = self.state.conf.snapshot();
+        let query = if crate::conf::get(&config, "spark.sql.variable.substitute")
+            .is_none_or(|v| v != "false")
+        {
+            crate::variable_substitution::substitute(query, &|k| crate::conf::get(&config, k))
+        } else {
+            std::borrow::Cow::Borrowed(query)
+        };
+        let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
         // run with the names they stand for.
         let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
