@@ -155,13 +155,15 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// (which Spark accepts without `struct<...>`). The direct parse's error
 /// is reported when the wrapped parse fails too.
 pub(crate) fn parse_json_schema(schema: &str) -> Result<DataType, KrishivError> {
-    match parse_data_type(schema) {
+    match parse_data_type(schema).and_then(DataType::refuse_collations) {
         Ok(parsed) => Ok(parsed),
         Err(first) => {
             if schema.trim().is_empty() {
                 return Err(first);
             }
-            match parse_data_type(&format!("struct<{schema}>")) {
+            match parse_data_type(&format!("struct<{schema}>"))
+                .and_then(DataType::refuse_collations)
+            {
                 Ok(parsed) => Ok(parsed),
                 Err(_) => Err(first),
             }

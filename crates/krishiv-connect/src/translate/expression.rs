@@ -105,7 +105,9 @@ impl Translator<'_> {
             ExprType::Cast(c) => {
                 let to = match &c.cast_to_type {
                     Some(CastToType::Type(t)) => data_type(t)?,
-                    Some(CastToType::TypeStr(s)) => krishiv_types::parse_data_type(s)?,
+                    Some(CastToType::TypeStr(s)) => {
+                        krishiv_types::parse_data_type(s)?.refuse_collations()?
+                    }
                     None => {
                         return Err(not_set(
                             "spark.connect.Expression.Cast",
