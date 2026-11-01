@@ -1,0 +1,398 @@
+{
+  "entries": [
+    {
+      "id": "array_join#00c202e0935d/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1.5 AS FLOAT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#00c202e0935d/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1.5 AS FLOAT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#06ddd57fdb59/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1 AS TINYINT), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#06ddd57fdb59/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1 AS TINYINT), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#091c6bc76b34/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), X'01') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#091c6bc76b34/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), X'01') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#0fa7d321edc9/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#0fa7d321edc9/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#1447b2102e21/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), TIMESTAMP'2024-02-29 12:34:56.123456', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#1447b2102e21/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), TIMESTAMP'2024-02-29 12:34:56.123456', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#18a4842d25c4/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1.5 AS DECIMAL(38,18))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#18a4842d25c4/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1.5 AS DECIMAL(38,18))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#1f06e45928a1/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), INTERVAL '1 02:03:04' DAY TO SECOND, ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#1f06e45928a1/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), INTERVAL '1 02:03:04' DAY TO SECOND, ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#24fa5d7bd42d/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), 1.5D) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#24fa5d7bd42d/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), 1.5D) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#25aed8808cf2/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), INTERVAL '1-2' YEAR TO MONTH, ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#25aed8808cf2/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), INTERVAL '1-2' YEAR TO MONTH, ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#25dbd24171be/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), 1L, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#25dbd24171be/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), 1L, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#2606e61798d5/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), DATE'2024-02-29', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#2606e61798d5/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), DATE'2024-02-29', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#26a1d87708b5/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#26a1d87708b5/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#2db1f447ec38/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#2db1f447ec38/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#330cf15ac598/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', 1.5D) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#330cf15ac598/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', 1.5D) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#33eaa3a1fb65/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), 1) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#33eaa3a1fb65/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), 1) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#342f28ca9278/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), DATE'2024-02-29') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#342f28ca9278/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), DATE'2024-02-29') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#343e6b442324/ansi_on",
+      "reason": "SELECT array_join(INTERVAL '1 02:03:04' DAY TO SECOND, ' ', ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#343e6b442324/ansi_off",
+      "reason": "SELECT array_join(INTERVAL '1 02:03:04' DAY TO SECOND, ' ', ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#39efc97bb11d/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#39efc97bb11d/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#4f6942135f3d/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#4f6942135f3d/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#512a6e36d739/ansi_on",
+      "reason": "SELECT array_join(INTERVAL '1-2' YEAR TO MONTH, ' ', ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#512a6e36d739/ansi_off",
+      "reason": "SELECT array_join(INTERVAL '1-2' YEAR TO MONTH, ' ', ',') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#51df1b074826/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1 AS SMALLINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#51df1b074826/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1 AS SMALLINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#58f3d1725082/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), 1L) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#58f3d1725082/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), 1L) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#5f54f1486587/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1 AS TINYINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#5f54f1486587/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1 AS TINYINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#604f000a2133/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1 AS TINYINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#604f000a2133/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1 AS TINYINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#60799d9f4dc7/ansi_on",
+      "reason": "SELECT array_join(INTERVAL '1 02:03:04' DAY TO SECOND, ' ') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#60799d9f4dc7/ansi_off",
+      "reason": "SELECT array_join(INTERVAL '1 02:03:04' DAY TO SECOND, ' ') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#707389afb806/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1.5 AS DECIMAL(38,18))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#707389afb806/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1.5 AS DECIMAL(38,18))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#75d835ed7e3a/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', 1) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#75d835ed7e3a/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', 1) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#8d8288460999/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), 1.5D, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#8d8288460999/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), 1.5D, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#8ec02f4776e6/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1.5 AS DECIMAL(10,2))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#8ec02f4776e6/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1.5 AS DECIMAL(10,2))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#9ebce3c730a7/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1 AS SMALLINT), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#9ebce3c730a7/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1 AS SMALLINT), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#a50de136f6a5/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#a50de136f6a5/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#aa2d3bf47cc7/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1.5 AS DECIMAL(10,2))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#aa2d3bf47cc7/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), CAST(1.5 AS DECIMAL(10,2))) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#aae7e098a117/ansi_on",
+      "reason": "SELECT array_join(array('hello', 'world'), true) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#aae7e098a117/ansi_off",
+      "reason": "SELECT array_join(array('hello', 'world'), true) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#ab1a76a79eb7/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), 1, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#ab1a76a79eb7/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), 1, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b3680a87838f/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', X'01') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b3680a87838f/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', X'01') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b428d1796092/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b428d1796092/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b6f061b2c61b/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b6f061b2c61b/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b8365dcc14e0/ansi_on",
+      "reason": "SELECT array_join(INTERVAL '1-2' YEAR TO MONTH, ' ') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b8365dcc14e0/ansi_off",
+      "reason": "SELECT array_join(INTERVAL '1-2' YEAR TO MONTH, ' ') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b9b708ec1b88/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#b9b708ec1b88/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#c5bf53c9b15d/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', DATE'2024-02-29') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#c5bf53c9b15d/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', DATE'2024-02-29') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#c8e156bdb6f2/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1.5 AS FLOAT), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#c8e156bdb6f2/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1.5 AS FLOAT), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#d228d546d801/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), X'01', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#d228d546d801/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), X'01', ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#e0fcd6d76222/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1 AS SMALLINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#e0fcd6d76222/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1 AS SMALLINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f1845c2d4a37/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1.5 AS DECIMAL(38,18)), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f1845c2d4a37/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1.5 AS DECIMAL(38,18)), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f3f0dc91e903/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1.5 AS FLOAT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f3f0dc91e903/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', CAST(1.5 AS FLOAT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f415ccbc6484/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', 1L) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f415ccbc6484/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', 1L) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f804f638dd25/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1.5 AS DECIMAL(10,2)), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#f804f638dd25/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), CAST(1.5 AS DECIMAL(10,2)), ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#fe5dd380c6a8/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', true) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#fe5dd380c6a8/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), ' ', true) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#fe9a4da61b13/ansi_on",
+      "reason": "SELECT array_join(array('hello', null ,'world'), true, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "array_join#fe9a4da61b13/ansi_off",
+      "reason": "SELECT array_join(array('hello', null ,'world'), true, ',') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "array_join"
+}

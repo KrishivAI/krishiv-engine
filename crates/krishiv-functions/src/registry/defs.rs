@@ -1762,6 +1762,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::array_edit::specs());
     out.extend(super::array_scan::specs());
     out.extend(super::array_set::specs());
+    out.extend(super::array_shape::specs());
     out.extend(super::text::specs());
     out.extend(super::hof::specs());
     out.extend(super::collection::specs());
