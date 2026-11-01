@@ -2,11 +2,11 @@
   "entries": [
     {
       "id": "sign#13e8c1b20b6e/ansi_on",
-      "reason": "SELECT sign(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT sign(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sign#13e8c1b20b6e/ansi_off",
-      "reason": "SELECT sign(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT sign(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sign#26732a952b46/ansi_on",
@@ -18,19 +18,19 @@
     },
     {
       "id": "sign#71aec8bd236a/ansi_on",
-      "reason": "SELECT sign(INTERVAL -'100' YEAR) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT sign(INTERVAL -'100' YEAR) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sign#71aec8bd236a/ansi_off",
-      "reason": "SELECT sign(INTERVAL -'100' YEAR) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT sign(INTERVAL -'100' YEAR) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sign#b5ebcde7d65f/ansi_on",
-      "reason": "SELECT sign(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT sign(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sign#b5ebcde7d65f/ansi_off",
-      "reason": "SELECT sign(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT sign(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
     Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_RADIX_BITS, EXEC_JOIN_ROW_LAYOUT,
-    EXEC_SEED, EXEC_SORT_HASH_BUCKETS,
+    EXEC_JOIN_SMJ_BUFFER_BYTES, EXEC_SEED, EXEC_SORT_HASH_BUCKETS,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
@@ -65,6 +65,9 @@ pub struct ExecConfig {
     /// A sort below a window splits its rows into hash buckets read in
     /// parallel (`krishiv.exec.sort.hashBuckets`; P2-T055).
     pub sort_hash_buckets: bool,
+    /// The bytes of one key's right-side rows a sort-merge join keeps in
+    /// memory (`krishiv.exec.join.smj.bufferBytes`; 0: a share of the pool).
+    pub join_merge_buffer_bytes: usize,
 }
 
 impl Default for ExecConfig {
@@ -81,6 +84,7 @@ impl Default for ExecConfig {
             join_row_layout: true,
             join_radix_bits: 3,
             sort_hash_buckets: true,
+            join_merge_buffer_bytes: 0,
         }
     }
 }
@@ -111,6 +115,11 @@ impl ExecConfig {
             .get(&EXEC_SORT_HASH_BUCKETS)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let join_merge_buffer_bytes = config
+            .get(&EXEC_JOIN_SMJ_BUFFER_BYTES)
+            .and_then(krishiv_common::config::ConfigValue::as_size)
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(0);
         let seed = config
             .get(&EXEC_SEED)
             .and_then(krishiv_common::config::ConfigValue::as_int)
@@ -122,6 +131,7 @@ impl ExecConfig {
             agg_row_layout,
             join_row_layout,
             join_radix_bits,
+            join_merge_buffer_bytes,
             ..Self::default()
         }
     }
@@ -403,6 +413,7 @@ pub struct TaskContext {
     name: &'static str,
     memory: OnceLock<MemoryHandle>,
     dependency: Option<GlobalState>,
+    second_dependency: Option<GlobalState>,
     /// The driver's scheduler-assigned globally unique partition id within
     /// its pipeline group (Spark's partition index for the partition the
     /// driver computes): stateful functions own one value stream per
@@ -436,6 +447,7 @@ impl TaskContext {
             name,
             memory: OnceLock::new(),
             dependency: None,
+            second_dependency: None,
             partition: 0,
         }
     }
@@ -464,6 +476,18 @@ impl TaskContext {
     /// [`PipelineBuilder::set_breaker_source`](crate::PipelineBuilder::set_breaker_source)).
     pub fn dependency(&self) -> Option<&GlobalState> {
         self.dependency.as_ref()
+    }
+
+    pub(crate) fn with_second_dependency(mut self, state: GlobalState) -> Self {
+        self.second_dependency = Some(state);
+        self
+    }
+
+    /// For a source over two breakers (a sort-merge join), the second one's
+    /// finalized global state (see
+    /// [`PipelineBuilder::set_merge_source`](crate::PipelineBuilder::set_merge_source)).
+    pub fn second_dependency(&self) -> Option<&GlobalState> {
+        self.second_dependency.as_ref()
     }
 
     /// The query.
@@ -517,6 +541,18 @@ impl TaskContext {
             );
             MemoryHandle { consumer, signal }
         })
+    }
+
+    /// A further consumer of this operator that never spills, for memory kept
+    /// apart from the driver's consumer: grant credit is per consumer, so two
+    /// merges on one would take each other's.
+    pub(crate) fn register_plain_consumer(&self, name: &str) -> Arc<ConsumerHandle> {
+        ConsumerHandle::register_counted(
+            Arc::clone(self.query.pool()),
+            name,
+            None,
+            self.query.spill_stats(self.op),
+        )
     }
 
     /// The consumer, if the operator registered one.

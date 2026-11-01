@@ -133,7 +133,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -188,11 +188,14 @@ pub mod node {
         #[prost(message, tag = "20")]
         Generate(super::GenerateNode),
         /// feature: union_loop
-        #[prost(message, tag = "21")]
+        #[prost(message, tag = "22")]
         UnionLoop(super::UnionLoopNode),
         /// feature: union_loop
-        #[prost(message, tag = "22")]
+        #[prost(message, tag = "23")]
         LoopRef(super::LoopRefNode),
+        /// feature: sort_merge_join
+        #[prost(message, tag = "21")]
+        SortMergeJoin(super::SortMergeJoinNode),
     }
 }
 /// feature: shared_subplan
@@ -674,6 +677,27 @@ pub struct HashJoinNode {
     #[prost(bool, tag = "11")]
     pub distinct_build: bool,
 }
+/// feature: sort_merge_join
+/// A join of its inputs sorted on the keys; the sorts are the join's own.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SortMergeJoinNode {
+    #[prost(uint32, tag = "1")]
+    pub probe: u32,
+    #[prost(uint32, tag = "2")]
+    pub build: u32,
+    #[prost(enumeration = "JoinType", tag = "3")]
+    pub join_type: i32,
+    #[prost(uint64, repeated, tag = "4")]
+    pub probe_keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "5")]
+    pub build_keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(bool, repeated, tag = "6")]
+    pub null_safe: ::prost::alloc::vec::Vec<bool>,
+    #[prost(message, optional, tag = "7")]
+    pub residual: ::core::option::Option<Residual>,
+    #[prost(bool, tag = "8")]
+    pub single_match: bool,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
     #[prost(uint32, tag = "1")]
@@ -1089,6 +1113,22 @@ pub struct DataType {
     /// `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
     #[prost(int32, tag = "5")]
     pub srid: i32,
+    /// feature: interval_types
+    /// `KIND_YEAR_MONTH_INTERVAL` only: the leading field.
+    #[prost(enumeration = "YearMonthField", tag = "6")]
+    pub ym_start: i32,
+    /// feature: interval_types
+    /// `KIND_YEAR_MONTH_INTERVAL` only: the trailing field.
+    #[prost(enumeration = "YearMonthField", tag = "7")]
+    pub ym_end: i32,
+    /// feature: interval_types
+    /// `KIND_DAY_TIME_INTERVAL` only: the leading field.
+    #[prost(enumeration = "DayTimeField", tag = "8")]
+    pub dt_start: i32,
+    /// feature: interval_types
+    /// `KIND_DAY_TIME_INTERVAL` only: the trailing field.
+    #[prost(enumeration = "DayTimeField", tag = "9")]
+    pub dt_end: i32,
 }
 /// Nested message and enum types in `DataType`.
 pub mod data_type {
@@ -1128,6 +1168,12 @@ pub mod data_type {
         Geometry = 17,
         /// feature: geo_types
         Geography = 18,
+        /// feature: interval_types
+        YearMonthInterval = 19,
+        /// feature: interval_types
+        DayTimeInterval = 20,
+        /// feature: interval_types
+        CalendarInterval = 21,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1155,6 +1201,9 @@ pub mod data_type {
                 Self::Time => "KIND_TIME",
                 Self::Geometry => "KIND_GEOMETRY",
                 Self::Geography => "KIND_GEOGRAPHY",
+                Self::YearMonthInterval => "KIND_YEAR_MONTH_INTERVAL",
+                Self::DayTimeInterval => "KIND_DAY_TIME_INTERVAL",
+                Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1179,6 +1228,9 @@ pub mod data_type {
                 "KIND_TIME" => Some(Self::Time),
                 "KIND_GEOMETRY" => Some(Self::Geometry),
                 "KIND_GEOGRAPHY" => Some(Self::Geography),
+                "KIND_YEAR_MONTH_INTERVAL" => Some(Self::YearMonthInterval),
+                "KIND_DAY_TIME_INTERVAL" => Some(Self::DayTimeInterval),
+                "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
                 _ => None,
             }
         }
@@ -1188,7 +1240,7 @@ pub mod data_type {
 pub struct Literal {
     #[prost(
         oneof = "literal::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
     )]
     pub kind: ::core::option::Option<literal::Kind>,
 }
@@ -1228,6 +1280,9 @@ pub mod literal {
         YearMonth(super::YearMonthLiteral),
         #[prost(message, tag = "16")]
         DayTime(super::DayTimeLiteral),
+        /// feature: interval_types
+        #[prost(message, tag = "17")]
+        Calendar(super::CalendarLiteral),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1260,6 +1315,17 @@ pub struct DayTimeLiteral {
     pub start: i32,
     #[prost(enumeration = "DayTimeField", tag = "3")]
     pub end: i32,
+}
+/// feature: interval_types
+/// A calendar interval: each part counted on its own.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CalendarLiteral {
+    #[prost(sint32, tag = "1")]
+    pub months: i32,
+    #[prost(sint32, tag = "2")]
+    pub days: i32,
+    #[prost(sint64, tag = "3")]
+    pub micros: i64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

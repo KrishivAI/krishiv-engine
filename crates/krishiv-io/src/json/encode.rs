@@ -5,8 +5,8 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
@@ -154,7 +154,7 @@ impl JsonEncoder {
             }
             (Kind::Decimal(_, s), _) => {
                 buf.push_str(&java_decimal_string(
-                    a.as_primitive::<Decimal128Type>().value(i),
+                    crate::csv::convert::decimal_at(a, i),
                     *s,
                 ));
             }

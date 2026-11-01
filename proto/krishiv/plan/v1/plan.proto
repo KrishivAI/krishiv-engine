@@ -151,9 +151,11 @@ message Node {
     // feature: generate
     GenerateNode generate = 20;
     // feature: union_loop
-    UnionLoopNode union_loop = 21;
+    UnionLoopNode union_loop = 22;
     // feature: union_loop
-    LoopRefNode loop_ref = 22;
+    LoopRefNode loop_ref = 23;
+    // feature: sort_merge_join
+    SortMergeJoinNode sort_merge_join = 21;
   }
 }
 
@@ -622,6 +624,19 @@ message HashJoinNode {
   bool distinct_build = 11;
 }
 
+// feature: sort_merge_join
+// A join of its inputs sorted on the keys; the sorts are the join's own.
+message SortMergeJoinNode {
+  uint32 probe = 1;
+  uint32 build = 2;
+  JoinType join_type = 3;
+  repeated uint64 probe_keys = 4;
+  repeated uint64 build_keys = 5;
+  repeated bool null_safe = 6;
+  optional Residual residual = 7;
+  bool single_match = 8;
+}
+
 enum JoinDistribution {
   JOIN_DISTRIBUTION_UNSPECIFIED = 0;
   JOIN_DISTRIBUTION_BROADCAST = 1;
@@ -924,6 +939,12 @@ message DataType {
     KIND_GEOMETRY = 17;
     // feature: geo_types
     KIND_GEOGRAPHY = 18;
+    // feature: interval_types
+    KIND_YEAR_MONTH_INTERVAL = 19;
+    // feature: interval_types
+    KIND_DAY_TIME_INTERVAL = 20;
+    // feature: interval_types
+    KIND_CALENDAR_INTERVAL = 21;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
@@ -937,6 +958,18 @@ message DataType {
   // feature: geo_types
   // `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
   int32 srid = 5;
+  // feature: interval_types
+  // `KIND_YEAR_MONTH_INTERVAL` only: the leading field.
+  YearMonthField ym_start = 6;
+  // feature: interval_types
+  // `KIND_YEAR_MONTH_INTERVAL` only: the trailing field.
+  YearMonthField ym_end = 7;
+  // feature: interval_types
+  // `KIND_DAY_TIME_INTERVAL` only: the leading field.
+  DayTimeField dt_start = 8;
+  // feature: interval_types
+  // `KIND_DAY_TIME_INTERVAL` only: the trailing field.
+  DayTimeField dt_end = 9;
 }
 
 enum YearMonthField {
@@ -971,6 +1004,8 @@ message Literal {
     sint64 timestamp_ntz = 14;
     YearMonthLiteral year_month = 15;
     DayTimeLiteral day_time = 16;
+    // feature: interval_types
+    CalendarLiteral calendar = 17;
   }
 }
 
@@ -994,4 +1029,12 @@ message DayTimeLiteral {
   sint64 micros = 1;
   DayTimeField start = 2;
   DayTimeField end = 3;
+}
+
+// feature: interval_types
+// A calendar interval: each part counted on its own.
+message CalendarLiteral {
+  sint32 months = 1;
+  sint32 days = 2;
+  sint64 micros = 3;
 }

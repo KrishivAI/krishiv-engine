@@ -5,8 +5,8 @@ READ	select interval 2 weeks 3 microseconds * 1.5
 READ	select (timestamp'2019-10-15' - timestamp'2019-10-14') / 1.5
 READ	select interval 2147483647 month * 2
 READ	select interval 2147483647 month / 0.5
-READ	select interval 2147483647 day * 2
-READ	select interval 2147483647 day / 0.5
+PARSE_ERROR	select interval 2147483647 day * 2
+PARSE_ERROR	select interval 2147483647 day / 0.5
 READ	select interval 2 second * '2'
 READ	select interval 2 second / '2'
 READ	select interval 2 year * '2'
@@ -119,7 +119,7 @@ PARSE_ERROR	select interval '15:40:32.99899999' hour to minute
 PARSE_ERROR	select interval '15:40.99899999' hour to second
 PARSE_ERROR	select interval '15:40' hour to second
 PARSE_ERROR	select interval '20 40:32.99899999' minute to second
-READ	select interval 10 nanoseconds
+PARSE_ERROR	select interval 10 nanoseconds
 READ	select map(1, interval 1 day, 2, interval 3 week)
 READ	select map(1, interval 1 day, 2, interval 2 day)
 READ	select map(1, interval 1 year, 2, interval 2 month)
@@ -283,4 +283,4 @@ READ	SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEA
 READ	SELECT width_bucket(INTERVAL '-1' YEAR, INTERVAL -'1-2' YEAR TO MONTH, INTERVAL '1-2' YEAR TO MONTH, 10)
 READ	SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)
 READ	SELECT width_bucket(INTERVAL '-59' MINUTE, INTERVAL -'1 01' DAY TO HOUR, INTERVAL '1 2:3:4.001' DAY TO SECOND, 10)
-READ	SELECT interval 106751991 day 4 hour 0 minute 54.776 second
+PARSE_ERROR	SELECT interval 106751991 day 4 hour 0 minute 54.776 second

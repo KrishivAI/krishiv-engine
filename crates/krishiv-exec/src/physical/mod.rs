@@ -67,8 +67,8 @@ mod shared_tests;
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{
     Detached, Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
-    group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op,
-    top_n_op,
+    group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter,
+    sort_merge_join, sort_op, top_n_op,
 };
 pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
@@ -442,6 +442,8 @@ pub enum PhysNode {
     },
     /// A hash join building its right input.
     HashJoin(HashJoinPlan),
+    /// A sort-merge join (P2-T056); its two sorts are its own.
+    SortMergeJoin(SortMergeJoinPlan),
     /// A nested-loop join building its right input.
     NestedLoopJoin(NestedLoopPlan),
     /// `UNION ALL` of inputs of one schema.
@@ -710,6 +712,29 @@ impl HashJoinPlan {
     }
 }
 
+/// A sort-merge join: each input is sorted on its keys in hash buckets of
+/// them, and the same bucket of the two is merged. Output is ordered within
+/// a bucket only. Inputs arrive co-partitioned on the keys.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortMergeJoinPlan {
+    /// The streamed (left) input.
+    pub probe: Box<PhysNode>,
+    /// The buffered (right) input.
+    pub build: Box<PhysNode>,
+    /// The join type; never `NullAwareAnti`.
+    pub join_type: JoinType,
+    /// Key columns of the streamed input.
+    pub probe_keys: Vec<usize>,
+    /// Key columns of the buffered input.
+    pub build_keys: Vec<usize>,
+    /// Per key, whether NULLs match (`<=>`).
+    pub null_safe: Vec<bool>,
+    /// The non-equality conditions.
+    pub residual: Option<Residual>,
+    /// A left outer join that fails when a left row matches more than once.
+    pub single_match: bool,
+}
+
 /// A nested-loop join over every pair of rows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NestedLoopPlan {
@@ -832,6 +857,7 @@ plan_data!(enum PhysNode {
     WindowGroupLimit { input, limit },
     Aggregate { input, aggregate },
     HashJoin(join),
+    SortMergeJoin(join),
     NestedLoopJoin(join),
     Union { inputs },
     WriteFiles { input, write },
@@ -869,6 +895,9 @@ plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
     distinct_build, runtime_filters, distribution
+});
+plan_data!(struct SortMergeJoinPlan {
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
@@ -909,6 +938,7 @@ impl PhysNode {
             | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
+            Self::SortMergeJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::Union { inputs } => inputs.iter().collect(),
             Self::UnionLoop {
@@ -951,6 +981,7 @@ impl PhysNode {
             | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
+            Self::SortMergeJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::Union { inputs } => inputs.iter_mut().collect(),
             Self::UnionLoop {

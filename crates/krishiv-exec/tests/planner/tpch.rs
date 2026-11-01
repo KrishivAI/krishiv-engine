@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Date32Type, Decimal64Type, Decimal128Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
@@ -257,6 +258,9 @@ pub(crate) fn render(a: &dyn Array, row: usize) -> String {
         ArrowType::Float64 => python_float(a.as_primitive::<Float64Type>().value(row)),
         ArrowType::Utf8View => a.as_string_view().value(row).to_owned(),
         ArrowType::Utf8 => a.as_string::<i32>().value(row).to_owned(),
+        ArrowType::Decimal64(_, s) => {
+            decimal(i128::from(a.as_primitive::<Decimal64Type>().value(row)), *s)
+        }
         ArrowType::Decimal128(_, s) => decimal(a.as_primitive::<Decimal128Type>().value(row), *s),
         ArrowType::Date32 => {
             let days = a.as_primitive::<Date32Type>().value(row);
@@ -511,6 +515,39 @@ fn tpch_sf0_01_matches_spark_with_columnar_aggregates() {
 /// per table) against Spark 4.2.0's answers over the same files
 /// (`tests/fixtures/tpch-sf1-spark-answers.json`). Run with
 /// `cargo test --release -p krishiv-exec --test planner tpch_sf1 -- --ignored`.
+/// Spark's answers with every equi-join but `NOT IN` a sort-merge join
+/// (`krishiv.exec.join.strategy=sortMerge`, P2-T056).
+#[test]
+fn tpch_sf0_01_matches_spark_with_sort_merge_joins() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut tpch = parquet_tables(&dir, &rt);
+    let mut config = (*tpch.config).clone();
+    config
+        .set("krishiv.exec.join.strategy", "sortMerge")
+        .unwrap();
+    tpch.config = Arc::new(config);
+    let answers = answers(&dir.join("spark-answers.json"));
+    let mut merges = 0;
+    for q in 1..=22 {
+        let plan = tpch.plan(q);
+        merges += plan.to_string().matches("SortMergeJoin").count();
+        let got = rows(&super::run(&plan).unwrap_or_else(|e| panic!("q{q:02}: {e}\n{plan}")));
+        let want = expected_rows(&answers, &format!("q{q:02}"));
+        assert_eq!(got, want, "q{q:02}\n{plan}");
+    }
+    assert!(merges >= 22, "{merges} sort-merge joins");
+    // Unforced, the planner never chooses one for these unsorted inputs.
+    let default = parquet_tables(&dir, &rt);
+    for q in 1..=22 {
+        let plan = default.plan(q).to_string();
+        assert!(!plan.contains("SortMergeJoin"), "q{q:02}\n{plan}");
+    }
+}
+
 #[test]
 #[ignore = "needs the TPC-H SF1 data set"]
 fn tpch_sf1_matches_spark() {

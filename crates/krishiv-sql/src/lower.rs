@@ -2628,13 +2628,14 @@ fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
                 TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(
                     literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
                 )),
-                _ => {
-                    let t = type_name.value.to_ascii_uppercase();
-                    return Err(unsupported(&format!("{t} literals"), sp));
-                }
+                TypedKind::Interval => ExprNode::Literal(
+                    crate::validate::interval::lowered_typed(value).map_err(|e| err(e, sp))?,
+                ),
             }
         }
-        _ => return Err(unsupported("INTERVAL literals", sp)),
+        Literal::Interval(iv) => {
+            ExprNode::Literal(crate::validate::interval::lowered(iv).map_err(|e| err(e, sp))?)
+        }
     })
 }
 

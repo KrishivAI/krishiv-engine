@@ -1,22 +1,6 @@
 {
   "entries": [
     {
-      "id": "exists#6a6847e8ef3b/ansi_on",
-      "reason": "SELECT exists(INTERVAL '1 02:03:04' DAY TO SECOND, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "exists#6a6847e8ef3b/ansi_off",
-      "reason": "SELECT exists(INTERVAL '1 02:03:04' DAY TO SECOND, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "exists#6e826ed77c7c/ansi_on",
-      "reason": "SELECT exists(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "exists#6e826ed77c7c/ansi_off",
-      "reason": "SELECT exists(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "exists#da2bc52421fa/ansi_on",
       "reason": "SELECT exists(map('a', 1), x -> x % 2 == 0) | parse: PARSE_SYNTAX_ERROR where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

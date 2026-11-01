@@ -29,6 +29,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+`join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
+(`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
+are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
+split through the same `Merge`.
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
 once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is
@@ -76,6 +80,7 @@ only where a requirement is unmet; on one worker instantiation lowers each excha
 
 ## Key files
 Paths are relative to this crate.
+- `src/carrier.rs` moves a value between decimal carriers (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`
 - `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)

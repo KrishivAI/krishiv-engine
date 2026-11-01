@@ -37,7 +37,7 @@
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
 //! which needs expression evaluation.
 
-mod interval;
+pub(crate) mod interval;
 pub(crate) mod literal;
 mod pipe;
 mod relation;

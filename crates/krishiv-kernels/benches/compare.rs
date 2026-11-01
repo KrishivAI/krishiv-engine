@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Comparison kernel benchmarks (64K rows, one thread; CodSpeed in CI):
-//! integral, decimal and string `<`/`=`, and `<=>` on top of `=`.
+//! integral, decimal and string `<`/`=`, `<=>` on top of `=`, and `LIKE` on a
+//! view column by pattern shape (`like/segments` is TPC-H q13's predicate).
 
 #![expect(
     missing_docs,
@@ -14,11 +15,12 @@
 use std::hint::black_box;
 
 use arrow_array::types::{Decimal128Type, Int64Type};
-use arrow_array::{Array, Decimal128Array, Int64Array, StringArray};
+use arrow_array::{Array, Decimal128Array, Int64Array, StringArray, StringViewArray};
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::compare::{
     BytesOperand, Equal, Less, Validity, compare, compare_bytes, null_safe,
 };
+use krishiv_kernels::string::LikePattern;
 use krishiv_kernels::{KernelCtx, Operand};
 
 #[global_allocator]
@@ -76,5 +78,28 @@ fn compare_benches(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, compare_benches);
+fn like_benches(c: &mut Criterion) {
+    // About 50 characters, as `o_comment`: one row in 64 holds the words.
+    let column = StringViewArray::from_iter_values((0..ROWS).map(|i| {
+        let words = if i % 64 == 0 {
+            "special deposits about the requests"
+        } else {
+            "furiously regular deposits haggle"
+        };
+        format!("{i:06} carefully {words} blithely")
+    }));
+    for (name, pattern) in [
+        ("prefix", "000%"),
+        ("contains", "%special%"),
+        ("segments", "%special%requests%"),
+        ("general", "%special%requ_sts%"),
+    ] {
+        let compiled = LikePattern::compile(pattern, '\\', 0).unwrap();
+        c.bench_function(&format!("like/{name}"), |bench| {
+            bench.iter(|| compiled.matches_views(black_box(&column)));
+        });
+    }
+}
+
+criterion_group!(benches, compare_benches, like_benches);
 criterion_main!(benches);

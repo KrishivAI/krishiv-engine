@@ -633,3 +633,15 @@ fn a_nondeterministic_recursive_cte_read_twice_outside_the_loop_runs() {
              SELECT a.n FROM r a JOIN r b ON a.n = b.n ORDER BY 1";
     assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
 }
+
+#[test]
+fn a_round_local_shared_cte_inside_a_shared_recursive_cte_runs() {
+    let s = Session::new().unwrap();
+    // `b` waits for the loop `r`, which the producer of `r` binds itself:
+    // `r` is built (and shared by its two outer reads), not deferred too.
+    let q = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+             (WITH b AS (SELECT n + 1 AS m, rand() AS x FROM r WHERE n < 3) \
+              SELECT a.m FROM b a JOIN b c ON a.x = c.x)) \
+             SELECT a.n FROM r a JOIN r c ON a.n = c.n ORDER BY 1";
+    assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
+}

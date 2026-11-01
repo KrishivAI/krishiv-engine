@@ -52,14 +52,14 @@ use object_store::path::Path;
 
 use super::{
     AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan, SubqueryPlan, ValueId,
-    Version, WritePlan, files_of, partitions_of,
+    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan, SortMergeJoinPlan,
+    SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
 use crate::join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, NestedLoopJoin, NestedLoopJoinNode,
-    NestedLoopSpec,
+    NestedLoopSpec, SortMergeJoin, SortMergeJoinNode,
 };
 use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
@@ -502,10 +502,13 @@ impl Instantiation<'_> {
         // A shared plan that reads a loop's table (or a shared plan that
         // does) can only be built where that table is bound: in a round of
         // the loop. Elsewhere it is left out; nothing reads it there.
-        let mut deferred = HashSet::new();
+        // Each deferred plan keeps the loops it still waits for, so a plan
+        // that reads it is deferred only for those the plan does not bind
+        // itself (a round-local plan read inside a loop is built in its
+        // rounds, not at the enclosing producer).
+        let mut deferred: HashMap<_, Vec<_>> = HashMap::new();
         for sp in plans.iter() {
             let mut stack = vec![&sp.plan];
-            let mut unbound = false;
             // Loops this plan defines bind their own references.
             let mut local = HashSet::new();
             let mut refs = Vec::new();
@@ -515,16 +518,20 @@ impl Instantiation<'_> {
                         local.insert(*id);
                     }
                     PhysNode::LoopRef { id, .. } => refs.push(*id),
-                    PhysNode::SharedRead { id, .. } => unbound |= deferred.contains(id),
+                    PhysNode::SharedRead { id, .. } => {
+                        if let Some(waits) = deferred.get(id) {
+                            refs.extend(waits.iter().copied());
+                        }
+                    }
                     _ => {}
                 }
                 stack.extend(n.children());
             }
-            unbound |= refs
-                .iter()
-                .any(|id| !self.loops.contains_key(id) && !local.contains(id));
-            if unbound {
-                deferred.insert(sp.id);
+            refs.retain(|id| !self.loops.contains_key(id) && !local.contains(id));
+            if !refs.is_empty() {
+                refs.sort_unstable();
+                refs.dedup();
+                deferred.insert(sp.id, refs);
                 continue;
             }
             let body = self.node(&sp.plan)?;
@@ -804,6 +811,7 @@ impl Instantiation<'_> {
                 Ok(Built { node, schema })
             }
             PhysNode::HashJoin(j) => self.hash_join(j),
+            PhysNode::SortMergeJoin(j) => self.merge_join(j),
             PhysNode::NestedLoopJoin(j) => {
                 let probe = self.node(&j.probe)?;
                 let build = self.node(&j.build)?;
@@ -1055,6 +1063,26 @@ impl Instantiation<'_> {
         // The value names this input without owning it (see
         // `BroadcastBuild`): the plan holds it.
         Ok(input)
+    }
+
+    fn merge_join(&mut self, j: &SortMergeJoinPlan) -> Result<Built> {
+        let probe = self.node(&j.probe)?;
+        let build = self.node(&j.build)?;
+        let join = sort_merge_join(
+            &probe.schema,
+            &build.schema,
+            j,
+            &self.env,
+            self.spill.clone(),
+        )?;
+        Ok(Built {
+            schema: join.schema(),
+            node: Arc::new(SortMergeJoinNode {
+                join: Arc::new(join),
+                probe: probe.node,
+                build: build.node,
+            }),
+        })
     }
 
     fn hash_join(&mut self, j: &HashJoinPlan) -> Result<Built> {
@@ -1422,6 +1450,26 @@ pub(crate) fn hash_join(
         })
         .collect::<Result<Vec<_>>>()?;
     join.with_filter_values(filters, Arc::clone(values), producer)
+}
+
+pub(crate) fn sort_merge_join(
+    probe: &SchemaRef,
+    build: &SchemaRef,
+    j: &SortMergeJoinPlan,
+    env: &EvalEnv,
+    spill: Option<SpillScope>,
+) -> Result<SortMergeJoin> {
+    SortMergeJoin::try_new(JoinSpec {
+        join_type: j.join_type,
+        probe_schema: Arc::clone(probe),
+        build_schema: Arc::clone(build),
+        probe_keys: j.probe_keys.clone(),
+        build_keys: j.build_keys.clone(),
+        null_safe: j.null_safe.clone(),
+        filter: residual(probe, build, j.residual.as_ref(), env)?,
+        single_match: j.single_match,
+        spill,
+    })
 }
 
 pub(crate) fn nested_loop_join(

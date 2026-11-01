@@ -1437,6 +1437,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     });
                 }
             }
+            Literal::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => {
+                self.u8(19);
+                self.put(&months.to_le_bytes());
+                self.put(&days.to_le_bytes());
+                self.i64(*micros);
+            }
         }
     }
 }
