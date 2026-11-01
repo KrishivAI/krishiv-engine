@@ -109,6 +109,7 @@ fn leaf_orderable(t: &ArrowType) -> bool {
             | A::Int64
             | A::Float32
             | A::Float64
+            | A::Decimal64(..)
             | A::Decimal128(..)
             | A::Date32
             | A::Timestamp(..)

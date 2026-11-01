@@ -46,7 +46,7 @@ use krishiv_common::error::{
     CyclicFunctionReference, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, FailedToParseTooComplex,
     InvalidExtractBaseFieldType, KrishivError, NotAScalarFunction, RequiredParameterNotFound,
-    UnexpectedPositionalArgument, UnrecognizedParameterName,
+    UnexpectedPositionalArgument, UnrecognizedParameterName, UnsupportedSqlUdfUsage,
     UserDefinedFunctionsCannotContainComplexFunctions,
     UserDefinedFunctionsReturnColumnCountMismatch, WrongNumArgsWithoutSuggestion,
 };
@@ -240,8 +240,26 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         call: &FunctionCall,
         kids: &[Bound],
+        op: &str,
     ) -> Result<Bound, AnalysisError> {
         let n = call.args.len();
+        // Spark's `ResolveSQLFunctions`: a SQL function is not inlined into
+        // the expressions of these operators.
+        if let Some(node_name) = match op {
+            "Sort" => Some("Sort"),
+            "Limit" => Some("GlobalLimit"),
+            "Offset" => Some("Offset"),
+            "Generate" => Some("Generate"),
+            _ => None,
+        } {
+            return Err(AnalysisError::new(
+                UnsupportedSqlUdfUsage {
+                    function_name: def.routine_name(),
+                    node_name: node_name.to_owned(),
+                },
+                e.origin,
+            ));
+        }
         if def.returns_table.is_some() {
             return Err(AnalysisError::new(
                 NotAScalarFunction {

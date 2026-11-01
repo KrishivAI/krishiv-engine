@@ -1684,6 +1684,11 @@ fn uniform_and_randstr_signatures() {
 /// on every pair of bound kinds: both layers map their own type to the
 /// shared `uniform_result` rule, and the test pins the two mappers against
 /// each other so one side cannot drift without the other.
+/// `t` as the executor hands it to a function, and as functions return it.
+fn wide(t: &DataType) -> arrow_schema::DataType {
+    krishiv_types::arrow::client_arrow_type(&t.to_arrow())
+}
+
 #[test]
 fn uniform_result_agrees_with_the_executor_bind() {
     use crate::scalar::{BindOptions, bind_scalar};
@@ -1715,14 +1720,14 @@ fn uniform_result_agrees_with_the_executor_bind() {
             let bound = bind_scalar(
                 "uniform",
                 &[
-                    a.clone().unwrap_or(DataType::Null).to_arrow().into(),
-                    b.clone().unwrap_or(DataType::Null).to_arrow().into(),
+                    wide(&a.clone().unwrap_or(DataType::Null)).into(),
+                    wide(&b.clone().unwrap_or(DataType::Null)).into(),
                 ],
                 &BindOptions::new(),
             )
             .unwrap();
             assert_eq!(
-                reg.data_type.clone().map(|t| t.to_arrow()),
+                reg.data_type.as_ref().map(wide),
                 Some(bound.return_type().clone()),
                 "uniform({a:?}, {b:?})"
             );

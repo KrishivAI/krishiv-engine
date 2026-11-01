@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
@@ -38,6 +38,7 @@ pub fn supported_key_type(t: &DataType) -> bool {
             | D::Int64
             | D::Float32
             | D::Float64
+            | D::Decimal64(..)
             | D::Decimal128(..)
             | D::Date32
             | D::Timestamp(TimeUnit::Microsecond, _)
@@ -87,10 +88,11 @@ pub fn widens_to(from: &DataType, to: &DataType) -> bool {
         (D::Float32 | D::Int8 | D::Int16 | D::Int32, D::Float64)
         | (D::Int8 | D::Int16, D::Float32)
         | (D::Timestamp(TimeUnit::Microsecond, _), D::Timestamp(TimeUnit::Microsecond, _)) => true,
-        (D::Decimal128(p1, s1), D::Decimal128(p2, s2)) => {
-            s2 >= s1 && i16::from(*p2) - i16::from(*s2) >= i16::from(*p1) - i16::from(*s1)
-        }
-        (f, D::Decimal128(p, s)) => {
+        (
+            D::Decimal64(p1, s1) | D::Decimal128(p1, s1),
+            D::Decimal64(p2, s2) | D::Decimal128(p2, s2),
+        ) => s2 >= s1 && i16::from(*p2) - i16::from(*s2) >= i16::from(*p1) - i16::from(*s1),
+        (f, D::Decimal64(p, s) | D::Decimal128(p, s)) => {
             int_digits(f).is_some_and(|d| i16::from(*p) - i16::from(*s) >= i16::from(d))
         }
         (f, t) => matches!((int_rank(f), int_rank(t)), (Some(a), Some(b)) if a < b),
@@ -242,8 +244,17 @@ pub fn normalize_key_bytes(array: &dyn Array, key_type: &DataType) -> Option<Nor
                 single: *key_type == D::Float32,
             }
         }
-        D::Decimal128(_, s) => {
+        D::Decimal64(_, s) | D::Decimal128(_, s) => {
             let (unscaled, from_scale): (Vec<i128>, i8) = match from {
+                D::Decimal64(_, fs) => (
+                    array
+                        .as_primitive::<Decimal64Type>()
+                        .values()
+                        .iter()
+                        .map(|&v| i128::from(v))
+                        .collect(),
+                    *fs,
+                ),
                 D::Decimal128(_, fs) => (
                     array.as_primitive::<Decimal128Type>().values().to_vec(),
                     *fs,
@@ -395,7 +406,7 @@ impl KeyRange {
         };
         Some(match (self, key_type) {
             (Self::Int(a, b), _) => (int(*a)?, int(*b)?),
-            (Self::Decimal(a, b), D::Decimal128(p, s)) => {
+            (Self::Decimal(a, b), D::Decimal64(p, s) | D::Decimal128(p, s)) => {
                 let d = |u: i128| ScalarValue::Decimal128 {
                     unscaled: u,
                     precision: *p,
@@ -426,7 +437,7 @@ impl KeyRange {
 pub(crate) fn value_scalar(v: &KeyValue, key_type: &DataType) -> Option<ScalarValue> {
     use DataType as D;
     Some(match (v, key_type) {
-        (KeyValue::Fixed(n), D::Decimal128(p, s)) => ScalarValue::Decimal128 {
+        (KeyValue::Fixed(n), D::Decimal64(p, s) | D::Decimal128(p, s)) => ScalarValue::Decimal128 {
             unscaled: *n,
             precision: *p,
             scale: *s,
