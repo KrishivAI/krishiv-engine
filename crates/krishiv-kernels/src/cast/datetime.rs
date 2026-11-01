@@ -24,6 +24,14 @@ pub trait TimeZoneRules: Send + Sync + std::fmt::Debug {
     /// overlap, the offset before the transition in a gap (which moves the
     /// time forward by the gap's length).
     fn offset_for_local(&self, local_seconds: i64) -> i32;
+    /// The offset `java.util.TimeZone` gives at `utc_seconds`, which the
+    /// legacy (`SimpleDateFormat`) formatters print. It drops the
+    /// transitions before 1900, so earlier instants have the zone's raw
+    /// offset; the default is [`Self::offset_at_utc`] (zones without such
+    /// history).
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.offset_at_utc(utc_seconds)
+    }
 }
 
 /// A zone with one fixed offset (`UTC` is `FixedOffset(0)`).

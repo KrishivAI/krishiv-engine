@@ -149,13 +149,16 @@ impl LegacyPattern {
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a timestamp past the year range or
     /// a `z` the zone-name tables do not cover.
     pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
-        let offset = zone
-            .rules
-            .offset_at_utc(micros.div_euclid(MICROS_PER_SECOND));
+        let seconds = micros.div_euclid(MICROS_PER_SECOND);
+        let offset = zone.rules.offset_at_utc(seconds);
         let local = micros
             .checked_add(i64::from(offset) * MICROS_PER_SECOND)
             .ok_or_else(|| unsupported("a timestamp past the year range in a pattern"))?;
-        self.write(local, Some((offset, zone.id)))
+        // Spark rebases the instant to the hybrid calendar keeping its
+        // `java.time` date-time labels; the offset fields then print what
+        // `java.util.TimeZone` says, which has no transition before 1900.
+        let printed = zone.rules.legacy_offset_at_utc(seconds);
+        self.write(local, Some((printed, zone.id)))
     }
 
     /// `local` (a `TIMESTAMP_NTZ`).
@@ -773,6 +776,70 @@ mod tests {
             rules: &FixedOffset(0),
         };
         assert_eq!(p.format_timestamp(0, utc).unwrap(), "Z Z Z|+0000 +0000");
+    }
+
+    /// `java.util.TimeZone` drops the transitions before 1900: earlier
+    /// instants print the zone's raw offset, later ones the database's
+    /// (Spark 4.2.0, `timeParserPolicy=LEGACY`, `date_format` in the
+    /// session zone: LA 1800 `-0800`, Kolkata 1850 `+0530` / 1899-12-31
+    /// `+0530` / 1900-06 `+0521`, Kathmandu 1850 `+0545`, Amsterdam (a link
+    /// to Brussels) 1850 `+0100` / 1910 `+0000`).
+    #[test]
+    fn region_offsets_before_1900_are_the_raw_offset() {
+        let p = LegacyPattern::new("yyyy-MM-dd HH:mm:ss Z").unwrap();
+        let show = |zone_id: &str, y, mo, d, h| {
+            let rules = crate::datetime::resolve_zone(zone_id).unwrap();
+            let local = micros(y, mo, d, h, 0, 0, 0);
+            let utc = crate::cast::datetime::local_to_utc(local, &rules).unwrap();
+            p.format_timestamp(
+                utc,
+                Zone {
+                    id: zone_id,
+                    rules: &rules,
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            show("America/Los_Angeles", 1800, 1, 1, 0),
+            "1800-01-01 00:00:00 -0800"
+        );
+        assert_eq!(
+            show("America/Los_Angeles", 1582, 5, 31, 19),
+            "1582-05-31 19:00:00 -0800"
+        );
+        assert_eq!(
+            show("Asia/Kolkata", 1850, 6, 1, 0),
+            "1850-06-01 00:00:00 +0530"
+        );
+        assert_eq!(
+            show("Asia/Kolkata", 1899, 12, 31, 23),
+            "1899-12-31 23:00:00 +0530"
+        );
+        assert_eq!(
+            show("Asia/Kolkata", 1900, 6, 1, 0),
+            "1900-06-01 00:00:00 +0521"
+        );
+        assert_eq!(
+            show("Asia/Kolkata", 1920, 6, 1, 0),
+            "1920-06-01 00:00:00 +0530"
+        );
+        assert_eq!(
+            show("Asia/Kathmandu", 1850, 6, 1, 0),
+            "1850-06-01 00:00:00 +0545"
+        );
+        assert_eq!(
+            show("Asia/Kathmandu", 1960, 6, 1, 0),
+            "1960-06-01 00:00:00 +0530"
+        );
+        assert_eq!(
+            show("Europe/Amsterdam", 1850, 6, 1, 0),
+            "1850-06-01 00:00:00 +0100"
+        );
+        assert_eq!(
+            show("Europe/Amsterdam", 1910, 6, 1, 0),
+            "1910-06-01 00:00:00 +0000"
+        );
     }
 
     fn parse(p: &str, s: &str) -> Option<i64> {

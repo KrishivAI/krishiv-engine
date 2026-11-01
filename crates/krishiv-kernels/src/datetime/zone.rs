@@ -97,6 +97,34 @@ impl TimeZoneRules for ZoneRef {
             }
         }
     }
+
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        match self {
+            Self::Named(zone) if utc_seconds < UTC_1900 => raw_offset(zone),
+            _ => self.offset_at_utc(utc_seconds),
+        }
+    }
+}
+
+/// 1900-01-01T00:00:00Z: `java.util.TimeZone` (`ZoneInfoFile`) keeps no
+/// transition before it.
+const UTC_1900: i64 = -2_208_988_800;
+
+/// `java.util.TimeZone.getRawOffset`: the standard offset of the zone's last
+/// rules, read in the year 2400 (past every scheduled change) as the smaller
+/// of the January and July offsets (daylight time is ahead of standard
+/// time). Assumed, unverified against a Spark run, for the zones whose
+/// database marks winter time as daylight time (`Europe/Dublin`) or that
+/// shift during Ramadan (`Africa/Casablanca`).
+fn raw_offset(zone: &TimeZone) -> i32 {
+    // 2400-01-15 and 2400-07-15, 00:00 UTC.
+    const SAMPLES: [i64; 2] = [13_570_675_200, 13_586_400_000];
+    SAMPLES
+        .iter()
+        .filter_map(|&s| Timestamp::from_second(s).ok())
+        .map(|t| zone.to_offset(t).seconds())
+        .min()
+        .unwrap_or(0)
 }
 
 /// Seconds within `jiff`'s timestamp range: the bundled database ends at
