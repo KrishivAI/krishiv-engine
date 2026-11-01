@@ -142,7 +142,26 @@ class DecimalType(FractionalType):
 
 
 class StringType(AtomicType):
-    pass
+    """A string; ``collation`` is the name as written (``UTF8_BINARY`` by default).
+
+    As in PySpark 4, a collated string prints ``string collate <name>`` and two
+    strings are equal only when the collation names are spelled alike.
+    """
+
+    def __init__(self, collation: str = "UTF8_BINARY") -> None:
+        self.collation = collation
+
+    def _collated(self) -> bool:
+        return self.collation != "UTF8_BINARY"
+
+    def simpleString(self) -> str:
+        return f"string collate {self.collation}" if self._collated() else "string"
+
+    def jsonValue(self) -> str:
+        return self.simpleString()
+
+    def __repr__(self) -> str:
+        return f"StringType({self.collation!r})" if self._collated() else "StringType()"
 
 
 class CharType(AtomicType):
@@ -359,6 +378,7 @@ _SIMPLE: dict[type[DataType], str] = {
     CalendarIntervalType: "interval",
 }
 _BY_SIMPLE: dict[str, type[DataType]] = {v: k for k, v in _SIMPLE.items()}
+_COLLATED = re.compile(r"string collate (\S+)", re.IGNORECASE)
 _DECIMAL = re.compile(r"decimal\(\s*(\d+)\s*,\s*(\d+)\s*\)", re.IGNORECASE)
 _CHAR = re.compile(r"char\(\s*(\d+)\s*\)", re.IGNORECASE)
 _VARCHAR = re.compile(r"varchar\(\s*(\d+)\s*\)", re.IGNORECASE)
@@ -370,6 +390,8 @@ def _from_simple_string(text: str) -> DataType:
     """The type of a Spark ``simpleString`` (as the engine reports it)."""
     if (cls := _BY_SIMPLE.get(text)) is not None:
         return cls()
+    if (m := _COLLATED.fullmatch(text)) is not None:
+        return StringType(m.group(1))
     if (m := _DECIMAL.fullmatch(text)) is not None:
         return DecimalType(int(m.group(1)), int(m.group(2)))
     if (m := _CHAR.fullmatch(text)) is not None:

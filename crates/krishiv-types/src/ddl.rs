@@ -21,11 +21,12 @@
 //! `INTERVAL` alone is a calendar interval; followed by fields it is an ANSI
 //! interval (`INTERVAL YEAR TO MONTH`, `INTERVAL HOUR TO SECOND`, ...).
 //!
-//! Char/varchar, variant and collated string types are recognized and
+//! Char/varchar and variant types are recognized and
 //! rejected with `KRISHIV_UNSUPPORTED_FEATURE`.
 
 use krishiv_common::error::ErrorClass;
 
+use crate::collation::Collation;
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
 use crate::{DataType, DayTimeField, DecimalType, Srid, YearMonthField};
@@ -446,6 +447,10 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
             }
+            if lower == "string" && self.peek().is_some_and(|t| t.is_keyword("collate")) {
+                self.next();
+                return self.collation_name(depth);
+            }
             if let Some(feature) = self.unsupported_type(&lower) {
                 self.skip_type_tail();
                 if depth == 0
@@ -647,12 +652,33 @@ impl<'a> Parser<'a> {
         Ok(field)
     }
 
+    /// The `name` of `STRING COLLATE name`: a word, or a dotted path such as
+    /// `SYSTEM.BUILTIN.UTF8_LCASE`.
+    fn collation_name(&mut self, depth: usize) -> Result<DataType> {
+        let first = self.expect(|t| matches!(t.kind, Kind::Word { .. }))?;
+        let mut name = first.text;
+        while self.peek().is_some_and(|t| t.kind == Kind::Punct('.')) {
+            self.next();
+            let part = self.expect(|t| matches!(t.kind, Kind::Word { .. }))?;
+            name.push('.');
+            name.push_str(&part.text);
+        }
+        if depth == 0
+            && let Some(tok) = self.peek()
+        {
+            return Err(self.unexpected(tok));
+        }
+        Ok(match Collation::parse(&name) {
+            Ok(c) => DataType::collated_string(c),
+            Err(e) => self.defer(e),
+        })
+    }
+
     /// Recognized types that are not represented yet.
     fn unsupported_type(&self, lower: &str) -> Option<String> {
         let what = match lower {
             "char" | "character" | "varchar" => "char/varchar data types",
             "variant" => "the variant data type",
-            "string" if self.peek().is_some_and(|t| t.is_keyword("collate")) => "collated strings",
             _ => return None,
         };
         Some(format!("{what} (\"{}\")", lower.to_ascii_uppercase()))
