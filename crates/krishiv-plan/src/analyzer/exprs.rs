@@ -4962,6 +4962,20 @@ impl Resolver<'_> {
             let lenient = cx.lenient && i == 0;
             match self.find(level, &c.name, origin, lenient) {
                 Ok(Some((a, used))) => {
+                    // A `HAVING` prefers a grouping column to a select-list alias of the same
+                    // name (Spark 4.2: "HAVING condition should prefer table columns over
+                    // aliases").
+                    if i == 0
+                        && !in_agg
+                        && matches!(cx.windows, WindowUse::Having)
+                        && let Some(keys) = extra
+                        && let Ok(Some((k, k_used))) = self.find(keys, &c.name, origin, false)
+                        && k.col.id != a.col.id
+                        && self.serves_path(&k, &c.name[k_used..])
+                    {
+                        self.used(&k);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None);
+                    }
                     self.used(&a);
                     return self.resolve_attr(&a, used, &c.name, origin, None);
                 }
@@ -5227,6 +5241,23 @@ impl Resolver<'_> {
             }
         }
         Ok(None)
+    }
+
+    /// Whether the struct fields `rest` exist below the column `k` (a path longer than the column
+    /// reads fields; a column that holds none of them leaves the name to another candidate).
+    fn serves_path(&self, k: &Attr, rest: &[String]) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        let mut ty = &k.col.data_type;
+        for part in rest {
+            let krishiv_types::DataType::Struct(s) = ty else {
+                return false;
+            };
+            let Some(f) = s.fields().iter().find(|f| same(f.name(), part, cs)) else {
+                return false;
+            };
+            ty = f.data_type();
+        }
+        true
     }
 
     /// `struct` with named children as `named_struct`, or `None` when every
