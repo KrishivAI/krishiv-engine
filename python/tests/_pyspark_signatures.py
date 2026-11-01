@@ -346,7 +346,6 @@ PYSPARK_SIGNATURES = {
     "version": "",
     "weekday": "col",
     "weekofyear": "col",
-    "width_bucket": "v, min, max, numBucket",
     "validate_utf8": "str",
     "when": "condition, value",
     "xxhash64": "*cols",
