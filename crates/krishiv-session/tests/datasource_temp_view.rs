@@ -31,3 +31,22 @@ fn a_second_create_needs_or_replace() {
     block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW v(f bigint) USING parquet")).unwrap();
     assert_eq!(count(&s, "DESCRIBE v"), 1);
 }
+
+#[test]
+fn the_format_and_path_are_checked_when_the_view_is_created() {
+    let s = Session::new().unwrap();
+    let e = block_on(s.sql("CREATE TEMPORARY VIEW v(e int) USING nosuchformat")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::DataSourceNotFound
+    );
+    let e = block_on(
+        s.sql("CREATE TEMPORARY VIEW v(e int) USING parquet OPTIONS (path '/nonexistent/krishiv')"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::PathNotFound
+    );
+    block_on(s.sql("CREATE TEMPORARY VIEW q(e int) USING org.apache.spark.sql.parquet")).unwrap();
+}
