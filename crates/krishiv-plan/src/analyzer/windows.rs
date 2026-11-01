@@ -1439,6 +1439,17 @@ impl Resolver<'_> {
             ExprNode::Literal(_) | ExprNode::Resolved(ResolvedExpr::OuterColumn(_)) => {
                 return Arc::clone(e);
             }
+            // The folded percentage list of `percentile(v, array(...))`: the
+            // executor reads it as literals, so it is not a projected column.
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.id.name() == "array"
+                    && !f.args.is_empty()
+                    && f.args
+                        .iter()
+                        .all(|a| matches!(a.node, ExprNode::Literal(_))) =>
+            {
+                return Arc::clone(e);
+            }
             _ => {}
         }
         let k = semantic_key(e, memo);

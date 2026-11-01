@@ -422,3 +422,20 @@ fn percentile_over_running_and_sliding_frames() -> R {
     }
     Ok(())
 }
+
+/// `percentile(v, array(...)) OVER (...)` answers an array per row, as Spark does.
+#[test]
+fn percentile_array_over_a_window() -> R {
+    let s = Session::new()?;
+    let data = "FROM VALUES (1, 1.0), (2, 5.0), (3, 9.0) t(id, v)";
+    assert_eq!(
+        shown(
+            &s,
+            &format!(
+                "SELECT percentile(v, array(0.0, 0.5, 1.0)) OVER (ORDER BY id) {data} ORDER BY id"
+            )
+        )?,
+        vec!["[1, 1, 1]", "[1, 3, 5]", "[1, 5, 9]"]
+    );
+    Ok(())
+}
