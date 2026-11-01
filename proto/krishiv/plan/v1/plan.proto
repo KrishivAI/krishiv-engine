@@ -385,6 +385,13 @@ message WindowFrame {
   sint64 lower_offset = 4;
   // feature: window_frame_offsets
   sint64 upper_offset = 5;
+  // `FRAME_BOUND_RANGE_INT` (16 bytes, big-endian two's complement `i128`) and
+  // `FRAME_BOUND_RANGE_FLOAT` (8 bytes, big-endian IEEE bits): a `RANGE`
+  // value bound's distance from the current row's key (negative: before it).
+  // feature: window_range_bounds
+  bytes lower_range = 6;
+  // feature: window_range_bounds
+  bytes upper_range = 7;
 }
 
 enum FrameUnits {
@@ -400,6 +407,10 @@ enum FrameBound {
   FRAME_BOUND_UNBOUNDED_FOLLOWING = 3;
   // feature: window_frame_offsets
   FRAME_BOUND_OFFSET = 4;
+  // feature: window_range_bounds
+  FRAME_BOUND_RANGE_INT = 5;
+  // feature: window_range_bounds
+  FRAME_BOUND_RANGE_FLOAT = 6;
 }
 
 message AggregateNode {

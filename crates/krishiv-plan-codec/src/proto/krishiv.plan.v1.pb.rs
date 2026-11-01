@@ -491,7 +491,7 @@ pub struct NthValueFunction {
     #[prost(bytes = "vec", tag = "4")]
     pub data_type: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WindowFrame {
     #[prost(enumeration = "FrameUnits", tag = "1")]
     pub units: i32,
@@ -507,6 +507,15 @@ pub struct WindowFrame {
     /// feature: window_frame_offsets
     #[prost(sint64, tag = "5")]
     pub upper_offset: i64,
+    /// `FRAME_BOUND_RANGE_INT` (16 bytes, big-endian two's complement `i128`) and
+    /// `FRAME_BOUND_RANGE_FLOAT` (8 bytes, big-endian IEEE bits): a `RANGE`
+    /// value bound's distance from the current row's key (negative: before it).
+    /// feature: window_range_bounds
+    #[prost(bytes = "vec", tag = "6")]
+    pub lower_range: ::prost::alloc::vec::Vec<u8>,
+    /// feature: window_range_bounds
+    #[prost(bytes = "vec", tag = "7")]
+    pub upper_range: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateNode {
@@ -1340,6 +1349,10 @@ pub enum FrameBound {
     UnboundedFollowing = 3,
     /// feature: window_frame_offsets
     Offset = 4,
+    /// feature: window_range_bounds
+    RangeInt = 5,
+    /// feature: window_range_bounds
+    RangeFloat = 6,
 }
 impl FrameBound {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1353,6 +1366,8 @@ impl FrameBound {
             Self::CurrentRow => "FRAME_BOUND_CURRENT_ROW",
             Self::UnboundedFollowing => "FRAME_BOUND_UNBOUNDED_FOLLOWING",
             Self::Offset => "FRAME_BOUND_OFFSET",
+            Self::RangeInt => "FRAME_BOUND_RANGE_INT",
+            Self::RangeFloat => "FRAME_BOUND_RANGE_FLOAT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1363,6 +1378,8 @@ impl FrameBound {
             "FRAME_BOUND_CURRENT_ROW" => Some(Self::CurrentRow),
             "FRAME_BOUND_UNBOUNDED_FOLLOWING" => Some(Self::UnboundedFollowing),
             "FRAME_BOUND_OFFSET" => Some(Self::Offset),
+            "FRAME_BOUND_RANGE_INT" => Some(Self::RangeInt),
+            "FRAME_BOUND_RANGE_FLOAT" => Some(Self::RangeFloat),
             _ => None,
         }
     }

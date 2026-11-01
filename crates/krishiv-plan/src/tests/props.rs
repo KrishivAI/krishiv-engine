@@ -1007,6 +1007,21 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
     let p = Arc::make_mut(p);
     match &mut p.node {
         PlanNode::OneRowRelation | PlanNode::TableFunction { .. } | PlanNode::Range { .. } => false,
+        PlanNode::UnionLoopRef { id, .. } => {
+            site!(w, *id += 1);
+            false
+        }
+        PlanNode::UnionLoop {
+            id,
+            anchor,
+            recursive,
+            max_level,
+            ..
+        } => {
+            site!(w, *id += 1);
+            site!(w, *max_level = max_level.map_or(Some(1), |n| Some(n + 1)));
+            m_plan(anchor, w) || m_plan(recursive, w)
+        }
         PlanNode::Read(s) => m_source(s, w),
         PlanNode::PartialAggregate {
             input,

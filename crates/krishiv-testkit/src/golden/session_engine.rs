@@ -33,7 +33,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::{Executor, ExecutorConfig, TokioExecutor};
 use krishiv_session::Session;
 use krishiv_sql::ParserOptions;
-use krishiv_sql::ast::{DescribeKind, Statement};
+use krishiv_sql::ast::{DescribeKind, ShowKind, Statement};
 use krishiv_types::DataType;
 
 use super::cell::{Cell, CellFormat};
@@ -331,6 +331,12 @@ impl Engine for SessionEngine {
             Ok(Statement::Describe(d))
                 if matches!(d.kind, DescribeKind::Table { .. } | DescribeKind::Query { .. })
         );
+        // `HiveResult` prints only the name column (the second) of SHOW TABLES and SHOW VIEWS, the
+        // schema line still lists all three.
+        let names_only = matches!(
+            krishiv_sql::parse_statement(sql, &self.options()),
+            Ok(Statement::Show(s)) if matches!(s.kind, ShowKind::Tables { .. } | ShowKind::Views { .. })
+        );
         let output = &analyzed.output;
         let schema = format!(
             "struct<{}>",
@@ -356,7 +362,9 @@ impl Engine for SessionEngine {
                     .zip(&types)
                     .map(|(col, ty)| arrow_cell(col, row, ty))
                     .collect::<Result<Vec<_>, _>>()?;
-                let cells = if padded && cells.len() == 3 {
+                let cells = if names_only && cells.len() == 3 {
+                    cells.into_iter().skip(1).take(1).collect()
+                } else if padded && cells.len() == 3 {
                     cells.into_iter().map(describe_cell).collect()
                 } else {
                     cells
@@ -442,11 +450,29 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
         }
+        (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
+            col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
+                .value(row),
+        ),
+        (DataType::DayTimeInterval { .. }, ArrowType::Duration(_)) => Cell::DayTime(
+            col.as_primitive::<arrow_array::types::DurationMicrosecondType>()
+                .value(row),
+        ),
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            let v = col
+                .as_primitive::<arrow_array::types::IntervalMonthDayNanoType>()
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.nanoseconds / 1000,
+            }
+        }
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
-            Cell::Str(krishiv_kernels::cast::format_time(
+            Cell::Time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()
                     .value(row),
-            ))
+            )
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
             Cell::Array(list_cells(col, row, element)?)
@@ -618,6 +644,30 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         }
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
+            Cell::Time(
+                col.as_primitive::<arrow_array::types::Time64NanosecondType>()
+                    .value(row),
+            )
+        }
+        (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
+            col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
+                .value(row),
+        ),
+        (DataType::DayTimeInterval { .. }, ArrowType::Duration(_)) => Cell::DayTime(
+            col.as_primitive::<arrow_array::types::DurationMicrosecondType>()
+                .value(row),
+        ),
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            let v = col
+                .as_primitive::<arrow_array::types::IntervalMonthDayNanoType>()
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.nanoseconds / 1000,
+            }
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
             Cell::Array(list_cells(col, row, element)?)

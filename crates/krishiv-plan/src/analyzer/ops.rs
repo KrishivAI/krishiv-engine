@@ -9,11 +9,12 @@ use krishiv_common::error::{
     AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
     DatatypeMismatchInvalidOrderingType, FailedToParseTooComplex, GroupByAggregate,
     GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
-    InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
-    NumTableValueAliasesMismatch, OrderByPosOutOfRange, QualifyAggregateNotAllowed,
-    QualifyRequiresWindowFunction, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt,
-    TableOrViewNotFound, UdtfAliasNumberMismatch, UnresolvedAllInGroupBy,
-    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    InvalidNonDeterministicExpressions, InvalidWhereCondition, JoinConditionIsNotBooleanType,
+    MissingAggregation, MissingGroupBy, NumTableValueAliasesMismatch, OrderByPosOutOfRange,
+    QualifyAggregateNotAllowed, QualifyRequiresWindowFunction, StarGroupByPos,
+    SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
+    UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin,
+    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
 };
 
@@ -2681,6 +2682,19 @@ impl Resolver<'_> {
                         p.origin,
                     ));
                 }
+                // Spark's `CheckAnalysis`: a join condition holds no
+                // nondeterministic expression.
+                if !super::sqlfn::is_deterministic(&b.expr) {
+                    return Err(AnalysisError::new(
+                        InvalidNonDeterministicExpressions {
+                            sql_exprs: format!(
+                                "\"{}\"",
+                                pretty(&b.shown(), self.ctx.conf.session_zone)
+                            ),
+                        },
+                        p.origin,
+                    ));
+                }
                 JoinCondition::On(b.expr)
             }
             JoinCondition::Using(cols) => {
@@ -3240,7 +3254,10 @@ impl Resolver<'_> {
             };
             self.make(Origin::UNKNOWN, node, out, &[&c])
         };
-        let qual: Arc<[String]> = Arc::from(vec![alias.to_owned()]);
+        let qual: Arc<[String]> = alias
+            .split(crate::plan::ALIAS_PART_SEP)
+            .map(str::to_owned)
+            .collect();
         let out = inner
             .out
             .iter()

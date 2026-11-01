@@ -26,11 +26,11 @@
     },
     {
       "id": "width_bucket#42875699b891/ansi_on",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "width_bucket#42875699b891/ansi_off",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "width_bucket#430624ff3b8f/ansi_on",
@@ -90,11 +90,11 @@
     },
     {
       "id": "width_bucket#58f403fd891a/ansi_on",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "width_bucket#58f403fd891a/ansi_off",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "width_bucket#62fe7381eb4a/ansi_on",

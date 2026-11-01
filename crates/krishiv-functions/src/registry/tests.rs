@@ -3316,3 +3316,22 @@ fn quantile_results_follow_the_percentage_shape() {
         (Some(DataType::Long), false)
     );
 }
+
+#[test]
+fn slice_wants_an_array_and_sequence_two_or_three_arguments() {
+    let i = ty(DataType::Integer);
+    let err = result("slice", &[i.clone(), i.clone(), i.clone()], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    );
+    for n in [1, 4] {
+        let args = vec![i.clone(); n];
+        let err = result("sequence", &args, &[]).unwrap_err();
+        assert_eq!(
+            err.error_class().name(),
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+            "{n} arguments"
+        );
+    }
+}

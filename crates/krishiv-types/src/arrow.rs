@@ -13,6 +13,9 @@
 //! | `timestamp` | `Timestamp(Microsecond, "UTC")` | |
 //! | `timestamp_ntz` | `Timestamp(Microsecond, None)` | |
 //! | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
+//! | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
+//! | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
+//! | `interval` | `Interval(MonthDayNano)` | |
 //! | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
 //! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
@@ -44,6 +47,9 @@
 //! - **Times.** A `time` value is nanoseconds since midnight, the long Spark
 //!   hashes and sends over Spark Connect; the precision lives in the field
 //!   tag only.
+//! - **Intervals.** The fields of an ANSI interval live in the field tag only,
+//!   as Spark's `ArrowUtils` loses them too. A calendar interval's nanoseconds
+//!   are always a whole number of microseconds.
 //! - **Spatial values.** Each row holds its SRID and its WKB bytes
 //!   (little-endian, as [`crate::geo::rewrite`] writes it for
 //!   [`crate::geo::ByteOrder::Ndr`]), so a `geometry(any)`
@@ -53,7 +59,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::{DataType as ArrowType, Field, Fields, TimeUnit};
+use arrow_schema::{DataType as ArrowType, Field, Fields, IntervalUnit, TimeUnit};
 
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
@@ -161,6 +167,9 @@ impl DataType {
             ),
             Self::TimestampNtz => ArrowType::Timestamp(TimeUnit::Microsecond, None),
             Self::Time { .. } => ArrowType::Time64(TimeUnit::Nanosecond),
+            Self::YearMonthInterval { .. } => ArrowType::Interval(IntervalUnit::YearMonth),
+            Self::DayTimeInterval { .. } => ArrowType::Duration(TimeUnit::Microsecond),
+            Self::CalendarInterval => ArrowType::Interval(IntervalUnit::MonthDayNano),
             Self::Geometry { .. } | Self::Geography { .. } => spatial_struct(),
             Self::Array(a) => ArrowType::List(Arc::new(
                 a.element_type()
@@ -227,6 +236,9 @@ impl DataType {
             ArrowType::Time64(TimeUnit::Nanosecond) => Self::Time {
                 precision: Self::TIME_DEFAULT_PRECISION,
             },
+            ArrowType::Interval(IntervalUnit::YearMonth) => Self::DEFAULT_YEAR_MONTH_INTERVAL,
+            ArrowType::Duration(TimeUnit::Microsecond) => Self::DEFAULT_DAY_TIME_INTERVAL,
+            ArrowType::Interval(IntervalUnit::MonthDayNano) => Self::CalendarInterval,
             ArrowType::List(f) | ArrowType::LargeList(f) => {
                 ArrayType::new(Self::from_arrow_field_at(f, depth + 1)?, f.is_nullable()).into()
             }
@@ -264,16 +276,22 @@ impl DataType {
                 | ArrowType::Decimal128(p, s),
             ) => (*p, *s) == (d.precision().max(1), arrow_scale(*d)),
             (Self::Timestamp, ArrowType::Timestamp(..))
-            | (Self::Time { .. } | Self::Geometry { .. } | Self::Geography { .. }, _) => {
-                *arrow == self.to_arrow()
-            }
+            | (
+                Self::Time { .. }
+                | Self::Geometry { .. }
+                | Self::Geography { .. }
+                | Self::YearMonthInterval { .. }
+                | Self::DayTimeInterval { .. },
+                _,
+            ) => *arrow == self.to_arrow(),
             _ => Self::from_arrow(arrow).is_ok_and(|t| t == *self),
         }
     }
 
     /// A field of the canonical Arrow type, tagged with the Spark type when
     /// the Arrow type alone does not determine it (`decimal(0,0)`, `time(p)`
-    /// below precision 6, geometry and geography).
+    /// below precision 6, intervals with other than the default fields,
+    /// geometry and geography).
     pub fn to_arrow_field(&self, name: impl Into<String>, nullable: bool) -> Field {
         self.tagged_field(name, self.to_arrow(), nullable)
     }

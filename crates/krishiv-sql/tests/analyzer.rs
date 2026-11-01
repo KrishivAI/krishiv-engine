@@ -356,8 +356,10 @@ fn resolution_corpus_matches_spark() {
     // resolved four correlated `EXISTS` / `IN` under `OR` and `NOT`; 120
     // since `date + int`, `int + date` and `date - int` became `date_add`
     // and `date_sub`; 118 since P2-T115 unit 3 resolved two more correlated
-    // subqueries; 117 since unit 4 resolved one under a join).
-    assert_eq!(gaps, 117, "statements in documented gaps");
+    // subqueries; 117 since unit 4 resolved one under a join; 99 since
+    // `date` / `timestamp` `+` and `-` DECIMAL raise Spark's mismatch; 87 since `+` between a string and a
+    // date or timestamp does).
+    assert_eq!(gaps, 87, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -867,8 +869,8 @@ fn window_goldens_resolve_to_a_fixed_point() {
             failures.push(format!("{sql}: not a fixed point\n{}", again.plan.root()));
         }
     }
-    assert_eq!(pending, ["range_offset"]);
-    assert_eq!(resolved, 97);
+    assert!(pending.is_empty(), "{pending:?}");
+    assert_eq!(resolved, 98);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

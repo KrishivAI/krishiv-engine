@@ -272,6 +272,11 @@ impl EvalEnv {
         }
     }
 
+    /// Fixes the query start instant (see `PlanningContext::query_start_micros`).
+    pub(crate) fn set_query_start_micros(&mut self, micros: i64) {
+        self.query_start_micros = micros;
+    }
+
     /// The environment a plan fixed, with this worker's kernels. UDFs are
     /// not plan data: instantiation sets them from the worker. Lambda
     /// variables match by stable identity, so no name-resolution flag is

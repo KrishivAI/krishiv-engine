@@ -406,10 +406,6 @@ const CASES: &[(&str, &str)] = &[
         "SELECT a FROM (SELECT a FROM t WHERE rand() > 0.5) WHERE a > 1 AND rand() > 0.5 AND rand() > 0.5",
     ),
     (
-        "rand_on",
-        "SELECT t.a FROM t JOIN u ON t.a = u.a AND rand() > 0.5",
-    ),
-    (
         "rand_collapse",
         "SELECT r + 1 AS s FROM (SELECT rand() AS r FROM t)",
     ),

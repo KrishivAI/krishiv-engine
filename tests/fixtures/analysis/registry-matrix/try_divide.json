@@ -58,11 +58,11 @@
     },
     {
       "id": "try_divide#c6f73e490267/ansi_on",
-      "reason": "SELECT try_divide(CAST(NULL AS interval month), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_divide(CAST(NULL AS interval month), 2) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_divide#c6f73e490267/ansi_off",
-      "reason": "SELECT try_divide(CAST(NULL AS interval month), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_divide(CAST(NULL AS interval month), 2) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_divide#d477c1bee5e3/ansi_off",

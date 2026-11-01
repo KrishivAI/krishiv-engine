@@ -782,10 +782,22 @@ fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::Wi
             upper: frame_bound(f.frame.upper)? as i32,
             lower_offset: offset(f.frame.lower),
             upper_offset: offset(f.frame.upper),
+            lower_range: range_payload(f.frame.lower),
+            upper_range: range_payload(f.frame.upper),
         }),
         filter: f.filter.map(|c| c as u64),
         name: f.name.clone(),
     })
+}
+
+/// A `RANGE` value bound's distance: 16 big-endian bytes for an integer, 8 for a float's bits; empty
+/// for any other bound.
+fn range_payload(b: FrameBound) -> Vec<u8> {
+    match b {
+        FrameBound::RangeInt(v) => v.to_be_bytes().to_vec(),
+        FrameBound::RangeFloat(bits) => bits.to_be_bytes().to_vec(),
+        _ => Vec::new(),
+    }
 }
 
 fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
@@ -794,6 +806,8 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
         FrameBound::CurrentRow => Ok(pb::FrameBound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(pb::FrameBound::UnboundedFollowing),
         FrameBound::Offset(_) => Ok(pb::FrameBound::Offset),
+        FrameBound::RangeInt(_) => Ok(pb::FrameBound::RangeInt),
+        FrameBound::RangeFloat(_) => Ok(pb::FrameBound::RangeFloat),
         // `FrameBound` is `#[non_exhaustive]`: a bound added later needs a
         // codec change, not a silently wrong frame.
         _ => Err(CodecError::Unsupported(

@@ -147,6 +147,7 @@ registry! {
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
     (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
+    (window_range_bounds, WindowRangeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds at a value distance from the current row's ordering key (`RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`)."),
     (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
 
@@ -391,7 +392,13 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                         | FrameBound::UnboundedFollowing
                 )
             };
-            (newer(frame.lower) || newer(frame.upper)).then_some(Feature::WindowFrameOffsets)
+            let range =
+                |b: FrameBound| matches!(b, FrameBound::RangeInt(_) | FrameBound::RangeFloat(_));
+            if range(frame.lower) || range(frame.upper) {
+                Some(Feature::WindowRangeBounds)
+            } else {
+                (newer(frame.lower) || newer(frame.upper)).then_some(Feature::WindowFrameOffsets)
+            }
         }
         Construct::Aggregate(a) => a.mask.is_some().then_some(Feature::AggregateFilter),
         Construct::AggregateFunction(f) => match f {

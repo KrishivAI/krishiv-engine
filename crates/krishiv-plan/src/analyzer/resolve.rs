@@ -121,6 +121,9 @@ pub(super) struct Resolver<'a> {
     pub(super) b: &'a Bindings,
     pub(super) next_id: u64,
     next_env: usize,
+    /// The recursive CTEs being resolved, innermost last: each loop's id
+    /// and the attributes its recursive term reads (see `recursive`).
+    pub(super) loops: Vec<(u32, Vec<Attr>)>,
     memo: HashMap<(usize, usize), Rel>,
     /// Relations without outer references, by (relation, CTE scope): they
     /// resolve alike in every environment with that CTE scope, so a plan
@@ -150,6 +153,9 @@ pub(super) struct Resolver<'a> {
     pub(super) fn_path: Vec<String>,
     /// SQL function calls inlined so far in this analysis (a budget).
     pub(super) sql_calls: usize,
+    /// The first aggregate over a nondeterministic argument: Spark checks
+    /// it after the operators' other rules, so any other error wins.
+    pub(super) pending_nondeterministic: Option<AnalysisError>,
 }
 
 type Resolved = (
@@ -169,6 +175,7 @@ pub(super) fn resolve(
         b,
         next_id: 0,
         next_env: 0,
+        loops: Vec::new(),
         memo: HashMap::new(),
         closed: HashMap::new(),
         canon: HashMap::new(),
@@ -182,6 +189,7 @@ pub(super) fn resolve(
         frame: None,
         fn_path: Vec::new(),
         sql_calls: 0,
+        pending_nondeterministic: None,
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -189,6 +197,9 @@ pub(super) fn resolve(
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     let rel = r.rel(plan.root(), &env)?;
+    if let Some(error) = r.pending_nondeterministic.take() {
+        return Err(error);
+    }
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
@@ -387,7 +398,10 @@ impl Resolver<'_> {
                     continue;
                 }
                 stack.push((Arc::clone(&p), true));
-                if !matches!(p.node, PlanNode::WithCte { .. }) {
+                if !matches!(
+                    p.node,
+                    PlanNode::WithCte { .. } | PlanNode::UnionLoop { .. }
+                ) {
                     let mut kids = Vec::new();
                     p.for_each_child(&mut |c| kids.push(self.rep(c)));
                     if matches!(p.node, PlanNode::Shift { .. }) {
@@ -677,6 +691,14 @@ impl Resolver<'_> {
             PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                ..
+            } => self.union_loop(p, *id, anchor, recursive, *max_level, env),
+            PlanNode::UnionLoopRef { id, .. } => self.loop_ref(p, *id),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Pivot {
                 input,
@@ -876,6 +898,8 @@ impl Resolver<'_> {
             | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Generate { .. }
+            | PlanNode::UnionLoop { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
     }

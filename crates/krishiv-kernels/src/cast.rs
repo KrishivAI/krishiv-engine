@@ -539,6 +539,19 @@ pub fn cast(
             .with_data_type(DataType::Decimal128(*p, *s));
         return cast(&wide, to, opts);
     }
+    // A time is its seconds with the fraction: the nanoseconds as a
+    // `decimal(38, 9)`, then the ordinary decimal rescale (half-up; an
+    // overflow quotes the value at scale 9, as Spark does).
+    if matches!(from, DataType::Time64(TimeUnit::Nanosecond))
+        && matches!(to, DataType::Decimal128(..) | DataType::Decimal64(..))
+    {
+        let nanos = input
+            .as_primitive::<Time64NanosecondType>()
+            .unary::<_, Decimal128Type>(i128::from)
+            .with_precision_and_scale(38, 9)
+            .map_err(|e| KernelError::internal(e.to_string()))?;
+        return cast(&nanos, to, opts);
+    }
     if let DataType::Decimal64(p, s) = to {
         let out = cast(input, &DataType::Decimal128(*p, *s), opts)?;
         // A valid value is within precision `p <= 18`, so it fits an `i64`;
@@ -882,10 +895,7 @@ fn from_micros(
     let overflow = |row: usize| {
         let mut lit = String::from("TIMESTAMP '");
         let v = t.value(row);
-        datetime::format_timestamp(
-            datetime::utc_to_local(v, opts.time_zone).unwrap_or(v),
-            &mut lit,
-        );
+        datetime::format_timestamp_in_zone(v, Some(opts.time_zone), &mut lit);
         let _ = write!(lit, "'");
         KernelError::cast_overflow(row, lit, "TIMESTAMP", to_name)
     };
@@ -1225,12 +1235,8 @@ fn to_string(input: &dyn Array, opts: &CastOptions<'_>) -> Result<StringArray, K
             }
             (DataType::Timestamp(TimeUnit::Microsecond, zone), _) => {
                 let v = input.as_primitive::<TimestampMicrosecondType>().value(i);
-                let local = if zone.is_some() {
-                    datetime::utc_to_local(v, opts.time_zone)
-                } else {
-                    Some(v)
-                };
-                datetime::format_timestamp(local.unwrap_or(v), &mut out);
+                let tz = zone.is_some().then_some(opts.time_zone);
+                datetime::format_timestamp_in_zone(v, tz, &mut out);
             }
             _ => return Err(unsupported()),
         }

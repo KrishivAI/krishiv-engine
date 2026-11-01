@@ -48,6 +48,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
     assert_eq!(
+        message("window_range_values").features,
+        ["window", "window_range_bounds"]
+    );
+    assert_eq!(
         message("aggregate_mode_regr_bit_listagg").features,
         ["mode_regr_bit_listagg_aggs"]
     );
@@ -409,6 +413,19 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::WindowOffsetFunctions)
     );
+    for bound in [
+        FrameBound::RangeInt(3),
+        FrameBound::RangeFloat(1.0_f64.to_bits()),
+    ] {
+        assert_eq!(
+            feature_of(Construct::Frame(&frame(
+                FrameBound::UnboundedPreceding,
+                bound
+            ))),
+            Some(Feature::WindowRangeBounds)
+        );
+    }
+    assert_eq!(Feature::WindowRangeBounds.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);

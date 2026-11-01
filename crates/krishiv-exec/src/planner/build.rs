@@ -272,6 +272,9 @@ impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &Arc<LogicalPlan>) -> Self {
         let next_id = max_id(root).saturating_add(1).max(1 << 62);
         let mut env = EvalEnv::new(&cx.config, Arc::clone(&cx.user));
+        if let Some(micros) = cx.query_start_micros {
+            env.set_query_start_micros(micros);
+        }
         // Planning validates UDF calls against the session's library; the
         // implementation a plan runs comes from its worker.
         env.udfs = cx.udfs.clone();
@@ -908,8 +911,8 @@ impl<'a> Planner<'a> {
     }
 
     /// Whether every table `plan` reads reports statistics, so its estimate
-    /// does not rest on default row counts. A `WITH` reference counts as
-    /// default-sized, as the estimator treats it.
+    /// does not rest on default row counts. A `WITH` reference has its
+    /// definition's, as the estimator treats it.
     pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
         self.stats.has_statistics(plan)
     }
