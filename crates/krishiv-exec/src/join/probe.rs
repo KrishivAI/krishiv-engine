@@ -56,12 +56,17 @@ impl<'a> Tables<'a> {
         matches!(self, Self::Level0(_, mask) if mask & (1 << part) != 0)
     }
 
-    /// The table of each partition, to read once per row: the same answers
-    /// as [`Self::get`], without its match and bounds check.
+    /// The table of each partition a row can route to ([`Self::part`]), to
+    /// read once per row, without [`Self::get`]'s match and bounds check.
     fn by_part(self) -> [Option<&'a JoinTable>; PARTS] {
         let mut out = [None; PARTS];
-        for (part, slot) in out.iter_mut().enumerate() {
-            *slot = self.get(part);
+        match self {
+            Self::Level0(..) => {
+                for (part, slot) in out.iter_mut().enumerate() {
+                    *slot = self.get(part);
+                }
+            }
+            Self::Single(t) => out[0] = Some(t),
         }
         out
     }

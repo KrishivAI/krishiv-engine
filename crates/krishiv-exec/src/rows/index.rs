@@ -18,8 +18,7 @@
 //! partition of a join, so what competes for the cache is all the tables
 //! together, and their rows.
 //! The kind is chosen once per table from its row count, the upper bound
-//! of its distinct keys ([`FLAT_MAX_BYTES`] was set from the
-//! `join_index_matrix` sweep).
+//! of its distinct keys ([`FLAT_MAX_BYTES`]).
 //!
 //! Both kinds are driven by the same table-local hash `g = fin(h ^ seed)`
 //! of each row's stored hash `h` ([`finalize`]): the salted
@@ -53,10 +52,10 @@ const SALT_MASK: u64 = 0xFFFF << 48;
 const ID_MASK: u64 = u32::MAX as u64;
 
 /// Largest flat index of one table, in bytes, before it takes the salted
-/// directory: 512 KiB over the default 8 radix partitions. On TPC-H SF10
-/// (12 threads, 3 blocks, 512 KiB L2) probe CPU fell from flat to salted with
-/// prefetch: q13 5.0 to 3.0 s, q09 6.3 to 5.3 s, q03 0.67 to 0.50 s, q05 1.2 to
-/// 1.0 s. At 256 KiB q09 kept 0.5 s of that loss, its 100,000 rows staying flat.
+/// directory: 512 KiB over the default 8 radix partitions. TPC-H SF10 probe CPU
+/// from flat to salted with prefetch: q13 6.23 to 3.58 s, q09 6.47 to 5.43 s,
+/// q03 0.72 to 0.53 s. At 256 KiB q09 kept 0.5 s of that loss, its 100,000 rows
+/// staying flat (gap ledger, "Note 2026-11-01").
 pub const FLAT_MAX_BYTES: usize = 64 << 10;
 
 /// Where an index finds its rows.

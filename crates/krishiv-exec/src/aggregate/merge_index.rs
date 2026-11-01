@@ -4,10 +4,10 @@
 //! 16-bit salt and `row reference + 1`, probed linearly at load at most 1/2.
 //!
 //! A merge is mostly inserts into a table too large for the caches, so each
-//! lookup misses. `hashbrown` has no way to prefetch; this directory is
-//! prefetched a few rows ahead, so the misses overlap. TPC-H SF10 q18 (15M
-//! groups, 16 tasks of about 1M): 1.162 to 1.034 s, q13 1.184 to 1.164 s, q03
-//! unchanged, 4 blocks, load at most 8.
+//! lookup misses. `hashbrown` has no way to prefetch; this directory's slots
+//! are prefetched for a chunk of rows at a time, so the misses overlap. TPC-H
+//! SF10 q18 (15M groups, 16 tasks of about 1M): 1.162 to 1.034 s, q13 1.184 to
+//! 1.164 s, q03 unchanged (gap ledger, "Note 2026-11-01", T159).
 
 use krishiv_kernels::prefetch_read;
 
@@ -174,4 +174,48 @@ fn zeroed(len: usize) -> Result<Vec<u64>> {
         .map_err(|e| internal(e.to_string()))?;
     slots.resize(len, 0);
     Ok(slots)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_walk_passes_other_salts_and_ends_at_an_empty_slot() {
+        let mut index = MergeIndex::new(1).unwrap();
+        let (a, b) = (0x0001_0000_0000_0005_u64, 0x0002_0000_0000_0005_u64);
+        let at = index.start(a);
+        assert!(matches!(index.walk(a, at), Slot::Empty(x) if x == at));
+        index.insert(at, a, 7);
+        // Another salt on the same slot: passed over.
+        assert!(matches!(index.walk(b, at), Slot::Empty(x) if x == index.after(at)));
+        // The same salt: a candidate, and the next position is empty.
+        assert!(matches!(index.walk(a, at), Slot::Candidate(x, 7) if x == at));
+        assert!(matches!(index.walk(a, index.after(at)), Slot::Empty(_)));
+    }
+
+    #[test]
+    fn growth_keeps_every_key_and_is_projected() {
+        let g = |r: u32| u64::from(r) << 3;
+        let mut index = MergeIndex::new(10).unwrap();
+        for r in 0..10 {
+            let Slot::Empty(at) = index.walk(g(r), index.start(g(r))) else {
+                panic!("key {r} seen twice");
+            };
+            index.insert(at, g(r), r);
+        }
+        assert!(!index.reserve(100, g).unwrap());
+        assert_eq!(index.projected(100), index.bytes());
+        let peak = index.projected(10_000);
+        assert_eq!(peak, index.bytes() + MergeIndex::bytes_for(10_010));
+        assert!(index.reserve(10_000, g).unwrap());
+        assert_eq!(index.bytes(), MergeIndex::bytes_for(10_010));
+        for r in 0..10 {
+            assert!(matches!(
+                index.walk(g(r), index.start(g(r))),
+                Slot::Candidate(_, x) if x == r
+            ));
+        }
+        assert_eq!(MergeIndex::bytes_for(usize::MAX), usize::MAX);
+    }
 }

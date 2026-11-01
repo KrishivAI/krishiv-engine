@@ -75,7 +75,7 @@ Paths are relative to this crate.
 - `src/physical/mod.rs` `PhysNode` and `PhysicalPlan` as serializable data; `src/physical/instantiate.rs` builds operators on the worker
 - `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
 - `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
-- `src/aggregate/mod.rs` hash aggregate; `src/join/mod.rs` hash join (build, probe, grace spill)
+- `src/aggregate/mod.rs` hash aggregate (`rowtable.rs` the row tables, `merge_index.rs` the salted index of a large final-phase merge); `src/join/mod.rs` hash join (build, probe, grace spill)
 - `src/rows/mod.rs` row-table layout and pages shared by aggregate and join; the stored row hash `h` is a fast seedless
   table hash, never the routing hash `H_kg` (kernels `hash::routing`, used only by exchanges and key groups);
   tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions

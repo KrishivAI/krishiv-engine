@@ -504,6 +504,7 @@ impl RowTable {
         if self.widen_to <= self.bits {
             return Ok(());
         }
+        self.only_hashbrown()?;
         let (bits, refs) = (self.widen_to, Refs::new(self.widen_to));
         let stride = self.stride;
         let nparts = 1usize << bits;
@@ -937,6 +938,7 @@ impl RowTable {
     /// Folds a prepared batch in. Call after reserving
     /// [`projected`](Self::projected) bytes.
     pub(crate) fn apply(&mut self, p: &RowPrepared) -> Result<()> {
+        self.only_hashbrown()?;
         let n = p.keys.len();
         self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
@@ -1559,6 +1561,16 @@ impl RowTable {
         })
     }
 
+    /// Refuses what would look keys up in the empty `hashbrown` index of a
+    /// table holding a [`MergeIndex`], and so duplicate its groups: such a
+    /// table only merges.
+    fn only_hashbrown(&self) -> Result<()> {
+        if self.merge_index.is_some() {
+            return Err(internal("a merge table only takes merges".to_owned()));
+        }
+        Ok(())
+    }
+
     /// Grows a [`MergeIndex`] for `new` more keys, as
     /// [`index_bytes`](Self::index_bytes) assumed.
     fn reserve_merge_index(&mut self, new: usize) -> Result<()> {
@@ -1658,6 +1670,7 @@ impl RowTable {
     /// keeps the partitions no range names, and drops its index.
     pub(crate) fn split_parts(&mut self, ranges: &[Range<usize>]) -> Vec<Self> {
         self.index = HashTable::new();
+        self.merge_index = None;
         self.sketches = None;
         self.sketching = false;
         self.adapt = None;
@@ -1931,7 +1944,7 @@ pub(crate) fn final_tasks(tables: &[&RowTable]) -> Vec<FinalTask> {
 
 impl RowTable {
     /// Presizes a merge table's index for `groups` keys (the final phase's
-    /// estimate). An index too large for a core's cache is a [`MergeIndex`].
+    /// estimate). One over [`FLAT_MAX_BYTES`] is a [`MergeIndex`].
     ///
     /// # Errors
     /// `INTERNAL_ERROR` if a [`MergeIndex`] cannot be allocated.
@@ -2153,6 +2166,67 @@ mod tests {
         let count = totals.get();
         assert_eq!(count.lookups, 8_000);
         assert!(count.compares >= 4_000, "{}", count.compares);
+    }
+
+    /// Different keys with one forged hash meet in one slot's walk, with
+    /// equal salts: each is compared, and each stays its own group.
+    #[test]
+    fn a_salted_merge_tells_apart_keys_of_one_salt() {
+        const H: u64 = 0x1234;
+        let core = core();
+        let seed = HashSeed::new(Some(5));
+        let mut real = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+        apply(&mut real, &batch(&core, 0..50));
+        let mut src = RowTable::new(&core, &seed, Mode::Append, false, RADIX_BITS).unwrap();
+        let refs: Vec<u32> = real
+            .ids(0..50)
+            .iter()
+            .map(|&r| {
+                let mut row = row_at(&real.parts, real.stride, real.refs, r).to_vec();
+                row[..8].copy_from_slice(&H.to_le_bytes());
+                src.push(&row, &[], H).unwrap()
+            })
+            .collect();
+        let c = MergeChunk {
+            part: 0,
+            refs,
+            states: Vec::new(),
+            heap: 0,
+        };
+        let mut out = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        out.presize(10_000).unwrap();
+        let (mut first, mut again) = (Vec::new(), Vec::new());
+        let mut count = ProbeCount::default();
+        out.merge_rows_salted(&src, &c, &mut first, &mut count)
+            .unwrap();
+        out.merge_rows_salted(&src, &c, &mut again, &mut count)
+            .unwrap();
+        assert_eq!(out.len(), 50);
+        assert_eq!(first, again);
+        let mut distinct = first.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 50);
+    }
+
+    /// A table with a merge index refuses raw input, and splitting a table
+    /// drops the index.
+    #[test]
+    fn a_merge_table_only_takes_merges() {
+        let core = core();
+        let seed = HashSeed::new(Some(5));
+        let mut out = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        out.presize(10_000).unwrap();
+        let held = out.memory_size();
+        let b = batch(&core, 0..10);
+        let prepared = out.prepare(&b, false).unwrap();
+        assert!(out.apply(&prepared).is_err());
+        out.widen_to = RADIX_BITS;
+        out.bits = 0;
+        assert!(out.widen().is_err());
+        out.bits = RADIX_BITS;
+        out.split_parts(&[]);
+        assert!(out.merge_index.is_none() && out.memory_size() < held);
     }
 
     /// Long string keys compare through the layout and their bytes are
