@@ -342,7 +342,9 @@ impl QueryFunctions {
                     // Canonical operators and built-ins stay bare; anything
                     // else, session UDFs included, is a user function.
                     let builtin = ["system".to_owned(), "builtin".to_owned(), call.name.clone()];
+                    // `qualify` is lowering's QUALIFY marker, which the analyzer strips.
                     if !call.qualifier.is_empty()
+                        || call.name == "qualify"
                         || Builtin::from_name(&call.name).is_some()
                         || !matches!(
                             self.base.lookup(&builtin, profile),
@@ -402,8 +404,10 @@ impl QueryFunctions {
                         }
                         _ => None,
                     });
+                    // Only a view is held to the path's first schema; a stored
+                    // function's body falls back to its own namespace.
                     call.qualifier = from_path
-                        .or(first)
+                        .or(first.filter(|_| temporary_visible))
                         .unwrap_or_else(|| vec![namespace.to_owned()]);
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);

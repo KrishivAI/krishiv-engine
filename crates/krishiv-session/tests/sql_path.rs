@@ -332,3 +332,26 @@ fn a_view_over_a_temporary_function_keeps_calling_it() {
     }
     assert_eq!(first(&s, "SELECT x FROM default.tmp_view"), "7");
 }
+
+#[test]
+fn a_view_with_qualify_reads_back() {
+    let s = session();
+    run(
+        &s,
+        "CREATE VIEW default.q_view AS SELECT row_number() OVER (ORDER BY id) AS rn FROM range(3) QUALIFY rn = 1",
+    );
+    assert_eq!(first(&s, "SELECT rn FROM default.q_view"), "1");
+}
+
+#[test]
+fn a_stored_function_falls_back_to_its_own_namespace() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA fns",
+        "CREATE FUNCTION fns.inner_f() RETURNS INT RETURN 1",
+        "CREATE FUNCTION fns.outer_f() RETURNS INT RETURN inner_f()",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT fns.outer_f()"), "1");
+}
