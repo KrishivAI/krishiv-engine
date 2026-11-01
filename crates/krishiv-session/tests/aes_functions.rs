@@ -299,6 +299,23 @@ fn a_literal_call_is_folded_to_one_iv() {
     );
 }
 
+/// A key that is itself a call over constants (`unhex`) is still foldable.
+#[test]
+fn a_constant_expression_argument_is_folded_too() {
+    let from = "range(10)";
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!(
+        "SELECT count(DISTINCT hex(aes_encrypt('Spark', unhex('6162636465666768696A6B6C6D6E6F70')))) FROM {from}"
+    )))
+    .unwrap();
+    let b = block_on(df.collect()).unwrap();
+    let n = b[0]
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>()
+        .value(0);
+    assert_eq!(n, 1);
+}
+
 /// Spark 4.2.0: a column input draws an IV for every row (4 distinct
 /// ciphertexts of 4 identical values). Must never be weakened.
 #[test]

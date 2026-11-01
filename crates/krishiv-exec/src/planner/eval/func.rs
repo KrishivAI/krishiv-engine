@@ -68,6 +68,7 @@ pub(super) fn compile_udf(
         relabel: false,
         nullable: f.nullable,
         folded: None,
+        constant: false,
     }))
 }
 
@@ -206,6 +207,10 @@ pub(super) fn compile(
         // Spark's constant folding does: one IV for every row and batch
         // (a column argument draws an IV per row).
         folded: (name == "aes_encrypt" && args_constant).then(OnceLock::new),
+        // A pure function of constants (`unhex('..')`) is one value for
+        // every row, so an enclosing call over it folds too.
+        constant: args_constant
+            && (name == "aes_encrypt" || krishiv_functions::scalar::is_constant_of_constants(name)),
     }))
 }
 
@@ -222,11 +227,17 @@ struct Call {
     nullable: bool,
     /// The one-row result of a call over constants that Spark folds once.
     folded: Option<OnceLock<ArrayRef>>,
+    /// Whether the value is the same for every row (see `is_constant`).
+    constant: bool,
 }
 
 impl PhysExpr for Call {
     fn data_type(&self) -> &ArrowType {
         &self.out
+    }
+
+    fn is_constant(&self) -> bool {
+        self.constant
     }
 
     fn nullable(&self) -> bool {
