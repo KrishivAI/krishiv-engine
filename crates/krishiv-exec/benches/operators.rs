@@ -19,7 +19,7 @@
 //!   through every batch rather than a prefix of it.
 //! - `operators/filter_string_1m_rows/predicate/{prefix,contains,equals}`: a
 //!   `Utf8View` column (the engine's string type, after a row-number column)
-//!   tested with the engine's `LIKE` kernel for a prefix and a contained
+//!   tested with the engine's compiled `LIKE` pattern (as `Like::eval` runs it) for a prefix and a contained
 //!   substring, and for equality with one value.
 //! - `operators/project_1m_rows/{columns,expr}`: scan → project → count.
 //!   `columns` reorders two columns (zero-copy); `expr` adds a computed one.
@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, StringViewArray};
+use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
@@ -44,7 +44,7 @@ use krishiv_exec::{
     ProjectItem, QueryContext, QueryId, QueryRunner, Result, ScalarExpr, Source, TokioExecutor,
     WorkloadClass,
 };
-use krishiv_kernels::string::StrOperand;
+use krishiv_kernels::string::LikePattern;
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_types::batch::Batch;
 
@@ -63,14 +63,25 @@ fn mix(x: i64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Whether row value `x` is kept at `per_mille`.
-fn keeps(x: i64, per_mille: i64) -> bool {
-    ((mix(x) % 1000) as i64) < per_mille
+/// Whether row number `v` is kept at `per_mille` (column `v`, unique values).
+fn keeps_v(v: i64, per_mille: i64) -> bool {
+    ((mix(v) % 1000) as i64) < per_mille
+}
+
+/// Whether `w` (the repeating column, `0..BATCH_ROWS` in every batch) is
+/// kept at `per_mille`: `w * 2531 mod 4096` is a permutation of the
+/// column's values (2531 is odd), and the `per_mille` share of them below the
+/// cut are kept, so every batch keeps exactly `BATCH_ROWS * per_mille / 1000`
+/// rows, spread through it (a hash of so few distinct values would keep an
+/// uncontrolled number).
+fn keeps_w(w: i64, per_mille: i64) -> bool {
+    let cut = BATCH_ROWS as i64 * per_mille / 1000;
+    w.wrapping_mul(2531).rem_euclid(BATCH_ROWS as i64) < cut
 }
 
 /// Panics unless at least 90 % of the batches of `table`'s column `col` are
-/// mixed (neither all kept nor all dropped) at `per_mille`: a selectivity
-/// bench over a column that fails this measures the fast paths, not the
+/// mixed (neither all kept nor all dropped) at `per_mille`, with `keeps` as the keep
+/// test: a selectivity bench over a column that fails this measures the fast paths, not the
 /// selectivity. (At 1 per mille a batch keeps about 4 rows, so a few random
 /// batches keep none; a prefix mask over the row number, the first version
 /// of these benches, had 1 mixed batch in 256 at 900 per mille.)
@@ -78,7 +89,7 @@ fn keeps(x: i64, per_mille: i64) -> bool {
     clippy::panic,
     reason = "a broken fixture must fail the bench loudly, not measure the wrong thing"
 )]
-fn assert_mixed(table: &[Batch], col: usize, per_mille: i64) {
+fn assert_mixed(table: &[Batch], col: usize, keeps: fn(i64, i64) -> bool, per_mille: i64) {
     let mixed = table
         .iter()
         .filter(|b| {
@@ -262,14 +273,14 @@ fn bench(c: &mut Criterion) {
     });
     // `v` runs 0..ROWS over the table; `w` repeats 0..BATCH_ROWS per batch.
     for per_mille in [1_i64, 100, 900] {
-        assert_mixed(&table, 0, per_mille);
-        assert_mixed(&table, 1, per_mille);
+        assert_mixed(&table, 0, keeps_v, per_mille);
+        assert_mixed(&table, 1, keeps_w, per_mille);
         let by_v = move |b: &RecordBatch| -> Result<BooleanArray> {
             Ok(b.column(0)
                 .as_primitive::<Int64Type>()
                 .values()
                 .iter()
-                .map(|v| keeps(*v, per_mille))
+                .map(|v| keeps_v(*v, per_mille))
                 .collect())
         };
         g.bench_function(
@@ -284,7 +295,7 @@ fn bench(c: &mut Criterion) {
                 .as_primitive::<Int64Type>()
                 .values()
                 .iter()
-                .map(|w| keeps(*w, per_mille))
+                .map(|w| keeps_w(*w, per_mille))
                 .collect())
         };
         g.bench_function(
@@ -296,18 +307,16 @@ fn bench(c: &mut Criterion) {
         );
     }
     let strings = string_table();
-    // The engine runs `LIKE` on its kernel after reading the view column as
-    // `Utf8`; the predicates do the same, so the string path is the engine's.
+    // `Like::eval` in the executor compiles the pattern once and matches the
+    // view column's values in place; the predicates do the same.
     let like = |pattern: &'static str| {
         move |b: &RecordBatch| -> Result<BooleanArray> {
-            let view = b.column(1).as_string_view();
-            let text: StringArray = view.iter().collect();
-            krishiv_kernels::string::like::<i32>(
-                StrOperand::Array(&text),
-                StrOperand::Scalar(Some(pattern)),
-                '\\',
-            )
-            .map_err(|e| e.error().clone())
+            let compiled = LikePattern::compile(pattern, '\\', 0).map_err(|e| e.error().clone())?;
+            Ok(b.column(1)
+                .as_string_view()
+                .iter()
+                .map(|s| s.is_some_and(|s| compiled.matches(s)))
+                .collect())
         }
     };
     let equals = |b: &RecordBatch| -> Result<BooleanArray> {
