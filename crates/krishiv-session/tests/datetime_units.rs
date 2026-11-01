@@ -451,3 +451,22 @@ fn make_timestamp_ntz_without_ansi_gives_null_for_a_bad_field() {
         Some("2021-02-28 06:30:45")
     );
 }
+
+/// A join condition holds no nondeterministic expression
+/// (`INVALID_NON_DETERMINISTIC_EXPRESSIONS`), even through a SQL function.
+#[test]
+fn a_nondeterministic_join_condition_is_refused() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION nd_pick() RETURNS INT RETURN FLOOR(RAND() * 6) + 1")).unwrap();
+    for sql in [
+        "SELECT * FROM VALUES(1) AS a(x) JOIN VALUES(1) AS b(y) ON rand() > 0.5",
+        "SELECT * FROM VALUES(1) AS a(x) JOIN VALUES(1) AS b(y) ON nd_pick() = 1",
+    ] {
+        let r = block_on(async { s.sql(sql).await?.collect().await });
+        let e = r.expect_err(sql);
+        assert!(
+            format!("{e:?}").contains("InvalidNonDeterministicExpressions"),
+            "{sql}: {e:?}"
+        );
+    }
+}
