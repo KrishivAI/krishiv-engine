@@ -2103,6 +2103,11 @@ impl Lowerer {
                     && !name.quoted
                     && name.value.eq_ignore_ascii_case("identifier")
                     && f.args.len() == 1
+                    && f.quantifier.is_none()
+                    && f.within_group.is_empty()
+                    && f.filter.is_none()
+                    && f.null_treatment.is_none()
+                    && f.over.is_none()
                     && let ExprKind::Literal(Literal::String(text)) = &f.args[0].expr.kind
                     && let Some(parts) = multipart_identifier(text)
                 {

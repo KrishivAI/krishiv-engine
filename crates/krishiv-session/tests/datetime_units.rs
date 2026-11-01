@@ -486,3 +486,18 @@ fn legacy_identifier_function_names_a_column() {
         assert_eq!(got, vec![Some(want.to_owned())], "{expr}");
     }
 }
+
+/// A modifier on the legacy `IDENTIFIER('c1')` call is not dropped: the call
+/// stays a function call, which does not resolve.
+#[test]
+fn legacy_identifier_call_with_a_modifier_is_not_a_column() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    let r = block_on(async {
+        s.sql("SELECT IDENTIFIER('c1') FILTER (WHERE missing) FROM VALUES(1) AS T(c1)")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(r.is_err(), "{r:?}");
+}
