@@ -231,6 +231,7 @@ impl Resolver<'_> {
             carriers: Arc::new(carriers),
             agg: None,
             widen: None,
+            hidden: c.hidden.iter().map(sh).collect::<Vec<_>>().into(),
         })
     }
 
@@ -264,6 +265,7 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
+        let c = &self.reveal(c, &items)?;
         if items.iter().any(|b| has_generator(&b.expr)) {
             return self.generator_project(p.origin, c, exprs, &items);
         }
@@ -274,6 +276,50 @@ impl Resolver<'_> {
             return self.window_project(p.origin, c, &items, &[]);
         }
         Ok(self.lateral_project(p.origin, c, &items, &[]))
+    }
+
+    /// `c` outputting the merged-away `USING` columns (`c.hidden`) the
+    /// bound expressions read, so an operator above can read them; `c`
+    /// itself when they read none.
+    pub(super) fn reveal<'a>(
+        &mut self,
+        c: &Rel,
+        bounds: impl IntoIterator<Item = &'a Bound>,
+    ) -> Result<Rel, AnalysisError> {
+        self.reveal_exprs(c, bounds.into_iter().map(|b| &b.expr))
+    }
+
+    /// [`Self::reveal`] for the columns `exprs` read.
+    pub(super) fn reveal_exprs<'a>(
+        &mut self,
+        c: &Rel,
+        exprs: impl IntoIterator<Item = &'a Arc<Expr>>,
+    ) -> Result<Rel, AnalysisError> {
+        if c.hidden.is_empty() {
+            return Ok(c.clone());
+        }
+        let mut missing: Vec<Attr> = Vec::new();
+        let mut seen = HashSet::new();
+        let mut stack: Vec<Arc<Expr>> = exprs.into_iter().map(Arc::clone).collect();
+        while let Some(x) = stack.pop() {
+            if !seen.insert(super::bind::addr(&*x)) {
+                continue;
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Column(col)) = &x.node
+                && !c.out.iter().any(|a| a.col.id == col.id)
+                && !missing.iter().any(|m| m.col.id == col.id)
+                && let Some(a) = c.hidden.iter().find(|a| a.col.id == col.id)
+            {
+                missing.push(a.clone());
+            }
+            x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+        }
+        if missing.is_empty() {
+            return Ok(c.clone());
+        }
+        let mut wide = self.widened(c, &missing)?;
+        wide.hidden = Arc::clone(&c.hidden);
+        Ok(wide)
     }
 
     /// A select list holding a generator call (today only `json_tuple`):
@@ -750,6 +796,7 @@ impl Resolver<'_> {
             ));
         }
         boolean_filter(&b, p.origin)?;
+        let wide = self.reveal(&wide, std::slice::from_ref(&b))?;
         let node = PlanNode::Filter {
             input: Arc::clone(&wide.plan),
             predicate: b.expr,
@@ -758,7 +805,9 @@ impl Resolver<'_> {
         let extended = wide.out.len() > c.out.len();
         f.widen = Some(Arc::new(Widen::Through { child: wide }));
         Ok(if extended {
-            self.restore(&f, &c.out)
+            let mut kept = self.restore(&f, &c.out);
+            kept.hidden = Arc::clone(&c.hidden);
+            kept
         } else {
             f
         })
@@ -1000,7 +1049,11 @@ impl Resolver<'_> {
         }
         // Without the enclosing queries when there is something below.
         let below = Self::below(c);
-        let lookup = Self::below_of(c, true);
+        // Names resolve among the nearest relations' columns first; the
+        // columns a `USING` join merged away answer to qualified names
+        // only after that (a bare name never meets them).
+        let lookup = Self::below_of(c, true, false);
+        let deep = Self::below_of(c, true, true);
         cx.outer = below.is_empty();
         let unresolved = |e: &AnalysisError| {
             e.error
@@ -1037,7 +1090,12 @@ impl Resolver<'_> {
             Some(bounds) => bounds,
             None => {
                 cx.extra = Some(&lookup);
-                match self.bind_all(exprs, &cx) {
+                let mut tried = self.bind_all(exprs, &cx);
+                if tried.as_ref().is_err_and(unresolved) && deep.len() > lookup.len() {
+                    cx.extra = Some(&deep);
+                    tried = self.bind_all(exprs, &cx);
+                }
+                match tried {
                     Err(e) if unresolved(&e) => {
                         cx.outer = true;
                         self.bind_all(exprs, &cx)?
@@ -1127,14 +1185,14 @@ impl Resolver<'_> {
     /// The attributes relations below `r` dropped and could add back
     /// (see [`Self::bind_missing`]), nearest first.
     fn below(r: &Rel) -> Vec<Attr> {
-        Self::below_of(r, false)
+        Self::below_of(r, false, true)
     }
 
     /// [`Self::below`]; with `keep_output`, attributes `r` already outputs
     /// are kept too (Spark looks a name the select list outputs twice up
     /// among them: `SELECT id, CAST(id AS STRING) AS id ... ORDER BY id`
     /// sorts by the first).
-    fn below_of(r: &Rel, keep_output: bool) -> Vec<Attr> {
+    fn below_of(r: &Rel, keep_output: bool, with_hidden: bool) -> Vec<Attr> {
         let mut out: Vec<Attr> = Vec::new();
         let mut seen: HashSet<AttrId> = if keep_output {
             HashSet::new()
@@ -1148,6 +1206,11 @@ impl Resolver<'_> {
         };
         let mut cur = r.clone();
         while let Some(w) = cur.widen.clone() {
+            // A `USING` join's own projection: what it merged away is
+            // reached only with `with_hidden`.
+            if !with_hidden && !cur.hidden.is_empty() && !Arc::ptr_eq(&cur.plan, &r.plan) {
+                break;
+            }
             cur = match &*w {
                 Widen::Aggregate(info) => {
                     info.keys.iter().for_each(|k| add(k, &mut out));
@@ -1366,6 +1429,9 @@ impl Resolver<'_> {
                 _ => Ok(x),
             })?;
         }
+        // An aggregate call over a merged-away `USING` column
+        // (`ORDER BY max(t2.k)`) reads it from the input.
+        grown.input = self.reveal_exprs(&grown.input, grown.aggregates.iter())?;
         // Grouping attributes a subquery reads from here.
         for b in &bounds {
             let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
@@ -1445,11 +1511,19 @@ impl Resolver<'_> {
                     Some((_, a)) => a.clone(),
                     None => {
                         let output = self.attr(&pretty(&b.expr, self.ctx.conf.session_zone), &b.ty);
+                        // The aggregate computes the grouping expression
+                        // as written in `GROUP BY`: a commuted spelling
+                        // (`1 + a` for `a + 1`) would read `a` ungrouped.
+                        let computed = info
+                            .grouping
+                            .iter()
+                            .find(|g| semantic_key(g, st.memo) == key)
+                            .map_or_else(|| Arc::clone(&b.expr), Arc::clone);
                         st.grown
                             .aggregates
                             .push(Arc::new(Expr::new(ExprNode::Resolved(
                                 ResolvedExpr::Alias {
-                                    expr: Arc::clone(&b.expr),
+                                    expr: computed,
                                     output: output.clone(),
                                 },
                             ))));
@@ -1564,6 +1638,7 @@ impl Resolver<'_> {
         // No grouping (`HAVING` without `GROUP BY`): Spark's
         // `MISSING_GROUP_BY` for an ungrouped column.
         let global = group.is_empty();
+        let c = self.reveal(&c, group.iter().chain(&items))?;
         let agg = self.build_aggregate(p.origin, &c, group, &items, global, None, env)?;
         match generator {
             None => Ok(agg),
@@ -2713,7 +2788,17 @@ impl Resolver<'_> {
             return Ok(self.make(p.origin, node, out, &[&l, &r]));
         };
         let j = self.make(Origin::UNKNOWN, node, out, &[&l, &r]);
-        self.using_project(p.origin, &j, kind, &keys, env)
+        let mut res = self.using_project(p.origin, &j, kind, &keys, env)?;
+        let shown: HashSet<AttrId> = res.out.iter().map(|a| a.col.id).collect();
+        let hidden: Vec<Attr> = l
+            .hidden
+            .iter()
+            .map(|a| nullable(a, ln))
+            .chain(r.hidden.iter().map(|a| nullable(a, rn)))
+            .chain(j.out.iter().filter(|a| !shown.contains(&a.col.id)).cloned())
+            .collect();
+        res.hidden = hidden.into();
+        Ok(res)
     }
 
     /// The common column names of a `NATURAL JOIN`'s inputs, as Spark's
@@ -2882,11 +2967,8 @@ impl Resolver<'_> {
             exprs.push(col_expr(&a.col, Origin::UNKNOWN));
             out.push(a.clone());
         }
-        let node = PlanNode::Project {
-            input: Arc::clone(&j.plan),
-            exprs,
-        };
-        Ok(self.make(origin, node, out, &[j]))
+        // An `ORDER BY` may name a column the merge dropped.
+        Ok(self.projection(origin, j, exprs, out))
     }
 
     /// A `LIMIT` (`offset` false) or `OFFSET` over `input`. Kept out of line:

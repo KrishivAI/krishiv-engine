@@ -1,11 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      10,
-      11,
-      18,
-      19
-    ],
     "subqueries": [
       4,
       5,

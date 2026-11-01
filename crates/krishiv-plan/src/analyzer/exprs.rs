@@ -1262,6 +1262,28 @@ impl Resolver<'_> {
                 .cloned()
                 .collect(),
         };
+        // A qualified star reaches the columns a `USING` join merged
+        // away, in the join's column order (ids follow it).
+        let out = match cx.rels {
+            [r] if s.plan_id.is_none()
+                && !s.qualifier.is_empty()
+                && cx.agg_scope.is_none()
+                && r.hidden
+                    .iter()
+                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs)) =>
+            {
+                let mut all = out;
+                all.extend(
+                    r.hidden
+                        .iter()
+                        .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                        .cloned(),
+                );
+                all.sort_by_key(|a| a.col.id.0);
+                all
+            }
+            _ => out,
+        };
         let out = match s.position {
             Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
             Some(n) => {
@@ -4909,7 +4931,13 @@ impl Resolver<'_> {
         // nothing below resolves them either, they stay ambiguous rather
         // than unresolved.
         let mut lenient_dup = false;
-        for (i, level) in [Some(scope), extra].into_iter().enumerate() {
+        // The columns a `USING` join merged away answer to a qualified name.
+        let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
+            ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
+            ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            _ => None,
+        };
+        for (i, level) in [Some(scope), extra, hidden].into_iter().enumerate() {
             let Some(level) = level else { continue };
             let lenient = cx.lenient && i == 0;
             match self.find(level, &c.name, origin, lenient) {
