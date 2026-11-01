@@ -207,8 +207,8 @@ pub struct RelStats {
     /// Per output attribute.
     pub cols: HashMap<AttrId, AttrStats>,
     /// Whether every table below reports statistics, so the estimate does
-    /// not rest on default row counts (a `WITH` reference counts as
-    /// default-sized).
+    /// not rest on default row counts (a `WITH` reference has its definition's;
+    /// one whose definition is out of scope counts as default-sized).
     pub from_statistics: bool,
 }
 

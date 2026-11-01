@@ -2270,6 +2270,21 @@ impl Resolver<'_> {
                         Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(e.origin),
                     ));
                 }
+                // `extract(SECOND FROM t)` reads a `time(p)` to `p` digits
+                // whatever digits the value holds (a string cast keeps all
+                // of them, and Arrow's `Time64` does not carry `p`): the
+                // precision follows as a trailing literal.
+                if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "extract" | "date_part")
+                    && n == 2
+                    && let Some(DataType::Time { precision }) = &call_kids[1].ty.data_type
+                    && *precision < 6
+                {
+                    zip_names.push(Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Integer(i32::from(*precision))))
+                            .with_origin(e.origin),
+                    ));
+                }
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "arrays_zip"
                     && let Some(DataType::Array(a)) = &ty.data_type

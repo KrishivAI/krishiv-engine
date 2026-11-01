@@ -20,22 +20,34 @@ fn text(sql: &str) -> String {
 }
 
 #[test]
-fn a_constant_cast_to_time_p_truncates() {
+fn a_constant_time_cast_to_time_p_truncates() {
+    // Spark: `time_to_micros(cast(TIME '09:08:01.987654' as time(1)))` is
+    // 32881900000.
     for (p, want) in [
-        (0, "1.000000"),
-        (1, "1.900000"),
-        (2, "1.980000"),
-        (3, "1.987000"),
-        (4, "1.987600"),
-        (5, "1.987650"),
-        (6, "1.987654"),
+        (0, "09:08:01"),
+        (1, "09:08:01.9"),
+        (2, "09:08:01.98"),
+        (3, "09:08:01.987"),
+        (4, "09:08:01.9876"),
+        (5, "09:08:01.98765"),
+        (6, "09:08:01.987654"),
     ] {
-        let sql = format!("extract(SECOND FROM cast('09:08:01.987654' as time({p})))");
+        let sql = format!("cast(TIME '09:08:01.987654' as time({p}))");
         assert_eq!(text(&sql), want, "{sql}");
     }
+}
+
+#[test]
+fn a_string_cast_to_time_p_keeps_the_digits() {
+    // Spark 4.2.0: `cast(cast('09:08:01.987654' as time(1)) as string)` is
+    // `09:08:01.987654` (the design's owner question 5).
     assert_eq!(
-        text("cast(TIME '09:08:01.987654' as time(2))"),
-        "09:08:01.98"
+        text("cast(cast('09:08:01.987654' as time(1)) as string)"),
+        "09:08:01.987654"
+    );
+    assert_eq!(
+        text("(SELECT CAST(s AS time(1)) FROM (SELECT '09:08:01.987654' s))"),
+        "09:08:01.987654"
     );
 }
 
@@ -48,7 +60,7 @@ fn a_column_cast_to_time_p_truncates_the_same() {
 }
 
 #[test]
-fn nested_constants_and_string_columns_truncate() {
+fn nested_time_constants_truncate() {
     assert_eq!(
         text("cast(array(TIME '09:08:01.987654') as array<time(2)>)"),
         "[09:08:01.98]"
@@ -56,10 +68,6 @@ fn nested_constants_and_string_columns_truncate() {
     assert_eq!(
         text("cast(named_struct('a', TIME '09:08:01.987654') as struct<a: time(3)>)"),
         "{09:08:01.987}"
-    );
-    assert_eq!(
-        text("(SELECT CAST(s AS time(1)) FROM (SELECT '09:08:01.987654' s))"),
-        "09:08:01.9"
     );
 }
 
@@ -86,5 +94,55 @@ fn an_invalid_string_is_an_error_under_ansi() {
     assert_eq!(
         e.error_class(),
         krishiv_common::error::ErrorClass::CastInvalidInput
+    );
+}
+
+/// `extract(SECOND ...)` cuts a `time(p)` to `p` digits even when the value
+/// holds more (a string cast keeps them): golden `time.sql` 47-52.
+#[test]
+fn extract_second_follows_the_declared_precision() {
+    for (p, want) in [
+        (0, "1.000000"),
+        (1, "1.900000"),
+        (2, "1.980000"),
+        (3, "1.987000"),
+        (4, "1.987600"),
+        (5, "1.987650"),
+        (6, "1.987654"),
+    ] {
+        let sql = format!("extract(SECOND FROM cast('09:08:01.987654' as time({p})))");
+        assert_eq!(text(&sql), want, "{sql}");
+    }
+    assert_eq!(
+        text("date_part('SECOND', cast('09:08:01.987654' as time(2)))"),
+        "1.980000"
+    );
+    assert_eq!(
+        text("(SELECT extract(SECOND FROM CAST(s AS time(3))) FROM (SELECT '09:08:01.987654' s))"),
+        "1.987000"
+    );
+    assert_eq!(
+        text("isnull(extract(SECOND FROM CAST(CAST(NULL AS STRING) AS time(3))))"),
+        "true"
+    );
+    // Other fields are not touched.
+    assert_eq!(
+        text("extract(MINUTE FROM cast('09:08:01.987654' as time(1)))"),
+        "8"
+    );
+}
+
+/// A cast to the type a value already has is a no-op (Spark 4.2.0:
+/// `time_to_micros(cast(cast('09:08:01.987654' as time(1)) as time(1)))` is
+/// 32881987654), while a cast to another precision truncates.
+#[test]
+fn a_cast_to_the_same_time_type_is_a_no_op() {
+    assert_eq!(
+        text("cast(cast(cast('09:08:01.987654' as time(1)) as time(1)) as string)"),
+        "09:08:01.987654"
+    );
+    assert_eq!(
+        text("cast(cast(cast('09:08:01.987654' as time(1)) as time(2)) as string)"),
+        "09:08:01.98"
     );
 }

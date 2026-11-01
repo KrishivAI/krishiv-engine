@@ -40,6 +40,7 @@ __all__ = [
     "array_except",
     "array_insert",
     "array_intersect",
+    "array_join",
     "array_max",
     "array_min",
     "array_position",
@@ -134,6 +135,7 @@ __all__ = [
     "find_in_set",
     "first",
     "first_value",
+    "flatten",
     "floor",
     "format_number",
     "format_string",
@@ -266,6 +268,7 @@ __all__ = [
     "schema_of_json",
     "sec",
     "second",
+    "sequence",
     "session_user",
     "sha",
     "sha1",
@@ -282,6 +285,7 @@ __all__ = [
     "sinh",
     "size",
     "skewness",
+    "slice",
     "sort_array",
     "soundex",
     "spark_partition_id",
@@ -434,6 +438,16 @@ def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Colu
 def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``array_intersect``."""
     return _call("array_intersect", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def array_join(col: ColumnOrName, delimiter: str, null_replacement: str | None = None) -> Column:
+    """Calls the registry function ``array_join``."""
+    return _call(
+        "array_join",
+        _named(col, "col"),
+        _lit(delimiter, "delimiter"),
+        *_opt(_lit, null_replacement, "null_replacement"),
+    )
 
 
 def array_max(col: ColumnOrName) -> Column:
@@ -905,6 +919,11 @@ def first(col: ColumnOrName, ignorenulls: bool = False) -> Column:
 def first_value(col: ColumnOrName, ignoreNulls: bool | Column | None = None) -> Column:
     """Calls the registry function ``first_value``."""
     return _call("first_value", _named(col, "col"), *_opt(_lit, ignoreNulls, "ignoreNulls"))
+
+
+def flatten(col: ColumnOrName) -> Column:
+    """Calls the registry function ``flatten``."""
+    return _call("flatten", _named(col, "col"))
 
 
 def floor(col: ColumnOrName, scale: Column | int | None = None) -> Column:
@@ -1633,6 +1652,11 @@ def second(col: ColumnOrName) -> Column:
     return _call("second", _named(col, "col"))
 
 
+def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``sequence``."""
+    return _call("sequence", _named(start, "start"), _named(stop, "stop"), *_opt(_named, step, "step"))
+
+
 def session_user() -> Column:
     """Calls the registry function ``session_user``."""
     return _call("session_user")
@@ -1715,6 +1739,11 @@ def size(col: ColumnOrName) -> Column:
 def skewness(col: ColumnOrName) -> Column:
     """Calls the registry function ``skewness``."""
     return _call("skewness", _named(col, "col"))
+
+
+def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column:
+    """Calls the registry function ``slice``."""
+    return _call("slice", _named(x, "x"), _int_or_col(start, "start"), _int_or_col(length, "length"))
 
 
 def sort_array(col: ColumnOrName, asc: bool = True) -> Column:
