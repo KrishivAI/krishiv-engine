@@ -1693,6 +1693,58 @@ impl Resolver<'_> {
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
+                // `to_char(datetime, fmt)` and `to_varchar` are `date_format` to
+                // Spark (`ToCharacterBuilder`), which names them so; a number or
+                // a binary keeps `to_char`.
+                if !session_qualified
+                    && n == 2
+                    && !window_fn
+                    && (lookup_name.eq_ignore_ascii_case("to_char")
+                        || lookup_name.eq_ignore_ascii_case("to_varchar"))
+                    && matches!(
+                        kids[0].ty.data_type,
+                        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+                    )
+                {
+                    // Spark builds `date_format` first, so its clauses are
+                    // refused under that name.
+                    let syntax = if f.distinct {
+                        Some("DISTINCT")
+                    } else if f.filter.is_some() {
+                        Some("FILTER CLAUSE")
+                    } else if !f.within_group.is_empty() {
+                        Some("WITHIN GROUP (ORDER BY ...)")
+                    } else {
+                        None
+                    };
+                    if let Some(syntax) = syntax {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: "`date_format`".to_owned(),
+                                syntax: syntax.to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    let call = Expr::function(
+                        "date_format",
+                        vec![Expr::clone(&kids[0].expr), Expr::clone(&kids[1].expr)],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            "date_format",
+                            vec![kids[0].shown(), kids[1].shown()]
+                                .into_iter()
+                                .map(|k| Expr::clone(&k))
+                                .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
+                }
                 // `date + int`, `int + date` and `date - int` are `date_add`
                 // and `date_sub` to Spark, which names them so.
                 if !session_qualified
@@ -5010,9 +5062,11 @@ impl Resolver<'_> {
         let mut names = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             let name = match &k.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
-                    c.name.clone()
-                }
+                ExprNode::Resolved(
+                    ResolvedExpr::Column(c)
+                    | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::LambdaVar(c),
+                ) => c.name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
                 _ => format!("col{}", i + 1),
@@ -6349,30 +6403,41 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         names
     }
     let mut names = collect(Node::Plan(plan));
-    // Spark lists each reference of a union's branches, not once per column.
+    // Spark lists each reference of a set operation's branches, not once per
+    // column. `INTERSECT` and `EXCEPT` are a semi or an anti join by now.
     let mut union = None;
     let _ = visit_distinct(Node::Plan(plan), |n| {
-        if let Node::Plan(p) = n
-            && let crate::PlanNode::Union { inputs, .. } = &p.node
-        {
-            union = Some(inputs.clone());
-            return std::ops::ControlFlow::Break(());
+        let Node::Plan(p) = n else {
+            return std::ops::ControlFlow::Continue(());
+        };
+        match &p.node {
+            crate::PlanNode::Union { inputs, .. } => union = Some(inputs.clone()),
+            crate::PlanNode::Join {
+                left,
+                right,
+                kind: crate::JoinKind::LeftSemi | crate::JoinKind::LeftAnti,
+                ..
+            } => union = Some(vec![Arc::clone(left), Arc::clone(right)]),
+            _ => return std::ops::ControlFlow::Continue(()),
         }
-        std::ops::ControlFlow::Continue(())
+        std::ops::ControlFlow::Break(())
     });
-    if let Some(inputs) = union {
-        // Under a union, once per reference of each branch.
+    // Only when a branch reads the outer query: over an uncorrelated set
+    // operation, the references above it are listed as anywhere else.
+    if union.is_some_and(|inputs: Vec<_>| {
+        inputs
+            .iter()
+            .any(|input| !collect(Node::Plan(input)).is_empty())
+    }) {
         names = Vec::new();
-        for input in &inputs {
-            let _ = visit_distinct(Node::Plan(input), |n| {
-                if let Node::Expr(e) = n
-                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-                {
-                    names.push((c.id, c.name.clone()));
-                }
-                std::ops::ControlFlow::Continue(())
-            });
-        }
+        let _ = visit_distinct(Node::Plan(plan), |n| {
+            if let Node::Expr(e) = n
+                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+            {
+                names.push((c.id, c.name.clone()));
+            }
+            std::ops::ControlFlow::Continue(())
+        });
     }
     names
         .into_iter()

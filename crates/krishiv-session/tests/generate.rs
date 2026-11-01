@@ -331,6 +331,19 @@ fn a_generator_beside_group_by_runs_above_the_aggregate() {
 }
 
 #[test]
+fn order_by_reads_a_grouping_column_the_generator_select_does_not_output() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(arr) as e from (values (2, array('a')), (1, array('b'))) as t(k, arr) \
+             group by k, arr order by k"
+        ),
+        table(&[&["b"], &["a"]])
+    );
+}
+
+#[test]
 fn stack_generates_rows_of_columns() {
     let s = Session::new().unwrap();
     assert_eq!(
@@ -416,17 +429,200 @@ fn generators_beside_group_by_name_their_columns_as_spark_does() {
 #[test]
 fn stack_takes_a_bounded_int_row_count() {
     let s = Session::new().unwrap();
-    for sql in [
-        "select stack(18446744073709551615, 1)",
-        "select stack(1000000000000, 1)",
-        "select stack(2147483647, 1)",
-        "select stack(2L, 1, 2)",
-        "select stack(0, 1)",
-    ] {
+    for sql in ["select stack(2147483647, 1)", "select stack(0, 1)"] {
         assert_eq!(
             error_of(&s, sql).error_class(),
             ErrorClass::KrishivUnsupportedFeature,
             "{sql}"
+        );
+    }
+}
+
+#[test]
+fn stack_checks_its_count_and_column_types() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        error_of(&s, "select stack(2L, 1, 2)").error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert_eq!(
+        error_of(&s, "select * from stack(2, 1, '1.1', 'a', 2, 2.2, 'b')").error_class(),
+        ErrorClass::DatatypeMismatchStackColumnDiffTypes
+    );
+    // Spark compares each value with its column's first one: `(1)` and `(3)`.
+    let e = error_of(&s, "select stack(3, 1, 2, 'a')").to_string();
+    assert!(e.contains("(1)") && e.contains("(3)"), "{e}");
+    // A count that is no INT is a type error, as in Spark.
+    for sql in [
+        "select stack(18446744073709551615, 1)",
+        "select stack(1000000000000, 1)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{sql}"
+        );
+    }
+    // NULLs take any column type.
+    assert_eq!(
+        rows(
+            &s,
+            "select a, cast(b as string), c from stack(2, 1, 1.1, null, 2, null, 'b') t(a, b, c)"
+        ),
+        table(&[&["1", "1.1", "NULL"], &["2", "NULL", "b"]])
+    );
+}
+
+#[test]
+fn a_generator_relation_checks_its_alias_count() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "select * from explode(array(1, 2)) t(c1, c2)",
+        "select * from posexplode(array(1, 2)) t(x)",
+        "select * from inline(array(struct(1, 2))) t(a, b, c)",
+        "select * from json_tuple('{\"a\": 1, \"b\": 2}', 'a', 'b') AS t(x)",
+        "select * from stack(2, 1, 2, 3) t(a, b, c)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::NumTableValueAliasesMismatch,
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn the_generator_argument_is_visible_to_group_by_as_gen_input_0() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select id, explode(arr) from (values (1, array(7))) as t(id, arr) \
+             group by id, _gen_input_0"
+        ),
+        table(&[&["1", "7"]])
+    );
+}
+
+/// A session whose batches hold one row, so every generator output splits.
+fn one_row_batches() -> Session {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.exec.batchSize", "1").unwrap();
+    s
+}
+
+#[test]
+fn a_batch_size_of_one_splits_every_row_and_loses_nothing() {
+    let s = one_row_batches();
+    assert_eq!(
+        rows(
+            &s,
+            &format!(
+                "select a, col from ({T}) lateral view outer explode(b) e as col order by a, col"
+            )
+        ),
+        table(&[&["1", "10"], &["1", "20"], &["2", "NULL"], &["3", "NULL"]]),
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select pos, col from (select posexplode(array('x', 'y', 'z')))"
+        ),
+        table(&[&["0", "x"], &["1", "y"], &["2", "z"]]),
+    );
+}
+
+#[test]
+fn counts_keep_their_weights_across_a_split() {
+    let s = one_row_batches();
+    assert_eq!(
+        rows(
+            &s,
+            "select a, cast(count(*) as string) from (select 1 a, explode(array(1, 2, 3))) group by a"
+        ),
+        table(&[&["1", "3"]]),
+    );
+}
+
+#[test]
+fn inline_null_structs_split_mid_row_stay_null() {
+    let s = one_row_batches();
+    assert_eq!(
+        rows(
+            &s,
+            "select inline(array(struct(1, 'a'), null, struct(3, 'c')))"
+        ),
+        table(&[&["1", "a"], &["NULL", "NULL"], &["3", "c"]]),
+    );
+}
+
+#[test]
+fn several_generators_in_one_select_make_a_cross_product() {
+    let s = Session::new().unwrap();
+    let mut got = rows(&s, "select explode(array(1, 2, 3)), explode(array(10, 20))");
+    got.sort();
+    assert_eq!(
+        got,
+        table(&[
+            &["1", "10"],
+            &["1", "20"],
+            &["2", "10"],
+            &["2", "20"],
+            &["3", "10"],
+            &["3", "20"],
+        ])
+    );
+}
+
+#[test]
+fn a_generator_beside_an_aggregate_without_group_by_runs_above_it() {
+    let s = Session::new().unwrap();
+    let mut got = rows(
+        &s,
+        "select explode(collect_list(cast(id as int))) as val from range(3)",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["0"], &["1"], &["2"]]));
+    let mut got = rows(
+        &s,
+        "select explode(collect_list(cast(id as int))) as val, cast(count(*) as int) as cnt from range(3)",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["0", "3"], &["1", "3"], &["2", "3"]]));
+    let e = error_of(
+        &s,
+        "select explode(array(1, 2)), explode(array(3, 4)), count(*)",
+    );
+    assert!(
+        e.to_string()
+            .contains("UNSUPPORTED_GENERATOR.MULTI_GENERATOR"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_generator_reads_a_lateral_alias_beside_an_aggregate() {
+    let s = Session::new().unwrap();
+    let mut got = rows(
+        &s,
+        "select col, cast(n as int) from (select array(1, 2, 3) as arr, explode(arr) as col, count(*) as n)",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["1", "1"], &["2", "1"], &["3", "1"]]));
+}
+
+#[test]
+fn a_generators_output_is_no_lateral_alias_beside_an_aggregate() {
+    let s = Session::new().unwrap();
+    for q in [
+        "select explode(array(1, 2, 3)) as col, col + 1 as col2, count(*)",
+        "select array(1, 2, 3) as arr, explode(arr) as col, count(*), col + 1 as col2",
+    ] {
+        let e = error_of(&s, q);
+        assert!(
+            e.to_string()
+                .contains("UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"),
+            "{q}: {e}"
         );
     }
 }

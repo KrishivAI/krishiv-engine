@@ -236,9 +236,12 @@ fn a_correlated_limit_keeps_its_order_and_partitions_by_clean_keys() {
     // An outer side reading inner columns is refused, never partitioned on it.
     let mixed = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g + lc.y = lt.id + lc.y ORDER BY lc.k DESC LIMIT 1)";
     assert!(failure(&s, mixed).contains("LIMIT of this form"));
-    // So is a sort the rewrite would lose, below a derived table.
+    // A sort below a derived table still decides the ranks.
     let derived = "SELECT id FROM lt WHERE k IN (SELECT k FROM (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC) q LIMIT 1)";
-    assert!(failure(&s, derived).contains("LIMIT of this form"));
+    assert_eq!(rows(&s, derived), ["4"]);
+    // A filter between them would have to rank after filtering: refused.
+    let filtered = "SELECT id FROM lt WHERE k IN (SELECT k FROM (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC) q WHERE k < 9 LIMIT 1)";
+    assert!(failure(&s, filtered).contains("LIMIT of this form"));
     // And a key the window and the join would evaluate apart.
     let random = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE CAST(rand(1) * 2 AS INT) = lt.id ORDER BY y LIMIT 1)";
     assert!(failure(&s, random).contains("LIMIT of this form"));
