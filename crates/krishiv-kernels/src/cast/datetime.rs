@@ -117,7 +117,7 @@ pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
     )
 }
 
-fn days_in_month(year: i64, month: u32) -> u32 {
+pub(crate) fn days_in_month(year: i64, month: u32) -> u32 {
     match month {
         2 if year.rem_euclid(4) == 0
             && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>

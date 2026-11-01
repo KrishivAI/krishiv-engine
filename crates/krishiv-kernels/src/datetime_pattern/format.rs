@@ -321,7 +321,7 @@ fn write_localized(full: bool, offset: i32, out: &mut String) {
 }
 
 /// `z` / `zzzz` for the zones known without the time-zone database.
-fn zone_name(
+pub(super) fn zone_name(
     id: &str,
     offset: i32,
     local_seconds: i64,
