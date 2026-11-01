@@ -738,3 +738,20 @@ fn having_cannot_read_an_aggregate_the_generator_hides() {
         ErrorClass::InvalidWhereCondition
     );
 }
+
+#[test]
+fn an_aliased_stack_beside_group_by_and_json_tuple_named_arguments() {
+    let s = Session::new().unwrap();
+    let mut got = rows(
+        &s,
+        "select stack(2, k, k + 1) as v from values (1), (2) t(k) group by k",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["1"], &["2"], &["2"], &["3"]]));
+    // A named argument to a table-valued json_tuple is refused, as for the
+    // other table functions.
+    assert_eq!(
+        error_of(&s, "select * from json_tuple('{\"a\": 1}', x => 'a')").error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}
