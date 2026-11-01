@@ -374,7 +374,15 @@ fn scale_column<T>(
 where
     T: ArrowPrimitiveType,
 {
-    let len = a.len().max(by.len());
+    // A one-row column beside an empty one has no row to stand for.
+    let len = if a.is_empty() || by.is_empty() {
+        0
+    } else {
+        a.len().max(by.len())
+    };
+    if len == 0 {
+        return Ok(PrimitiveBuilder::<T>::new().finish());
+    }
     if a.len() != len && a.len() != 1 {
         return Err(KernelError::internal("operands differ in length"));
     }

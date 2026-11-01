@@ -368,7 +368,8 @@ impl Resolver<'_> {
             // Spark has cast the string to the date's type by then.
             DataType::Date
         } else {
-            DataType::String
+            // And here to a number, as `PromoteStrings` does.
+            DataType::Double
         };
         let m = Mismatch::Unexpected {
             arg: 1,
@@ -569,6 +570,9 @@ impl Resolver<'_> {
         l: &Bound,
         r: &Bound,
     ) -> Result<Bound, AnalysisError> {
+        if self.ctx.conf.legacy_interval {
+            return Err(legacy_difference(origin));
+        }
         let kids = [l.clone(), r.clone()];
         let name = shown(Builtin::Subtract, [l, r], origin);
         for (arg, side) in kids.iter().enumerate() {
@@ -589,10 +593,12 @@ impl Resolver<'_> {
                 return Err(self.mismatch(m, &name, &kids, "-", origin));
             }
         }
-        let both_ntz = kids
+        // Spark reads the other side as the zoneless type, which matters for a
+        // wall time that doesn't exist in the session zone.
+        let any_ntz = kids
             .iter()
-            .all(|k| matches!(k.ty.data_type, Some(DataType::TimestampNtz)));
-        let t = if both_ntz {
+            .any(|k| matches!(k.ty.data_type, Some(DataType::TimestampNtz)));
+        let t = if any_ntz {
             DataType::TimestampNtz
         } else {
             DataType::Timestamp
@@ -620,6 +626,9 @@ impl Resolver<'_> {
         l: &Bound,
         r: &Bound,
     ) -> Result<Bound, AnalysisError> {
+        if self.ctx.conf.legacy_interval {
+            return Err(legacy_difference(origin));
+        }
         let kids = [l.clone(), r.clone()];
         let name = shown(Builtin::Subtract, [l, r], origin);
         for (arg, side) in kids.iter().enumerate() {
@@ -637,6 +646,8 @@ impl Resolver<'_> {
             self.implicit_cast(l, Some(DataType::Date)),
             self.implicit_cast(r, Some(DataType::Date)),
         );
+        // With ANSI off, a string that doesn't read as a date is NULL.
+        let nullable = a.ty.nullable || b.ty.nullable;
         let out = DataType::DayTimeInterval {
             start: DayTimeField::Day,
             end: DayTimeField::Day,
@@ -645,10 +656,12 @@ impl Resolver<'_> {
             Builtin::SubtractDates,
             vec![Arc::clone(&a.expr), Arc::clone(&b.expr)],
             out.clone(),
-            l.ty.nullable || r.ty.nullable,
+            nullable,
             origin,
         );
-        Ok(bound(expr, out, name, &kids))
+        let mut difference = bound(expr, out, name, &kids);
+        difference.ty.nullable = nullable;
+        Ok(difference)
     }
 
     /// `NULL op interval`: the NULL takes the interval's type.
@@ -726,6 +739,15 @@ fn try_operator(name: &str) -> Option<(&'static str, &'static str)> {
     ]
     .into_iter()
     .find(|(function, _)| name.eq_ignore_ascii_case(function))
+}
+
+/// With `spark.sql.legacy.interval.enabled`, a date or timestamp difference is
+/// a calendar interval, which Krishiv doesn't compute yet.
+fn legacy_difference(origin: Origin) -> AnalysisError {
+    unsupported(
+        "a date or timestamp difference with spark.sql.legacy.interval.enabled",
+        origin,
+    )
 }
 
 fn calendar(origin: Origin) -> AnalysisError {
