@@ -366,6 +366,27 @@ fn positive_literal(e: &Expr) -> bool {
     }
 }
 
+/// Whether `p` reads the outer query and is one row for each outer row:
+/// a global aggregate under projections and aliases (no filter, so no
+/// `HAVING`).
+pub(super) fn one_row_aggregate(p: &Arc<LogicalPlan>) -> bool {
+    if !has_outer(Node::Plan(p)) {
+        return false;
+    }
+    fn walk(p: &LogicalPlan) -> bool {
+        match &p.node {
+            PlanNode::Aggregate {
+                grouping: Grouping::GroupBy(keys),
+                ..
+            } => keys.is_empty(),
+            PlanNode::Project { input, .. } => walk(input),
+            PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => walk(input),
+            _ => false,
+        }
+    }
+    walk(p)
+}
+
 /// Whether an aggregate sits under `p`'s projections and filters.
 fn aggregates_below(p: &LogicalPlan) -> bool {
     match &p.node {

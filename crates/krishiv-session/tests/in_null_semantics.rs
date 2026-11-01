@@ -79,3 +79,49 @@ fn a_subquery_select_list_reads_the_outer_query() -> R {
     );
     Ok(())
 }
+
+#[test]
+fn in_a_correlated_count_is_an_equality_with_the_count_bug_handled() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("create temporary view t1(c1, c2) as values (0, 1), (1, 2)"))?;
+    block_on(s.sql("create temporary view t2(c1, c2) as values (0, 2), (0, 3)"))?;
+    let rows = |sql: &str| -> R<Vec<String>> {
+        block_on(async {
+            let b = s.sql(sql).await?.collect().await?;
+            let mut out = Vec::new();
+            for batch in &b {
+                for r in 0..batch.num_rows() {
+                    out.push(
+                        batch
+                            .columns()
+                            .iter()
+                            .map(|c| {
+                                if c.is_null(r) {
+                                    "NULL".to_owned()
+                                } else if let Some(x) = c.as_boolean_opt() {
+                                    x.value(r).to_string()
+                                } else {
+                                    c.as_primitive::<arrow_array::types::Int32Type>()
+                                        .value(r)
+                                        .to_string()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\t"),
+                    );
+                }
+            }
+            out.sort();
+            Ok(out)
+        })
+    };
+    assert_eq!(
+        rows("select *, c1 in (select count(*) + 1 from t2 where t2.c1 = t1.c1) from t1")?,
+        ["0\t1\tfalse", "1\t2\ttrue"]
+    );
+    assert_eq!(
+        rows("select *, c1 not in (select count(*) + 1 from t2 where t2.c1 = t1.c1) from t1")?,
+        ["0\t1\ttrue", "1\t2\tfalse"]
+    );
+    Ok(())
+}

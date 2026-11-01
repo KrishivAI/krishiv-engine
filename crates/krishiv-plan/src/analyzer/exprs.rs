@@ -2550,6 +2550,7 @@ impl Resolver<'_> {
                 let expr = rebuilt(ExprNode::Subquery { kind, plan });
                 let shown = shown_call(&expr, kids, &values);
                 let expr = self.null_in_subquery(expr);
+                let expr = self.in_global_aggregate(expr);
                 Bound {
                     shown,
                     expr,
@@ -2586,6 +2587,48 @@ impl Resolver<'_> {
             ));
         }
         Ok(b)
+    }
+
+    /// `v IN (correlated global aggregate)`: the aggregate has exactly one
+    /// row for each outer row (a count of nothing is 0), so the `IN` is
+    /// `v = (scalar subquery)`, which the scalar path decorrelates with
+    /// its count-bug handling. Any other `IN` is returned as it came.
+    fn in_global_aggregate(&self, e: Arc<Expr>) -> Arc<Expr> {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &e.node
+        else {
+            return e;
+        };
+        let [value] = &values[..] else { return e };
+        if !super::subquery::one_row_aggregate(plan) {
+            return e;
+        }
+        let scalar = Arc::new(
+            Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::Scalar,
+                plan: Arc::clone(plan),
+            })
+            .with_origin(e.origin),
+        );
+        let nullable = super::subquery::typed(value).1 || super::subquery::typed(&scalar).1;
+        Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::Eq),
+                    kind: FunctionKind::Scalar,
+                    args: vec![Arc::clone(value), scalar],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: DataType::Boolean,
+                    nullable,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(e.origin),
+        )
     }
 
     /// `NULL IN (subquery)`: Spark folds it by whether the subquery has
