@@ -619,7 +619,12 @@ impl Session {
                     .await
             }
             DescribeKind::Query { query, .. } => {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
                 let rows = analysis

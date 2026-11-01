@@ -60,7 +60,8 @@ const MAX_GROUPING_SETS: usize = 1 << 16;
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
 pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> R<Plan> {
-    lower(&parse_query(sql, options)?, source).map_err(|e| e.redacted_in(sql))
+    lower_with(&parse_query(sql, options)?, source, options.case_sensitive)
+        .map_err(|e| e.redacted_in(sql))
 }
 
 /// Lowers `query` into an unresolved plan whose spans index `source`.
@@ -71,12 +72,21 @@ pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> 
 /// decimal bounds, unsupported cast types) and `FAILED_TO_PARSE_TOO_COMPLEX`
 /// for plans deeper than `MAX_DEPTH`.
 pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
+    lower_with(query, source, false)
+}
+
+/// [`lower`] with `spark.sql.caseSensitive`: CTE names match exactly.
+///
+/// # Errors
+/// As for [`lower`].
+pub fn lower_with(query: &Query, source: SourceId, case_sensitive: bool) -> R<Plan> {
     let mut l = Lowerer {
         source,
         depth: 0,
         root: query.span,
         windows: Vec::new(),
         recursive: 0,
+        case_sensitive,
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -97,6 +107,7 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
         root: expr.span,
         windows: Vec::new(),
         recursive: 0,
+        case_sensitive: false,
     };
     l.expr(expr)
 }
@@ -113,6 +124,7 @@ pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> 
         root: item.span,
         windows: Vec::new(),
         recursive: 0,
+        case_sensitive: false,
     };
     l.select_item(item)
 }
@@ -174,7 +186,14 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
 
 /// Whether `plan` (subquery plans included) reads the table `name`, the
 /// way an unresolved CTE reference is spelled.
-fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
+fn reads_table(plan: &LogicalPlan, name: &str, exact: bool) -> bool {
+    let same = |a: &str| {
+        if exact {
+            a == name
+        } else {
+            a.eq_ignore_ascii_case(name)
+        }
+    };
     enum Step<'a> {
         Plan(&'a LogicalPlan),
         Expr(&'a IrExpr),
@@ -189,7 +208,7 @@ fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
                 }
                 if let PlanNode::Read(ReadSource::Table { name: n, .. }) = &p.node
                     && let [n] = n.as_slice()
-                    && n.eq_ignore_ascii_case(name)
+                    && same(n)
                 {
                     return true;
                 }
@@ -201,7 +220,7 @@ fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
                         if !hidden {
                             stack.push(Step::Plan(&c.plan));
                         }
-                        hidden |= c.name.eq_ignore_ascii_case(name);
+                        hidden |= same(&c.name);
                     }
                     if !hidden {
                         stack.push(Step::Plan(input));
@@ -238,6 +257,8 @@ struct Lowerer {
     /// there `LIMIT ALL` stays a limit (of `i32::MAX` rows), because it
     /// lifts the recursion row limit of the CTE it reads.
     recursive: usize,
+    /// `spark.sql.caseSensitive`: a CTE name matches its references exactly.
+    case_sensitive: bool,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -454,7 +475,7 @@ impl Lowerer {
                 };
                 let mut body = self.query(&c.query)?;
                 let columns: Vec<String> = c.columns.iter().map(|i| i.value.clone()).collect();
-                if with.recursive && reads_table(&body, &c.name.value) {
+                if with.recursive && reads_table(&body, &c.name.value, self.case_sensitive) {
                     body = self.recursive_cte(&body, c, &columns, max_level)?;
                 }
                 if !columns.is_empty() {
@@ -504,7 +525,10 @@ impl Lowerer {
             locals.extend(ctes.iter().cloned());
             inner = input;
         }
-        if locals.iter().any(|l| reads_table(&l.plan, name)) {
+        if locals
+            .iter()
+            .any(|l| reads_table(&l.plan, name, self.case_sensitive))
+        {
             return Err(err(InvalidRecursiveCte {}, c.span));
         }
         let (anchor, recursive) = match &inner.node {
@@ -513,16 +537,16 @@ impl Lowerer {
                 by_name: false,
                 ..
             } if inputs.len() == 2
-                && !reads_table(&inputs[0], name)
-                && reads_table(&inputs[1], name) =>
+                && !reads_table(&inputs[0], name, self.case_sensitive)
+                && reads_table(&inputs[1], name, self.case_sensitive) =>
             {
                 (Arc::clone(&inputs[0]), Arc::clone(&inputs[1]))
             }
             PlanNode::Distinct { input }
                 if matches!(&input.node, PlanNode::Union { inputs, .. }
                     if inputs.len() == 2
-                        && !reads_table(&inputs[0], name)
-                        && reads_table(&inputs[1], name)) =>
+                        && !reads_table(&inputs[0], name, self.case_sensitive)
+                        && reads_table(&inputs[1], name, self.case_sensitive)) =>
             {
                 return Err(err(UnionNotSupportedInRecursiveCte {}, c.span));
             }

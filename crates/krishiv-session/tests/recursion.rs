@@ -561,3 +561,15 @@ fn explain_verbose_and_warnings_do_not_run_the_loop() {
     let df = block_on(s.sql(q)).unwrap();
     block_on(df.warnings()).unwrap();
 }
+
+#[test]
+fn case_sensitive_cte_names_are_distinct_from_the_recursive_one() {
+    // `R` and `r` are different CTEs under spark.sql.caseSensitive=true, so
+    // the second one is not recursive; by default it is INVALID_RECURSIVE_CTE.
+    let q = "WITH RECURSIVE R AS (SELECT 1 AS n), r AS (SELECT * FROM R) SELECT * FROM r";
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.caseSensitive=true"))
+        .and_then(|d| block_on(d.collect()))
+        .unwrap();
+    assert_eq!(rows(&s, q), vec![vec!["1".to_owned()]]);
+}

@@ -413,7 +413,12 @@ impl Session {
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
             .to_owned();
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -702,7 +707,12 @@ impl Session {
                 schema_binding: None,
                 ..
             } => {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -1401,7 +1411,12 @@ impl Session {
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
     ) -> Result<(), KrishivError> {
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         self.create_table_from(table, &df, mode, layout).await
     }
@@ -1854,7 +1869,12 @@ impl Session {
                 .iter()
                 .for_each(|r| scalar_subqueries(r, &mut subqueries));
             for query in &subqueries {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 DataFrame::new(self.clone(), Arc::clone(plan.root()))
                     .analyzed_in(self.query_env())
                     .await?;
@@ -1866,7 +1886,12 @@ impl Session {
                 );
             }
         }
-        let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            &c.query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let listed: Vec<String> = c
             .columns

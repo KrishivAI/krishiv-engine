@@ -543,8 +543,9 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         match statement {
             Statement::Query(q) => {
-                let plan = krishiv_sql::lower(&q, SourceId(0))
-                    .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
+                let plan =
+                    krishiv_sql::lower_with(&q, SourceId(0), self.parser_options().case_sensitive)
+                        .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
@@ -2212,7 +2213,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 11] = [
+const PARSER_KEYS: [&str; 12] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -2224,6 +2225,7 @@ const PARSER_KEYS: [&str; 11] = [
     "spark.sql.sources.bucketing.maxBuckets",
     "spark.sql.parser.singleCharacterPipeOperator.enabled",
     "spark.sql.legacy.viewSchemaBindingMode",
+    "spark.sql.caseSensitive",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
