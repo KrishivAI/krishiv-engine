@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      21
-    ]
-  },
-  "file": "datetime-formatting",
-  "format_version": 1
-}
