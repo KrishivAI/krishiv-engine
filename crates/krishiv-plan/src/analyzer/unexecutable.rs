@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Types the engine parses, maps and serializes but cannot evaluate yet
-//! (`TIME`, `GEOMETRY`, `GEOGRAPHY`): a resolved plan that holds one
+//! (`TIME` while its gate is off): a resolved plan that holds one
 //! anywhere (a scanned column, a cast, a typed `NULL`, a function result)
 //! fails with `KRISHIV_UNSUPPORTED_FEATURE` before it reaches a planner.
 
@@ -20,15 +20,7 @@ const TIME: &str = "the TIME data type";
 fn feature(t: &DataType, time_type: bool) -> Option<&'static str> {
     // The first unevaluable type in the type or inside it (an array
     // element, a map key or value, a struct field).
-    if !time_type && t.any_type(&|x| matches!(x, DataType::Time { .. })) {
-        Some(TIME)
-    } else if t.any_type(&|x| matches!(x, DataType::Geometry { .. })) {
-        Some("the GEOMETRY data type")
-    } else if t.any_type(&|x| matches!(x, DataType::Geography { .. })) {
-        Some("the GEOGRAPHY data type")
-    } else {
-        None
-    }
+    (!time_type && t.any_type(&|x| matches!(x, DataType::Time { .. }))).then_some(TIME)
 }
 
 /// Fails on the first node of `root` (in pre-order) that holds a type the

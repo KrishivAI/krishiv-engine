@@ -350,3 +350,53 @@ impl Writer {
 
 #[cfg(test)]
 mod tests;
+
+/// The text Spark prints a spatial value as (extended well-known text):
+/// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0.
+///
+/// Only a two-dimensional point is printed so far; any other geometry is
+/// `KRISHIV_UNSUPPORTED_FEATURE`.
+///
+/// ```
+/// use krishiv_types::geo::{rewrite, to_ewkt, ByteOrder, SpatialKind};
+///
+/// let xdr = [0, 0, 0, 0, 1, 0x3F, 0xF0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 0];
+/// let ndr = rewrite(&xdr, SpatialKind::Geometry, ByteOrder::Ndr).unwrap();
+/// assert_eq!(to_ewkt(4326, &ndr).unwrap(), "SRID=4326;POINT(1 2)");
+/// assert_eq!(to_ewkt(0, &ndr).unwrap(), "POINT(1 2)");
+/// ```
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for anything but a two-dimensional point.
+pub fn to_ewkt(srid: i32, wkb: &[u8]) -> Result<String> {
+    let coord = |at: usize| -> Option<f64> {
+        let bytes: [u8; 8] = wkb.get(at..at + 8)?.try_into().ok()?;
+        Some(match wkb.first()? {
+            0 => f64::from_be_bytes(bytes),
+            _ => f64::from_le_bytes(bytes),
+        })
+    };
+    let code = wkb
+        .get(1..HEADER)
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .map(|b| match wkb.first() {
+            Some(0) => u32::from_be_bytes(b),
+            _ => u32::from_le_bytes(b),
+        });
+    let (Some(POINT), Some(x), Some(y), true) = (
+        code,
+        coord(HEADER),
+        coord(HEADER + 8),
+        wkb.len() == HEADER + 16,
+    ) else {
+        return Err(error::unsupported(
+            "printing a geometry that is not a two-dimensional point".to_owned(),
+        ));
+    };
+    let prefix = if srid == 0 {
+        String::new()
+    } else {
+        format!("SRID={srid};")
+    };
+    Ok(format!("{prefix}POINT({x} {y})"))
+}

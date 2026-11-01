@@ -2002,6 +2002,24 @@ impl Resolver<'_> {
                     }
                     (&owned[..], 5)
                 } else if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
+                    && n == 1
+                {
+                    // `st_geomfromwkb(wkb)` is `st_geomfromwkb(wkb, 0)` and
+                    // `st_asbinary(g)` is `st_asbinary(g, 'NDR')`.
+                    owned = kids[..n].to_vec();
+                    owned.push(if entry.id.name() == "st_asbinary" {
+                        default_argument(
+                            Literal::String("NDR".to_owned()),
+                            DataType::String,
+                            false,
+                            e.origin,
+                        )
+                    } else {
+                        default_argument(Literal::Integer(0), DataType::Integer, false, e.origin)
+                    });
+                    (&owned[..], 2)
+                } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "locate" | "position")
                     && n == 2
                 {
@@ -2419,9 +2437,24 @@ impl Resolver<'_> {
                         .first()
                         .and_then(|k| k.ty.data_type.clone())
                         .map_or_else(|| "void".to_owned(), |t| t.catalog_string());
+                    // Spark names `typeof(1 / 0)` over the implicit casts of
+                    // its argument, but not those that unify spatial types
+                    // (`typeof(array(geog, CAST(geog AS GEOGRAPHY(ANY))))`,
+                    // checked against the st-functions golden).
+                    let spatial = call_kids.iter().any(|k| {
+                        k.ty.data_type.as_ref().is_some_and(|t| {
+                            t.any_type(&|x| {
+                                matches!(x, DataType::Geometry { .. } | DataType::Geography { .. })
+                            })
+                        })
+                    });
                     (
                         rebuilt(ExprNode::Literal(Literal::String(name))),
-                        Some(expr),
+                        if spatial {
+                            shown.or(Some(expr))
+                        } else {
+                            Some(expr)
+                        },
                     )
                 } else {
                     (expr, shown)

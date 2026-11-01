@@ -68,7 +68,12 @@ pub(crate) fn coerce_to(
     };
     let parts = parts(e.data_type(), to.clone(), mode, env)?;
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
-    Ok(Arc::new(Cast { e, parts, nullable }))
+    Ok(Arc::new(Cast {
+        e,
+        parts,
+        nullable,
+        geography: false,
+    }))
 }
 
 /// `(l, r)` with operands of one Spark `STRING` or `BINARY` in different
@@ -96,6 +101,9 @@ struct Cast {
     e: Arc<dyn PhysExpr>,
     parts: CastParts,
     nullable: bool,
+    /// The target is a geography: every value's coordinates must be
+    /// geographic (a geometry of the same SRID casts to it).
+    geography: bool,
 }
 
 /// Whether a cast between `from` and `to` reads the session time zone.
@@ -311,7 +319,30 @@ pub(super) fn compile(
     // Every cast to a narrower or textual type can produce NULL in legacy
     // and `TRY_CAST` modes; ANSI keeps the input's nullability.
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
-    Ok(Arc::new(Cast { e, parts, nullable }))
+    let geography = matches!(to, DataType::Geography { .. });
+    Ok(Arc::new(Cast {
+        e,
+        parts,
+        nullable,
+        geography,
+    }))
+}
+
+/// Fails with `WKB_PARSE_ERROR` on a value of `spatial` (the struct of a
+/// geometry or geography) with a coordinate outside longitude and latitude.
+fn check_geography(spatial: &ArrayRef) -> Result<()> {
+    use krishiv_types::geo::{ByteOrder, SpatialKind, rewrite};
+    let Some(s) = spatial.as_struct_opt() else {
+        return Ok(());
+    };
+    let wkb = s.column(1);
+    let Some(wkb) = wkb.as_binary_view_opt() else {
+        return Ok(());
+    };
+    for row in (0..s.len()).filter(|r| s.is_valid(*r)) {
+        rewrite(wkb.value(row), SpatialKind::Geography, ByteOrder::Ndr)?;
+    }
+    Ok(())
 }
 
 impl PhysExpr for Cast {
@@ -330,6 +361,9 @@ impl PhysExpr for Cast {
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let v = self.e.eval(batch, partition)?;
         let out = apply(&self.parts, v.array())?;
+        if self.geography {
+            check_geography(&out)?;
+        }
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),
             Value::Array(_) => Value::Array(out),
