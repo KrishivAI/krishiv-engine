@@ -154,10 +154,17 @@ fn directories_list_like_spark() {
         class(got),
         (ErrorClass::PathNotFound, "memory:/nope".to_owned())
     );
-    // A subdirectory would need partition discovery.
+    // A `name=value` subdirectory is a partition column, after the data's.
     env.write(&fx, "p/k=1/part-0", &a, &[ints(&a)], &[])
         .unwrap();
-    let got = env.block_on(r.infer("mock", &paths(&["/p"]), &none));
+    let got = env
+        .block_on(r.infer("mock", &paths(&["/p"]), &none))
+        .unwrap();
+    assert_eq!(got.last().map(|c| c.name.as_str()), Some("k"));
+    // Any other subdirectory is refused.
+    env.write(&fx, "q/plain/part-0", &a, &[ints(&a)], &[])
+        .unwrap();
+    let got = env.block_on(r.infer("mock", &paths(&["/q"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
     // Globs and credentials in paths.
     for p in ["/d/*", "s3://user:secret@bucket/k"] {

@@ -28,6 +28,8 @@ use crate::error::{Result, internal, unsupported};
 /// What NULL and the empty string render as in a partition directory.
 pub const DEFAULT_PARTITION: &str = "__HIVE_DEFAULT_PARTITION__";
 
+pub mod discover;
+
 #[cfg(test)]
 mod tests;
 

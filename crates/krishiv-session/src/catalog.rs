@@ -456,7 +456,8 @@ impl QueryCatalog {
                 listing.files.to_vec(),
                 listing.options.clone(),
             )
-            .await?;
+            .await?
+            .with_partition_columns(listing.partition_columns.to_vec());
             self.opened
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)

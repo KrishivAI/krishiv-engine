@@ -1041,3 +1041,47 @@ proptest! {
         assert_eq!(fast, slow);
     }
 }
+
+/// Text built from the pieces of a `TIME` (and some that are not), so most
+/// strings are close to valid.
+fn time_text() -> impl Strategy<Value = String> {
+    let piece = proptest::sample::select(
+        &[
+            "0", "1", "2", "5", "9", "12", "23", "24", "59", "60", "99", "123", ":", ":", ".", " ",
+            "\t", "\u{a0}", "T", "AM", "PM", "pm", "-", "x",
+        ][..],
+    );
+    proptest::collection::vec(piece, 1..9).prop_map(|p| p.concat())
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    /// The string-to-`TIME` cast agrees with the byte scanner on every row.
+    #[test]
+    fn time_text_reads_like_the_reference(
+        rows in proptest::collection::vec(proptest::option::weighted(0.9, time_text()), 0..64)
+    ) {
+        use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
+        let input: arrow_array::StringArray = rows.iter().map(|r| r.as_deref()).collect();
+        let opts = CastOptions { mode: CastMode::Legacy, time_zone: &FixedOffset(0) };
+        let fast = cast(&input, &arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond), &opts)
+            .unwrap();
+        let fast = fast.as_primitive::<arrow_array::types::Time64NanosecondType>();
+        for (i, r) in rows.iter().enumerate() {
+            let want = r.as_deref().and_then(reference::time_parse);
+            prop_assert_eq!((!fast.is_null(i)).then(|| fast.value(i)), want, "{:?}", r);
+        }
+    }
+
+    /// Showing a time and reading it back is the identity (to the
+    /// microsecond, the widest `TIME`), and the seconds cast agrees.
+    #[test]
+    fn time_shows_and_reads_back(micros in 0_i64..86_400_000_000) {
+        use krishiv_kernels::cast::{format_time, parse_time};
+        let nanos = micros * 1_000;
+        let text = format_time(nanos);
+        prop_assert_eq!(parse_time(&text), Some(nanos));
+        prop_assert_eq!(reference::time_parse(&text), Some(nanos));
+    }
+}

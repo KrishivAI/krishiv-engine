@@ -19,7 +19,7 @@ use arrow_array::{
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType as ArrowType, FieldRef};
 
-use super::cast::{CastParts, apply};
+use super::cast::{CastParts, Precision, apply};
 use crate::error::Result;
 use crate::planner::build::{internal, unsupported};
 
@@ -33,7 +33,7 @@ pub(super) fn is_nested(t: &ArrowType) -> bool {
 
 /// `a` through `p`, where the source or the target is nested.
 pub(super) fn cast(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
-    if a.data_type() == &p.to {
+    if a.data_type() == &p.to && p.precision.is_empty() {
         return Ok(Arc::clone(a));
     }
     let refused = || unsupported(&format!("CAST from {} to {}", a.data_type(), p.to));
@@ -50,7 +50,13 @@ pub(super) fn cast(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
                 .columns()
                 .iter()
                 .zip(to.iter())
-                .map(|(c, f)| apply(&p.child(f.data_type()), &masked(c, s.nulls())?))
+                .enumerate()
+                .map(|(i, (c, f))| {
+                    apply(
+                        &p.child(f.data_type(), p.precision.field(i)),
+                        &masked(c, s.nulls())?,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
             let out = StructArray::try_new(to.clone(), children, s.nulls().cloned())
                 .map_err(|e| internal(&e.to_string()))?;
@@ -126,7 +132,7 @@ fn compact<O: OffsetSizeTrait>(
 fn list<O: OffsetSizeTrait>(p: &CastParts, a: &ArrayRef, to: &FieldRef) -> Result<ArrayRef> {
     let l = a.as_list::<O>();
     let (offsets, values) = compact(l.value_offsets(), l.nulls(), l.values())?;
-    let values = apply(&p.child(to.data_type()), &values)?;
+    let values = apply(&p.child(to.data_type(), p.precision.element()), &values)?;
     let out = ListArray::try_new(Arc::clone(to), offsets, values, l.nulls().cloned())
         .map_err(|e| internal(&e.to_string()))?;
     Ok(Arc::new(out))
@@ -136,7 +142,7 @@ fn map(p: &CastParts, a: &ArrayRef, to: &FieldRef, sorted: bool) -> Result<Array
     let m = a.as_map();
     let entries: ArrayRef = Arc::new(m.entries().clone());
     let (offsets, entries) = compact(m.value_offsets(), m.nulls(), &entries)?;
-    let entries = apply(&p.child(to.data_type()), &entries)?;
+    let entries = apply(&p.child(to.data_type(), p.precision.entries()), &entries)?;
     let out = MapArray::try_new(
         Arc::clone(to),
         offsets,
@@ -217,7 +223,7 @@ fn texts(p: &CastParts, a: &ArrayRef) -> Result<Vec<Option<String>>> {
             rows(ranges(offsets), items, "{", "}")
         }
         _ => {
-            let out = apply(&p.child(&ArrowType::Utf8View), a)?;
+            let out = apply(&p.child(&ArrowType::Utf8View, Precision::None), a)?;
             out.as_string_view()
                 .iter()
                 .map(|v| v.map(str::to_owned))

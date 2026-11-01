@@ -689,6 +689,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 crate::TypedLiteralKind::Timestamp => "TIMESTAMP",
                 crate::TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
                 crate::TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+                crate::TypedLiteralKind::Time => "TIME",
             };
             out.push(Piece::Owned(format!("{keyword} '{value}'")));
         }
