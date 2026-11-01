@@ -844,3 +844,33 @@ fn stack_matches_spark_edge_cases() {
         table(&[&["1"], &["2"]])
     );
 }
+
+#[test]
+fn generators_beside_aliases_aggregates_and_windows() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        error_of(&s, "select explode(array(1,2)) as (a, b)").error_class(),
+        ErrorClass::UdtfAliasNumberMismatch
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(collect_list(x)) from values (1),(2) t(x)"
+        ),
+        table(&[&["1"], &["2"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(arr) e, row_number() over (order by k) rn from values (1, array(1,2)) t(k, arr)"
+        ),
+        table(&[&["1", "1"], &["2", "2"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(array(1,2)) e, sum(1) over () s from values (1) t(k)"
+        ),
+        table(&[&["1", "2"], &["2", "2"]])
+    );
+}
