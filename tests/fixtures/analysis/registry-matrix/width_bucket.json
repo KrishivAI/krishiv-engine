@@ -2,147 +2,131 @@
   "entries": [
     {
       "id": "width_bucket#08522002b6c3/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#08522002b6c3/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#1f0baf8c13ed/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, CAST(NULL AS interval year), 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, CAST(NULL AS interval year), 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#1f0baf8c13ed/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, CAST(NULL AS interval year), 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, CAST(NULL AS interval year), 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#2cdea7416c20/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '0' DAY, CAST(NULL AS interval day), INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' DAY, CAST(NULL AS interval day), INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#2cdea7416c20/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '0' DAY, CAST(NULL AS interval day), INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' DAY, CAST(NULL AS interval day), INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#42875699b891/ansi_on",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#42875699b891/ansi_off",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval day), INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#430624ff3b8f/ansi_on",
-      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1-2' YEAR TO MONTH, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#430624ff3b8f/ansi_off",
-      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1-2' YEAR TO MONTH, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#4335b9dc32b0/ansi_on",
-      "reason": "SELECT width_bucket(5.3, INTERVAL '1 02:03:04' DAY TO SECOND, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, INTERVAL '1 02:03:04' DAY TO SECOND, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#4335b9dc32b0/ansi_off",
-      "reason": "SELECT width_bucket(5.3, INTERVAL '1 02:03:04' DAY TO SECOND, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, INTERVAL '1 02:03:04' DAY TO SECOND, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#4473af590076/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#4473af590076/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#466d2261914f/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '1-2' YEAR TO MONTH, 0.2, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(INTERVAL '1-2' YEAR TO MONTH, 0.2, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#466d2261914f/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '1-2' YEAR TO MONTH, 0.2, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(INTERVAL '1-2' YEAR TO MONTH, 0.2, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#47f3b0b42546/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, CAST(NULL AS interval year), INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, CAST(NULL AS interval year), INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#47f3b0b42546/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, CAST(NULL AS interval year), INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "width_bucket#48ec6e0def23/ansi_on",
-      "reason": "SELECT width_bucket(5.3, 0.2, 10.6, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "width_bucket#48ec6e0def23/ansi_off",
-      "reason": "SELECT width_bucket(5.3, 0.2, 10.6, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, CAST(NULL AS interval year), INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#4fdb40f0c53a/ansi_on",
-      "reason": "SELECT width_bucket(5.3, INTERVAL '1-2' YEAR TO MONTH, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, INTERVAL '1-2' YEAR TO MONTH, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#4fdb40f0c53a/ansi_off",
-      "reason": "SELECT width_bucket(5.3, INTERVAL '1-2' YEAR TO MONTH, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, INTERVAL '1-2' YEAR TO MONTH, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#58f403fd891a/ansi_on",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#58f403fd891a/ansi_off",
-      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(CAST(NULL AS interval year), INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#62fe7381eb4a/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, CAST(NULL AS interval day), 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, CAST(NULL AS interval day), 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#62fe7381eb4a/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, CAST(NULL AS interval day), 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, CAST(NULL AS interval day), 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#6f35fbc81ebf/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#6f35fbc81ebf/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "width_bucket#a31d6503e08a/ansi_on",
-      "reason": "SELECT width_bucket(5.3, 0.2, 10.6, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "width_bucket#a31d6503e08a/ansi_off",
-      "reason": "SELECT width_bucket(5.3, 0.2, 10.6, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#d62c647e8e17/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '1 02:03:04' DAY TO SECOND, 0.2, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(INTERVAL '1 02:03:04' DAY TO SECOND, 0.2, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#d62c647e8e17/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '1 02:03:04' DAY TO SECOND, 0.2, 10.6, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(INTERVAL '1 02:03:04' DAY TO SECOND, 0.2, 10.6, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#e04bf1ead0e4/ansi_on",
-      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#e04bf1ead0e4/ansi_off",
-      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "width_bucket#f9ff9022e4ce/ansi_on",
-      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1 02:03:04' DAY TO SECOND, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "width_bucket#f9ff9022e4ce/ansi_off",
-      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT width_bucket(5.3, 0.2, INTERVAL '1 02:03:04' DAY TO SECOND, 5) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     }
   ],
   "format_version": 1,

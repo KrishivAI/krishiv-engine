@@ -309,3 +309,33 @@ fn region_zone_names_follow_daylight_time() {
         ("CEST".into(), "Central European Summer Time".into())
     );
 }
+
+#[test]
+fn region_zone_names_use_historical_and_out_of_range_daylight_time() {
+    let full = DateTimePattern::new("zzzz", Purpose::Format).unwrap();
+    let name = |id, micros: i64, offset: i32| {
+        let zone = Zone {
+            id,
+            rules: &FixedOffset(offset),
+        };
+        full.format_timestamp(micros, zone).unwrap()
+    };
+    // Shanghai observed daylight time in 1990 only; Berlin past year 9999 repeats its rules.
+    assert_eq!(
+        name("Asia/Shanghai", 648_043_200_000_000, 32400),
+        "China Daylight Time"
+    );
+    assert_eq!(
+        name("Europe/Berlin", 1_010_786_126_400_000_000, 7200),
+        "Central European Summer Time"
+    );
+    // Java calls Windhoek's +02:00 daylight time from March 1990 (1991-07-15T12:00Z), standard before.
+    assert_eq!(
+        name("Africa/Windhoek", 679_579_200_000_000, 7200),
+        "Western African Time"
+    );
+    assert_eq!(
+        name("Africa/Windhoek", 15_000_000_000_000, 7200),
+        "Central Africa Time"
+    );
+}

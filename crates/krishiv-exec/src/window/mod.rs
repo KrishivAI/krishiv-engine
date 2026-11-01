@@ -347,6 +347,7 @@ impl WindowFunctionPlan {
                 | DataType::Int32
                 | DataType::Int64
                 | DataType::Date32
+                | DataType::Decimal64(..)
                 | DataType::Decimal128(..)
         );
         for b in bounds {

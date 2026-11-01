@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -76,7 +76,10 @@ fn ddl_type(t: &str) -> DataType {
             let (p, s) = d["decimal(".len()..d.len() - 1]
                 .split_once(',')
                 .expect("decimal(p,s)");
-            DataType::Decimal128(p.trim().parse().expect("p"), s.trim().parse().expect("s"))
+            krishiv_types::arrow::canonical_arrow_type(&DataType::Decimal128(
+                p.trim().parse().expect("p"),
+                s.trim().parse().expect("s"),
+            ))
         }
         other => panic!("unknown type {other}"),
     }
@@ -125,8 +128,8 @@ fn render(a: &dyn Array, i: usize) -> Option<String> {
         DataType::Int64 => a.as_primitive::<Int64Type>().value(i).to_string(),
         DataType::Float32 => java_float_string32(a.as_primitive::<Float32Type>().value(i)),
         DataType::Float64 => java_double_string(a.as_primitive::<Float64Type>().value(i)),
-        DataType::Decimal128(_, s) => {
-            let v = a.as_primitive::<Decimal128Type>().value(i);
+        DataType::Decimal64(_, s) | DataType::Decimal128(_, s) => {
+            let v = crate::csv::convert::decimal_at(a, i);
             krishiv_kernels::text::java_decimal_string(v, *s)
         }
         DataType::Utf8View => a.as_string_view().value(i).to_owned(),
@@ -1725,5 +1728,33 @@ fn random_inputs_never_panic_and_splits_agree() {
                 }
             }
         }
+    }
+}
+
+/// The encoder writes decimals of either carrier.
+#[test]
+fn decimals_are_written_from_both_carriers() {
+    let narrow: arrow_array::ArrayRef = Arc::new(
+        arrow_array::Decimal64Array::from(vec![150, -275])
+            .with_precision_and_scale(10, 2)
+            .expect("decimal"),
+    );
+    let wide: arrow_array::ArrayRef = Arc::new(
+        arrow_array::Decimal128Array::from(vec![150, -275])
+            .with_precision_and_scale(20, 2)
+            .expect("decimal"),
+    );
+    for column in [narrow, wide] {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            column.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![column]).expect("batch");
+        let bytes = encode(&batch, &options(&serde_json::json!({}))).expect("encode");
+        assert_eq!(
+            String::from_utf8(bytes).expect("utf-8"),
+            "{\"d\":1.50}\n{\"d\":-2.75}\n"
+        );
     }
 }

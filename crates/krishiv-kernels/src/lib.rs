@@ -49,6 +49,7 @@ pub mod error;
 pub mod float;
 pub mod hash;
 pub mod integer;
+pub mod interval;
 pub mod json;
 pub mod list;
 pub mod map;

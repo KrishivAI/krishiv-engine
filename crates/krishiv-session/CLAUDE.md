@@ -15,6 +15,7 @@ Paths are relative to this crate.
 - `src/conf.rs` configuration snapshot taken per query (`query_snapshot`, where an unset session time zone is the local zone;
   `snapshot` is the stored configuration, which `SET` lists); `local_zone` reads the machine's zone as Java does
 - `src/catalog.rs` session catalog (temporary tables and views)
+- `src/carrier.rs` decimals at the session's edges: `register_batches` converts to the canonical carrier, results and `schema()` read `Decimal128`
 - `src/view_schema.rs` schema binding modes of permanent views (`WITH SCHEMA BINDING|COMPENSATION|TYPE EVOLUTION|EVOLUTION`, Spark's `ViewSchemaMode`): the read projection per mode, the checks against the analyzed view query, the evolved schema stored after analysis; `tests/views_schema_binding.rs`
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
 - `src/access.rs` `StatementInfo` / `Session::statement_info` (class + read securables with columns), write/DDL checks (`authorize_statement`), the `krishiv::audit` denial record, `PathPrefixPolicy`

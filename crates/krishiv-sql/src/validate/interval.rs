@@ -14,9 +14,12 @@ use krishiv_common::error::{
     InvalidIntervalFormatInvalidValue, InvalidIntervalFormatMissingNumber,
     InvalidIntervalFormatMissingUnit, InvalidIntervalFormatUnmatchedFormatString,
     InvalidIntervalFormatUnmatchedFormatStringWithNotice, InvalidIntervalFormatUnrecognizedNumber,
-    InvalidIntervalFormatUnsupportedFromToExpression, KrishivError, LegacyErrorTemp0024,
-    LegacyErrorTemp0026, LegacyErrorTemp0027, LegacyErrorTemp0029, LegacyErrorTemp0063,
+    InvalidIntervalFormatUnsupportedFromToExpression, KrishivError, KrishivUnsupportedFeature,
+    LegacyErrorTemp0024, LegacyErrorTemp0026, LegacyErrorTemp0027, LegacyErrorTemp0029,
+    LegacyErrorTemp0063,
 };
+
+use krishiv_plan::{DayTimeField, Literal as IrLiteral, YearMonthField};
 
 use super::literal::TypedKind;
 use crate::ast::{Interval, IntervalValue, Span};
@@ -33,6 +36,110 @@ struct Calendar {
     months: i32,
     days: i32,
     micros: i64,
+}
+
+/// The fields an interval literal names; Spark types the literal by them,
+/// whatever its values (`INTERVAL 0 MONTH 1 DAY` mixes fields).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Named {
+    /// The lowest and the highest year-month field.
+    year_month: Option<(YearMonthField, YearMonthField)>,
+    /// The lowest and the highest day-time field.
+    day_time: Option<(DayTimeField, DayTimeField)>,
+}
+
+impl Named {
+    fn add_year_month(&mut self, f: YearMonthField) {
+        let (lo, hi) = self.year_month.unwrap_or((f, f));
+        self.year_month = Some((lo.min(f), hi.max(f)));
+    }
+
+    fn add_day_time(&mut self, f: DayTimeField) {
+        let (lo, hi) = self.day_time.unwrap_or((f, f));
+        self.day_time = Some((lo.min(f), hi.max(f)));
+    }
+
+    fn of_range(from: &str, to: &str) -> Self {
+        let mut named = Self::default();
+        for unit in [from, to] {
+            named.add_unit(unit);
+        }
+        named
+    }
+
+    /// Records a unit of Spark's interval grammar; a week counts as days, and
+    /// milliseconds and microseconds as seconds.
+    fn add_unit(&mut self, unit: &str) {
+        match unit {
+            "year" => self.add_year_month(YearMonthField::Year),
+            "month" => self.add_year_month(YearMonthField::Month),
+            "week" | "day" => self.add_day_time(DayTimeField::Day),
+            "hour" => self.add_day_time(DayTimeField::Hour),
+            "minute" => self.add_day_time(DayTimeField::Minute),
+            _ => self.add_day_time(DayTimeField::Second),
+        }
+    }
+
+    fn mixed(self) -> bool {
+        self.year_month.is_some() && self.day_time.is_some()
+    }
+}
+
+/// `IntervalUtils.getDuration`: a value's days and microseconds as microseconds.
+fn duration(c: Calendar) -> Result<i64, KrishivError> {
+    i64::from(c.days)
+        .checked_mul(MICROS_PER_DAY)
+        .and_then(|d| d.checked_add(c.micros))
+        .ok_or_else(|| IntervalArithmeticOverflowWithoutSuggestion {}.into())
+}
+
+/// The plan literal of a value of the fields `named`.
+fn plan_literal(c: Calendar, named: Named) -> Result<IrLiteral, KrishivError> {
+    match (named.year_month, named.day_time) {
+        (Some((start, end)), None) => Ok(IrLiteral::YearMonthInterval {
+            months: c.months,
+            start,
+            end,
+        }),
+        (None, Some((start, end))) => Ok(IrLiteral::DayTimeInterval {
+            micros: duration(c)?,
+            start,
+            end,
+        }),
+        // Only `spark.sql.legacy.interval.enabled` lets these through the
+        // checks, and its calendar literals are not supported.
+        _ => Err(KrishivUnsupportedFeature {
+            feature: "an interval literal mixing year-month and day-time fields".to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// The value and fields of `INTERVAL value unit ...` or `INTERVAL value from TO to`.
+fn evaluate(iv: &Interval) -> Result<(Calendar, Named), KrishivError> {
+    match &iv.range {
+        Some((value, from, to)) => Ok((range(value, from, to)?, Named::of_range(from, to))),
+        None => multi_units(&iv.units),
+    }
+}
+
+/// The plan literal of a checked `INTERVAL value unit ...` or `INTERVAL value
+/// from TO to`.
+///
+/// # Errors
+/// As for [`literal`].
+pub(crate) fn lowered(iv: &Interval) -> Result<IrLiteral, KrishivError> {
+    let (c, named) = evaluate(iv)?;
+    plan_literal(c, named)
+}
+
+/// The plan literal of a checked `INTERVAL 'text'`.
+///
+/// # Errors
+/// As for [`typed`].
+pub(crate) fn lowered_typed(value: &str) -> Result<IrLiteral, KrishivError> {
+    let (c, named) = parse_string(value).map_err(|_| TypedKind::Interval.invalid(value))?;
+    plan_literal(c, named)
 }
 
 fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
@@ -61,11 +168,8 @@ pub(crate) fn literal(iv: &Interval, sql: &str, legacy: bool) -> Result<(), Pars
             .unwrap_or(iv.span.start),
         iv.span.end,
     );
-    let calendar = match &iv.range {
-        Some((value, from, to)) => range(value, from, to).map_err(|e| at(e, body))?,
-        None => multi_units(&iv.units).map_err(|e| at(e, body))?,
-    };
-    typed_check(calendar, iv.span, sql, legacy)
+    let (calendar, named) = evaluate(iv).map_err(|e| at(e, body))?;
+    typed_check(calendar, named, iv.span, sql, legacy)
 }
 
 /// Checks the typed literal `INTERVAL 'text'` at `span`.
@@ -74,30 +178,34 @@ pub(crate) fn literal(iv: &Interval, sql: &str, legacy: bool) -> Result<(), Pars
 /// `INVALID_TYPED_LITERAL` when `text` is not an interval, and the mixed
 /// fields and overflow errors of [`literal`].
 pub(crate) fn typed(value: &str, span: Span, sql: &str, legacy: bool) -> Result<(), ParseError> {
-    let calendar =
-        string_to_interval(value).map_err(|_| at(TypedKind::Interval.invalid(value), span))?;
-    typed_check(calendar, span, sql, legacy)
+    let (calendar, named) =
+        parse_string(value).map_err(|_| at(TypedKind::Interval.invalid(value), span))?;
+    typed_check(calendar, named, span, sql, legacy)
 }
 
 /// Spark's `visitInterval` after parsing: a year-month or a day-time
-/// interval, never both (unless legacy).
-fn typed_check(c: Calendar, span: Span, sql: &str, legacy: bool) -> Result<(), ParseError> {
+/// interval, never both (unless legacy), and a day-time value within a long.
+fn typed_check(
+    c: Calendar,
+    named: Named,
+    span: Span,
+    sql: &str,
+    legacy: bool,
+) -> Result<(), ParseError> {
     if legacy {
         return Ok(());
     }
-    if c.months != 0 {
-        if c.days != 0 || c.micros != 0 {
-            return Err(at(
-                LegacyErrorTemp0029 {
-                    literal: span.text(sql).to_owned(),
-                },
-                span,
-            ));
-        }
-        return Ok(());
+    if named.mixed() {
+        return Err(at(
+            LegacyErrorTemp0029 {
+                literal: span.text(sql).to_owned(),
+            },
+            span,
+        ));
     }
-    // A day-time interval that does not fit in microseconds fails when it
-    // is evaluated, not here.
+    if named.day_time.is_some() {
+        duration(c).map_err(|e| at(e, span))?;
+    }
     Ok(())
 }
 
@@ -113,7 +221,7 @@ fn signed(v: &IntervalValue) -> String {
 
 /// `value unit [value unit ...]`: Spark joins ` value unit` pairs and
 /// parses them as one interval string.
-fn multi_units(units: &[(IntervalValue, String)]) -> Result<Calendar, KrishivError> {
+fn multi_units(units: &[(IntervalValue, String)]) -> Result<(Calendar, Named), KrishivError> {
     let mut text = String::new();
     for (value, unit) in units {
         // A string value holding a unit would read as one once joined.
@@ -128,7 +236,7 @@ fn multi_units(units: &[(IntervalValue, String)]) -> Result<Calendar, KrishivErr
         text.push(' ');
         text.push_str(unit);
     }
-    string_to_interval(&text)
+    parse_string(&text)
 }
 
 /// `value from TO to`.
@@ -363,9 +471,15 @@ enum State {
 
 /// Spark's `IntervalUtils.stringToInterval`: `[interval] [+|-]value unit
 /// ...`, units `year`, `month`, `week`, `day`, `hour`, `minute`, `second`,
-/// `millisecond`, `microsecond`, `nanosecond` (each optionally plural); only seconds take
+/// `millisecond`, `microsecond` (each optionally plural); only seconds take
 /// a fraction (up to nanoseconds).
+#[cfg(test)]
 fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
+    parse_string(input).map(|(c, _)| c)
+}
+
+/// Spark's `stringToInterval`, with the units the string names.
+fn parse_string(input: &str) -> Result<(Calendar, Named), KrishivError> {
     let s = trim_all(input).to_lowercase();
     let b = s.as_bytes();
     if b.is_empty() {
@@ -401,6 +515,7 @@ fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
     let (mut value, mut negative, mut fraction, mut scale) = (0_i64, false, 0_i64, -1_i64);
     let mut point_prefixed = false;
     let mut c = Calendar::default();
+    let mut named = Named::default();
     while i < b.len() {
         let ch = b[i];
         let space = ch.is_ascii_whitespace();
@@ -550,7 +665,7 @@ fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
                     c.micros = c.micros.checked_add(us).ok_or_else(arithmetic)?;
                     Ok(())
                 };
-                let units: [(&str, i64); 10] = [
+                let units: [(&str, i64); 9] = [
                     ("year", 0),
                     ("month", 1),
                     ("week", 2),
@@ -560,7 +675,6 @@ fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
                     ("second", MICROS_PER_SECOND),
                     ("millisecond", 1000),
                     ("microsecond", 1),
-                    ("nanosecond", 0),
                 ];
                 let Some((unit, per)) = units.iter().find(|(u, _)| rest.starts_with(u)) else {
                     return Err(invalid_unit());
@@ -581,11 +695,9 @@ fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
                         add_micros(&mut c, value, *per)?;
                         c.micros = c.micros.checked_add(fraction).ok_or_else(arithmetic)?;
                     }
-                    "nanosecond" => {
-                        c.micros = c.micros.checked_add(value / 1000).ok_or_else(arithmetic)?;
-                    }
                     _ => add_micros(&mut c, value, *per)?,
                 }
+                named.add_unit(unit);
                 i += unit.len();
                 state = State::UnitSuffix;
             }
@@ -618,7 +730,7 @@ fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
         }
     }
     match state {
-        State::UnitSuffix | State::UnitEnd | State::TrimBeforeSign => Ok(c),
+        State::UnitSuffix | State::UnitEnd | State::TrimBeforeSign => Ok((c, named)),
         State::TrimBeforeValue => Err(InvalidIntervalFormatMissingNumber {
             input: input_owned(),
             word: word(i.saturating_sub(1)),
