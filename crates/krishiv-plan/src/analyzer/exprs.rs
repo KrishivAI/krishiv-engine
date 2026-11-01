@@ -2667,7 +2667,9 @@ impl Resolver<'_> {
             return e;
         };
         let [value] = &values[..] else { return e };
-        if !super::subquery::one_row_aggregate(plan) {
+        if !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+            || !super::subquery::one_row_aggregate(plan)
+        {
             return e;
         }
         let scalar = Arc::new(

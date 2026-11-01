@@ -904,6 +904,24 @@ impl Rewriter {
         {
             return Ok(Arc::clone(p));
         }
+        // Spark rejects a correlated scalar subquery here
+        // (`MUST_AGGREGATE_CORRELATED_SCALAR_SUBQUERY` for a key).
+        if all.iter().any(|e| {
+            subqueries(e).iter().any(|s| {
+                matches!(
+                    s.node,
+                    ExprNode::Subquery {
+                        kind: SubqueryKind::Scalar,
+                        ..
+                    }
+                ) && self.correlated(s)
+            })
+        }) {
+            return Err(unsupported(
+                "correlated subqueries outside a filter or a projection",
+                p.origin,
+            ));
+        }
         let (base, all) = self.existence(input, all)?;
         let (base, mut all) = self.scalars(base, all)?;
         let aggregates = all.split_off(keys.len());
