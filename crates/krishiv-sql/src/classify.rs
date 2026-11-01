@@ -475,6 +475,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                 | AlterTableAction::ChangeColumn { .. }
                 | AlterTableAction::AlterColumn { .. }
                 | AlterTableAction::SetTblProperties(_)
+                | AlterTableAction::SetComment(_)
                 | AlterTableAction::UnsetTblProperties { .. }
                 | AlterTableAction::SetSerdeProperties(_)
                 | AlterTableAction::SetPartitionSerdeProperties { .. }

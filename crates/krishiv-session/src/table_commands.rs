@@ -910,6 +910,10 @@ impl Session {
             .table(&name.namespace, &name.name)
             .is_some_and(|t| t.view.is_some())
         {
+            if matches!(a.action, AlterTableAction::SetComment(_)) {
+                // Spark's error for a view here is not recorded in the goldens yet.
+                return Err(unsupported("COMMENT ON TABLE of a view"));
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
                 operation: "`ALTER TABLE`".to_owned(),
                 view_name: name.quoted(),
@@ -1012,6 +1016,9 @@ impl Session {
                         changed.properties.insert(k, v);
                     }
                 }
+            }
+            AlterTableAction::SetComment(comment) => {
+                changed.comment = comment.clone();
             }
             AlterTableAction::UnsetTblProperties { keys, .. } => {
                 for key in options_of(keys, original).keys() {
@@ -1938,7 +1945,14 @@ impl Session {
             }
             .into());
         }
-        if self.temp_entry_of(name, env) {
+        let global = name
+            .namespace
+            .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+            && self.state.catalog.exists(
+                &crate::catalog::global_key(&name.name),
+                env.analysis.conf.case_sensitive,
+            );
+        if self.temp_entry_of(name, env) || global {
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: format!("`{operation}`"),
                 view_name: name.quoted(),

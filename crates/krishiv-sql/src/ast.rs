@@ -1290,6 +1290,8 @@ pub enum AlterTableAction {
     },
     /// `SET TBLPROPERTIES (...)`.
     SetTblProperties(Vec<TableOption>),
+    /// `COMMENT ON TABLE name IS 'comment'` (`None` for `IS NULL`).
+    SetComment(Option<String>),
     /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
     UnsetTblProperties {
         /// `IF EXISTS`.

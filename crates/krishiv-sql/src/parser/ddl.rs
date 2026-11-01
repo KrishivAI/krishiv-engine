@@ -34,6 +34,8 @@ impl<'s> Parser<'s> {
     pub(crate) fn command_statement(&mut self) -> PR<Statement> {
         if self.kw_at(0, "ALTER") {
             self.alter_command()
+        } else if self.kw_at(0, "COMMENT") {
+            self.comment_on_command()
         } else if self.kw_at(0, "SHOW") {
             self.show_command()
         } else if self.kw_at(0, "DESC") || self.kw_at(0, "DESCRIBE") {
@@ -169,6 +171,32 @@ impl<'s> Parser<'s> {
         Ok(PartitionSpec {
             parts,
             span: self.span_from(start),
+        })
+    }
+
+    // ---- COMMENT ON ---------------------------------------------------
+
+    /// `COMMENT ON TABLE name IS 'comment' | NULL`, an `ALTER TABLE` that sets the comment.
+    fn comment_on_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("COMMENT")?;
+            p.expect_kw("ON")?;
+            p.expect_kw("TABLE")?;
+            let table = p.ddl_name()?;
+            p.expect_kw("IS")?;
+            let comment = if p.eat_kw("NULL") {
+                None
+            } else {
+                Some(p.string_after()?)
+            };
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::AlterTable(Box::new(AlterTable {
+                table,
+                action: AlterTableAction::SetComment(comment),
+                span,
+            })))
         })
     }
 

@@ -66,3 +66,27 @@ fn a_view_shows_the_same_statement_as_serde() {
     assert_eq!(show_create(&s, "v AS SERDE"), show_create(&s, "v"));
     assert!(block_on(s.sql("SHOW CREATE TABLE tbl AS SERDE")).is_err());
 }
+
+#[test]
+fn a_global_temp_view_is_a_view_to_alter_table() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE GLOBAL TEMPORARY VIEW gv(a, b) AS SELECT 1, 'one'")).unwrap();
+    let e = block_on(s.sql("ALTER TABLE global_temp.gv CHANGE a TYPE INT")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::ExpectTableNotViewNoAlternative
+    );
+}
+
+#[test]
+fn comment_on_table_sets_and_clears_the_table_comment() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE tc (a INT) USING parquet")).unwrap();
+    block_on(s.sql("COMMENT ON TABLE IDENTIFIER('t' || 'c') IS 'hello'")).unwrap();
+    assert!(show_create(&s, "tc").contains("COMMENT 'hello'\n"));
+    block_on(s.sql("COMMENT ON TABLE tc IS NULL")).unwrap();
+    assert!(!show_create(&s, "tc").contains("COMMENT"));
+    assert!(block_on(s.sql("COMMENT ON TABLE nope IS 'x'")).is_err());
+    block_on(s.sql("CREATE VIEW vc AS SELECT a FROM tc")).unwrap();
+    assert!(block_on(s.sql("COMMENT ON TABLE vc IS 'x'")).is_err());
+}

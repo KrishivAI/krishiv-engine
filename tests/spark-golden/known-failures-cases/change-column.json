@@ -1,9 +1,5 @@
 {
-  "cases": {
-    "sql-commands": [
-      25
-    ]
-  },
+  "cases": {},
   "file": "change-column",
   "format_version": 1
 }
