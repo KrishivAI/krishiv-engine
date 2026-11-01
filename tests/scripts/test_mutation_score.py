@@ -69,3 +69,12 @@ def test_enforced_area_without_input_fails():
     rows, failures = m.evaluate({}, {"areas": {"gone": {"floor": 70, "enforce": True}, "soft": {}}})
     assert [r["area"] for r in rows] == ["gone", "soft"]
     assert failures == ["gone: no mutants tested is below the floor 70%"]
+
+
+def test_main_without_shard_files_reports_every_area_untested(tmp_path, capsys):
+    floors = tmp_path / "f.json"
+    floors.write_text(json.dumps({"target": 70, "areas": {"a": {"floor": 70, "enforce": False}}}))
+    out = tmp_path / "out.json"
+    assert m.main(["--floors", str(floors), "--out", str(out)]) == 0
+    assert json.loads(out.read_text())["areas"][0]["score"] is None
+    assert "| a | n/a |" in capsys.readouterr().out

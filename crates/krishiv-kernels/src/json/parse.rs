@@ -467,39 +467,45 @@ impl<'a> Lexer<'a> {
             return Err(Error::TooDeep);
         }
         match self.next()? {
-            Some(Token::OpenBrace | Token::OpenBracket) => {
-                let brace = self.bytes.get(self.pos.saturating_sub(1)).copied() == Some(b'{');
-                loop {
-                    self.skip_trivia()?;
-                    let b = self.bytes.get(self.pos).copied();
-                    if brace && b == Some(b'}') || !brace && b == Some(b']') {
-                        self.pos = self.pos.saturating_add(1);
-                        return Ok(());
-                    }
-                    if brace {
-                        self.skip_key()?;
-                        self.skip_trivia()?;
-                        if self.bytes.get(self.pos).copied() != Some(b':') {
-                            return Err(Error::Malformed);
-                        }
-                        self.pos = self.pos.saturating_add(1);
-                    }
-                    self.skip_value_at(depth.saturating_add(1))?;
-                    self.skip_trivia()?;
-                    match self.bytes.get(self.pos).copied() {
-                        Some(b',') => self.pos = self.pos.saturating_add(1),
-                        Some(b) if brace && b == b'}' || !brace && b == b']' => {
-                            self.pos = self.pos.saturating_add(1);
-                            return Ok(());
-                        }
-                        _ => return Err(Error::Malformed),
-                    }
-                }
-            }
+            Some(Token::OpenBrace | Token::OpenBracket) => self.skip_container(depth),
             // Only scalars skip as one token; a structural token is not
             // a value (`[1, }]` is malformed, not a two-element array).
             Some(Token::Str(_) | Token::Num(_, _) | Token::Bool(_) | Token::Null) => Ok(()),
             None | Some(_) => Err(Error::Malformed),
+        }
+    }
+
+    /// The rest of an object or array whose opening token was just read, at nesting `depth`. Its
+    /// own function so that [`Self::skip_value_at`]'s frame stays small: the walk recurses up to
+    /// [`MAX_JSON_DEPTH`] deep and must fit a 2 MiB thread stack, also in sanitizer and debug builds.
+    #[inline(never)]
+    fn skip_container(&mut self, depth: usize) -> Result<(), Error> {
+        let brace = self.bytes.get(self.pos.saturating_sub(1)).copied() == Some(b'{');
+        loop {
+            self.skip_trivia()?;
+            let b = self.bytes.get(self.pos).copied();
+            if brace && b == Some(b'}') || !brace && b == Some(b']') {
+                self.pos = self.pos.saturating_add(1);
+                return Ok(());
+            }
+            if brace {
+                self.skip_key()?;
+                self.skip_trivia()?;
+                if self.bytes.get(self.pos).copied() != Some(b':') {
+                    return Err(Error::Malformed);
+                }
+                self.pos = self.pos.saturating_add(1);
+            }
+            self.skip_value_at(depth.saturating_add(1))?;
+            self.skip_trivia()?;
+            match self.bytes.get(self.pos).copied() {
+                Some(b',') => self.pos = self.pos.saturating_add(1),
+                Some(b) if brace && b == b'}' || !brace && b == b']' => {
+                    self.pos = self.pos.saturating_add(1);
+                    return Ok(());
+                }
+                _ => return Err(Error::Malformed),
+            }
         }
     }
 
