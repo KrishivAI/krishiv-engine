@@ -148,3 +148,40 @@ fn mixed_srids_meet_at_any() {
         "geography(any)"
     );
 }
+
+#[test]
+fn spatial_values_are_no_keys() {
+    let m = format!("ST_GeomFromWKB({POINT})");
+    let e = error(&format!("{m} = {m}"));
+    assert!(e.contains("INVALID_ORDERING_TYPE"), "{e}");
+    for q in [format!("max({m})"), format!("min({m})")] {
+        let e = error(&q);
+        assert!(e.contains("GEOMETRY or GEOGRAPHY"), "{q}: {e}");
+    }
+    for q in [
+        format!("SELECT DISTINCT {m}"),
+        format!("SELECT {m} g GROUP BY {m}"),
+    ] {
+        let e = run(&q).unwrap_err();
+        assert!(e.contains("GEOMETRY"), "{q}: {e}");
+    }
+}
+
+#[test]
+fn spatial_values_are_not_written_to_files() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let df = block_on(s.sql(&format!("SELECT ST_GeomFromWKB({POINT}) g"))).unwrap();
+    let e = block_on(df.write().parquet(dir.path().join("out").to_str().unwrap())).unwrap_err();
+    assert!(e.to_string().contains("GEOMETRY or GEOGRAPHY"), "{e}");
+}
+
+#[test]
+fn an_srid_outside_int_is_named_as_written() {
+    let e = error(&format!("ST_GeomFromWKB({POINT}, 5000000000)"));
+    assert!(
+        e.contains("ST_INVALID_SRID_VALUE") || e.contains("DATATYPE_MISMATCH"),
+        "{e}"
+    );
+    assert!(!e.contains("2147483648"), "{e}");
+}

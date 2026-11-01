@@ -332,12 +332,13 @@ pub(super) fn compile(
 /// geometry or geography) with a coordinate outside longitude and latitude.
 fn check_geography(spatial: &ArrayRef) -> Result<()> {
     use krishiv_types::geo::{ByteOrder, SpatialKind, rewrite};
-    let Some(s) = spatial.as_struct_opt() else {
-        return Ok(());
-    };
-    let wkb = s.column(1);
-    let Some(wkb) = wkb.as_binary_view_opt() else {
-        return Ok(());
+    let wkb = spatial
+        .as_struct_opt()
+        .and_then(|s| s.column(1).as_binary_view_opt().map(|w| (s, w)));
+    let Some((s, wkb)) = wkb else {
+        return Err(internal(
+            "a cast to geography of a value that is no spatial struct",
+        ));
     };
     for row in (0..s.len()).filter(|r| s.is_valid(*r)) {
         rewrite(wkb.value(row), SpatialKind::Geography, ByteOrder::Ndr)?;

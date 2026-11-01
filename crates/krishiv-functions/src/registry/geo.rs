@@ -10,6 +10,7 @@
 
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType, KrishivError,
+    StInvalidSridValue,
 };
 use krishiv_types::{DataType, Srid};
 
@@ -20,10 +21,13 @@ use crate::signature::{ArgType, CallTypes, Constant, InputType, Inputs};
 /// The SRID argument `i`, a foldable integer.
 fn srid_argument(name: &str, c: &CallTypes<'_>, i: usize) -> Result<i32, KrishivError> {
     match c.constant(i) {
-        Some(Constant::Integral(n)) => {
-            // An out-of-range value is no SRID either; the message prints it.
-            Ok(i32::try_from(*n).unwrap_or(i32::MIN))
-        }
+        Some(Constant::Integral(n)) => i32::try_from(*n).map_err(|_| {
+            // No SRID is outside `int`: the message prints the value.
+            StInvalidSridValue {
+                srid: n.to_string(),
+            }
+            .into()
+        }),
         Some(Constant::Error(e)) => Err(e.clone()),
         _ => Err(DatatypeMismatchNonFoldableInput {
             sql_expr: call_sql(name, c),

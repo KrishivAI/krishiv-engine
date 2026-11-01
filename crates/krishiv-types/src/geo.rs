@@ -31,6 +31,7 @@
 //! error class); the output is never larger than the input.
 
 use crate::error::{self, Result};
+use crate::{DataType, Srid};
 
 /// The byte order of encoded WKB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -399,4 +400,28 @@ pub fn to_ewkt(srid: i32, wkb: &[u8]) -> Result<String> {
         format!("SRID={srid};")
     };
     Ok(format!("{prefix}POINT({x} {y})"))
+}
+
+/// Whether `t` is, or holds anywhere inside it, the struct a geometry or
+/// geography is stored as (`Struct<srid: Int32, wkb: BinaryView>`).
+///
+/// ```
+/// use krishiv_types::{geo::holds_spatial, DataType, Srid};
+///
+/// assert!(holds_spatial(&DataType::Geometry { srid: Srid::Any }.to_arrow()));
+/// assert!(!holds_spatial(&DataType::Binary.to_arrow()));
+/// ```
+#[must_use]
+pub fn holds_spatial(t: &arrow_schema::DataType) -> bool {
+    use arrow_schema::DataType as A;
+    match t {
+        A::Struct(fields) => {
+            let spatial = DataType::Geometry { srid: Srid::Any }.to_arrow();
+            *t == spatial || fields.iter().any(|f| holds_spatial(f.data_type()))
+        }
+        A::List(f) | A::LargeList(f) | A::FixedSizeList(f, _) | A::Map(f, _) => {
+            holds_spatial(f.data_type())
+        }
+        _ => false,
+    }
 }

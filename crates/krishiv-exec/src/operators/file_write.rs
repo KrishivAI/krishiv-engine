@@ -160,6 +160,19 @@ impl FileWriteSink {
         format_options: FormatOptions,
         options: WriteOptions,
     ) -> Result<Self> {
+        // Files hold a geometry or geography as a WKB column with a Parquet
+        // logical type (P2-T181 unit U3); until it lands, a spatial value is
+        // not written as the `{srid, wkb}` struct Spark cannot read.
+        if schema
+            .fields()
+            .iter()
+            .any(|f| krishiv_types::geo::holds_spatial(f.data_type()))
+        {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
+            }
+            .into());
+        }
         if !format.capabilities(&format_options).write {
             return Err(krishiv_common::error::KrishivUnsupportedFeature {
                 feature: format!("writing the {} format", format.name()),

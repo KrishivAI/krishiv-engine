@@ -23,7 +23,7 @@ use krishiv_common::error::{KrishivError, StInvalidEndiannessValue};
 use krishiv_types::Srid;
 use krishiv_types::geo::{ByteOrder, SpatialKind, rewrite};
 
-use super::args::{Inputs, internal, to_binary};
+use super::args::{Inputs, internal};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
@@ -71,8 +71,11 @@ fn parts(column: &ArrayRef) -> Result<(Int32Array, BinaryViewArray), KrishivErro
         .as_struct_opt()
         .ok_or_else(|| internal(format!("a spatial argument of type {}", column.data_type())))?;
     let srid = s.column(0).as_primitive_opt::<Int32Type>().cloned();
-    let wkb = to_binary(s.column(1).as_ref())?;
-    let wkb: BinaryViewArray = wkb.iter().collect();
+    let wkb = s
+        .column(1)
+        .as_binary_view_opt()
+        .cloned()
+        .ok_or_else(|| internal("a spatial value without a binary view WKB".to_owned()))?;
     srid.map(|s| (s, wkb))
         .ok_or_else(|| internal("a spatial value without an int SRID".to_owned()))
 }
