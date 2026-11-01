@@ -10,11 +10,11 @@
     },
     {
       "id": "try_multiply#31933e3dbf90/ansi_on",
-      "reason": "SELECT try_multiply(CAST(NULL AS interval year), 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_multiply(CAST(NULL AS interval year), 3) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_multiply#31933e3dbf90/ansi_off",
-      "reason": "SELECT try_multiply(CAST(NULL AS interval year), 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_multiply(CAST(NULL AS interval year), 3) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_multiply#420e775113c8/ansi_on",
