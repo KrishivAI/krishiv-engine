@@ -322,6 +322,27 @@ fn a_view_does_not_fall_back_to_its_namespace_for_a_routine_gone_from_its_path()
 }
 
 #[test]
+fn a_view_on_a_session_only_path_does_not_fall_back_to_its_namespace() {
+    let s = session();
+    for sql in [
+        "CREATE TEMPORARY FUNCTION pick() RETURNS INT RETURN 1",
+        "CREATE FUNCTION default.pick() RETURNS INT RETURN 2",
+        "SET PATH = system.session, system.builtin",
+        "CREATE VIEW default.so_view AS SELECT pick() AS x",
+        "DROP TEMPORARY FUNCTION pick",
+    ] {
+        run(&s, sql);
+    }
+    let read = block_on(async {
+        s.sql("SELECT x FROM default.so_view")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(read.is_err(), "{read:?}");
+}
+
+#[test]
 fn a_view_over_a_temporary_function_keeps_calling_it() {
     let s = session();
     for sql in [

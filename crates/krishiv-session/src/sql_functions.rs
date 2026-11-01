@@ -406,9 +406,13 @@ impl QueryFunctions {
                     });
                     // Only a view is held to the path's first schema; a stored
                     // function's body falls back to its own namespace.
-                    call.qualifier = from_path
-                        .or(first.filter(|_| temporary_visible))
-                        .unwrap_or_else(|| vec![namespace.to_owned()]);
+                    call.qualifier = match from_path.or(first.filter(|_| temporary_visible)) {
+                        Some(q) => q,
+                        // A view whose path holds no catalog schema keeps the
+                        // call bare, unresolved, not the view's namespace.
+                        None if temporary_visible => return Ok(e),
+                        None => vec![namespace.to_owned()],
+                    };
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
                     Ok(Arc::new(next))
