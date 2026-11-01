@@ -28,6 +28,7 @@ mod cond;
 mod field;
 mod func;
 mod hof;
+mod interval;
 pub(crate) mod logic;
 mod nested_cast;
 mod strings;
@@ -386,18 +387,41 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             &data_type.to_arrow(),
             *nullable,
         ),
-        ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
+        ExprNode::Cast { expr, to, mode } => match expr.interval_type() {
+            Some(from) if *to == krishiv_types::DataType::String => {
+                Ok(cast::interval_to_string(compile(expr, input)?, from))
+            }
+            _ => {
+                let mut child = compile(expr, input)?;
+                if *to == krishiv_types::DataType::String
+                    && let Some(from) = expr.nested_interval_type()
+                {
+                    child = nested_cast::interval_leaves(child, from);
+                }
+                cast::compile(child, to, *mode, input)
+            }
+        },
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
             if let FunctionId::Registry { name, .. } = &f.id
                 && hof::is_supported(name)
             {
                 return hof::compile(name, f, input, e);
             }
-            let args = f
+            let mut args = f
                 .args
                 .iter()
                 .map(|a| compile(a, input))
                 .collect::<Result<Vec<_>>>()?;
+            // These write an interval as its string, which takes its fields.
+            if let FunctionId::Registry { name, .. } = &f.id
+                && matches!(name.as_str(), "to_json" | "to_csv")
+                && let (Some(first), Some(from)) = (
+                    args.first_mut(),
+                    f.args.first().and_then(|a| a.nested_interval_type()),
+                )
+            {
+                *first = nested_cast::interval_leaves(Arc::clone(first), from);
+            }
             match &f.id {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
                 FunctionId::Registry { name, .. } => {
@@ -476,14 +500,39 @@ fn builtin(
         ) => {
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
-            arith::binary(b, l, r, out, f.nullable, env)?
+            if interval::is_ansi(l.data_type()) {
+                interval::binary(b, l, r, out, f.nullable, env)?
+            } else {
+                arith::binary(b, l, r, out, f.nullable, env)?
+            }
         }
+        (
+            Builtin::DateAddYmInterval
+            | Builtin::TimestampAddYmInterval
+            | Builtin::TimestampAddInterval
+            | Builtin::SubtractDates
+            | Builtin::SubtractTimestamps,
+            2,
+        ) => {
+            let r = args.pop().ok_or_else(arity)?;
+            let l = args.pop().ok_or_else(arity)?;
+            interval::binary(b, l, r, out, f.nullable, env)?
+        }
+        (Builtin::ExtractAnsiIntervalDays, 1) => interval::unary(b, args.pop().ok_or_else(arity)?),
+        (Builtin::TryEval, 1) => interval::try_eval(args.pop().ok_or_else(arity)?),
         (Builtin::IntegralDivide, 2) => {
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
             arith::integral_divide(l, r, env)?
         }
-        (Builtin::Negative, 1) => arith::negative(args.pop().ok_or_else(arity)?, env)?,
+        (Builtin::Negative, 1) => {
+            let e = args.pop().ok_or_else(arity)?;
+            if interval::is_ansi(e.data_type()) {
+                interval::unary(b, e)
+            } else {
+                arith::negative(e, env)?
+            }
+        }
         (Builtin::In, n) if n >= 2 => cond::in_list(args, env)?,
         (Builtin::Between, 3) => {
             let hi = args.pop().ok_or_else(arity)?;
@@ -620,6 +669,25 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
                 .with_data_type(DataType::Timestamp.to_arrow()),
         ),
         Literal::TimestampNtz(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v])),
+        Literal::YearMonthInterval { months, .. } => {
+            Arc::new(arrow_array::IntervalYearMonthArray::from(vec![*months]))
+        }
+        Literal::DayTimeInterval { micros, .. } => {
+            Arc::new(arrow_array::DurationMicrosecondArray::from(vec![*micros]))
+        }
+        Literal::CalendarInterval {
+            months,
+            days,
+            micros,
+        } => Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
+            arrow_buffer::IntervalMonthDayNano::new(
+                *months,
+                *days,
+                micros
+                    .checked_mul(1000)
+                    .ok_or_else(|| internal("a calendar interval's microseconds"))?,
+            ),
+        ])),
         // A one-row string map, as the JSON options bind.
         Literal::Map(pairs) => {
             let keys: ArrayRef = Arc::new(StringArray::from(

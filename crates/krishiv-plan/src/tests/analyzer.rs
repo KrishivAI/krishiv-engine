@@ -361,19 +361,6 @@ fn timestamp_literals_are_named_as_spark_sql() {
     );
 }
 
-/// Spark Connect can send a calendar literal, which the analyzer does not type
-/// yet: it says so, rather than resolving a value of no type.
-#[test]
-fn a_calendar_interval_literal_is_refused_until_it_has_a_type() {
-    let calendar = Expr::from(Literal::CalendarInterval {
-        months: 14,
-        days: 3,
-        micros: 4,
-    });
-    let r = run(LogicalPlan::table(["t"]).project(vec![calendar]), &ctx());
-    assert_eq!(class(&r), "KRISHIV_UNSUPPORTED_FEATURE");
-}
-
 /// The select list of the generated-names statement of the corpus.
 fn names_query() -> Vec<Expr> {
     use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Remainder, Subtract};
@@ -1593,7 +1580,25 @@ fn unsupported_inputs_fail_explicitly() {
         }
         .into(),
     ]);
-    assert_eq!(class(&run(interval, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    let out = run(interval.clone(), &ctx).unwrap().output;
+    assert_eq!(
+        out[0].data_type,
+        krishiv_types::DataType::DEFAULT_YEAR_MONTH_INTERVAL
+    );
+    assert!(!out[0].nullable);
+    // `spark.sql.legacy.interval.enabled` makes Spark's literals calendar
+    // intervals, which is refused rather than answered differently.
+    let legacy = context(
+        catalog(),
+        ResolutionConf {
+            legacy_interval: true,
+            ..ResolutionConf::default()
+        },
+    );
+    assert_eq!(
+        class(&run(interval, &legacy)),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
     // With ordinals off, an integer key is a constant.
     let off = context(
         catalog(),
@@ -3467,7 +3472,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 21);
+    assert_eq!(ResolutionConf::KEYS.len(), 22);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),

@@ -75,7 +75,7 @@ SELECT a LIKE ANY ('x', 'y') FROM t
 SELECT ? FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature parameter markers is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..8
 SELECT INTERVAL 1 DAY FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature INTERVAL literals is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..21
+  => Project [INTERVAL '1' DAY] | +- Read t | 
 SELECT TIMESTAMP '2020-01-01 00:00:00' FROM t
   => Project [TIMESTAMP '2020-01-01 00:00:00'] | +- Read t | 
 SELECT db.f(a) FROM t

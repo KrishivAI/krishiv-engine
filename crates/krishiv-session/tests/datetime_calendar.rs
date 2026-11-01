@@ -291,7 +291,7 @@ fn matrix_cells_match_spark() {
     // instead of passing silently.
     assert_eq!(tally.not_run, expected_not_run(), "{report}");
     assert_eq!(tally.normalized_cast_invalid_input, 109, "{report}");
-    assert_eq!(tally.normalized_months_between, 52, "{report}");
+    assert_eq!(tally.normalized_months_between, 60, "{report}");
 }
 
 /// The exact cells the engine does not run: `TIME` and `INTERVAL`
@@ -302,12 +302,11 @@ fn expected_not_run() -> BTreeMap<String, usize> {
     BTreeMap::from([
         (
             "analysis errors of the rewritten convert_timezone".to_owned(),
-            32,
+            36,
         ),
         ("cast of invalid UTF-8 bytes to a string".to_owned(), 27),
         ("no recorded rows".to_owned(), 62),
         ("session conf override".to_owned(), 4),
-        ("unsupported: INTERVAL literals".to_owned(), 144),
     ])
 }
 

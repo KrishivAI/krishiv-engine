@@ -199,7 +199,7 @@ fn is_numeric(t: &DataType) -> bool {
 }
 
 /// The type of a resolved expression, when its node says it.
-fn type_of(e: &Expr) -> Option<DataType> {
+pub(crate) fn type_of(e: &Expr) -> Option<DataType> {
     match &e.node {
         ExprNode::Resolved(
             ResolvedExpr::Column(c)

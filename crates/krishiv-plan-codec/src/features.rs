@@ -487,6 +487,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // session UDF (by name and version) needs a reader with it.
         Construct::Function(id) => match id {
             FunctionId::Udf { .. } => Some(Feature::RustUdf),
+            FunctionId::Builtin(b) if b.is_analyzer_internal() => Some(Feature::IntervalTypes),
             FunctionId::Builtin(_) => None,
             // A future identity is baseline until it is classified
             // (encoding refuses it first).

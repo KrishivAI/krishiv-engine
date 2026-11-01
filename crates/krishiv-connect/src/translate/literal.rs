@@ -18,9 +18,9 @@ use crate::proto::v4_2::{DataType as ProtoType, data_type::Kind, expression};
 use expression::literal::{Decimal, LiteralType};
 
 /// Spark's default for `DayTimeIntervalType()`: `DAY TO SECOND`.
-const DAY_TIME_DEFAULT: (i32, i32) = (0, 3);
+pub(super) const DAY_TIME_DEFAULT: (i32, i32) = (0, 3);
 /// Spark's default for `YearMonthIntervalType()`: `YEAR TO MONTH`.
-const YEAR_MONTH_DEFAULT: (i32, i32) = (0, 1);
+pub(super) const YEAR_MONTH_DEFAULT: (i32, i32) = (0, 1);
 
 /// Translates a literal.
 ///
@@ -141,7 +141,7 @@ fn null(of: &ProtoType) -> Result<Literal, KrishivError> {
 /// The start and end field of an interval type: both when both are given,
 /// the start alone as a one-field type, the default otherwise (Spark's
 /// `toCatalyst*IntervalType`).
-fn fields(start: Option<i32>, end: Option<i32>, default: (i32, i32)) -> (i32, i32) {
+pub(super) fn fields(start: Option<i32>, end: Option<i32>, default: (i32, i32)) -> (i32, i32) {
     match (start, end) {
         (Some(s), Some(e)) => (s, e),
         (Some(s), None) => (s, s),
@@ -149,7 +149,7 @@ fn fields(start: Option<i32>, end: Option<i32>, default: (i32, i32)) -> (i32, i3
     }
 }
 
-fn year_month_field(n: i32) -> Result<YearMonthField, KrishivError> {
+pub(super) fn year_month_field(n: i32) -> Result<YearMonthField, KrishivError> {
     match n {
         0 => Ok(YearMonthField::Year),
         1 => Ok(YearMonthField::Month),
@@ -159,7 +159,7 @@ fn year_month_field(n: i32) -> Result<YearMonthField, KrishivError> {
     }
 }
 
-fn day_time_field(n: i32) -> Result<DayTimeField, KrishivError> {
+pub(super) fn day_time_field(n: i32) -> Result<DayTimeField, KrishivError> {
     match n {
         0 => Ok(DayTimeField::Day),
         1 => Ok(DayTimeField::Hour),
