@@ -33,6 +33,29 @@ const NON_DETERMINISTIC: &[&str] = &[
     "input_file_name",
 ];
 
+/// Whether `sql` is `CREATE [OR REPLACE] [TEMP[ORARY]] FUNCTION IDENTIFIER(` or
+/// `DROP [TEMP[ORARY]] FUNCTION [IF EXISTS] IDENTIFIER(`: a routine name is an identifier
+/// reference in both modes.
+fn names_a_function(sql: &str) -> bool {
+    let words: Vec<&str> = tokenize(sql)
+        .into_iter()
+        .filter(|t| !t.kind.is_trivia())
+        .take(8)
+        .filter_map(|t| sql.get(t.span.start..t.span.end))
+        .collect();
+    let at = |i: usize, w: &str| words.get(i).is_some_and(|x| x.eq_ignore_ascii_case(w));
+    let Some(f) = words
+        .iter()
+        .position(|w| w.eq_ignore_ascii_case("FUNCTION"))
+    else {
+        return false;
+    };
+    (at(0, "CREATE") || at(0, "DROP")) && f < 6 && {
+        let name = if at(f + 1, "IF") { f + 3 } else { f + 1 };
+        at(name, "IDENTIFIER") && at(name + 1, "(")
+    }
+}
+
 impl Session {
     /// `sql` with every `IDENTIFIER(expr)` replaced by the (quoted) identifier `expr` evaluates to.
     /// Text without the clause is returned as it is.
@@ -45,7 +68,7 @@ impl Session {
         // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
         // where a table or an expression may stand: a statement that does not parse as written
         // (a column list, a rename target) keeps the parser's error.
-        if legacy && krishiv_sql::parse_statement(sql, options).is_err() {
+        if legacy && !names_a_function(sql) && krishiv_sql::parse_statement(sql, options).is_err() {
             return Ok(Cow::Borrowed(sql));
         }
         let tokens: Vec<_> = tokenize(sql)

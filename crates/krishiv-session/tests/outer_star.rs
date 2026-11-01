@@ -46,3 +46,14 @@ fn a_temporary_function_named_by_identifier_takes_no_database() {
         assert!(e.contains("INVALID_TEMP_OBJ_QUALIFIER"), "{sql}: {e}");
     }
 }
+
+#[test]
+fn the_legacy_identifier_clause_still_names_a_function() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("set spark.sql.legacy.identifierClause = true")).unwrap();
+    let e = block_on(s.sql("DROP TEMPORARY FUNCTION IDENTIFIER('default.my' || 'Avg')"))
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(e.contains("INVALID_TEMP_OBJ_QUALIFIER"), "{e}");
+}
