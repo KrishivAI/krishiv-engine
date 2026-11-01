@@ -46,3 +46,45 @@ fn a_column_cast_to_time_p_truncates_the_same() {
         "09:08:01.9"
     );
 }
+
+#[test]
+fn nested_constants_and_string_columns_truncate() {
+    assert_eq!(
+        text("cast(array(TIME '09:08:01.987654') as array<time(2)>)"),
+        "[09:08:01.98]"
+    );
+    assert_eq!(
+        text("cast(named_struct('a', TIME '09:08:01.987654') as struct<a: time(3)>)"),
+        "{09:08:01.987}"
+    );
+    assert_eq!(
+        text("(SELECT CAST(s AS time(1)) FROM (SELECT '09:08:01.987654' s))"),
+        "09:08:01.9"
+    );
+}
+
+#[test]
+fn null_and_invalid_inputs_keep_their_modes() {
+    assert_eq!(
+        text("coalesce(CAST(CAST(NULL AS STRING) AS time(2)), TIME '01:02:03')"),
+        "01:02:03"
+    );
+    assert_eq!(
+        text("coalesce(try_cast('nope' AS time(2)), TIME '01:02:03')"),
+        "01:02:03"
+    );
+}
+
+#[test]
+fn an_invalid_string_is_an_error_under_ansi() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
+    let e = block_on(s.sql("SELECT CAST('nope' AS time(2))"))
+        .and_then(|df| block_on(df.collect()))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::CastInvalidInput
+    );
+}

@@ -270,8 +270,8 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &p.zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
-    let out = match (input.data_type(), out.data_type()) {
-        (_, ArrowType::Time64(_)) if p.precision.unit() > 1 => {
+    let out = match out.data_type() {
+        ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond) if p.precision.unit() > 1 => {
             use arrow_array::types::Time64NanosecondType;
             let unit = p.precision.unit();
             Arc::new(
