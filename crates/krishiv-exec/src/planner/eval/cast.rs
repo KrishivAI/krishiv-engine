@@ -101,7 +101,12 @@ struct Cast {
 /// Whether a cast between `from` and `to` reads the session time zone.
 fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
-    (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(..)))
+    // TIMESTAMP <-> TIMESTAMP_NTZ moves between an instant and the wall
+    // clock of the session zone.
+    let unzoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, None));
+    (zoned(from) && unzoned(to))
+        || (unzoned(from) && zoned(to))
+        || (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(..)))
         || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(..)))
 }
 
