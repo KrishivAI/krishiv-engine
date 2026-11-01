@@ -123,3 +123,21 @@ fn to_time_try_to_time_and_time() {
     }
     assert_eq!(class("time('abc')"), ErrorClass::CastInvalidInput);
 }
+
+/// Spark types `to_time`'s arguments as strings with no implicit casts:
+/// `try_to_time(1)` is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`.
+#[test]
+fn to_time_takes_only_strings() {
+    for expr in [
+        "try_to_time(1)",
+        "to_time(1)",
+        "to_time('01:02:03', 5)",
+        "try_to_time('01:02:03', 5)",
+    ] {
+        assert_eq!(
+            class(expr),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{expr}"
+        );
+    }
+}

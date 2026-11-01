@@ -935,12 +935,12 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["to_time"],
-        &Inputs::Expects(vec![exact(DataType::String)]),
+        &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
         time6,
     ));
     out.extend(scalar(
         &["try_to_time"],
-        &Inputs::Expects(vec![exact(DataType::String)]),
+        &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
         time6_nullable,
     ));
     out.extend(scalar(
