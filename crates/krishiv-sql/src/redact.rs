@@ -223,11 +223,22 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
                 .iter()
                 .any(|w| word.eq_ignore_ascii_case(w))
                 && code[i + 2..].get(j + 1).is_some_and(|n| {
-                    n.kind == TokenKind::Word
-                        && (is_type_word(n.span.text(sql))
-                            || code[i + 2..]
-                                .get(j + 2)
-                                .is_some_and(|m| m.kind == TokenKind::Sym(Sym::Colon)))
+                    let after = code[i + 2..].get(j + 2);
+                    match n.kind {
+                        TokenKind::Word => {
+                            is_type_word(n.span.text(sql))
+                                || after.is_some_and(|m| m.kind == TokenKind::Sym(Sym::Colon))
+                        }
+                        // A quoted struct field: `STRUCT<`a`: INT>` or
+                        // `STRUCT<`a` INT>`.
+                        TokenKind::QuotedIdent | TokenKind::DoubleQuoted => {
+                            after.is_some_and(|m| {
+                                m.kind == TokenKind::Sym(Sym::Colon)
+                                    || (m.kind == TokenKind::Word && is_type_word(m.span.text(sql)))
+                            })
+                        }
+                        _ => false,
+                    }
                 });
             match u.kind {
                 TokenKind::Sym(Sym::Lt) if angle > 0 || opens_type => {
