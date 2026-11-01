@@ -1113,6 +1113,12 @@ fn array_item_casts(args: &[Arg<'_>], rules: Rules) -> Vec<Option<DataType>> {
         return none;
     };
     let item_ty = item.ty.unwrap_or(&DataType::Null);
+    // Spark takes the tightest common type here whatever ANSI says, so an
+    // `INT` array and a `FLOAT` item meet at `FLOAT`.
+    let rules = Rules {
+        ansi: false,
+        ..rules
+    };
     let Some(Some(meet)) = tightest(a.element_type(), item_ty, rules) else {
         return none;
     };

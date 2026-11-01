@@ -21,8 +21,9 @@ use krishiv_common::error::{
     DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
-    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
-    InvalidExtractFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    GroupByPosOutOfRange, InternalError, InvalidAggregateFilterNotBoolean,
+    InvalidExtractBaseFieldType, InvalidExtractFieldType,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
     InvalidWithinGroupExpressionDistinctUnsupported,
@@ -1258,6 +1259,19 @@ impl Resolver<'_> {
                 .cloned()
                 .collect(),
         };
+        let out = match s.position {
+            Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
+            Some(n) => {
+                return Err(AnalysisError::new(
+                    GroupByPosOutOfRange {
+                        index: n.to_string(),
+                        size: out.len().to_string(),
+                    },
+                    origin,
+                ));
+            }
+            None => out,
+        };
         if out.is_empty() && !s.qualifier.is_empty() {
             return Err(AnalysisError::new(
                 CannotResolveStarExpand {
@@ -2183,24 +2197,56 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
-                // `array_of_structs['a']` is Spark's `GetArrayStructFields` (the
-                // field of every element); not built yet, so it is refused
-                // rather than read as a position.
+                // `array_of_structs['a']` is Spark's `GetArrayStructFields`: the
+                // field of every element, a NULL element giving NULL. It is
+                // built as `transform(arr, x -> x.a)` once the field is known.
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "__subscript"
                     && n == 2
-                    && matches!(
-                        &kids[0].ty.data_type,
-                        Some(DataType::Array(a)) if matches!(a.element_type(), DataType::Struct(_))
-                    )
-                    && matches!(&kids[1].expr.node, ExprNode::Literal(Literal::String(_)))
+                    && let Some(DataType::Array(arr)) = &kids[0].ty.data_type
+                    && let DataType::Struct(st) = arr.element_type()
+                    && let ExprNode::Literal(Literal::String(name)) = &kids[1].expr.node
                 {
-                    return Err(AnalysisError::new(
-                        KrishivUnsupportedFeature {
-                            feature: "subscripts of an array of structs by field name".to_owned(),
-                        },
-                        e.origin,
+                    let cs = self.ctx.conf.case_sensitive;
+                    let Some(field) = st.fields().iter().find(|f| same(f.name(), name, cs)) else {
+                        return Err(unresolved_field(
+                            &[
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone),
+                                name.clone(),
+                            ],
+                            st,
+                            e.origin,
+                        ));
+                    };
+                    let element = Expr::new(ExprNode::Column(ColumnRef {
+                        name: vec!["__subscript_element".to_owned()],
+                        plan_id: None,
+                    }))
+                    .with_origin(e.origin);
+                    let body = Expr::new(ExprNode::Field {
+                        base: Arc::new(element),
+                        name: field.name().to_owned(),
+                    })
+                    .with_origin(e.origin);
+                    let call = Expr::function(
+                        "transform",
+                        vec![
+                            Expr::clone(&kids[0].expr),
+                            Expr::lambda(vec!["__subscript_element".to_owned()], body),
+                        ],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    // Spark names it as the field of the array (`x.a`).
+                    b.shown = Some(Arc::new(
+                        Expr::new(ExprNode::Field {
+                            base: Arc::new(Expr::clone(&kids[0].shown())),
+                            name: field.name().to_owned(),
+                        })
+                        .with_origin(e.origin),
                     ));
+                    return Ok(b);
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `arrays_zip(a, b)` names its struct fields after columns,
@@ -7469,6 +7515,8 @@ mod tests {
     #[test]
     fn stars_print_as_sql() {
         let star = Expr::new(ExprNode::Star(crate::Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: Vec::new(),
             except: Vec::new(),
             plan_id: None,

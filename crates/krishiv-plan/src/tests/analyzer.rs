@@ -251,6 +251,8 @@ fn dataframes(base: i64) -> Vec<(&'static str, LogicalPlan)> {
         (
             "star",
             join_two.project(vec![Expr::new(ExprNode::Star(Star {
+                replace: Vec::new(),
+                position: None,
                 qualifier: Vec::new(),
                 except: Vec::new(),
                 plan_id: Some(PlanId(base + 2)),
@@ -513,6 +515,8 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
             "SELECT x.* FROM t",
             default,
             t().project(vec![Expr::new(ExprNode::Star(Star {
+                replace: Vec::new(),
+                position: None,
                 qualifier: vec!["x".to_owned()],
                 except: Vec::new(),
                 plan_id: None,
@@ -2994,6 +2998,8 @@ fn star_except_drops_overlaps_and_rejects_nested() {
 
     let except = |cols: &[&str]| {
         Expr::new(ExprNode::Star(Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: Vec::new(),
             except: cols
                 .iter()
@@ -3549,6 +3555,8 @@ fn parameterless_count_honours_the_legacy_flag() {
 fn star_with_table_in_count_honours_the_legacy_flag() {
     let star_t = || {
         Expr::new(ExprNode::Star(Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: vec!["t".to_owned()],
             except: Vec::new(),
             plan_id: None,
@@ -3585,6 +3593,8 @@ fn star_with_table_in_count_honours_the_legacy_flag() {
     // single-star error, with or without the flag).
     let star_db_t = || {
         Expr::new(ExprNode::Star(Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: vec!["db".to_owned(), "t".to_owned()],
             except: Vec::new(),
             plan_id: None,
@@ -3596,6 +3606,8 @@ fn star_with_table_in_count_honours_the_legacy_flag() {
     // An unknown qualifier keeps the star error, with or without the flag.
     let missing = || {
         Expr::new(ExprNode::Star(Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: vec!["missing".to_owned()],
             except: Vec::new(),
             plan_id: None,
