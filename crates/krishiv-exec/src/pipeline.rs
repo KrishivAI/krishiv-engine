@@ -63,6 +63,8 @@ pub(crate) struct Pipeline {
     pub(crate) preserve_order: bool,
     /// The breaker sink whose finalized global state the source reads.
     pub(crate) input: Option<OperatorId>,
+    /// The second breaker a source over two reads (a sort-merge join).
+    pub(crate) second_input: Option<OperatorId>,
 }
 
 struct Draft {
@@ -71,6 +73,7 @@ struct Draft {
     fanned: Vec<usize>,
     source: Option<(OperatorId, Arc<dyn Source>)>,
     input: Option<OperatorId>,
+    second_input: Option<OperatorId>,
     operators: Vec<(OperatorId, Arc<dyn Operator>)>,
     operator_inputs: Vec<Option<OperatorId>>,
     sink: (OperatorId, Arc<dyn Sink>),
@@ -128,6 +131,7 @@ impl PipelineBuilder {
             fanned: Vec::new(),
             source: None,
             input: None,
+            second_input: None,
             operators: Vec::new(),
             operator_inputs: Vec::new(),
             sink: (id, result),
@@ -197,6 +201,25 @@ impl PipelineBuilder {
         self.check_child(sink)?;
         let id = self.set_source(source)?;
         self.draft().input = Some(sink);
+        Ok(id)
+    }
+
+    /// As [`set_breaker_source`](Self::set_breaker_source), for a source
+    /// reading two breakers: a sort-merge join over its two sorts, the second
+    /// one's state through
+    /// [`TaskContext::second_dependency`](crate::TaskContext::second_dependency).
+    ///
+    /// # Errors
+    /// As [`set_breaker_source`](Self::set_breaker_source), for either sink.
+    pub fn set_merge_source(
+        &mut self,
+        source: Arc<dyn Source>,
+        first: OperatorId,
+        second: OperatorId,
+    ) -> Result<OperatorId> {
+        self.check_child(second)?;
+        let id = self.set_breaker_source(source, first)?;
+        self.draft().second_input = Some(second);
         Ok(id)
     }
 
@@ -278,6 +301,7 @@ impl PipelineBuilder {
             fanned: Vec::new(),
             source: None,
             input: None,
+            second_input: None,
             operators: Vec::new(),
             operator_inputs: Vec::new(),
             sink: (id, sink),
@@ -346,6 +370,7 @@ impl PipelineBuilder {
                 fanned: Vec::new(),
                 source: None,
                 input: None,
+                second_input: None,
                 operators: Vec::new(),
                 operator_inputs: Vec::new(),
                 sink: sink.clone(),
@@ -384,6 +409,7 @@ impl PipelineBuilder {
                     deps: d.deps,
                     preserve_order: d.preserve_order,
                     input: d.input,
+                    second_input: d.second_input,
                 })
             })
             .collect::<Result<_>>()?;

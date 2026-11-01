@@ -36,6 +36,13 @@ pub(super) const NAMES: &[&str] = &[
     "str_to_map",
 ];
 
+/// `t`'s field, with decimals on `Decimal128` as functions read and return them.
+fn wide_field(t: &SparkType, name: &str, nullable: bool) -> Field {
+    let field = t.to_arrow_field(name, nullable);
+    let wide = krishiv_types::arrow::client_arrow_type(field.data_type());
+    field.with_data_type(wide)
+}
+
 /// The Spark type of an Arrow carrier (what the analyzer typed).
 fn spark_type(name: &str, args: &[BindArg], t: &DataType) -> Result<SparkType, KrishivError> {
     SparkType::from_arrow(t).map_err(|_| bad_types(name, args))
@@ -46,8 +53,8 @@ fn spark_type(name: &str, args: &[BindArg], t: &DataType) -> Result<SparkType, K
 fn entries_field(key: &SparkType, value: &SparkType, value_nullable: bool) -> FieldRef {
     let entries = DataType::Struct(
         vec![
-            key.to_arrow_field("key", false),
-            value.to_arrow_field("value", value_nullable),
+            wide_field(key, "key", false),
+            wide_field(value, "value", value_nullable),
         ]
         .into(),
     );
@@ -164,7 +171,7 @@ fn map_concat_bind(
         SparkType::String,
         true,
     ))));
-    let out = merged.to_arrow();
+    let out = krishiv_types::arrow::client_arrow_type(&merged.to_arrow());
     let entries = map_entries_of(&out).ok_or_else(|| bad_types(listed, args))?;
     let n = args.len();
     Ok(Binding::new(out, move |x: &Inputs<'_>| {
@@ -178,18 +185,22 @@ fn projection_bind(listed: &'static str, entries: &FieldRef) -> Result<Binding, 
     let out = match listed {
         "map_keys" => {
             let key = spark_map_key(entries)?;
-            list_type(&key.to_arrow_field("element", true), true)
+            list_type(&wide_field(&key, "element", true), true)
         }
         "map_values" => {
             let value = spark_map_value(entries)?;
-            list_type(&value.to_arrow_field("element", true), true)
+            list_type(&wide_field(&value, "element", true), true)
         }
         _ => DataType::List(Arc::new(Field::new(
             "element",
             DataType::Struct(
                 vec![
-                    spark_map_key(entries)?.to_arrow_field("key", false),
-                    spark_map_value(entries)?.to_arrow_field("value", map_value_nullable(entries)?),
+                    wide_field(&spark_map_key(entries)?, "key", false),
+                    wide_field(
+                        &spark_map_value(entries)?,
+                        "value",
+                        map_value_nullable(entries)?,
+                    ),
                 ]
                 .into(),
             ),

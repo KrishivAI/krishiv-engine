@@ -35,6 +35,7 @@
 
 mod format;
 pub(crate) mod parse;
+mod zone_names;
 
 use krishiv_common::error::{
     InconsistentBehaviorCrossVersionDatetimePatternRecognition,

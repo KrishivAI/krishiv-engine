@@ -941,7 +941,7 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
         r#""location":{}"#,
         json_str(&format!("file:{}", location.display()))
     ));
-    let options = storage_options(t);
+    let options = &t.options;
     if !options.is_empty() {
         f.push(format!(
             r#""storage_properties":{}"#,
@@ -1017,22 +1017,13 @@ fn bucket_rows(t: &CatalogTable) -> Vec<(String, String)> {
     ]
 }
 
-/// The table's options as Spark shows them: the `header` the engine adds to CSV tables is not one of them.
-fn storage_options(t: &CatalogTable) -> std::collections::BTreeMap<String, String> {
-    t.options
-        .iter()
-        .filter(|(k, v)| !(t.provider == "csv" && k.as_str() == "header" && v.as_str() == "true"))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
-}
-
 /// `Location` and `Storage Properties` (`CatalogStorageFormat.toLinkedHashMap`) at `location`.
 fn storage_rows(t: &CatalogTable, location: &std::path::Path) -> Vec<(String, String)> {
     let mut rows = vec![(
         "Location".to_owned(),
         format!("file:{}", location.display()),
     )];
-    let options = storage_options(t);
+    let options = &t.options;
     if !options.is_empty() {
         rows.push((
             "Storage Properties".to_owned(),
@@ -1181,9 +1172,9 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             .collect::<Vec<_>>()
             .join(",\n")
     };
-    let options = storage_options(t);
+    let options = &t.options;
     if !options.is_empty() {
-        out.push_str(&format!("OPTIONS (\n{})\n", pairs(&options)));
+        out.push_str(&format!("OPTIONS (\n{})\n", pairs(options)));
     }
     partitioning(&mut out);
     if let Some(c) = &t.comment {

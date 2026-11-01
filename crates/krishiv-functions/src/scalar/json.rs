@@ -225,7 +225,7 @@ fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     if !is_string(&json.data_type()) {
         return Err(bad_types("from_json", args));
     }
-    let target = read_schema(schema)?.to_arrow();
+    let target = krishiv_types::arrow::client_arrow_type(&read_schema(schema)?.to_arrow());
     let options = read_options(options)?;
     if matches!(
         options.mode,

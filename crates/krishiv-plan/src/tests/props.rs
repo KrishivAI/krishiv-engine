@@ -760,6 +760,15 @@ fn m_literal(v: &mut Literal, w: &mut Walk) -> bool {
             site!(w, flip(start, DayTimeField::Day, DayTimeField::Hour));
             site!(w, flip(end, DayTimeField::Second, DayTimeField::Minute));
         }
+        Literal::CalendarInterval {
+            months,
+            days,
+            micros,
+        } => {
+            site!(w, *months += 1);
+            site!(w, *days += 1);
+            site!(w, *micros += 1);
+        }
     }
     false
 }

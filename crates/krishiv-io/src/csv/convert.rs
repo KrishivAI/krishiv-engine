@@ -10,7 +10,9 @@ use arrow_array::builder::{
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
     TimestampMicrosecondBuilder,
 };
-use arrow_array::{ArrayRef, new_null_array};
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Decimal64Type, Decimal128Type};
+use arrow_array::{Array, ArrayRef, new_null_array};
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::text::{
@@ -86,7 +88,7 @@ impl Kind {
             DataType::Int64 => Self::Int(64),
             DataType::Float32 => Self::F32,
             DataType::Float64 => Self::F64,
-            DataType::Decimal128(p, s) => Self::Decimal(*p, *s),
+            DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => Self::Decimal(*p, *s),
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Self::Str,
             DataType::Binary | DataType::BinaryView | DataType::LargeBinary => Self::Bin,
             DataType::Date32 => Self::Date,
@@ -203,7 +205,8 @@ pub(crate) enum Column {
     I64(Int64Builder),
     F32(Float32Builder),
     F64(Float64Builder),
-    Decimal(Decimal128Builder),
+    /// The builder, and the type of the finished column.
+    Decimal(Decimal128Builder, DataType),
     Str(StrBuilder),
     Binary(BinaryBuilder),
     BinaryView(BinaryViewBuilder),
@@ -228,10 +231,11 @@ impl Column {
             DataType::Int64 => Self::I64(Int64Builder::new()),
             DataType::Float32 => Self::F32(Float32Builder::new()),
             DataType::Float64 => Self::F64(Float64Builder::new()),
-            DataType::Decimal128(p, s) => Self::Decimal(
+            DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => Self::Decimal(
                 Decimal128Builder::new()
                     .with_precision_and_scale(*p, *s)
                     .map_err(|e| crate::error::internal(e.to_string()))?,
+                dt.clone(),
             ),
             DataType::Binary => Self::Binary(BinaryBuilder::new()),
             DataType::BinaryView => Self::BinaryView(BinaryViewBuilder::new()),
@@ -262,7 +266,7 @@ impl Column {
             (Self::I64(b), Val::I64(x)) => b.append_value(*x),
             (Self::F32(b), Val::F32(x)) => b.append_value(*x),
             (Self::F64(b), Val::F64(x)) => b.append_value(*x),
-            (Self::Decimal(b), Val::I128(x)) => b.append_value(*x),
+            (Self::Decimal(b, _), Val::I128(x)) => b.append_value(*x),
             (Self::Str(b), Val::Text(x)) => b.append(Some(x)),
             (Self::Binary(b), Val::Bytes(x)) => b.append_value(x),
             (Self::BinaryView(b), Val::Bytes(x)) => b.append_value(x),
@@ -284,7 +288,7 @@ impl Column {
             Self::I64(b) => b.append_null(),
             Self::F32(b) => b.append_null(),
             Self::F64(b) => b.append_null(),
-            Self::Decimal(b) => b.append_null(),
+            Self::Decimal(b, _) => b.append_null(),
             Self::Str(b) => b.append(None),
             Self::Binary(b) => b.append_null(),
             Self::BinaryView(b) => b.append_null(),
@@ -305,7 +309,7 @@ impl Column {
             Self::I64(b) => Arc::new(b.finish()),
             Self::F32(b) => Arc::new(b.finish()),
             Self::F64(b) => Arc::new(b.finish()),
-            Self::Decimal(b) => Arc::new(b.finish()),
+            Self::Decimal(b, t) => finish_decimal(b, t),
             Self::Str(b) => b.finish(),
             Self::Binary(b) => Arc::new(b.finish()),
             Self::BinaryView(b) => Arc::new(b.finish()),
@@ -317,5 +321,30 @@ impl Column {
                 new_null_array(dt, rows)
             }
         }
+    }
+}
+
+/// The finished decimals on the carrier `t`. A parsed or decoded value fits its
+/// declared precision, so it fits `Decimal64` when `t` is.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the value fits its precision"
+)]
+pub(crate) fn finish_decimal(b: &mut Decimal128Builder, t: &DataType) -> ArrayRef {
+    let wide = b.finish();
+    match t {
+        DataType::Decimal64(p, s) => Arc::new(
+            wide.unary::<_, Decimal64Type>(|v| v as i64)
+                .with_data_type(DataType::Decimal64(*p, *s)),
+        ),
+        _ => Arc::new(wide),
+    }
+}
+
+/// The unscaled decimal at row `i`, of either carrier.
+pub(crate) fn decimal_at(a: &dyn Array, i: usize) -> i128 {
+    match a.as_primitive_opt::<Decimal64Type>() {
+        Some(d) => i128::from(d.value(i)),
+        None => a.as_primitive::<Decimal128Type>().value(i),
     }
 }

@@ -112,7 +112,21 @@ def cell(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> str:
         return value.isoformat()
     if isinstance(value, bytes | bytearray):
         return "[" + " ".join(f"{b:02X}" for b in value) + "]"
+    if isinstance(value, timedelta):
+        return _day_time_cell(value)
     return str(value)
+
+
+def _day_time_cell(value: timedelta) -> str:
+    """A day-time interval as ``Dataset.show`` prints it, in its default fields (Arrow carries no others)."""
+    micros = abs(value // timedelta(microseconds=1))
+    sign = "-" if value < timedelta(0) else ""
+    seconds, micros = divmod(micros, 1_000_000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    fraction = f".{micros:06d}".rstrip("0") if micros else ""
+    return f"INTERVAL '{sign}{days} {hours:02d}:{minutes:02d}:{seconds:02d}{fraction}' DAY TO SECOND"
 
 
 def _shortest_single(value: float) -> str:

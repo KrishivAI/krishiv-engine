@@ -1,22 +1,6 @@
 {
   "entries": [
     {
-      "id": "map_filter#0bc9d763148d/ansi_on",
-      "reason": "SELECT map_filter(INTERVAL '1-2' YEAR TO MONTH, (k, v) -> k > v) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_filter#0bc9d763148d/ansi_off",
-      "reason": "SELECT map_filter(INTERVAL '1-2' YEAR TO MONTH, (k, v) -> k > v) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_filter#40c0a2faf086/ansi_on",
-      "reason": "SELECT map_filter(INTERVAL '1 02:03:04' DAY TO SECOND, (k, v) -> k > v) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_filter#40c0a2faf086/ansi_off",
-      "reason": "SELECT map_filter(INTERVAL '1 02:03:04' DAY TO SECOND, (k, v) -> k > v) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "map_filter#c64ad5a780f2/ansi_off",
       "reason": "SELECT map_filter(map('a', 1), (k, v) -> k > v) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     }

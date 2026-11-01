@@ -51,6 +51,7 @@ variants!(
     WindowGroupLimit,
     Aggregate,
     HashJoin,
+    SortMergeJoin,
     NestedLoopJoin,
     Union,
     WriteFiles,
@@ -75,6 +76,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::WindowGroupLimit { .. } => Variant::WindowGroupLimit,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
+        PhysNode::SortMergeJoin(_) => Variant::SortMergeJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
@@ -462,6 +464,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "sort_merge_join"
             | "partial_aggregate"
             | "shared_subplan"
             | "rust_udf"
@@ -481,7 +484,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_percentiles" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
-            n if n.starts_with("time_") || n.starts_with("geo_") => 6,
+            n if n.starts_with("time_") || n.starts_with("geo_") || n.starts_with("interval_") => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "hash_join_full_outer"

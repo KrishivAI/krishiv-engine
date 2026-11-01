@@ -17,60 +17,12 @@
       "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
-      "id": "xxhash64#36cc90cab019/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#36cc90cab019/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#46bae09a5a04/ansi_on",
-      "reason": "SELECT xxhash64(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#46bae09a5a04/ansi_off",
-      "reason": "SELECT xxhash64(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#89b3d078d407/ansi_on",
-      "reason": "SELECT xxhash64('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#89b3d078d407/ansi_off",
-      "reason": "SELECT xxhash64('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#aa4cafed551d/ansi_on",
-      "reason": "SELECT xxhash64('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#aa4cafed551d/ansi_off",
-      "reason": "SELECT xxhash64('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#e69ca7f985b4/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#e69ca7f985b4/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "xxhash64#f5d3d559ad3a/ansi_on",
       "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#f5d3d559ad3a/ansi_off",
       "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
-    },
-    {
-      "id": "xxhash64#f916e9e6b8e7/ansi_on",
-      "reason": "SELECT xxhash64(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#f916e9e6b8e7/ansi_off",
-      "reason": "SELECT xxhash64(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     }
   ],
   "format_version": 1,
