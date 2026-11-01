@@ -114,6 +114,6 @@ fn numbers_compare_as_numbers() {
     assert_eq!(normalise("12.50"), normalise("12.5"));
     assert_eq!(normalise("7"), normalise("7.000000"));
     assert_eq!(normalise("NULL"), "NULL");
-    assert_ne!(normalise("abc"), normalise("abd"));
+    assert_ne!(normalise("abc"), normalise("abz"));
     assert_ne!(normalise("1.0"), normalise("1.1"));
 }
