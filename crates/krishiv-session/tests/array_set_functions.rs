@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `array_contains`, `array_distinct`, `array_union`, `sort_array` and
-//! `arrays_zip` end to end: every row, name and error class below is what a
+//! `array_contains`, `array_distinct`, `array_union`, `array_except`,
+//! `array_intersect`, `arrays_overlap`, `sort_array` and `arrays_zip` end to end: every row, name and error class below is what a
 //! Spark 4.2.0 run returned for the statement.
 #![forbid(unsafe_code)]
 #![cfg(test)]
@@ -186,6 +186,54 @@ const ROWS: &[(&str, &str)] = &[
     ),
     ("array_union(array(3,1,2), array(2,5))", "[3, 1, 2, 5]"),
     (
+        "array_except(array(1,2,2,3,NULL,NULL), array(2,4))",
+        "[1, 3, NULL]",
+    ),
+    ("array_except(array(1,NULL), array(NULL))", "[1]"),
+    (
+        "array_except(array(0.0D, -0.0D, double('nan')), array(double('nan')))",
+        "[0.0]",
+    ),
+    ("array_except(array(1,2), array(1L))", "[2]"),
+    ("array_except(array(), array(1))", "[]"),
+    ("array_except(array(1,2), array())", "[1, 2]"),
+    ("array_except(array(3,1,2,1), array(2))", "[3, 1]"),
+    ("array_except(cast(NULL as array<int>), array(1))", "NULL"),
+    (
+        "array_intersect(array(1,2,2,3,NULL,NULL), array(2,NULL,2))",
+        "[2, NULL]",
+    ),
+    ("array_intersect(array(0.0D, -0.0D), array(0.0D))", "[0.0]"),
+    ("array_intersect(array(1,2), array(1L))", "[1]"),
+    ("array_intersect(array(3,1,2), array(2,3))", "[3, 2]"),
+    ("array_intersect(array(2,3,3), array(3,2))", "[2, 3]"),
+    ("array_intersect(array(1), array(NULL))", "[]"),
+    (
+        "array_intersect(array(array(1,NULL)), array(array(1,NULL)))",
+        "[[1, NULL]]",
+    ),
+    (
+        "array_intersect(array(1), cast(NULL as array<int>))",
+        "NULL",
+    ),
+    ("arrays_overlap(array(1,2), array(2,3))", "true"),
+    ("arrays_overlap(array(1,NULL), array(2,3))", "NULL"),
+    ("arrays_overlap(array(1,NULL), array(1))", "true"),
+    ("arrays_overlap(array(), array(1))", "false"),
+    ("arrays_overlap(array(NULL), array(NULL))", "NULL"),
+    (
+        "arrays_overlap(array(NULL), cast(array() as array<int>))",
+        "false",
+    ),
+    ("arrays_overlap(array(1), array(NULL))", "NULL"),
+    ("arrays_overlap(array(1,2), array(NULL,3))", "NULL"),
+    ("arrays_overlap(array(1,2), array(1L))", "true"),
+    ("arrays_overlap(array(0.0D), array(-0.0D))", "true"),
+    (
+        "arrays_overlap(array(double('nan')), array(double('nan')))",
+        "true",
+    ),
+    (
         "array_union(array(array(1),array(1)), array(array(2)))",
         "[[1], [2]]",
     ),
@@ -344,6 +392,54 @@ const ERRORS: &[(&str, &str)] = &[
     (
         "array_union(array(1,2),array(3,4),array(5))",
         "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+    ),
+    (
+        "array_except(array(1), array('a'))",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "array_except(NULL, array(1))",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "array_except(array(1,2), 1)",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "array_except(array(map(1,2)), array(map(1,2)))",
+        "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE",
+    ),
+    (
+        "array_intersect(array(1), array('a'))",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "array_intersect(NULL, array(1))",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "array_intersect(array(1,2), 1)",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "array_intersect(array(map(1,2)), array(map(1,2)))",
+        "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE",
+    ),
+    (
+        "arrays_overlap(array(1), array('a'))",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "arrays_overlap(NULL, array(1))",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "arrays_overlap(array(1,2), 1)",
+        "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES",
+    ),
+    (
+        "arrays_overlap(array(map(1,2)), array(map(1,2)))",
+        "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE",
     ),
     (
         "arrays_zip(1, array(1))",
@@ -515,4 +611,42 @@ fn lambda_variables_and_string_columns() {
         .unwrap(),
         ["true", "false"]
     );
+}
+
+/// Rows of different lengths, with NULL arrays, through the three
+/// two-array functions.
+#[test]
+fn two_array_functions_over_rows() {
+    let s = Session::new().unwrap();
+    let from = "FROM VALUES (array(1,2,3,3), array(3,4)), (array(5), array()), \
+        (NULL, array(1)), (array(1,NULL), array(NULL,2)), (array(), array(NULL)) t(a, b)";
+    for (call, want) in [
+        (
+            "array_except(a, b)",
+            vec!["[1, 2]", "[5]", "NULL", "[1]", "[]"],
+        ),
+        (
+            "array_intersect(a, b)",
+            vec!["[3]", "[]", "NULL", "[NULL]", "[]"],
+        ),
+        (
+            "arrays_overlap(a, b)",
+            vec!["true", "false", "NULL", "NULL", "false"],
+        ),
+    ] {
+        let got = run(&s, &format!("SELECT {call} {from}")).unwrap();
+        assert_eq!(got, want, "{call}");
+    }
+}
+
+/// A long right side is searched, not scanned for every left element.
+#[test]
+fn large_arrays_do_not_blow_up() {
+    let s = Session::new().unwrap();
+    let got = run(
+        &s,
+        "SELECT size(array_except(sequence_like.a, sequence_like.a)) FROM \
+         (SELECT transform(array_repeat(1, 50000), (x, i) -> i) AS a) sequence_like",
+    );
+    assert_eq!(got.unwrap(), ["0"]);
 }

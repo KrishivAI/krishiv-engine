@@ -527,7 +527,9 @@ impl Resolver<'_> {
             // lambdas read `namedlambdavariable()`, and a three-argument
             // `aggregate`/`reduce` shows the identity `finish` (see `hof`
             // and Spark's `toPrettySQL`).
-            _ if matches!(&b.expr.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if super::hof::Hof::of(f.id.name()).is_some()) => {
+            _ if !matches!(shown.node, ExprNode::Field { .. })
+                && matches!(&b.expr.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if super::hof::Hof::of(f.id.name()).is_some()) =>
+            {
                 pretty(&lateral_refs(&b.expr, &b.lateral), zone)
             }
             _ => pretty(&lateral_refs(&shown, &b.lateral), zone),
