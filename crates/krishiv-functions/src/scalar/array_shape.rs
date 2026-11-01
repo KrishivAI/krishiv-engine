@@ -313,6 +313,7 @@ fn join(x: &Inputs<'_>, replaced: bool) -> Result<ArrayRef, KrishivError> {
     let delimiters = x.strings(1)?;
     let replacements: Option<StringArray> = replaced.then(|| x.strings(2)).transpose()?;
     let mut out: Vec<Option<String>> = Vec::with_capacity(x.rows());
+    let mut total = 0usize;
     for row in 0..x.rows() {
         let replacement = replacements
             .as_ref()
@@ -341,6 +342,10 @@ fn join(x: &Inputs<'_>, replaced: bool) -> Result<ArrayRef, KrishivError> {
             if i32::try_from(text.len()).is_err() {
                 return Err(too_long("array_join", text.len()));
             }
+        }
+        total = total.saturating_add(text.len());
+        if i32::try_from(total).is_err() {
+            return Err(too_long("array_join", total));
         }
         out.push(Some(text));
     }

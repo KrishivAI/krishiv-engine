@@ -148,6 +148,14 @@ const ERRORS: &[(&str, &str)] = &[
         "array_join(array(array('a')), ',')",
         "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
     ),
+    (
+        "array_join(array('a'), 1)",
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+    ),
+    (
+        "array_join(array('a', NULL), ',', 1)",
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+    ),
 ];
 
 #[test]

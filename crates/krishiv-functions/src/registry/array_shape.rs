@@ -27,11 +27,7 @@ fn flatten(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     {
         return Ok(ArgType::new(
             DataType::Array(
-                ArrayType::new(
-                    inner.element_type().clone(),
-                    outer.contains_null() || inner.contains_null(),
-                )
-                .into(),
+                ArrayType::new(inner.element_type().clone(), inner.contains_null()).into(),
             ),
             c.args()[0].nullable || outer.contains_null(),
         ));
@@ -84,10 +80,10 @@ fn join_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
         } else {
             InputType::Exact(strings)
         },
-        InputType::Exact(DataType::String),
+        InputType::Strict(DataType::String),
     ];
     if c.args().len() > 2 {
-        inputs.push(InputType::Exact(DataType::String));
+        inputs.push(InputType::Strict(DataType::String));
     }
     inputs
 }
