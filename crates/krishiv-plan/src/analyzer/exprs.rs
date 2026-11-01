@@ -4751,6 +4751,19 @@ impl Resolver<'_> {
                 }
                 .into()
             }
+            Mismatch::DateDays { sub, date, ty } => DatatypeMismatchUnexpectedInputType {
+                sql_expr: format!(
+                    "\"{}({}, {})\"",
+                    if sub { "date_sub" } else { "date_add" },
+                    pretty(&kids[date].shown(), zone),
+                    pretty(&kids[1 - date].shown(), zone)
+                ),
+                param_index: ordinal(1),
+                required_type: r#"("INT" or "SMALLINT" or "TINYINT")"#.to_owned(),
+                input_sql: format!("\"{}\"", pretty(&kids[1 - date].shown(), zone)),
+                input_type: quoted_type(ty.as_ref()),
+            }
+            .into(),
             Mismatch::DataDiff(types, list) => {
                 let types: Vec<String> = types.iter().map(|t| quoted_type(t.as_ref())).collect();
                 let data_type = if list {

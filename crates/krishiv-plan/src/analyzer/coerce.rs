@@ -98,6 +98,16 @@ pub(super) enum Mismatch {
         /// The required type, as Spark prints it.
         required: String,
     },
+    /// `UNEXPECTED_INPUT_TYPE` of the day argument of `date_add` /
+    /// `date_sub`, which Spark names in place of `date + n` / `date - n`.
+    DateDays {
+        /// Whether the call is `date_sub`.
+        sub: bool,
+        /// The date argument (0-based); the day count is the other one.
+        date: usize,
+        /// The day count's type.
+        ty: Option<DataType>,
+    },
     /// `DATA_DIFF_TYPES`: the argument types; whether Spark lists them as
     /// `["A", "B"]` (else `("A" or "B")`).
     DataDiff(Vec<Option<DataType>>, bool),
@@ -776,6 +786,41 @@ fn integral_divide(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Result<Typed, Mismat
     }
 }
 
+/// What Spark says of `+` / `-` between a date or timestamp and a DECIMAL
+/// (`DateTimeOperations` only takes integral days and intervals).
+fn datetime_decimal(op: Builtin, a: &Arg<'_>, b: &Arg<'_>) -> Option<Mismatch> {
+    use DataType as T;
+    let (date_side, dec) = match (a.ty, b.ty) {
+        (Some(d), Some(T::Decimal(_))) if is_datetime(Some(d)) => (0, 1),
+        (Some(T::Decimal(_)), Some(d)) if is_datetime(Some(d)) => (1, 0),
+        _ => return None,
+    };
+    let dt = [a.ty, b.ty][date_side]?;
+    let is_date = *dt == T::Date;
+    let dec_ty = [a.ty, b.ty][dec].cloned();
+    let unexpected = |required: &str| Mismatch::Unexpected {
+        arg: dec,
+        param: dec,
+        ty: dec_ty.clone(),
+        required: required.to_owned(),
+    };
+    Some(match (op, is_date) {
+        (Builtin::Add, false) => Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()),
+        (Builtin::Add, true) => Mismatch::DateDays {
+            sub: false,
+            date: date_side,
+            ty: dec_ty,
+        },
+        (_, false) => unexpected(r#""(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)""#),
+        (_, true) if date_side == 0 => Mismatch::DateDays {
+            sub: true,
+            date: 0,
+            ty: dec_ty,
+        },
+        (_, true) => unexpected(r#""DATE""#),
+    })
+}
+
 /// `+ - * / %`.
 fn arithmetic(
     op: Builtin,
@@ -791,7 +836,8 @@ fn arithmetic(
         _ => NUMERIC,
     };
     if matches!(op, Builtin::Add | Builtin::Subtract) && (is_datetime(a.ty) || is_datetime(b.ty)) {
-        return Err(Mismatch::Unsupported("date and timestamp arithmetic"));
+        return Err(datetime_decimal(op, a, b)
+            .unwrap_or(Mismatch::Unsupported("date and timestamp arithmetic")));
     }
     legacy_strings(&[*a, *b], ansi)?;
     let (x, y) = match (a.ty, b.ty) {
@@ -1646,6 +1692,45 @@ mod tests {
             nullable: true,
             literal: None,
         }
+    }
+
+    /// `+` and `-` between a date or timestamp and a DECIMAL fail with the
+    /// class Spark's `DateTimeOperations` gives each shape.
+    #[test]
+    fn datetime_and_decimal_arithmetic_mismatches() {
+        let dec = T::Decimal(DecimalType::SYSTEM_DEFAULT);
+        let shapes = |op, l: &T, r: &T| datetime_decimal(op, &arg(Some(l)), &arg(Some(r)));
+        for ts in [T::Timestamp, T::TimestampNtz] {
+            assert!(matches!(
+                shapes(Builtin::Add, &ts, &dec),
+                Some(Mismatch::DiffTypes(..))
+            ));
+            assert!(matches!(
+                shapes(Builtin::Subtract, &dec, &ts),
+                Some(Mismatch::Unexpected {
+                    arg: 0,
+                    param: 0,
+                    ..
+                })
+            ));
+        }
+        assert!(matches!(
+            shapes(Builtin::Add, &dec, &T::Date),
+            Some(Mismatch::DateDays {
+                sub: false,
+                date: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            shapes(Builtin::Subtract, &T::Date, &dec),
+            Some(Mismatch::DateDays {
+                sub: true,
+                date: 0,
+                ..
+            })
+        ));
+        assert!(shapes(Builtin::Add, &T::Date, &T::Integer).is_none());
     }
 
     /// Struct comparisons are NULL only when a whole struct operand is NULL:
