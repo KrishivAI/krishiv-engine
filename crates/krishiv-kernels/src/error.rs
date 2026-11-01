@@ -33,12 +33,12 @@
 //! [`crate::version::SparkVersion`].
 
 use krishiv_common::error::{
-    ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTimestamp, CastInvalidInput,
-    CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion, DatetimeOverflow, DivideByZero,
-    ErrorClass, IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd,
-    InvalidFormatEscInTheMiddle, InvalidFractionOfSecond, InvalidUtf8String,
-    KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
-    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
+    ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTime, CannotParseTimestamp,
+    CastInvalidInput, CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion,
+    DatetimeFieldOutOfBoundsWithoutSuggestion, DatetimeOverflow, DivideByZero, ErrorClass,
+    IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
+    InvalidFractionOfSecond, InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError,
+    KrishivUnsupportedFeature, NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
     NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
 
@@ -301,6 +301,26 @@ impl KernelError {
                 range_message: message,
             }
             .into(),
+        }
+    }
+
+    /// `DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION`: a `TIME` value or
+    /// field outside its range (no ANSI switch to suggest).
+    pub(crate) fn time_field_out_of_bounds(row: usize, message: String) -> Self {
+        Self {
+            row: Some(row),
+            error: DatetimeFieldOutOfBoundsWithoutSuggestion {
+                range_message: message,
+            }
+            .into(),
+        }
+    }
+
+    /// `CANNOT_PARSE_TIME`: `input` and `format` are Spark's quoted renderings.
+    pub(crate) fn cannot_parse_time(row: usize, input: String, format: String) -> Self {
+        Self {
+            row: Some(row),
+            error: CannotParseTime { input, format }.into(),
         }
     }
 

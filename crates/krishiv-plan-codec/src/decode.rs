@@ -891,12 +891,19 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
         }
     };
     let frame = required(&f.frame, "a window frame")?;
-    let bound = |b: i32, offset: i64| {
+    let bound = |b: i32, offset: i64, range: &[u8]| {
+        let bad = || corrupt("a RANGE window frame bound of the wrong width");
         enum_map!(pb::FrameBound, b, "window frame bound", {
             UnboundedPreceding => FrameBound::UnboundedPreceding,
             CurrentRow => FrameBound::CurrentRow,
             UnboundedFollowing => FrameBound::UnboundedFollowing,
             Offset => FrameBound::Offset(offset),
+            RangeInt => FrameBound::RangeInt(i128::from_be_bytes(
+                range.try_into().map_err(|_| bad())?,
+            )),
+            RangeFloat => FrameBound::RangeFloat(u64::from_be_bytes(
+                range.try_into().map_err(|_| bad())?,
+            )),
         })
     };
     Ok(WindowFunctionPlan {
@@ -906,8 +913,8 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
                 Rows => FrameUnits::Rows,
                 Range => FrameUnits::Range,
             })?,
-            lower: bound(frame.lower, frame.lower_offset)?,
-            upper: bound(frame.upper, frame.upper_offset)?,
+            lower: bound(frame.lower, frame.lower_offset, &frame.lower_range)?,
+            upper: bound(frame.upper, frame.upper_offset, &frame.upper_range)?,
         },
         filter: f.filter.map(usize_of).transpose()?,
         name: f.name.clone(),
