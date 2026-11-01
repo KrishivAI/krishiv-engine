@@ -29,6 +29,7 @@ use crate::error::{Result, internal, unsupported};
 pub const DEFAULT_PARTITION: &str = "__HIVE_DEFAULT_PARTITION__";
 
 pub mod discover;
+pub mod glob;
 
 #[cfg(test)]
 mod tests;

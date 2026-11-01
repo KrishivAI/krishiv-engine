@@ -25,7 +25,7 @@
 //! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
 //! [`StoreRegistry`]) are supported. Not yet supported, failing with
-//! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories that are
+//! `KRISHIV_UNSUPPORTED_FEATURE`: subdirectories that are
 //! not `name=value` partition directories, paths with any other scheme, file sources Spark
 //! knows but the engine has no [`FileFormat`] for, and merging the files'
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
@@ -417,8 +417,9 @@ impl FileReads {
             let Some(text) = p.as_plain() else {
                 return Err(unsupported("paths with credentials".to_owned()));
             };
-            if text.contains(['*', '?', '[', '{']) {
-                return Err(unsupported("glob patterns in paths".to_owned()));
+            if krishiv_io::partition::glob::has_glob(text) {
+                self.list_glob(text, options, &mut listed).await?;
+                continue;
             }
             // The store is instantiated from the plan's option values
             // (plans stay pure data): the read's `fs.*` options override
@@ -508,6 +509,57 @@ impl FileReads {
 
     /// Adds the files `at` names to `out`, each with the `name=value`
     /// directories between `at` and the file.
+    /// The files under every path `text` (a Hadoop glob) matches; each match
+    /// is a root of its own, as in Spark, so partition discovery starts there.
+    async fn list_glob(
+        &self,
+        text: &str,
+        options: &BTreeMap<String, OptionValue>,
+        out: &mut Vec<(FileRef, Vec<Segment>)>,
+    ) -> Result<()> {
+        let first = text.find(['*', '?', '[', '{']).unwrap_or(text.len());
+        let cut = text[..first].rfind('/').map_or(0, |i| i + 1);
+        let (prefix, rest) = text.split_at(cut);
+        let glob = krishiv_io::partition::glob::Glob::parse(rest)
+            .map_err(|e| unsupported(format!("the glob pattern {text}: {e}")))?;
+        let at = self.paths.locate_with_options(prefix, options)?;
+        let base = at.path.parts().count();
+        let mut matched = std::collections::BTreeMap::new();
+        for meta in self.io.list(&at.store, &at.path).await? {
+            let below: Vec<String> = meta
+                .location
+                .parts()
+                .skip(base)
+                .map(|p| p.as_ref().to_owned())
+                .collect();
+            // The file and each directory above it are candidates.
+            for n in 1..=below.len() {
+                let names: Vec<&str> = below[..n].iter().map(String::as_str).collect();
+                if glob.matches(&names) {
+                    matched
+                        .entry(below[..n].to_vec())
+                        .or_insert_with(|| Path::from_iter(meta.location.parts().take(base + n)));
+                }
+            }
+        }
+        if matched.is_empty() {
+            return Err(PathNotFound {
+                path: format!("{}{rest}", at.display.trim_end_matches('/')),
+            }
+            .into());
+        }
+        for (names, path) in matched {
+            let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
+            let found = LocatedPath {
+                store: at.store.clone(),
+                path,
+                display,
+            };
+            self.list_path(&found, out).await?;
+        }
+        Ok(())
+    }
+
     async fn list_path(
         &self,
         at: &LocatedPath,

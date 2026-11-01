@@ -258,3 +258,37 @@ fn nested_and_repeated_projections_keep_the_column_layout() {
         [["1", "1", "2020", "2020"], ["2", "2", "2021", "2021"]]
     );
 }
+
+#[test]
+fn a_glob_reads_each_match_as_its_own_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let root = written(
+        &s,
+        dir.path(),
+        &[2020, 2020, 2021],
+        &[Some("eu"), Some("us"), Some("eu")],
+    );
+    // A matched directory is a root of its own, so `year` is not a column.
+    let ids = rows(
+        &s,
+        &format!("SELECT CAST(id AS STRING), region FROM parquet.`{root}/year=2020`"),
+    );
+    assert_eq!(ids, [["1", "eu"], ["2", "us"]]);
+    let globbed = rows(
+        &s,
+        &format!("SELECT CAST(id AS STRING), region FROM parquet.`{root}/year=202{{0,1}}`"),
+    );
+    assert_eq!(globbed, [["1", "eu"], ["2", "us"], ["3", "eu"]]);
+    let star = rows(
+        &s,
+        &format!("SELECT CAST(id AS STRING) FROM parquet.`{root}/year=2021/region=e?`"),
+    );
+    assert_eq!(star, [["3"]]);
+    let e = block_on(s.sql(&format!("SELECT * FROM parquet.`{root}/year=1999*`")));
+    let e = match e {
+        Ok(df) => block_on(df.collect()).unwrap_err(),
+        Err(e) => e,
+    };
+    assert_eq!(e.error_class().name(), "PATH_NOT_FOUND");
+}
