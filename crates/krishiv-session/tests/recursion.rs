@@ -357,3 +357,24 @@ fn the_rows_a_recursion_keeps_count_against_the_memory_limit() {
     );
     assert_eq!(class, ErrorClass::UnableToAcquireMemory);
 }
+
+#[test]
+fn a_cte_defined_in_the_term_cannot_hide_a_forbidden_place() {
+    let s = Session::new().unwrap();
+    // Spark 4.2.0: the aggregate reads `a`, which reads the recursive CTE.
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH RECURSIVE r(n) AS (SELECT CAST(1 AS BIGINT) UNION ALL \
+             (WITH a AS (SELECT n FROM r) SELECT count(*) FROM a)) SELECT * FROM r LIMIT 3"
+        ),
+        ErrorClass::InvalidRecursiveReferencePlace
+    );
+    // An allowed place through a definition still runs.
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+         (WITH a AS (SELECT n + 1 AS m FROM r WHERE n < 3) SELECT m FROM a)) SELECT * FROM r",
+    ));
+    assert_eq!(got, ["1", "2", "3"]);
+}

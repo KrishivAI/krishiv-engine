@@ -9,6 +9,7 @@
 //! the anchor's columns (all nullable), the recursive term resolves over
 //! it, and the two are widened as `UNION ALL` inputs are.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::AnalysisError;
@@ -99,49 +100,87 @@ impl Resolver<'_> {
     }
 }
 
+/// The CTE definitions in scope at a node of [`check_places`]'s walk,
+/// innermost first: a read of a CTE counts as a read of what its definition
+/// reads.
+struct Scope {
+    name: String,
+    plan: Arc<LogicalPlan>,
+    /// The definitions in scope of this one's own body.
+    outer: Option<Rc<Scope>>,
+}
+
+type Defs = Option<Rc<Scope>>;
+
+/// The definition `name` resolves to in `defs`, with the scope its body sees.
+fn lookup(defs: &Defs, name: &str) -> Option<(Arc<LogicalPlan>, Defs)> {
+    let mut cur = defs.as_ref();
+    while let Some(d) = cur {
+        if d.name.eq_ignore_ascii_case(name) {
+            return Some((Arc::clone(&d.plan), d.outer.clone()));
+        }
+        cur = d.outer.as_ref();
+    }
+    None
+}
+
 /// Spark's `INVALID_RECURSIVE_REFERENCE.PLACE`: the recursive reference
-/// (a `CteRef` over `ids`) may not sit under an aggregate, a window or a
-/// sort, inside a subquery expression, on the right side of a left outer,
-/// semi or anti join, the left side of a right outer join, or in a full
-/// outer join.
+/// (a `CteRef` of `name` that no definition inside the term answers, or a
+/// CTE defined inside the term that reads it) may not sit under an
+/// aggregate, a window or a sort, inside a subquery expression, on the right
+/// side of a left outer, semi or anti join, the left side of a right outer
+/// join, or in a full outer join.
 fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), AnalysisError> {
-    fn has(p: &Arc<LogicalPlan>, name: &str, memo: &mut HashMap<usize, bool>) -> bool {
+    type Memo = HashMap<usize, bool>;
+    fn has(p: &Arc<LogicalPlan>, name: &str, defs: &Defs, memo: &mut Memo) -> bool {
         let key = Arc::as_ptr(p) as usize;
         if let Some(b) = memo.get(&key) {
             return *b;
         }
-        let mut found = matches!(&p.node, PlanNode::CteRef(r) if r.name.eq_ignore_ascii_case(name));
-        if let PlanNode::WithCte { input, ctes } = &p.node {
-            // A definition of `name` hides the recursive CTE from what
-            // follows it: the later definitions and the body.
-            let mut hidden = false;
-            for c in ctes {
-                found |= !hidden && has(&c.plan, name, memo);
-                hidden |= c.name.eq_ignore_ascii_case(name);
+        let mut found = false;
+        match &p.node {
+            PlanNode::CteRef(r) => {
+                found = match lookup(defs, &r.name) {
+                    // A definition inside the term: what it reads.
+                    Some((plan, outer)) => has(&plan, name, &outer, memo),
+                    // None inside: the recursive reference, if it is the name.
+                    None => r.name.eq_ignore_ascii_case(name),
+                };
             }
-            found |= !hidden && has(input, name, memo);
-        } else {
-            p.for_each_child(&mut |c| found |= has(c, name, memo));
+            PlanNode::WithCte { input, ctes } => {
+                let mut scope = defs.clone();
+                for c in ctes {
+                    found |= has(&c.plan, name, &scope, memo);
+                    scope = Some(Rc::new(Scope {
+                        name: c.name.clone(),
+                        plan: Arc::clone(&c.plan),
+                        outer: scope,
+                    }));
+                }
+                found |= has(input, name, &scope, memo);
+            }
+            _ => p.for_each_child(&mut |c| found |= has(c, name, defs, memo)),
         }
-        p.for_each_expr(&mut |e| found |= expr_has(e, name, memo));
+        p.for_each_expr(&mut |e| found |= expr_has(e, name, defs, memo));
         memo.insert(key, found);
         found
     }
-    fn expr_has(e: &Arc<crate::Expr>, name: &str, memo: &mut HashMap<usize, bool>) -> bool {
-        let mut found = matches!(&e.node, ExprNode::Subquery { plan, .. } if has(plan, name, memo));
-        e.for_each_child(&mut |c| found |= expr_has(c, name, memo));
+    fn expr_has(e: &Arc<crate::Expr>, name: &str, defs: &Defs, memo: &mut Memo) -> bool {
+        let mut found =
+            matches!(&e.node, ExprNode::Subquery { plan, .. } if has(plan, name, defs, memo));
+        e.for_each_child(&mut |c| found |= expr_has(c, name, defs, memo));
         found
     }
     let mut memo = HashMap::new();
     let mut seen = HashSet::new();
-    let mut stack = vec![Arc::clone(plan)];
+    let mut stack: Vec<(Arc<LogicalPlan>, Defs)> = vec![(Arc::clone(plan), None)];
     let bad = || AnalysisError::new(InvalidRecursiveReferencePlace {}, o);
-    while let Some(p) = stack.pop() {
+    while let Some((p, defs)) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&p) as usize) {
             continue;
         }
         let mut in_expr = false;
-        p.for_each_expr(&mut |e| in_expr |= expr_has(e, name, &mut memo));
+        p.for_each_expr(&mut |e| in_expr |= expr_has(e, name, &defs, &mut memo));
         if in_expr {
             return Err(bad());
         }
@@ -149,14 +188,17 @@ fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), An
             PlanNode::Aggregate { input, .. }
             | PlanNode::Window { input, .. }
             | PlanNode::Sort { input, .. }
-                if has(input, name, &mut memo) =>
+                if has(input, name, &defs, &mut memo) =>
             {
                 return Err(bad());
             }
             PlanNode::Join {
                 left, right, kind, ..
             } => {
-                let (l, r) = (has(left, name, &mut memo), has(right, name, &mut memo));
+                let (l, r) = (
+                    has(left, name, &defs, &mut memo),
+                    has(right, name, &defs, &mut memo),
+                );
                 let wrong = match kind {
                     JoinKind::FullOuter => l || r,
                     JoinKind::RightOuter => l,
@@ -170,20 +212,18 @@ fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), An
             _ => {}
         }
         if let PlanNode::WithCte { input, ctes } = &p.node {
-            // What a redefinition of `name` hides is not the recursive
-            // reference's scope.
-            let mut hidden = false;
+            let mut scope = defs.clone();
             for c in ctes {
-                if !hidden {
-                    stack.push(Arc::clone(&c.plan));
-                }
-                hidden |= c.name.eq_ignore_ascii_case(name);
+                stack.push((Arc::clone(&c.plan), scope.clone()));
+                scope = Some(Rc::new(Scope {
+                    name: c.name.clone(),
+                    plan: Arc::clone(&c.plan),
+                    outer: scope,
+                }));
             }
-            if !hidden {
-                stack.push(Arc::clone(input));
-            }
+            stack.push((Arc::clone(input), scope));
         } else {
-            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+            p.for_each_child(&mut |c| stack.push((Arc::clone(c), defs.clone())));
         }
     }
     Ok(())
