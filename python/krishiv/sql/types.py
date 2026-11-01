@@ -142,7 +142,26 @@ class DecimalType(FractionalType):
 
 
 class StringType(AtomicType):
-    pass
+    """A string; ``collation`` is the name as written (``UTF8_BINARY`` by default).
+
+    As in PySpark 4, a collated string prints ``string collate <name>`` and two
+    strings are equal only when the collation names are spelled alike.
+    """
+
+    def __init__(self, collation: str = "UTF8_BINARY") -> None:
+        self.collation = collation
+
+    def _collated(self) -> bool:
+        return self.collation != "UTF8_BINARY"
+
+    def simpleString(self) -> str:
+        return f"string collate {self.collation}" if self._collated() else "string"
+
+    def jsonValue(self) -> str:
+        return self.simpleString()
+
+    def __repr__(self) -> str:
+        return f"StringType({self.collation!r})" if self._collated() else "StringType()"
 
 
 class CharType(AtomicType):
@@ -359,6 +378,7 @@ _SIMPLE: dict[type[DataType], str] = {
     CalendarIntervalType: "interval",
 }
 _BY_SIMPLE: dict[str, type[DataType]] = {v: k for k, v in _SIMPLE.items()}
+_COLLATED = re.compile(r"string collate (\S+)", re.IGNORECASE)
 _DECIMAL = re.compile(r"decimal\(\s*(\d+)\s*,\s*(\d+)\s*\)", re.IGNORECASE)
 _CHAR = re.compile(r"char\(\s*(\d+)\s*\)", re.IGNORECASE)
 _VARCHAR = re.compile(r"varchar\(\s*(\d+)\s*\)", re.IGNORECASE)
@@ -370,6 +390,8 @@ def _from_simple_string(text: str) -> DataType:
     """The type of a Spark ``simpleString`` (as the engine reports it)."""
     if (cls := _BY_SIMPLE.get(text)) is not None:
         return cls()
+    if (m := _COLLATED.fullmatch(text)) is not None:
+        return StringType(m.group(1))
     if (m := _DECIMAL.fullmatch(text)) is not None:
         return DecimalType(int(m.group(1)), int(m.group(2)))
     if (m := _CHAR.fullmatch(text)) is not None:
@@ -425,12 +447,10 @@ class StructField(DataType):
 
     @classmethod
     def fromJson(cls, json: dict[str, Any]) -> StructField:
-        return cls(
-            json["name"],
-            _parse_datatype_json_value(json["type"]),
-            json.get("nullable", True),
-            json.get("metadata") or {},
-        )
+        metadata = dict(json.get("metadata") or {})
+        collations = metadata.pop(_COLLATIONS_KEY, None) or {}
+        data_type = _apply_collations(_parse_datatype_json_value(json["type"]), json["name"], collations)
+        return cls(json["name"], data_type, json.get("nullable", True), metadata)
 
     def typeName(self) -> str:
         from krishiv.errors import PySparkTypeError
@@ -561,6 +581,25 @@ def _simple_string_of(data_type: DataType | str) -> str:
 def _parse_datatype_json_string(json_string: str) -> DataType:
     """The type of a JSON type string, as ``pyspark.sql.types`` reads it."""
     return _parse_datatype_json_value(_json.loads(json_string))
+
+
+_COLLATIONS_KEY = "__COLLATIONS"
+
+
+def _apply_collations(dt: DataType, path: str, collations: dict[str, str]) -> DataType:
+    """``dt`` with the collations that the engine's JSON form records under ``path`` applied."""
+    if isinstance(dt, StringType):
+        spec = collations.get(path)
+        return StringType(spec.split(".", 1)[-1]) if spec else dt
+    if isinstance(dt, ArrayType):
+        return ArrayType(_apply_collations(dt.elementType, f"{path}.element", collations), dt.containsNull)
+    if isinstance(dt, MapType):
+        return MapType(
+            _apply_collations(dt.keyType, f"{path}.key", collations),
+            _apply_collations(dt.valueType, f"{path}.value", collations),
+            dt.valueContainsNull,
+        )
+    return dt
 
 
 def _parse_datatype_json_value(json_value: dict[str, Any] | str) -> DataType:
@@ -753,6 +792,9 @@ class _DdlParser:
         if lower in _DDL_ATOMS:
             if self.peek() == "(":
                 raise ValueError(tok)
+            if lower == "string" and (self.peek() or "").lower() == "collate":
+                self.next()
+                return StringType(self.next())
             return _DDL_ATOMS[lower]()
         raise ValueError(tok)
 

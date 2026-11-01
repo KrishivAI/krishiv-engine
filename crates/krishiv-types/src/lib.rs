@@ -10,6 +10,7 @@
 
 pub mod arrow;
 pub mod batch;
+mod collation;
 mod data_type;
 mod ddl;
 pub mod error;
@@ -20,6 +21,7 @@ mod json;
 mod nested;
 pub mod variant;
 
+pub use collation::{CatalogEntry, Collation, CollationFamily};
 pub use data_type::{DataType, DayTimeField, DecimalStorage, DecimalType, Srid, YearMonthField};
 pub use ddl::parse_data_type;
 pub use json::parse_metadata;

@@ -1146,3 +1146,67 @@ fn late_materialization_defaults_to_the_session_setting() {
     let bad = krishiv_common::config::Config::from_pairs([(key, "sometimes")]);
     assert!(bad.is_err(), "{bad:?}");
 }
+
+/// `BINARY` decimals, which arrow-rs reads only as `Decimal128`, reach the query
+/// on the canonical carrier: at the top level and inside a list.
+#[test]
+fn binary_decimals_read_on_the_canonical_carrier() {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Decimal64Type;
+    use parquet::data_type::{ByteArray, ByteArrayType};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+    let message = "message m {
+        required binary f (DECIMAL(10,2));
+        optional group l (LIST) {
+            repeated group list { optional binary element (DECIMAL(10,2)); }
+        }
+    }";
+    let schema = Arc::new(parse_message_type(message).unwrap());
+    let be = |v: i32| ByteArray::from(v.to_be_bytes().to_vec());
+    let mut buf = Vec::new();
+    let mut w = SerializedFileWriter::new(&mut buf, schema, Arc::default()).unwrap();
+    let mut rg = w.next_row_group().unwrap();
+    let mut flat = rg.next_column().unwrap().unwrap();
+    flat.typed::<ByteArrayType>()
+        .write_batch(&[be(150)], None, None)
+        .unwrap();
+    flat.close().unwrap();
+    let mut nested = rg.next_column().unwrap().unwrap();
+    nested
+        .typed::<ByteArrayType>()
+        .write_batch(&[be(150), be(-275)], Some(&[3, 3]), Some(&[0, 1]))
+        .unwrap();
+    nested.close().unwrap();
+    rg.close().unwrap();
+    w.close().unwrap();
+
+    let env = Env::new();
+    let file = env.put("binary-decimals.parquet", buf);
+    let o = env.options(&[]);
+    let d = DataType::Decimal64(10, 2);
+    let table: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("f", d.clone(), false),
+        Field::new(
+            "l",
+            DataType::List(Arc::new(Field::new("element", d.clone(), true))),
+            true,
+        ),
+    ]));
+    let got = env.scan(&file, &ScanRequest::all(table), &o).unwrap();
+    let batch = &got[0];
+    assert_eq!(batch.column(0).data_type(), &d);
+    assert_eq!(
+        batch.column(0).as_primitive::<Decimal64Type>().value(0),
+        150
+    );
+    let list = batch.column(1).as_list::<i32>();
+    assert_eq!(list.values().data_type(), &d);
+    assert_eq!(
+        list.values()
+            .as_primitive::<Decimal64Type>()
+            .values()
+            .to_vec(),
+        [150, -275]
+    );
+}

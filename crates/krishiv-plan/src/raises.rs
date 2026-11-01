@@ -204,6 +204,7 @@ pub(crate) fn type_of(e: &Expr) -> Option<DataType> {
         ExprNode::Resolved(
             ResolvedExpr::Column(c)
             | ResolvedExpr::OuterColumn(c)
+            | ResolvedExpr::LambdaVar(c)
             | ResolvedExpr::Alias { output: c, .. },
         ) => Some(c.data_type.clone()),
         ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => Some(data_type.clone()),

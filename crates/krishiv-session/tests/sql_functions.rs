@@ -363,14 +363,16 @@ fn functions_run_over_columns() {
     let (schema, rows) = run(&s, "SELECT d(2)").unwrap();
     assert_eq!(schema, "struct<d(2):double>");
     assert_eq!(rows, ["2"]);
-    // In WHERE and ORDER BY.
+    // In WHERE; ORDER BY refuses a SQL function (Spark's sql-udf golden).
     assert_eq!(
         ok(
             &s,
-            "SELECT id FROM people WHERE plus(id, 0) > 1 ORDER BY plus(0, id) DESC"
+            "SELECT id FROM people WHERE plus(id, 0) > 1 ORDER BY id DESC"
         ),
         ["3", "2"]
     );
+    let e = fails(&s, "SELECT id FROM people ORDER BY plus(0, id) DESC");
+    assert!(format!("{e:?}").contains("UnsupportedSqlUdfUsage"), "{e:?}");
 }
 
 #[test]

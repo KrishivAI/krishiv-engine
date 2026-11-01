@@ -2054,6 +2054,7 @@ dependencies = [
  "krishiv-common",
  "libm",
  "md-5 0.11.0",
+ "memchr",
  "mimalloc",
  "proptest",
  "sha1",

@@ -7,9 +7,12 @@
 
 use std::fmt::Write as _;
 
-use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_common::error::{
+    CollationInvalidProvider, ErrorClass, InvalidJsonDataTypeForCollations, KrishivError,
+};
 use serde_json::{Map, Value};
 
+use crate::collation::{Collation, CollationFamily};
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
 use crate::{DataType, DecimalType, Srid};
@@ -23,17 +26,27 @@ impl DataType {
     }
 
     fn write_json(&self, out: &mut String) {
+        self.write_json_in(out, false);
+    }
+
+    /// `in_field`: the type is a struct field's, whose collations are in the
+    /// field's `__COLLATIONS` metadata, so a collated string is plain `string`.
+    fn write_json_in(&self, out: &mut String, in_field: bool) {
         match self {
+            Self::CollatedString(c) if !in_field => {
+                write_string(&format!("string collate {c}"), out);
+            }
+            Self::CollatedString(_) => write_string("string", out),
             Self::Array(a) => {
                 out.push_str(r#"{"type":"array","elementType":"#);
-                a.element_type().write_json(out);
+                a.element_type().write_json_in(out, in_field);
                 let _ = write!(out, r#","containsNull":{}}}"#, a.contains_null());
             }
             Self::Map(m) => {
                 out.push_str(r#"{"type":"map","keyType":"#);
-                m.key_type().write_json(out);
+                m.key_type().write_json_in(out, in_field);
                 out.push_str(r#","valueType":"#);
-                m.value_type().write_json(out);
+                m.value_type().write_json_in(out, in_field);
                 let _ = write!(out, r#","valueContainsNull":{}}}"#, m.value_contains_null());
             }
             Self::Struct(s) => {
@@ -45,9 +58,15 @@ impl DataType {
                     out.push_str(r#"{"name":"#);
                     write_string(f.name(), out);
                     out.push_str(r#","type":"#);
-                    f.data_type().write_json(out);
+                    f.data_type().write_json_in(out, true);
                     let _ = write!(out, r#","nullable":{},"metadata":"#, f.nullable());
-                    write_value(&Value::Object(f.metadata().as_map().clone()), out);
+                    let mut metadata = f.metadata().as_map().clone();
+                    let mut collations = Map::new();
+                    collect_collations(f.data_type(), f.name(), &mut collations);
+                    if !collations.is_empty() {
+                        metadata.insert(COLLATIONS_KEY.to_owned(), Value::Object(collations));
+                    }
+                    write_value(&Value::Object(metadata), out);
                     out.push('}');
                 }
                 out.push_str("]}");
@@ -147,12 +166,104 @@ fn struct_field(v: &Value, depth: usize) -> Result<StructField> {
         .and_then(Value::as_bool)
         .ok_or_else(invalid)?;
     let data_type = DataType::from_json_value(obj.get("type").ok_or_else(invalid)?, depth + 1)?;
-    let metadata = match obj.get("metadata") {
-        None => Metadata::empty(),
-        Some(Value::Object(m)) => Metadata::from_map(m.clone()),
+    let (data_type, metadata) = match obj.get("metadata") {
+        None => (data_type, Metadata::empty()),
+        Some(Value::Object(m)) => {
+            let mut m = m.clone();
+            let data_type = match m.remove(COLLATIONS_KEY) {
+                Some(Value::Object(map)) => apply_collations(&data_type, name, &map)?,
+                Some(_) => return Err(invalid()),
+                None => data_type,
+            };
+            (data_type, Metadata::from_map(m))
+        }
         Some(_) => return Err(invalid()),
     };
     Ok(StructField::new(name, data_type, nullable).with_metadata(metadata))
+}
+
+/// The field-metadata key under which Spark's JSON form records the
+/// collations of a field's string leaves, by path.
+const COLLATIONS_KEY: &str = "__COLLATIONS";
+
+/// `spark.NAME` or `icu.NAME`: Spark's collation provider prefix.
+fn provider_name(c: Collation) -> String {
+    let provider = match c.family() {
+        CollationFamily::Icu { .. } => "icu",
+        _ => "spark",
+    };
+    format!("{provider}.{}", c.name())
+}
+
+/// The collated string leaves of `t` below `path` (`.element`, `.key` and
+/// `.value` under arrays and maps; a nested struct's fields carry their own).
+fn collect_collations(t: &DataType, path: &str, out: &mut Map<String, Value>) {
+    match t {
+        DataType::CollatedString(c) => {
+            out.insert(path.to_owned(), Value::String(provider_name(*c)));
+        }
+        DataType::Array(a) => {
+            collect_collations(a.element_type(), &format!("{path}.element"), out);
+        }
+        DataType::Map(m) => {
+            collect_collations(m.key_type(), &format!("{path}.key"), out);
+            collect_collations(m.value_type(), &format!("{path}.value"), out);
+        }
+        _ => {}
+    }
+}
+
+/// `t` with the collations of `map` applied to its string leaves.
+fn apply_collations(t: &DataType, path: &str, map: &Map<String, Value>) -> Result<DataType> {
+    Ok(match t {
+        DataType::String => match map.get(path) {
+            Some(Value::String(spec)) => DataType::collated_string(parse_provider_name(spec)?),
+            _ => t.clone(),
+        },
+        DataType::Array(a) => ArrayType::new(
+            apply_collations(a.element_type(), &format!("{path}.element"), map)?,
+            a.contains_null(),
+        )
+        .into(),
+        DataType::Map(m) => MapType::new(
+            apply_collations(m.key_type(), &format!("{path}.key"), map)?,
+            apply_collations(m.value_type(), &format!("{path}.value"), map)?,
+            m.value_contains_null(),
+        )
+        .into(),
+        other => {
+            if map.contains_key(path) {
+                return Err(InvalidJsonDataTypeForCollations {
+                    json_type: other.json(),
+                }
+                .into());
+            }
+            other.clone()
+        }
+    })
+}
+
+/// `provider.NAME`, checked as Spark's `CollationFactory.fromFullyQualifiedName`
+/// does.
+fn parse_provider_name(spec: &str) -> Result<Collation> {
+    let invalid_provider = |provider: &str| -> KrishivError {
+        CollationInvalidProvider {
+            provider: provider.to_owned(),
+            supported_providers: "spark, icu".to_owned(),
+        }
+        .into()
+    };
+    let Some((provider, name)) = spec.split_once('.') else {
+        return Err(invalid_provider(spec));
+    };
+    let collation = Collation::parse(name)?;
+    let is_icu = matches!(collation.family(), CollationFamily::Icu { .. });
+    match provider {
+        "spark" if !is_icu => Ok(collation),
+        "icu" if is_icu => Ok(collation),
+        "spark" | "icu" => Err(crate::collation::invalid_name(name)),
+        other => Err(invalid_provider(other)),
+    }
 }
 
 /// Spark's `nameToType`: the `typeName` of an atomic type, `decimal`
@@ -201,6 +312,9 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
             }
             _ => Err(error::precision_exceeds_max(p)),
         });
+    }
+    if let Some(rest) = name.strip_prefix("string collate ") {
+        return Some(Collation::parse(rest).map(DataType::collated_string));
     }
     if let Some(t) = time_from_name(name) {
         return Some(t);

@@ -31,7 +31,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, RecordBatch};
 use arrow_buffer::BooleanBuffer;
@@ -185,6 +186,16 @@ fn compare(a: &dyn Array, op: CmpOp, lit: &ScalarValue) -> Option<BooleanBuffer>
         (DataType::Timestamp(TimeUnit::Microsecond, _), S::TimestampMicros(v)) => {
             prim::<TimestampMicrosecondType>(a, op, *v)
         }
+        (
+            DataType::Decimal64(_, s),
+            S::Decimal128 {
+                unscaled, scale, ..
+            },
+        ) if s == scale => match i64::try_from(*unscaled) {
+            Ok(v) => prim::<Decimal64Type>(a, op, v),
+            // Beyond every value of the column: not filtered here.
+            Err(_) => return None,
+        },
         (
             DataType::Decimal128(_, s),
             S::Decimal128 {

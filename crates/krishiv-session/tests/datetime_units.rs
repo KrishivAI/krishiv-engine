@@ -470,6 +470,25 @@ fn make_timestamp_ntz_without_ansi_gives_null_for_a_bad_field() {
     );
 }
 
+/// A join condition holds no nondeterministic expression
+/// (`INVALID_NON_DETERMINISTIC_EXPRESSIONS`), even through a SQL function.
+#[test]
+fn a_nondeterministic_join_condition_is_refused() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION nd_pick() RETURNS INT RETURN FLOOR(RAND() * 6) + 1")).unwrap();
+    for sql in [
+        "SELECT * FROM VALUES(1) AS a(x) JOIN VALUES(1) AS b(y) ON rand() > 0.5",
+        "SELECT * FROM VALUES(1) AS a(x) JOIN VALUES(1) AS b(y) ON nd_pick() = 1",
+    ] {
+        let r = block_on(async { s.sql(sql).await?.collect().await });
+        let e = r.expect_err(sql);
+        assert!(
+            format!("{e:?}").contains("InvalidNonDeterministicExpressions"),
+            "{sql}: {e:?}"
+        );
+    }
+}
+
 /// With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('c1')` is a
 /// column reference, qualified and backquoted forms included.
 #[test]
@@ -500,4 +519,67 @@ fn legacy_identifier_call_with_a_modifier_is_not_a_column() {
             .await
     });
     assert!(r.is_err(), "{r:?}");
+}
+
+/// A SQL function is refused in `ORDER BY`, `LIMIT` and a generator
+/// (`UNSUPPORTED_SQL_UDF_USAGE`), as Spark's `ResolveSQLFunctions` does.
+#[test]
+fn a_sql_function_is_refused_in_sort_limit_and_generate() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION udf_id(x INT) RETURNS INT RETURN x")).unwrap();
+    // A call in the select list is fine under an ORDER BY of plain columns.
+    let ok = block_on(async {
+        s.sql("SELECT udf_id(c1) FROM VALUES(1) AS t(c1) ORDER BY c1")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(ok.is_ok(), "{ok:?}");
+    for (sql, node) in [
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) ORDER BY udf_id(c1)",
+            "Sort",
+        ),
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) LIMIT udf_id(1)",
+            "GlobalLimit",
+        ),
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) LATERAL VIEW EXPLODE(ARRAY(udf_id(c1))) AS e",
+            "Generate",
+        ),
+    ] {
+        let r = block_on(async { s.sql(sql).await?.collect().await });
+        let e = format!("{:?}", r.expect_err(sql));
+        assert!(
+            e.contains("UnsupportedSqlUdfUsage") && e.contains(node),
+            "{sql}: {e}"
+        );
+    }
+}
+
+/// The legacy `IDENTIFIER(expr)` also names a table in `FROM` and `INSERT INTO`; a column list
+/// keeps the parser's error, and a unit of `TIMESTAMPADD` stays a keyword.
+#[test]
+fn legacy_identifier_function_names_a_table() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    block_on(s.sql("CREATE TEMPORARY VIEW IDENTIFIER('lv') AS SELECT 7 AS a")).unwrap();
+    let rows = block_on(async {
+        s.sql("SELECT * FROM IDENTIFIER('l' || 'v')")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(rows.is_ok(), "{rows:?}");
+    let refused = block_on(async {
+        s.sql("CREATE TABLE lt(IDENTIFIER('c1') INT) USING CSV")
+            .await
+    });
+    assert!(refused.is_err());
+    let routine = block_on(async {
+        s.sql("SELECT TIMESTAMPADD(IDENTIFIER('YEAR'), 1, DATE'2024-01-15')")
+            .await
+    });
+    assert!(routine.is_err());
 }

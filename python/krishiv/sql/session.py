@@ -415,6 +415,8 @@ def _pa_type(data_type: DataType, pa: Any) -> Any:
     if isinstance(data_type, DoubleType):
         return pa.float64()
     if isinstance(data_type, StringType):
+        if data_type._collated():
+            raise unsupported_feature(f"createDataFrame with {data_type.simpleString()} columns")
         return pa.string()
     if isinstance(data_type, BinaryType):
         return pa.binary()

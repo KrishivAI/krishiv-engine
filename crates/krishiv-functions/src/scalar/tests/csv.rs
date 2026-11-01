@@ -647,14 +647,18 @@ fn from_csv_option_names_and_values() {
             vec![("unescapedQuoteHandling", "BAD")],
             "unescapedQuoteHandling=BAD",
         ),
-        (vec![("timeFormat", "HH")], "timeFormat"),
         (vec![("quote", "ab")], "quote"),
     ] {
         let err = from_csv_bind_error("a INT", &pairs);
         assert!(err.contains(named), "{pairs:?}: {err}");
     }
     // A malformed pattern keeps Spark's error (not an unsupported-option one).
-    for option in ["dateFormat", "timestampFormat", "timestampNTZFormat"] {
+    for option in [
+        "dateFormat",
+        "timeFormat",
+        "timestampFormat",
+        "timestampNTZFormat",
+    ] {
         let err = from_csv_bind_error("a INT", &[(option, "yyyy-MM-dd'")]);
         assert!(err.contains("INVALID_DATETIME_PATTERN"), "{option}: {err}");
     }

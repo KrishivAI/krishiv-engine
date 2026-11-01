@@ -17,10 +17,6 @@
       "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) + CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) + CAST(NULL AS STRING))\\\"\"}"
     },
     {
-      "id": "add/DATE/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS DATE) + CAST(NULL AS STRING)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"STRING\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"}"
-    },
-    {
       "id": "add/DECIMAL(10,2)/STRING/ansi_off",
       "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) + CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
     },

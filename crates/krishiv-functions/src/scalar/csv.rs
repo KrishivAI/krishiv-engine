@@ -80,7 +80,7 @@ pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
         .fields()
         .iter()
         .map(|f| {
-            let arrow = f.data_type().to_arrow();
+            let arrow = krishiv_types::arrow::client_arrow_type(&f.data_type().to_arrow());
             Field::new(f.name().to_owned(), arrow, f.nullable())
         })
         .collect();
@@ -231,6 +231,8 @@ struct Parsed {
     neg_inf: String,
     /// Date pattern.
     date_pattern: Option<DateTimePattern>,
+    /// Time pattern.
+    time_pattern: Option<DateTimePattern>,
     /// Timestamp pattern.
     timestamp_pattern: Option<DateTimePattern>,
     /// Timestamp_ntz pattern.
@@ -293,6 +295,7 @@ impl Parsed {
             pos_inf: "Inf".to_owned(),
             neg_inf: "-Inf".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,
@@ -359,10 +362,7 @@ impl Parsed {
                     self.fallback = v.eq_ignore_ascii_case("true");
                 }
                 "timeformat" => {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: format!("{func} with option timeFormat"),
-                    }
-                    .into());
+                    self.time_pattern = Some(datetime_option(v, func, "timeFormat")?);
                 }
                 "header" => {
                     // Ignored for `from_csv` (Spark ignores it); `to_csv`
@@ -462,6 +462,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     let return_type = DataType::Struct(fields.clone());
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let date_pattern = parsed.date_pattern.clone();
+    let time_pattern = parsed.time_pattern.clone();
     let timestamp_pattern = parsed.timestamp_pattern.clone();
     let ntz_pattern = parsed.ntz_pattern.clone();
     let from_opts = FromCsvOptions {
@@ -472,6 +473,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         pos_inf: parsed.pos_inf,
         neg_inf: parsed.neg_inf,
         date_pattern,
+        time_pattern,
         timestamp_pattern,
         ntz_pattern,
         fallback: parsed.fallback,
@@ -557,6 +559,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         line_sep: parsed.line_sep,
         null_value: parsed.null_value,
         date_pattern: date_pattern.clone(),
+        time_pattern: parsed.time_pattern.clone(),
         timestamp_pattern: timestamp_pattern.clone(),
         ntz_pattern: ntz_pattern.clone(),
     };

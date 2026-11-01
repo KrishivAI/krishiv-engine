@@ -50,6 +50,7 @@ use krishiv_functions::signature::FunctionKind;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_kernels::{KernelCtx, SparkVersion};
 use krishiv_types::DataType;
+use krishiv_types::arrow::client_arrow_type;
 
 use super::fold_ops;
 use super::{Constant, FunctionRegistry, SparkProfile};
@@ -399,7 +400,7 @@ fn fold_cast(
     };
     // A NULL of any type casts to a NULL of the target type.
     if inner.null_count() > 0 || inner.data_type() == &ArrowType::Null {
-        return Some(Ok(new_null_array(&to.to_arrow(), 1)));
+        return Some(Ok(new_null_array(&fold_type(to), 1)));
     }
     // A cast to `time(p)` drops the digits below `p`, but every `TIME` has
     // the same Arrow carrier, so the shortcut below would keep them: the
@@ -409,7 +410,7 @@ fn fold_cast(
     }
     // A cast to the value's own type is the value (the kernels below do
     // not cover every target, e.g. arrays of literals).
-    if inner.data_type() == &to.to_arrow() {
+    if inner.data_type() == &fold_type(to) {
         return Some(Ok(inner));
     }
     // The kernels' targets: numbers, strings and dates (no timestamp: it
@@ -437,7 +438,7 @@ fn fold_cast(
     // The kernels' string carrier is `Utf8`: what the executor maps
     // `Utf8View` to around the same call. The result stays `Utf8`, which
     // the value reader and the function bindings both take as a string.
-    let target = to.to_arrow();
+    let target = fold_type(to);
     let kernel_target = match &target {
         ArrowType::Utf8View => ArrowType::Utf8,
         _ => target,
@@ -553,7 +554,7 @@ fn operator(
         Ok(a) => a,
         Err(e) => return Some(Err(e)),
     };
-    let out = f.data_type.to_arrow();
+    let out = fold_type(&f.data_type);
     match (op, args.as_slice()) {
         (
             Builtin::Add
@@ -618,7 +619,7 @@ fn when(f: &ResolvedFunction, kids: Vec<Result<ArrayRef, KrishivError>>) -> Fold
     let mut it = kids.into_iter();
     loop {
         let Some(c) = it.next() else {
-            return Some(Ok(new_null_array(&f.data_type.to_arrow(), 1)));
+            return Some(Ok(new_null_array(&fold_type(&f.data_type), 1)));
         };
         let Some(v) = it.next() else {
             return Some(c);
@@ -671,7 +672,7 @@ fn registry(
                     other => return Some(other),
                 }
             }
-            return Some(Ok(new_null_array(&f.data_type.to_arrow(), 1)));
+            return Some(Ok(new_null_array(&fold_type(&f.data_type), 1)));
         }
         "if" => {
             let [c, a, b] = <[_; 3]>::try_from(kids).ok()?;
@@ -748,7 +749,7 @@ fn normalized(a: ArrayRef) -> ArrayRef {
 /// A literal as a one-row array of its Spark type's carrier.
 fn literal(l: &Literal) -> Option<ArrayRef> {
     Some(match l {
-        Literal::Null(Some(t)) => new_null_array(&t.to_arrow(), 1),
+        Literal::Null(Some(t)) => new_null_array(&fold_type(t), 1),
         Literal::Null(None) => new_null_array(&ArrowType::Null, 1),
         Literal::Boolean(v) => Arc::new(BooleanArray::from(vec![*v])),
         Literal::Byte(v) => Arc::new(Int8Array::from(vec![*v])),
@@ -772,6 +773,12 @@ fn literal(l: &Literal) -> Option<ArrayRef> {
         Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),
         _ => return None,
     })
+}
+
+/// The Arrow type a constant of `t` folds in: decimals stay on `Decimal128` here,
+/// whatever carrier the query later runs on.
+fn fold_type(t: &DataType) -> ArrowType {
+    client_arrow_type(&t.to_arrow())
 }
 
 #[cfg(test)]

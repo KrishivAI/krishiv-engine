@@ -291,7 +291,7 @@ fn literal(v: &ScalarValue, t: &arrow_schema::DataType) -> Option<Literal> {
                 precision,
                 scale,
             },
-            A::Decimal128(p, s),
+            A::Decimal64(p, s) | A::Decimal128(p, s),
         ) if precision == p && scale == s => Literal::Decimal {
             unscaled: *unscaled,
             data_type: DecimalType::try_new(u32::from(*p), u32::try_from(*s).ok()?).ok()?,

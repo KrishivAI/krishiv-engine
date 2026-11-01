@@ -43,6 +43,7 @@
 
 mod access;
 mod cache;
+mod carrier;
 mod catalog;
 mod column;
 mod command;

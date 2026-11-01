@@ -895,10 +895,7 @@ fn from_micros(
     let overflow = |row: usize| {
         let mut lit = String::from("TIMESTAMP '");
         let v = t.value(row);
-        datetime::format_timestamp(
-            datetime::utc_to_local(v, opts.time_zone).unwrap_or(v),
-            &mut lit,
-        );
+        datetime::format_timestamp_in_zone(v, Some(opts.time_zone), &mut lit);
         let _ = write!(lit, "'");
         KernelError::cast_overflow(row, lit, "TIMESTAMP", to_name)
     };
@@ -1238,12 +1235,8 @@ fn to_string(input: &dyn Array, opts: &CastOptions<'_>) -> Result<StringArray, K
             }
             (DataType::Timestamp(TimeUnit::Microsecond, zone), _) => {
                 let v = input.as_primitive::<TimestampMicrosecondType>().value(i);
-                let local = if zone.is_some() {
-                    datetime::utc_to_local(v, opts.time_zone)
-                } else {
-                    Some(v)
-                };
-                datetime::format_timestamp(local.unwrap_or(v), &mut out);
+                let tz = zone.is_some().then_some(opts.time_zone);
+                datetime::format_timestamp_in_zone(v, tz, &mut out);
             }
             _ => return Err(unsupported()),
         }

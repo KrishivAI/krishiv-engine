@@ -75,11 +75,12 @@ fn put_key_type(out: &mut Vec<u8>, t: &DataType) {
         D::Binary => 14,
         D::LargeBinary => 15,
         D::BinaryView => 16,
+        D::Decimal64(..) => 17,
         _ => 0,
     };
     out.push(tag);
     match t {
-        D::Decimal128(p, s) => {
+        D::Decimal64(p, s) | D::Decimal128(p, s) => {
             out.push(*p);
             out.extend_from_slice(&s.to_le_bytes());
         }
@@ -342,6 +343,11 @@ impl Reader<'_> {
             14 => D::Binary,
             15 => D::LargeBinary,
             16 => D::BinaryView,
+            17 => {
+                let p = self.u8()?;
+                let s = i8::from_le_bytes(self.array()?);
+                D::Decimal64(p, s)
+            }
             _ => return Err(bad("an unknown key type")),
         };
         if !supported_key_type(&t) {

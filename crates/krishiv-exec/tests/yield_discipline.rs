@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arrow_array::{
-    Array, Date32Array, Decimal128Array, Int32Array, Int64Array, RecordBatch, StringViewArray,
+    Array, Date32Array, Decimal64Array, Int32Array, Int64Array, RecordBatch, StringViewArray,
 };
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
@@ -367,7 +367,7 @@ struct TpchTable {
 }
 
 fn tpch_tables() -> Vec<TpchTable> {
-    let decimal = || DataType::Decimal128(15, 2);
+    let decimal = || DataType::Decimal64(15, 2);
     let string = || DataType::Utf8View;
     vec![
         TpchTable {
@@ -513,9 +513,9 @@ fn tpch_column(field: &Field, rows: usize) -> Result<Arc<dyn Array>> {
         DataType::Date32 => Arc::new(Date32Array::from_iter_values(
             (0..rows).map(|i| 8_766 + i32::try_from(i % 2_500).unwrap()),
         )),
-        DataType::Decimal128(_, _) => Arc::new(
-            Decimal128Array::from_iter_values(
-                (0..rows).map(|i| i128::try_from(i % 7 + 1).unwrap() * 100),
+        DataType::Decimal64(_, _) => Arc::new(
+            Decimal64Array::from_iter_values(
+                (0..rows).map(|i| i64::try_from(i % 7 + 1).unwrap() * 100),
             )
             .with_precision_and_scale(15, 2)
             .map_err(|e| internal(&e.to_string()))?,

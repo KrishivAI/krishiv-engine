@@ -35,12 +35,12 @@ use std::sync::Arc;
 use arrow_array::builder::{
     BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder, Float64Builder, Int8Builder,
     Int16Builder, Int32Builder, Int64Builder, LargeStringBuilder, StringBuilder, StringViewBuilder,
-    TimestampMicrosecondBuilder,
+    Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Int64Type, Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
@@ -109,6 +109,7 @@ struct Opts {
     /// `to_xml`: refuse element and attribute names that are not XML names.
     validate_name: bool,
     date: Option<DateTimePattern>,
+    time: Option<DateTimePattern>,
     timestamp: Option<DateTimePattern>,
     ntz: Option<DateTimePattern>,
 }
@@ -127,6 +128,7 @@ impl Opts {
             prefers_decimal: false,
             validate_name: true,
             date: None,
+            time: None,
             timestamp: None,
             ntz: None,
         };
@@ -164,6 +166,7 @@ impl Opts {
                 }
                 "indent" => o.indent = Some(v.clone()),
                 "dateformat" => o.date = Some(pattern(v, "dateFormat")?),
+                "timeformat" => o.time = Some(pattern(v, "timeFormat")?),
                 "timestampformat" => o.timestamp = Some(pattern(v, "timestampFormat")?),
                 "timestampntzformat" => o.ntz = Some(pattern(v, "timestampNTZFormat")?),
                 // Accepted and ignored: they select or label input this
@@ -563,6 +566,11 @@ fn build(dt: &DataType, vals: &[V]) -> Result<ArrayRef, KrishivError> {
             })
         }
         DataType::Date32 => primitive!(Date32Builder::new(), |x: &Val| narrow::<i32>(x, dt)),
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            primitive!(Time64NanosecondBuilder::new(), |x: &Val| narrow::<i64>(
+                x, dt
+            ))
+        }
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
             let b = TimestampMicrosecondBuilder::new().with_timezone_opt(tz.clone());
             primitive!(b, |x: &Val| narrow::<i64>(x, dt))
@@ -735,6 +743,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
                 pos_inf: "Infinity",
                 neg_inf: "-Infinity",
                 date: parsed.date.as_ref(),
+                time: parsed.time.as_ref(),
                 fallback: false,
             },
             zone: zone.as_ref(),
@@ -815,6 +824,7 @@ struct Writing<'a> {
     /// The session zone's id, for the `VV` and `z` pattern letters.
     zone_id: &'a str,
     date: &'a DateTimePattern,
+    time: Option<&'a DateTimePattern>,
     timestamp: &'a DateTimePattern,
     ntz: &'a DateTimePattern,
 }
@@ -888,6 +898,13 @@ impl Writing<'_> {
             DataType::Date32 => self
                 .date
                 .format_date(a.as_primitive::<Date32Type>().value(i))?,
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                let nanos = a.as_primitive::<Time64NanosecondType>().value(i);
+                match self.time {
+                    Some(p) => p.format_local(nanos.div_euclid(1_000))?,
+                    None => krishiv_kernels::cast::format_time(nanos),
+                }
+            }
             DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
                 self.timestamp.format_timestamp(
                     a.as_primitive::<TimestampMicrosecondType>().value(i),
@@ -1097,6 +1114,7 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
             zone: zone.as_ref(),
             zone_id: &zone_name,
             date: &date,
+            time: parsed.time.as_ref(),
             timestamp: &timestamp,
             ntz: &ntz,
         };
