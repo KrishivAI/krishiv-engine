@@ -426,18 +426,18 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
             col.as_primitive::<Decimal128Type>().value(row),
             u32::from(d.scale()),
         ),
-        (DataType::String, ArrowType::Utf8View) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8View) => {
             Cell::Str(col.as_string_view().value(row).to_owned())
         }
-        (DataType::String, ArrowType::Utf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8) => {
             Cell::Str(col.as_string::<i32>().value(row).to_owned())
         }
-        (DataType::String, ArrowType::LargeUtf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::LargeUtf8) => {
             Cell::Str(col.as_string::<i64>().value(row).to_owned())
         }
         // A binary-safe STRING holding bytes that are not UTF-8: Spark's `UTF8String.toString`
         // replaces the malformed sequences.
-        (DataType::String, _) => Cell::Str(
+        (DataType::String | DataType::CollatedString(_), _) => Cell::Str(
             String::from_utf8_lossy(&binary_value(col, row).ok_or_else(unexpected)?).into_owned(),
         ),
         (DataType::Binary, _) => Cell::Binary(binary_value(col, row).ok_or_else(unexpected)?),
@@ -627,13 +627,13 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
             col.as_primitive::<Decimal128Type>().value(row),
             u32::from(d.scale()),
         ),
-        (DataType::String, ArrowType::Utf8View) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8View) => {
             Cell::Str(col.as_string_view().value(row).to_owned())
         }
-        (DataType::String, ArrowType::Utf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8) => {
             Cell::Str(col.as_string::<i32>().value(row).to_owned())
         }
-        (DataType::String, ArrowType::LargeUtf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::LargeUtf8) => {
             Cell::Str(col.as_string::<i64>().value(row).to_owned())
         }
         (DataType::Date, ArrowType::Date32) => {
@@ -801,7 +801,7 @@ fn fixture_column(table: &Table, i: usize, ty: &DataType) -> Result<ArrayRef, En
                     .map_err(|e| harness_error(e.to_string()))?,
             )
         }
-        DataType::String => {
+        DataType::String | DataType::CollatedString(_) => {
             let mut b = StringViewBuilder::new();
             for c in cells {
                 match c {

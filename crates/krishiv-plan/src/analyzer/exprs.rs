@@ -1610,7 +1610,7 @@ impl Resolver<'_> {
                     if let FunctionLookup::Sql(def) =
                         self.ctx.functions.lookup(&named, self.ctx.profile)
                     {
-                        return self.sql_call(&def, e, f, kids);
+                        return self.sql_call(&def, e, f, kids, cx.op);
                     }
                 }
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
@@ -1628,7 +1628,7 @@ impl Resolver<'_> {
                         .functions
                         .lookup(std::slice::from_ref(&f.name), self.ctx.profile)
                 {
-                    return self.sql_call(&def, e, f, kids);
+                    return self.sql_call(&def, e, f, kids, cx.op);
                 }
                 // `session.f` / `system.session.f` reach a temporary SQL
                 // function as well as a session UDF.
@@ -1636,7 +1636,7 @@ impl Resolver<'_> {
                     && let FunctionLookup::Sql(def) =
                         self.ctx.functions.lookup(&parts, self.ctx.profile)
                 {
-                    return self.sql_call(&def, e, f, kids);
+                    return self.sql_call(&def, e, f, kids, cx.op);
                 }
                 // A call of a function with a named-parameter signature is
                 // rearranged into positional order (Spark's
