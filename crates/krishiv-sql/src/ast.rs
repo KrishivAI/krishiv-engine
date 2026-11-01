@@ -3308,6 +3308,9 @@ pub enum ExprKind {
         qualifier: Vec<Ident>,
         /// Excluded columns.
         except: Vec<ObjectName>,
+        /// A backquoted name read as a regular expression over the column names
+        /// (`spark.sql.parser.quotedRegexColumnNames`); the qualifier is its table.
+        regex: Option<String>,
     },
     /// `expr.field`.
     Field(Box<Expr>, Ident),

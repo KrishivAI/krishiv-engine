@@ -16,6 +16,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -319,6 +320,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -636,6 +638,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -927,6 +930,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -1189,6 +1193,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -1484,6 +1489,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -1650,6 +1656,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -1794,6 +1801,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -1957,6 +1965,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -2085,6 +2094,7 @@ Query {
                                                                 kind: Wildcard {
                                                                     qualifier: [],
                                                                     except: [],
+                                                                    regex: None,
                                                                 },
                                                                 span: 89..90,
                                                             },
@@ -2205,6 +2215,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },
@@ -2443,6 +2454,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 7..8,
                         },

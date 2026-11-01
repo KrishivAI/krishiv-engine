@@ -44,6 +44,7 @@ CreatePermanentView(
                                         kind: Wildcard {
                                             qualifier: [],
                                             except: [],
+                                            regex: None,
                                         },
                                         span: 24..25,
                                     },
@@ -1931,6 +1932,7 @@ CreatePermanentView(
                                         kind: Wildcard {
                                             qualifier: [],
                                             except: [],
+                                            regex: None,
                                         },
                                         span: 27..28,
                                     },

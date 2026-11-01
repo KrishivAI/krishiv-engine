@@ -57,7 +57,7 @@ mod vector;
 mod xml;
 
 pub use json::schema_of_json_ddl;
-pub use regex::{extract_all_pieces, split_regex};
+pub use regex::{FullMatch, extract_all_pieces, split_regex};
 pub use xml::schema_of_xml_ddl;
 
 use std::fmt;

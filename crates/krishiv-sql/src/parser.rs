@@ -141,6 +141,9 @@ pub(crate) struct Parser<'s> {
     markers: Vec<usize>,
     /// How many script bodies the cursor is inside: a statement there ends at its `;`.
     in_script: usize,
+    /// How many select items enclose the cursor (Spark's `NamedExpression` ancestors): a
+    /// backquoted name there may be a column regex.
+    in_named: usize,
     /// How many script statements enclose the cursor (compounds, branches and loop bodies).
     script_depth: usize,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
@@ -649,6 +652,7 @@ impl<'s> Parser<'s> {
             closers,
             markers,
             in_script: 0,
+            in_named: 0,
             script_depth: 0,
             deferred: None,
             cast_types: vec![],
@@ -3880,7 +3884,7 @@ impl<'s> Parser<'s> {
                 span: self.span_from(begin),
             }))
         } else if self.eat_kw("EXTEND") {
-            PipeOpKind::Extend(self.comma_sep(Self::select_item)?)
+            PipeOpKind::Extend(self.comma_sep(Self::named_item)?)
         } else if self.eat_kw("SET") {
             PipeOpKind::Set(self.comma_sep(|p| {
                 let start = p.start();
@@ -4145,7 +4149,7 @@ impl<'s> Parser<'s> {
         } else {
             self.set_quantifier()
         };
-        let projection = self.comma_sep(Self::select_item)?;
+        let projection = self.comma_sep(Self::named_item)?;
         Ok((hints, quantifier, projection))
     }
 
@@ -4422,6 +4426,14 @@ impl<'s> Parser<'s> {
             // `COMMA? hintStatement`: a comma needs another hint.
             self.eat_sym(Sym::Comma);
         }
+    }
+
+    /// A select item of a select list: its names may be column regexes.
+    fn named_item(&mut self) -> PR<SelectItem> {
+        self.in_named += 1;
+        let item = self.select_item();
+        self.in_named -= 1;
+        item
     }
 
     fn select_item(&mut self) -> PR<SelectItem> {
@@ -5101,7 +5113,7 @@ impl<'s> Parser<'s> {
         let start = self.start();
         self.expect_kw("PIVOT")?;
         self.expect_sym(Sym::LParen)?;
-        let aggregates = self.comma_sep(Self::select_item)?;
+        let aggregates = self.comma_sep(Self::named_item)?;
         self.expect_kw("FOR")?;
         let columns = if self.sym_at(0, Sym::LParen) {
             self.paren_list(|p| p.name_part(true))?

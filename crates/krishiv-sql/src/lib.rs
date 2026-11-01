@@ -114,6 +114,9 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.viewSchemaBindingMode` (on by default): a view may
     /// take `WITH SCHEMA ...`; off, the clause is `FEATURE_NOT_ENABLED`.
     pub view_schema_binding: bool,
+    /// `spark.sql.parser.quotedRegexColumnNames`: a backquoted name in a select item is a regular
+    /// expression over the column names.
+    pub quoted_regex_column_names: bool,
 }
 
 impl Default for ParserOptions {
@@ -155,6 +158,7 @@ impl ParserOptions {
             ),
             case_sensitive: on("spark.sql.caseSensitive", false),
             view_schema_binding: on("spark.sql.legacy.viewSchemaBindingMode", true),
+            quoted_regex_column_names: on("spark.sql.parser.quotedRegexColumnNames", false),
         }
     }
 }

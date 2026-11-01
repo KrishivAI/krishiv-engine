@@ -82,6 +82,7 @@ Cache(
                                             kind: Wildcard {
                                                 qualifier: [],
                                                 except: [],
+                                                regex: None,
                                             },
                                             span: 24..25,
                                         },
@@ -207,6 +208,7 @@ Cache(
                                             kind: Wildcard {
                                                 qualifier: [],
                                                 except: [],
+                                                regex: None,
                                             },
                                             span: 65..66,
                                         },

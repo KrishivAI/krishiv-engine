@@ -151,6 +151,7 @@ fn df(id: i64) -> LogicalPlan {
 /// Each DataFrame-slice operation, as the API builds it.
 fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let star = Expr::new(ExprNode::Star(Star {
+        regex: None,
         replace: Vec::new(),
         position: None,
         qualifier: Vec::new(),

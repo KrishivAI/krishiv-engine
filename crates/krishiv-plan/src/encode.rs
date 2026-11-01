@@ -1137,6 +1137,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 except,
                 replace,
                 position,
+                regex,
                 plan_id,
             }) => {
                 self.u8(3);
@@ -1152,6 +1153,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 if let Some(n) = position {
                     self.len(*n);
+                }
+                if let Some(r) = regex {
+                    self.str(r);
                 }
             }
             ExprNode::Function(FunctionCall {

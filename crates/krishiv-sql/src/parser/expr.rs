@@ -814,6 +814,7 @@ impl Parser<'_> {
                     ExprKind::Wildcard {
                         qualifier: vec![],
                         except,
+                        regex: None,
                     },
                     start,
                 ));
@@ -1052,6 +1053,7 @@ impl Parser<'_> {
                 let kind = ExprKind::Wildcard {
                     qualifier: parts,
                     except,
+                    regex: None,
                 };
                 return Ok(self.mk(kind, start));
             }
@@ -1067,6 +1069,20 @@ impl Parser<'_> {
                 parts,
             };
             return self.function_call(name, start);
+        }
+        // Under `spark.sql.parser.quotedRegexColumnNames` a backquoted name in a select item is a
+        // regular expression over the column names (the last part; the rest is its table).
+        if self.opts.quoted_regex_column_names
+            && self.in_named > 0
+            && parts.last().is_some_and(|p| p.quoted)
+            && let Some(last) = parts.pop()
+        {
+            let kind = ExprKind::Wildcard {
+                qualifier: parts,
+                except: Vec::new(),
+                regex: Some(last.value),
+            };
+            return Ok(self.mk(kind, start));
         }
         Ok(self.mk(ExprKind::Column(parts), start))
     }

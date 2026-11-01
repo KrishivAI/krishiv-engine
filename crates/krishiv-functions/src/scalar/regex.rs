@@ -238,6 +238,41 @@ impl Compiled {
     }
 }
 
+/// A Java regular expression that has to match the whole of a text (`Matcher.matches`), as Spark
+/// matches a quoted column regex against column names.
+pub struct FullMatch(Compiled);
+
+impl std::fmt::Debug for FullMatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FullMatch").field(&self.0.source).finish()
+    }
+}
+
+impl FullMatch {
+    /// Compiles the Java regex `pattern`, ignoring case when `ignore_case`.
+    ///
+    /// # Errors
+    /// `INVALID_PARAMETER_VALUE.PATTERN` for a pattern Java would refuse (or this engine cannot
+    /// translate).
+    pub fn new(pattern: &str, ignore_case: bool) -> Result<Self, KrishivError> {
+        let flags = if ignore_case { "(?i)" } else { "" };
+        let wrapped = format!("{flags}\\A(?:{pattern})\\z");
+        let compiled = Compiled::new(&wrapped, "`quotedRegexColumnNames`")?;
+        Ok(Self(compiled))
+    }
+
+    /// Whether the pattern matches all of `text`.
+    ///
+    /// # Errors
+    /// `KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED` for a pattern that backtracks past the cap.
+    pub fn is_match(&self, text: &str) -> Result<bool, KrishivError> {
+        self.0
+            .for_input(text)
+            .is_match(text)
+            .map_err(|e| self.0.backtrack(e))
+    }
+}
+
 /// Java `Matcher.find` from byte `from`: the whole-match span and where the
 /// next search resumes (`None` resumes nowhere: stop after this match).
 /// An empty match advances past one character, as Java does.

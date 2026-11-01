@@ -177,6 +177,7 @@ Query {
                             kind: Wildcard {
                                 qualifier: [],
                                 except: [],
+                                regex: None,
                             },
                             span: 95..96,
                         },
@@ -1643,6 +1644,7 @@ Query {
                                                     kind: Wildcard {
                                                         qualifier: [],
                                                         except: [],
+                                                        regex: None,
                                                     },
                                                     span: 42..43,
                                                 },

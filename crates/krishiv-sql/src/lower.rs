@@ -722,6 +722,7 @@ impl Lowerer {
         let star = |l: &Self, except: Vec<Vec<String>>| {
             arc(l.ex(
                 ExprNode::Star(Star {
+                    regex: None,
                     replace: Vec::new(),
                     position: None,
                     qualifier: Vec::new(),
@@ -849,6 +850,7 @@ impl Lowerer {
                     let value = arc(self.expr(&a.value)?);
                     let star = self.ex(
                         ExprNode::Star(Star {
+                            regex: None,
                             qualifier: Vec::new(),
                             except: Vec::new(),
                             replace: vec![(name.value.clone(), value)],
@@ -901,6 +903,7 @@ impl Lowerer {
                     let key = match self.position(e) {
                         Some(position) => arc(self.ex(
                             ExprNode::Star(Star {
+                                regex: None,
                                 qualifier: Vec::new(),
                                 except: Vec::new(),
                                 replace: Vec::new(),
@@ -1265,6 +1268,7 @@ impl Lowerer {
         );
         let star = self.ex(
             ExprNode::Star(Star {
+                regex: None,
                 replace: Vec::new(),
                 position: None,
                 qualifier: vec![qualifier],
@@ -2029,7 +2033,11 @@ impl Lowerer {
                     base
                 }
             }
-            ExprKind::Wildcard { qualifier, except } => self.ex(
+            ExprKind::Wildcard {
+                qualifier,
+                except,
+                regex,
+            } => self.ex(
                 ExprNode::Star(Star {
                     replace: Vec::new(),
                     position: None,
@@ -2038,6 +2046,7 @@ impl Lowerer {
                         .iter()
                         .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
                         .collect(),
+                    regex: regex.clone(),
                     plan_id: None,
                 }),
                 sp,

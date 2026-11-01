@@ -539,6 +539,7 @@ fn star_replacement_values_enter_the_key() {
     let with = |v: i32| {
         Plan::try_new(
             LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Star(crate::Star {
+                regex: None,
                 qualifier: Vec::new(),
                 except: Vec::new(),
                 replace: vec![(

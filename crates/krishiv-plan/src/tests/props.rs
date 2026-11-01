@@ -178,6 +178,7 @@ impl Gen<'_> {
             }),
             1 => ExprNode::Literal(self.literal()),
             2 => ExprNode::Star(Star {
+                regex: None,
                 replace: Vec::new(),
                 position: None,
                 qualifier: self.many(0, 1, Gen::name),

@@ -1266,6 +1266,7 @@ impl Resolver<'_> {
         // away, ahead of the output columns as in Spark.
         let out = match cx.rels {
             [r] if s.plan_id.is_none()
+                && s.regex.is_none()
                 && !s.qualifier.is_empty()
                 && cx.agg_scope.is_none()
                 && r.hidden
@@ -1283,6 +1284,25 @@ impl Resolver<'_> {
                 all
             }
             _ => out,
+        };
+        // A quoted column regex keeps the columns whose names it matches in full (ignoring case
+        // unless the session is case sensitive).
+        let out = match &s.regex {
+            Some(pattern) => {
+                let matcher = krishiv_functions::scalar::FullMatch::new(pattern, !cs)
+                    .map_err(|e| AnalysisError::new(e, origin))?;
+                let mut kept = Vec::with_capacity(out.len());
+                for a in out {
+                    if matcher
+                        .is_match(&a.col.name)
+                        .map_err(|e| AnalysisError::new(e, origin))?
+                    {
+                        kept.push(a);
+                    }
+                }
+                kept
+            }
+            None => out,
         };
         let out = match s.position {
             Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
@@ -7751,6 +7771,7 @@ mod tests {
     #[test]
     fn stars_print_as_sql() {
         let star = Expr::new(ExprNode::Star(crate::Star {
+            regex: None,
             replace: Vec::new(),
             position: None,
             qualifier: Vec::new(),

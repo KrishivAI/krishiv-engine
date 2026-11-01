@@ -90,8 +90,8 @@ fn without_spans<'a>(lines: impl Iterator<Item = &'a str>) -> String {
 /// The expression of `SELECT <text>` and, as the select list may read a
 /// leading `ALL` differently, the one inside `SELECT (<text>)`, rendered
 /// like [`without_spans`].
-fn reparsed(text: &str, options: &ParserOptions) -> [Option<String>; 2] {
-    let parse = |sql: String, nested: bool| -> Option<String> {
+fn reparsed(text: &str, options: &ParserOptions) -> Vec<Option<String>> {
+    let parse = |sql: String, nested: bool, options: &ParserOptions| -> Option<String> {
         let q = parse_query(&sql, options).ok()?;
         let SetExprKind::Select(s) = q.body.kind else {
             return None;
@@ -104,10 +104,21 @@ fn reparsed(text: &str, options: &ParserOptions) -> [Option<String>; 2] {
         };
         Some(without_spans(format!("{expr:#?}").lines()))
     };
-    [
-        parse(format!("SELECT {text}"), false),
-        parse(format!("SELECT ({text})"), true),
-    ]
+    let mut out = vec![
+        parse(format!("SELECT {text}"), false, options),
+        parse(format!("SELECT ({text})"), true, options),
+    ];
+    // A backquoted name outside a select item is a column even where the select list would read
+    // it as a regex (`spark.sql.parser.quotedRegexColumnNames`).
+    if options.quoted_regex_column_names {
+        let plain = ParserOptions {
+            quoted_regex_column_names: false,
+            ..*options
+        };
+        out.push(parse(format!("SELECT {text}"), false, &plain));
+        out.push(parse(format!("SELECT ({text})"), true, &plain));
+    }
+    out
 }
 
 /// Checks the spans of `q`, parsed from `sql` with `options` (see the
