@@ -1148,7 +1148,7 @@ impl Session {
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
-                        .qualify_calls(e, namespace, path, self.state.profile)
+                        .qualify_calls(e, namespace, path, self.state.profile, true)
                 }),
             }),
         )?;

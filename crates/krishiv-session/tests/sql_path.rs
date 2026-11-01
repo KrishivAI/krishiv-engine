@@ -320,3 +320,15 @@ fn a_view_does_not_fall_back_to_its_namespace_for_a_routine_gone_from_its_path()
     });
     assert!(read.is_err(), "{read:?}");
 }
+
+#[test]
+fn a_view_over_a_temporary_function_keeps_calling_it() {
+    let s = session();
+    for sql in [
+        "CREATE TEMPORARY FUNCTION tmp_pick() RETURNS INT RETURN 7",
+        "CREATE VIEW default.tmp_view AS SELECT tmp_pick() AS x",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT x FROM default.tmp_view"), "7");
+}
