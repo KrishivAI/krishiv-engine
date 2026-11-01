@@ -323,7 +323,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
     if !(2..=max).contains(&n) {
         return Some((listed, Err(bad_types(listed, args))));
     }
-    let binding = Binding::new(DataType::Binary, move |x: &Inputs<'_>| {
+    let body = move |x: &Inputs<'_>| -> Result<ArrayRef, KrishivError> {
         let data = x.binaries(0)?;
         let key = x.binaries(1)?;
         let text = |i: usize| (i < n).then(|| x.strings(i)).transpose();
@@ -363,6 +363,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             })
             .collect::<Result<_, _>>()?;
         Ok(Arc::new(out) as ArrayRef)
-    });
+    };
+    // Encryption draws a fresh IV per row, so it must run on every row even
+    // when all arguments are literals (the ordinary binding would compute one
+    // row and repeat it).
+    let binding = if encrypt {
+        Binding::partitioned(DataType::Binary, move |x, _partition| body(x))
+    } else {
+        Binding::new(DataType::Binary, body)
+    };
     Some((listed, Ok(binding)))
 }

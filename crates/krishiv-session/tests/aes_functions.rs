@@ -271,3 +271,29 @@ fn datepart_reads_the_time_precision_like_date_part() {
     .unwrap();
     assert_eq!(a, b);
 }
+
+#[test]
+fn literal_encryption_draws_a_fresh_iv_for_every_row() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!(
+        "SELECT count(DISTINCT hex(aes_encrypt('Spark', {K}))) FROM range(10)"
+    )))
+    .unwrap();
+    let b = block_on(df.collect()).unwrap();
+    let n = b[0]
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>()
+        .value(0);
+    assert_eq!(n, 10);
+}
+
+#[test]
+fn a_qualified_call_hides_the_key_too() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!("SELECT builtin.aes_encrypt(1, {K})")));
+    let msg = match df {
+        Ok(df) => format!("{:?}", block_on(df.collect()).map(|_| ())),
+        Err(e) => e.to_string(),
+    };
+    assert!(!msg.contains("abcdefghijklmnop"), "{msg}");
+}
