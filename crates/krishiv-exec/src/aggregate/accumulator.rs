@@ -1503,7 +1503,84 @@ impl Accumulator {
         if self.expr.input == AggInput::State {
             return Err(internal("a running fold over partial states".to_owned()));
         }
+        if matches!(self.kind, Kind::Exact(_)) {
+            return self.update_running_exact(groups, cols, run);
+        }
         self.fold(groups, &args, false, &Weights::Const(1), Some(run), None)
+    }
+
+    /// The flags of an exact percentile call: its percentages, `reverse`,
+    /// whether it interpolates (`cont`), the legacy discrete rule and whether
+    /// it returns an array.
+    fn exact_params(&self) -> Result<(Vec<f64>, bool, bool, bool, bool)> {
+        use AggregateFunction as F;
+        match &self.expr.function {
+            F::Percentile {
+                percentages,
+                array,
+                reverse,
+            } => Ok((percentages.clone(), *reverse, true, false, *array)),
+            F::PercentileDisc {
+                percentages,
+                array,
+                reverse,
+                legacy,
+            } => Ok((percentages.clone(), *reverse, false, *legacy, *array)),
+            _ => Err(internal(
+                "an exact percentile over another aggregate".to_owned(),
+            )),
+        }
+    }
+
+    /// [`update_running`](Self::update_running) for the exact percentiles,
+    /// whose state is a value map: the rows are folded in runs ending at a
+    /// snapshot row. A window evaluates them
+    /// over a whole partition or a running frame (`percentile` accepts an
+    /// ordered window); a snapshot freezes the answer at its row instead of
+    /// copying the value map.
+    fn update_running_exact(
+        &mut self,
+        groups: &[u32],
+        cols: &[ArrayRef],
+        run: &Running<'_>,
+    ) -> Result<()> {
+        let mut lo = 0;
+        while lo < groups.len() {
+            let hi = (lo..groups.len())
+                .find(|&i| run.snapshots[i] != Running::NONE)
+                .map_or(groups.len(), |i| i + 1);
+            let part: Vec<ArrayRef> = cols.iter().map(|c| c.slice(lo, hi - lo)).collect();
+            let args: Vec<&ArrayRef> = self
+                .expr
+                .args
+                .iter()
+                .map(|&i| arg(&part, i))
+                .collect::<Result<_>>()?;
+            self.fold(
+                &groups[lo..hi],
+                &args,
+                false,
+                &Weights::Const(1),
+                None,
+                None,
+            )?;
+            let last = hi - 1;
+            if run.snapshots[last] != Running::NONE {
+                let (percentages, reverse, cont, legacy, _) = self.exact_params()?;
+                if let Kind::Exact(acc) = &mut self.kind {
+                    acc.freeze(
+                        run.parts[last] as usize,
+                        run.snapshots[last] as usize,
+                        &percentages,
+                        reverse,
+                        cont,
+                        legacy,
+                    );
+                }
+            }
+            lo = hi;
+        }
+        Ok(())
     }
 
     /// Merges partial states (`states`: this aggregate's state columns).
@@ -2668,25 +2745,7 @@ impl Accumulator {
             Kind::Mode(m) => m.evaluate(ids)?,
             Kind::ListAgg(l) => l.evaluate(ids)?,
             Kind::Exact(acc) => {
-                use AggregateFunction as F;
-                let (percentages, reverse, cont, legacy, array) = match &self.expr.function {
-                    F::Percentile {
-                        percentages,
-                        array,
-                        reverse,
-                    } => (percentages.clone(), *reverse, true, false, *array),
-                    F::PercentileDisc {
-                        percentages,
-                        array,
-                        reverse,
-                        legacy,
-                    } => (percentages.clone(), *reverse, false, *legacy, *array),
-                    _ => {
-                        return Err(internal(
-                            "an exact percentile over another aggregate".to_owned(),
-                        ));
-                    }
-                };
+                let (percentages, reverse, cont, legacy, array) = self.exact_params()?;
                 let field = if array {
                     match &self.result {
                         DataType::List(field) => Some(Arc::clone(field)),

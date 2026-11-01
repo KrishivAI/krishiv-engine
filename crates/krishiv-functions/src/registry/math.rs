@@ -27,6 +27,11 @@ fn binary(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Double, c)
 }
 
+/// `width_bucket`: a `bigint`, NULL for a bad bucket count or range.
+fn width_bucket(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, true))
+}
+
 fn constant(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Double, false))
 }
@@ -272,6 +277,13 @@ pub(super) fn specs() -> Vec<Spec> {
     );
     // `log(base, x)` is NULL outside its domain too.
     out.extend(scalar(&["pow", "power", "atan2", "hypot"], &double, binary));
+    let width = Inputs::Expects(vec![
+        exact(DataType::Double),
+        exact(DataType::Double),
+        exact(DataType::Double),
+        exact(DataType::Long),
+    ]);
+    out.extend(scalar(&["width_bucket"], &width, width_bucket));
     out.extend(scalar(&["pi", "e"], &Inputs::Any, constant));
     // `width_bucket(value, min, max, buckets)`: NULL outside its domain,
     // so always nullable.

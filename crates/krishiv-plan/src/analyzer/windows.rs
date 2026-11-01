@@ -614,10 +614,18 @@ impl Resolver<'_> {
         }
         // `listagg(...) WITHIN GROUP (ORDER BY ...) OVER (ORDER BY ...)`
         // is unsupported (Spark only allows the whole-partition frame
-        // without an ordering); the error quotes the aggregate with its
-        // ordering as further arguments, as Spark's `ListAgg.sql` does.
-        if call.id.name() == "listagg"
-            && !call.within_group.is_empty()
+        // without an ordering), and so are `median` and the percentiles
+        // over an ordered or framed window; the error quotes the
+        // aggregate with its ordering as further arguments, as Spark's
+        // `ListAgg.sql` does (the percentiles show the ordered value
+        // first, then the percentage).
+        let name = call.id.name();
+        let whole_only = match name {
+            "listagg" => !call.within_group.is_empty(),
+            "median" | "percentile_cont" | "percentile_disc" => true,
+            _ => false,
+        };
+        if whole_only
             && (!bound.order_by.is_empty()
                 || frame.units != FrameUnits::Rows
                 || !matches!(frame.lower, FrameBound::UnboundedPreceding)
@@ -626,20 +634,35 @@ impl Resolver<'_> {
             let zone = self.ctx.conf.session_zone;
             let mut parts = Vec::new();
             let mut orders = Vec::new();
-            if let ExprNode::Resolved(ResolvedExpr::Function(shown_f)) = &function.shown().node {
-                parts.extend(shown_f.args.iter().map(|a| pretty(a, zone)));
-                orders.extend(shown_f.within_group.iter().map(|o| {
+            // The shown call is resolved or still a plain call, by the
+            // function.
+            let shown_call = match &function.shown().node {
+                ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                    Some((f.args.clone(), f.within_group.clone()))
+                }
+                ExprNode::Function(f) => Some((f.args.clone(), f.within_group.clone())),
+                _ => None,
+            };
+            if let Some((shown_args, shown_group)) = &shown_call {
+                let order_text = |o: &crate::SortOrder| {
                     format!(
                         "{}{}",
                         pretty(&o.expr, zone),
                         crate::display::order_suffix(o)
                     )
-                }));
+                };
+                if name == "listagg" {
+                    parts.extend(shown_args.iter().map(|a| pretty(a, zone)));
+                    orders.extend(shown_group.iter().map(order_text));
+                } else {
+                    parts.extend(shown_group.iter().map(|o| pretty(&o.expr, zone)));
+                    orders.extend(shown_args.iter().map(|a| pretty(a, zone)));
+                }
             }
             parts.extend(orders);
             return Err(AnalysisError::new(
                 InvalidWindowSpecForAggregationFunc {
-                    agg_func: format!("\"listagg({})\"", parts.join(", ")),
+                    agg_func: format!("\"{name}({})\"", parts.join(", ")),
                 },
                 e.origin,
             ));

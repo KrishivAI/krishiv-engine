@@ -2228,10 +2228,11 @@ fn json_signatures() {
     let s = ty(DataType::String);
     let map_ss = || DataType::Map(MapType::new(DataType::String, DataType::String, true).into());
     let string_lit = |text: &str| Some(Constant::String(text.to_owned()));
-    // `json_array_length` and `get_json_object` take strings exactly.
+    // `json_array_length` takes a string and nothing else; `get_json_object`
+    // takes strings exactly.
     assert_eq!(
         def("json_array_length").inputs,
-        Inputs::Expects(vec![InputType::Exact(DataType::String)])
+        Inputs::Expects(vec![InputType::Strict(DataType::String)])
     );
     assert_eq!(
         result("json_array_length", std::slice::from_ref(&s), &[]).unwrap(),
