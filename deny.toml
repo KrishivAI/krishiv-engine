@@ -36,6 +36,7 @@ confidence-threshold = 0.9
 exceptions = [
     { crate = "tiny-keccak", allow = ["CC0-1.0"] },
     { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "libbz2-rs-sys", allow = ["bzip2-1.0.6"] },
 ]
 
 [bans]
