@@ -243,3 +243,136 @@ fn a_view_does_not_read_a_namespace_its_path_left_out() {
         "{err:?}"
     );
 }
+
+#[test]
+fn a_stored_function_calls_routines_through_the_path_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA fa",
+        "CREATE SCHEMA fb",
+        "CREATE FUNCTION fa.pick() RETURNS INT RETURN 1",
+        "CREATE FUNCTION fb.pick() RETURNS INT RETURN 2",
+        "SET PATH = spark_catalog.fa, system.builtin",
+        "CREATE FUNCTION default.outer_fn() RETURNS INT RETURN pick()",
+        "SET PATH = spark_catalog.fb, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT pick()"), "2");
+    assert_eq!(first(&s, "SELECT default.outer_fn()"), "1");
+}
+
+#[test]
+fn a_view_calls_routines_through_the_path_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA va",
+        "CREATE SCHEMA vb",
+        "CREATE FUNCTION va.pick() RETURNS INT RETURN 1",
+        "CREATE FUNCTION vb.pick() RETURNS INT RETURN 2",
+        "SET PATH = spark_catalog.va, system.builtin",
+        "CREATE VIEW default.pick_view AS SELECT pick() AS v",
+        "SET PATH = spark_catalog.vb, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT pick()"), "2");
+    assert_eq!(first(&s, "SELECT v FROM default.pick_view"), "1");
+}
+
+#[test]
+fn a_session_only_path_reaches_temporary_views_not_stored_tables() {
+    let s = session();
+    for sql in [
+        "CREATE TABLE default.only_stored USING parquet AS SELECT 1 AS id",
+        "CREATE TEMPORARY VIEW only_temp AS SELECT 2 AS id",
+        "SET PATH = system.session, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT id FROM only_temp"), "2");
+    let err =
+        block_on(async { s.sql("SELECT id FROM only_stored").await?.collect().await }).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("TableOrViewNotFound"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_view_does_not_fall_back_to_its_namespace_for_a_routine_gone_from_its_path() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA gfa",
+        "CREATE FUNCTION gfa.pick() RETURNS INT RETURN 1",
+        "CREATE FUNCTION default.pick() RETURNS INT RETURN 2",
+        "SET PATH = spark_catalog.gfa, system.builtin",
+        "CREATE VIEW default.gone_view AS SELECT pick() AS x",
+        "DROP FUNCTION gfa.pick",
+    ] {
+        run(&s, sql);
+    }
+    let read = block_on(async {
+        s.sql("SELECT x FROM default.gone_view")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(read.is_err(), "{read:?}");
+}
+
+#[test]
+fn a_view_on_a_session_only_path_does_not_fall_back_to_its_namespace() {
+    let s = session();
+    for sql in [
+        "CREATE TEMPORARY FUNCTION pick() RETURNS INT RETURN 1",
+        "CREATE FUNCTION default.pick() RETURNS INT RETURN 2",
+        "SET PATH = system.session, system.builtin",
+        "CREATE VIEW default.so_view AS SELECT pick() AS x",
+        "DROP TEMPORARY FUNCTION pick",
+    ] {
+        run(&s, sql);
+    }
+    let read = block_on(async {
+        s.sql("SELECT x FROM default.so_view")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(read.is_err(), "{read:?}");
+}
+
+#[test]
+fn a_view_over_a_temporary_function_keeps_calling_it() {
+    let s = session();
+    for sql in [
+        "CREATE TEMPORARY FUNCTION tmp_pick() RETURNS INT RETURN 7",
+        "CREATE VIEW default.tmp_view AS SELECT tmp_pick() AS x",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT x FROM default.tmp_view"), "7");
+}
+
+#[test]
+fn a_view_with_qualify_reads_back() {
+    let s = session();
+    run(
+        &s,
+        "CREATE VIEW default.q_view AS SELECT row_number() OVER (ORDER BY id) AS rn FROM range(3) QUALIFY rn = 1",
+    );
+    assert_eq!(first(&s, "SELECT rn FROM default.q_view"), "1");
+}
+
+#[test]
+fn a_stored_function_falls_back_to_its_own_namespace() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA fns",
+        "CREATE FUNCTION fns.inner_f() RETURNS INT RETURN 1",
+        "CREATE FUNCTION fns.outer_f() RETURNS INT RETURN inner_f()",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT fns.outer_f()"), "1");
+}

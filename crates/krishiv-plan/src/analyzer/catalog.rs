@@ -26,6 +26,9 @@ pub struct NameForm {
     /// The name carried a namespace or catalog part. Spark resolves
     /// temporary views only for names that did not.
     pub qualified: bool,
+    /// The SQL path names no schema of this catalog, only the session: the
+    /// name may reach temporary views and nothing stored.
+    pub temporary_only: bool,
 }
 
 /// A boxed `Send` future, as trait methods that may do I/O return.

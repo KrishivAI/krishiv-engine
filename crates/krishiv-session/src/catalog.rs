@@ -1011,6 +1011,9 @@ impl Catalog for QueryCatalog {
                 resolve(&self.loaded, &self.session, &id.name, form)
             };
             let Some(table) = found else {
+                if form.temporary_only {
+                    return Ok(None);
+                }
                 return Ok(self.load_stored(id, form));
             };
             let (columns, kind) = match &*table {
@@ -1152,7 +1155,15 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
+    /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
+    /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
+    /// created, not where it is read.
+    pub(crate) qualify: Option<&'a QualifyCalls<'a>>,
 }
+
+/// See [`StoredViews::qualify`]: the expression, the namespace it was written in and the path frozen with it.
+pub(crate) type QualifyCalls<'a> =
+    dyn Fn(&Arc<Expr>, &str, &[Vec<String>]) -> Option<Arc<Expr>> + 'a;
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
 /// its query as a subquery, with its bare table names resolved in the namespace the view was created in.
@@ -1590,7 +1601,18 @@ impl Expander<'_> {
         expr: Arc<Expr>,
         scope: &mut Vec<String>,
     ) -> Result<Arc<Expr>, KrishivError> {
-        let expr = expr.map_children(|child| self.expand_expr(child, scope))?;
+        let mut expr = expr.map_children(|child| self.expand_expr(child, scope))?;
+        // Inside a stored view the calls of its query resolve through the path it was created under.
+        if matches!(expr.node, ExprNode::Function(_))
+            && let (Some(qualify), Some(namespace), Some(path)) = (
+                self.stored.and_then(|s| s.qualify),
+                &self.view_namespace,
+                &self.view_path,
+            )
+            && let Some(next) = qualify(&expr, namespace, path)
+        {
+            expr = next;
+        }
         if let ExprNode::Subquery { kind, plan } = &expr.node {
             let expanded = self.go(Arc::clone(plan), scope)?;
             if !Arc::ptr_eq(&expanded, plan) {
@@ -2028,6 +2050,7 @@ mod tests {
         let form = NameForm {
             case_sensitive: false,
             qualified: false,
+            temporary_only: false,
         };
         let t = resolve(&loaded, &session, "people", form).unwrap();
         loaded.lock().unwrap().insert("people".to_owned(), t);
