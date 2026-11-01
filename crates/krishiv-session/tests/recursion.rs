@@ -412,16 +412,31 @@ fn definitions_beside_the_recursive_reference_resolve_through_the_scope() {
 }
 
 #[test]
-fn a_recursive_term_that_changes_the_anchors_types_is_refused() {
+fn a_recursive_term_wider_than_the_anchor_cannot_merge() {
     let s = Session::new().unwrap();
+    // Spark 4.2.0: CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE ("INT" and "BIGINT").
+    let e = block_on(async {
+        s.sql(
+            "WITH RECURSIVE t1(n, m) AS (SELECT 1, 1 UNION ALL \
+             SELECT n + 1, CAST(n + 1 AS BIGINT) FROM t1 WHERE n < 5) SELECT * FROM t1",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap_err();
     assert_eq!(
-        class_of(
-            &s,
-            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
-             SELECT CAST(n AS BIGINT) + 1 FROM r WHERE n < 3) SELECT * FROM r"
-        ),
-        ErrorClass::KrishivUnsupportedFeature
+        e.error_class(),
+        ErrorClass::CannotMergeIncompatibleDataType,
+        "{e}"
     );
+    // A narrower term is cast to the anchor's type.
+    let got = rows(
+        &s,
+        "WITH RECURSIVE t1(n, m) AS (SELECT 1, CAST(1 AS BIGINT) UNION ALL \
+         SELECT n + 1, n + 1 FROM t1 WHERE n < 5) SELECT m FROM t1",
+    );
+    assert_eq!(got.len(), 5);
 }
 
 #[test]
@@ -518,4 +533,17 @@ fn an_outer_limit_reaches_a_loop_through_a_plain_cte() {
         ),
         ErrorClass::RecursionLevelLimitExceeded
     );
+}
+
+#[test]
+fn explain_verbose_and_warnings_do_not_run_the_loop() {
+    let s = Session::new().unwrap();
+    // Never ends if run: the only bound is the (huge) level limit.
+    let q = "WITH RECURSIVE r(n) MAX RECURSION LEVEL 4000000 AS \
+             (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT * FROM r";
+    block_on(s.sql(&format!("EXPLAIN VERBOSE {q}")))
+        .and_then(|d| block_on(d.collect()))
+        .unwrap();
+    let df = block_on(s.sql(q)).unwrap();
+    block_on(df.warnings()).unwrap();
 }

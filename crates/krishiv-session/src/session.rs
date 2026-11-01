@@ -83,6 +83,18 @@ fn query_start_micros() -> i64 {
         .unwrap_or_default()
 }
 
+/// Unpins the hidden tables a planning call pinned when dropped.
+struct PinGuard {
+    catalog: Arc<crate::catalog::QueryCatalog>,
+    names: Vec<String>,
+}
+
+impl Drop for PinGuard {
+    fn drop(&mut self) {
+        self.catalog.unpin_cached(&self.names);
+    }
+}
+
 /// Unpins a run's per-execution tables when dropped: the run's stream ends
 /// or is dropped, or starting it failed.
 struct Release {
@@ -1313,7 +1325,7 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_traced(analyzed, env, false).await?;
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false, true).await?;
         Ok((optimized, physical))
     }
 
@@ -1336,15 +1348,16 @@ impl Session {
         Ok((optimized, physical))
     }
 
-    /// As [`Self::physical`]; with `trace`, also every optimizer rule
-    /// application that changed the plan (`EXPLAIN VERBOSE`).
+    /// As [`Self::physical_inspected`] (the plan is only shown, never run);
+    /// with `trace`, also every optimizer rule application that changed the
+    /// plan (`EXPLAIN VERBOSE`).
     pub(crate) async fn physical_traced(
         &self,
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        self.physical_with(analyzed, env, trace, true).await
+        self.physical_with(analyzed, env, trace, false).await
     }
 
     /// `run_loops` false: recursive CTEs are not run (see
@@ -1362,26 +1375,24 @@ impl Session {
         let start = QUERY_START
             .try_with(|s| *s)
             .unwrap_or_else(|_| query_start_micros());
-        let mut pins = Vec::new();
+        // The hidden tables the planning pins are released when this call
+        // ends in an error, is cancelled, or only inspects the plan; a plan
+        // that will run keeps them, and the run releases the ones its scans
+        // name (`Self::run_on_query`).
+        let mut pins = PinGuard {
+            catalog: Arc::clone(&env.catalog),
+            names: Vec::new(),
+        };
         let planned = QUERY_START
             .scope(
                 start,
-                self.physical_pinned(analyzed, env, trace, run_loops, &mut pins, start),
+                self.physical_pinned(analyzed, env, trace, run_loops, &mut pins.names, start),
             )
             .await;
-        match planned {
-            // The plan reads the loops' tables when it runs: whoever runs it
-            // releases them (`Self::run_on_query`).
-            Ok((optimized, physical, steps)) if run_loops => {
-                env.catalog
-                    .scope_pins(std::ptr::from_ref(physical.root()) as usize, pins);
-                Ok((optimized, physical, steps))
-            }
-            other => {
-                env.catalog.unpin_cached(&pins);
-                other
-            }
+        if run_loops && planned.is_ok() {
+            env.catalog.mark_releasable(std::mem::take(&mut pins.names));
         }
+        planned
     }
 
     async fn physical_pinned(
@@ -1525,7 +1536,7 @@ impl Session {
             catalog: Arc::clone(&env.catalog),
             names: env
                 .catalog
-                .take_scoped(std::ptr::from_ref(physical.root()) as usize),
+                .take_releasable(&crate::recursion::loop_tables(physical)),
         };
         let (stream, query) = self
             .run_on_query_inner(physical, worker, env, detailed)

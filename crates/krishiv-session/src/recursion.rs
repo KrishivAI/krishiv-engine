@@ -401,6 +401,26 @@ fn pushed_limits(root: &Arc<LogicalPlan>) -> HashMap<u32, usize> {
         .collect()
 }
 
+/// The hidden loop tables the scans of `physical` read: the ones its run
+/// releases.
+pub(crate) fn loop_tables(physical: &krishiv_exec::physical::PhysicalPlan) -> Vec<String> {
+    use krishiv_exec::physical::PhysNode;
+    let prefix = format!("{CACHE_PREFIX}loop");
+    let mut names = Vec::new();
+    let mut stack: Vec<&PhysNode> = physical.roots().collect();
+    while let Some(node) = stack.pop() {
+        if let PhysNode::Scan(scan) = node
+            && let ReadSource::Table { name, .. } = &scan.scan.source
+            && let Some(last) = name.last()
+            && last.starts_with(&prefix)
+        {
+            names.push(last.clone());
+        }
+        stack.extend(node.children());
+    }
+    names
+}
+
 impl Session {
     /// `analyzed` with every recursive CTE evaluated and replaced by a scan
     /// of its rows.

@@ -329,10 +329,10 @@ pub(crate) struct QueryCatalog {
     /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
     /// from under the query between substitution and planning.
     pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
-    /// The hidden tables a planned query reads while it runs (recursive
-    /// CTE results), by the address of the plan's root; released when the
-    /// run ends.
-    scoped: Mutex<HashMap<usize, Vec<String>>>,
+    /// The pinned tables a planned query's run releases: the ones its own
+    /// planning pinned (a table it only reads belongs to an earlier
+    /// expansion and stays).
+    releasable: Mutex<BTreeSet<String>>,
     /// Memory held for pinned tables, by hidden name; released with them.
     held: Mutex<HashMap<String, krishiv_memory::Reservation>>,
     files: Arc<FileReads>,
@@ -383,7 +383,7 @@ impl QueryCatalog {
             session,
             cache,
             pinned: Mutex::new(HashMap::new()),
-            scoped: Mutex::new(HashMap::new()),
+            releasable: Mutex::new(BTreeSet::new()),
             held: Mutex::new(HashMap::new()),
             files,
             scans,
@@ -411,23 +411,26 @@ impl QueryCatalog {
             .insert(name, memory);
     }
 
-    /// Records that the plan rooted at `plan` reads the pinned `names`.
-    pub(crate) fn scope_pins(&self, plan: usize, names: Vec<String>) {
-        if !names.is_empty() {
-            self.scoped
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(plan, names);
-        }
-    }
-
-    /// The names [`Self::scope_pins`] recorded for `plan`, forgotten.
-    pub(crate) fn take_scoped(&self, plan: usize) -> Vec<String> {
-        self.scoped
+    /// Marks `names` as pinned by a planning call whose plan, when run,
+    /// releases them.
+    pub(crate) fn mark_releasable(&self, names: Vec<String>) {
+        self.releasable
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(&plan)
-            .unwrap_or_default()
+            .extend(names);
+    }
+
+    /// Those of `candidates` marked releasable, forgotten as such.
+    pub(crate) fn take_releasable(&self, candidates: &[String]) -> Vec<String> {
+        let mut marked = self
+            .releasable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        candidates
+            .iter()
+            .filter(|c| marked.remove(*c))
+            .cloned()
+            .collect()
     }
 
     /// Releases the snapshots pinned under the hidden `names`.

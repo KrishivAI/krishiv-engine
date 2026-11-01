@@ -17,7 +17,10 @@ use super::bind::unsupported;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use std::collections::{HashMap, HashSet};
 
-use krishiv_common::error::InvalidRecursiveReferencePlace;
+use krishiv_common::error::{CannotMergeIncompatibleDataType, InvalidRecursiveReferencePlace};
+use krishiv_types::DataType;
+
+use super::coerce::quoted_type;
 
 use crate::{BoundColumn, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode};
 
@@ -58,16 +61,30 @@ impl Resolver<'_> {
             check_places(input, &def.name, o)?;
         }
         let kids = self.widen_inputs(&[a, r], "UNION", o)?;
-        // The reference was typed by the anchor: a recursive term whose
-        // columns widen the anchor's would feed rows of another type back.
-        if kids[1]
-            .out
-            .iter()
-            .zip(&refs)
-            .any(|(x, y)| x.col.data_type != y.col.data_type)
-        {
-            return Err(unsupported(
-                "a recursive term whose column types differ from the anchor's",
+        // The reference was typed by the anchor, so rows of another type
+        // cannot feed back. Spark refuses a recursive term that is not the
+        // anchor's type (`CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE`); a term of a
+        // narrower numeric type it casts to the anchor's, which is not done
+        // here yet.
+        for (term, anchor) in kids[1].out.iter().zip(&refs) {
+            let (t, a) = (&term.col.data_type, &anchor.col.data_type);
+            if t == a {
+                continue;
+            }
+            if numeric_rank(t)
+                .zip(numeric_rank(a))
+                .is_some_and(|(t, a)| t < a)
+            {
+                return Err(unsupported(
+                    "a recursive term whose column is narrower than the anchor's",
+                    o,
+                ));
+            }
+            return Err(AnalysisError::new(
+                CannotMergeIncompatibleDataType {
+                    left: quoted_type(Some(a)),
+                    right: quoted_type(Some(t)),
+                },
                 o,
             ));
         }
@@ -98,6 +115,20 @@ impl Resolver<'_> {
         };
         Ok(self.make(o, node, out, &[]))
     }
+}
+
+/// The position of a numeric type in the widening order, `None` for others.
+fn numeric_rank(t: &DataType) -> Option<u8> {
+    Some(match t {
+        DataType::Byte => 0,
+        DataType::Short => 1,
+        DataType::Integer => 2,
+        DataType::Long => 3,
+        DataType::Decimal(_) => 4,
+        DataType::Float => 5,
+        DataType::Double => 6,
+        _ => return None,
+    })
 }
 
 /// The CTE definitions in scope at a node of [`check_places`]'s walk,
