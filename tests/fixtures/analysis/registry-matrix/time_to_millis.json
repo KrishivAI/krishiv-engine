@@ -1,0 +1,166 @@
+{
+  "entries": [
+    {
+      "id": "time_to_millis#004d386ea169/ansi_on",
+      "reason": "SELECT time_to_millis(CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#004d386ea169/ansi_off",
+      "reason": "SELECT time_to_millis(CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#0176d34de481/ansi_on",
+      "reason": "SELECT time_to_millis('abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#0176d34de481/ansi_off",
+      "reason": "SELECT time_to_millis('abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#1f2c91c5f917/ansi_on",
+      "reason": "SELECT time_to_millis(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#1f2c91c5f917/ansi_off",
+      "reason": "SELECT time_to_millis(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#1fd6c0e7e54c/ansi_on",
+      "reason": "SELECT time_to_millis(CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#1fd6c0e7e54c/ansi_off",
+      "reason": "SELECT time_to_millis(CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#22d497881cf3/ansi_on",
+      "reason": "SELECT time_to_millis(map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#22d497881cf3/ansi_off",
+      "reason": "SELECT time_to_millis(map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#294dfd64ae58/ansi_on",
+      "reason": "SELECT time_to_millis(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#294dfd64ae58/ansi_off",
+      "reason": "SELECT time_to_millis(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#2d84a48e5751/ansi_on",
+      "reason": "SELECT time_to_millis(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#2d84a48e5751/ansi_off",
+      "reason": "SELECT time_to_millis(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#4e75db6a8666/ansi_on",
+      "reason": "SELECT time_to_millis(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#4e75db6a8666/ansi_off",
+      "reason": "SELECT time_to_millis(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#511652d30c61/ansi_on",
+      "reason": "SELECT time_to_millis(1.5D) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#511652d30c61/ansi_off",
+      "reason": "SELECT time_to_millis(1.5D) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#53f820c09c48/ansi_on",
+      "reason": "SELECT time_to_millis('1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#53f820c09c48/ansi_off",
+      "reason": "SELECT time_to_millis('1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#54a44290a47e/ansi_on",
+      "reason": "SELECT time_to_millis(CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#54a44290a47e/ansi_off",
+      "reason": "SELECT time_to_millis(CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#8596f7fd633a/ansi_on",
+      "reason": "SELECT time_to_millis(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#8596f7fd633a/ansi_off",
+      "reason": "SELECT time_to_millis(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#8af831ddbf65/ansi_on",
+      "reason": "SELECT time_to_millis(1L) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#8af831ddbf65/ansi_off",
+      "reason": "SELECT time_to_millis(1L) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#b5320d2b75f8/ansi_on",
+      "reason": "SELECT time_to_millis(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#b5320d2b75f8/ansi_off",
+      "reason": "SELECT time_to_millis(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#c7fe0ff45e07/ansi_on",
+      "reason": "SELECT time_to_millis(CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#c7fe0ff45e07/ansi_off",
+      "reason": "SELECT time_to_millis(CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#d5c618053114/ansi_on",
+      "reason": "SELECT time_to_millis(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#d5c618053114/ansi_off",
+      "reason": "SELECT time_to_millis(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#d9075ff3126f/ansi_on",
+      "reason": "SELECT time_to_millis(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#d9075ff3126f/ansi_off",
+      "reason": "SELECT time_to_millis(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#e0630d385083/ansi_on",
+      "reason": "SELECT time_to_millis(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#e0630d385083/ansi_off",
+      "reason": "SELECT time_to_millis(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#f5e527ecfb33/ansi_on",
+      "reason": "SELECT time_to_millis(X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#f5e527ecfb33/ansi_off",
+      "reason": "SELECT time_to_millis(X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#fed6ad1d44f6/ansi_on",
+      "reason": "SELECT time_to_millis(1) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_millis#fed6ad1d44f6/ansi_off",
+      "reason": "SELECT time_to_millis(1) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "time_to_millis"
+}
