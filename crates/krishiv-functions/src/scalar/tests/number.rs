@@ -135,6 +135,40 @@ fn bin_shows_longs_in_binary() {
 }
 
 #[test]
+fn factorial_is_null_outside_zero_to_twenty() {
+    let out = run(
+        "factorial",
+        &[&ints(&[
+            Some(0),
+            Some(1),
+            Some(5),
+            Some(20),
+            Some(21),
+            Some(-1),
+            Some(i32::MIN),
+            Some(i32::MAX),
+            None,
+        ])],
+    );
+    assert_eq!(
+        out.as_primitive::<arrow_array::types::Int64Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        vec![
+            Some(1),
+            Some(1),
+            Some(120),
+            Some(2_432_902_008_176_640_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+    );
+}
+
+#[test]
 fn conv_goldens_and_bases() {
     // The `math.sql` goldens.
     let conv = |num: &str, from: i32, to: i32| {

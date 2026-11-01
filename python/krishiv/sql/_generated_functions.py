@@ -132,6 +132,7 @@ __all__ = [
     "exp",
     "expm1",
     "extract",
+    "factorial",
     "find_in_set",
     "first",
     "first_value",
@@ -904,6 +905,11 @@ def expm1(col: ColumnOrName) -> Column:
 def extract(field: Column, source: ColumnOrName) -> Column:
     """Calls the registry function ``extract``."""
     return _call("extract", _named(field, "field"), _named(source, "source"))
+
+
+def factorial(col: ColumnOrName) -> Column:
+    """Calls the registry function ``factorial``."""
+    return _call("factorial", _named(col, "col"))
 
 
 def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column:

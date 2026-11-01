@@ -124,6 +124,7 @@ PYSPARK_SIGNATURES = {
     "equal_null": "col1, col2",
     "exp": "col",
     "expm1": "col",
+    "factorial": "col",
     "expr": "str",
     "extract": "field, source",
     "find_in_set": "str, str_array",

@@ -301,6 +301,7 @@ pub(super) fn rows() -> Vec<Row> {
         "degrees",
         "exp",
         "expm1",
+        "factorial",
         "hex",
         "hour",
         "initcap",
