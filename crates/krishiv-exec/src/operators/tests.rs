@@ -1374,3 +1374,111 @@ fn generate_splits_its_output_at_the_batch_size() {
         [Some(0), Some(1), Some(2), Some(3), Some(4), None]
     );
 }
+
+/// Every output batch of `op` over `input`, fed until it asks for more input.
+fn generate_all(op: &Generate, input: &Batch, local: &mut LocalState) -> Vec<Batch> {
+    let mut out = Vec::new();
+    loop {
+        match op
+            .execute(input, local)
+            .unwrap_or_else(|e| unreachable!("{e}"))
+        {
+            OperatorOutput::HaveMoreOutput(b) => out.push(b),
+            OperatorOutput::NeedMoreInput(b) => {
+                out.extend(b);
+                return out;
+            }
+            other => unreachable!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn generate_with_batch_size_one_keeps_each_rows_weight_across_a_split() {
+    let (_root, ctx) = ctx_with(ExecConfig {
+        batch_size: 1,
+        ..ExecConfig::default()
+    });
+    let xs = lists(vec![
+        Some(vec![Some(10), Some(11), Some(12)]),
+        Some(vec![Some(7)]),
+    ]);
+    let id: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("xs", xs.data_type().clone(), true),
+    ]));
+    let data = RecordBatch::try_new(Arc::clone(&input_schema), vec![id, xs]).unwrap();
+    let input = Batch::with_weights(data, Weights::Column(Int64Array::from(vec![5, -2]))).unwrap();
+    let arg = Arc::new(Typed(1, input_schema.field(1).data_type().clone()));
+    let op = Generate::try_new(&input_schema, GeneratorKind::Explode, false, arg, Some(1)).unwrap();
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let out = generate_all(&op, &input, &mut local);
+    assert_eq!(out.iter().map(Batch::num_rows).collect::<Vec<_>>(), [1; 4]);
+    let ids: Vec<i64> = out
+        .iter()
+        .map(|b| b.data().column(0).as_primitive::<Int64Type>().value(0))
+        .collect();
+    let vals: Vec<i64> = out
+        .iter()
+        .map(|b| b.data().column(1).as_primitive::<Int64Type>().value(0))
+        .collect();
+    assert_eq!(ids, [1, 1, 1, 2]);
+    assert_eq!(vals, [10, 11, 12, 7]);
+    let weights: Vec<i64> = out
+        .iter()
+        .map(|b| match b.weights() {
+            Weights::Column(w) => w.value(0),
+            Weights::Const(w) => *w,
+        })
+        .collect();
+    assert_eq!(weights, [5, 5, 5, -2], "the split keeps the row's weight");
+}
+
+#[test]
+fn inline_skips_a_null_struct_and_splits_mid_row() {
+    let (_root, ctx) = ctx_with(ExecConfig {
+        batch_size: 2,
+        ..ExecConfig::default()
+    });
+    let field = Arc::new(Field::new("a", DataType::Int64, true));
+    let item = Arc::new(Field::new(
+        "item",
+        DataType::Struct(vec![Arc::clone(&field)].into()),
+        true,
+    ));
+    let structs = arrow_array::StructArray::new(
+        vec![field].into(),
+        vec![Arc::new(Int64Array::from(vec![1, 0, 3])) as ArrayRef],
+        Some(arrow_buffer::NullBuffer::from(vec![true, false, true])),
+    );
+    let list: ArrayRef = Arc::new(arrow_array::ListArray::new(
+        item,
+        arrow_buffer::OffsetBuffer::from_lengths([3]),
+        Arc::new(structs),
+        None,
+    ));
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "xs",
+        list.data_type().clone(),
+        true,
+    )]));
+    let input = Batch::new(RecordBatch::try_new(Arc::clone(&input_schema), vec![list]).unwrap());
+    let arg = Arc::new(Typed(0, input_schema.field(0).data_type().clone()));
+    let op = Generate::try_new(&input_schema, GeneratorKind::Inline, false, arg, Some(0)).unwrap();
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let out = generate_all(&op, &input, &mut local);
+    assert_eq!(out.iter().map(Batch::num_rows).collect::<Vec<_>>(), [2, 1]);
+    let vals: Vec<Option<i64>> = out
+        .iter()
+        .flat_map(|b| {
+            b.data()
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    // Spark's inline turns a NULL struct into a row of NULL fields.
+    assert_eq!(vals, [Some(1), None, Some(3)]);
+}

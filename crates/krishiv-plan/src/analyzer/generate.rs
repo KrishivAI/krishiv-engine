@@ -227,26 +227,29 @@ impl Resolver<'_> {
         };
         let values = &bound[1..];
         let width = values.len().div_ceil(rows);
-        for col in 0..width {
-            let mut previous: Option<(usize, &DataType)> = None;
-            for (i, b) in values.iter().enumerate().skip(col).step_by(width) {
-                let Some(ty) = b.ty.data_type.as_ref().filter(|t| **t != DataType::Null) else {
-                    continue;
-                };
-                if let Some((left, left_ty)) = previous.filter(|(_, t)| *t != ty) {
-                    return Err(AnalysisError::new(
-                        DatatypeMismatchStackColumnDiffTypes {
-                            sql_expr: shown,
-                            column_index: col.to_string(),
-                            left_type: quoted_type(Some(left_ty)),
-                            left_param_index: (left + 1).to_string(),
-                            right_type: quoted_type(Some(ty)),
-                            right_param_index: (i + 1).to_string(),
-                        },
-                        origin,
-                    ));
-                }
-                previous = Some((i, ty));
+        // Spark compares row by row, each value with its column's first typed value.
+        let mut base: Vec<Option<(usize, &DataType)>> = vec![None; width];
+        for (i, b) in values.iter().enumerate() {
+            let col = i % width;
+            let Some(ty) = b.ty.data_type.as_ref().filter(|t| **t != DataType::Null) else {
+                continue;
+            };
+            let Some((left, left_ty)) = base[col] else {
+                base[col] = Some((i, ty));
+                continue;
+            };
+            if left_ty != ty {
+                return Err(AnalysisError::new(
+                    DatatypeMismatchStackColumnDiffTypes {
+                        sql_expr: shown,
+                        column_index: col.to_string(),
+                        left_type: quoted_type(Some(left_ty)),
+                        left_param_index: (left + 1).to_string(),
+                        right_type: quoted_type(Some(ty)),
+                        right_param_index: (i + 1).to_string(),
+                    },
+                    origin,
+                ));
             }
         }
         let structs = (0..rows)

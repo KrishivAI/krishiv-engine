@@ -449,6 +449,9 @@ fn stack_checks_its_count_and_column_types() {
         error_of(&s, "select * from stack(2, 1, '1.1', 'a', 2, 2.2, 'b')").error_class(),
         ErrorClass::DatatypeMismatchStackColumnDiffTypes
     );
+    // Spark compares each value with its column's first one: `(1)` and `(3)`.
+    let e = error_of(&s, "select stack(3, 1, 2, 'a')").to_string();
+    assert!(e.contains("(1)") && e.contains("(3)"), "{e}");
     // A count that is no INT is a type error, as in Spark.
     for sql in [
         "select stack(18446744073709551615, 1)",
