@@ -8,6 +8,7 @@ Usage (from repo root):
 
     env -u SPARK_HOME uv run --no-project --python 3.12 --with 'pyspark==4.2.0' \
       python tests/scripts/gen_interval_goldens.py --out tests/fixtures/spark-4.2.0/interval-arithmetic.json
+    (the same, with --section functions --out tests/fixtures/spark-4.2.0/interval-functions.json)
 """
 
 from __future__ import annotations
@@ -303,6 +304,201 @@ LOS_ANGELES = [
 ]
 
 
+# Unit 4: casts, aggregates, functions and calendar values. Written to their own fixture (`--section functions`).
+V_DAY = "VALUES (interval '1' day), (interval '2' day), (null) AS t(i)"
+V_MONTH = "VALUES (interval '1' month), (interval '3' month), (null) AS t(i)"
+V_MIXED = "VALUES (interval '1' day), (interval '2' hour) AS t(i)"
+FUNCTIONS = [
+    # casts: interval to number
+    "cast(interval '1 02' day to hour as int)",
+    "cast(interval '1 02' day to hour as bigint)",
+    "cast(interval '3' month as decimal(10,2))",
+    "cast(interval '1-2' year to month as int)",
+    "cast(interval '200' day as tinyint)",
+    "cast(interval '40000' day as smallint)",
+    "try_cast(interval '200' day as tinyint)",
+    "cast(interval '-1' day as int)",
+    "cast(interval '1.5' second as decimal(10,3))",
+    "cast(interval '1.5' second as int)",
+    "cast(interval '1' day as double)",
+    "cast(interval '1' month as boolean)",
+    # casts: number to interval
+    "cast(5 as interval year to month)",
+    "cast(5 as interval day to second)",
+    "cast(1.5 as interval month)",
+    "cast(2.5 as interval day)",
+    "cast(5L as interval hour)",
+    "cast(3000000000L as interval month)",
+    "try_cast(3000000000L as interval month)",
+    "cast(cast(5 as tinyint) as interval second)",
+    "cast(1.5d as interval month)",
+    "cast(true as interval month)",
+    # casts: within and across families
+    "cast(interval '1' day as interval hour)",
+    "cast(interval '1 02' day to hour as interval minute)",
+    "cast(interval '25' hour as interval day)",
+    "cast(interval '1-2' year to month as interval month)",
+    "cast(interval '14' month as interval year)",
+    "cast(interval '106751991' day as interval second)",
+    "cast(interval '1' day as interval month)",
+    "cast(interval '1' month as interval day)",
+    # casts: strings
+    "cast('1' as interval day)",
+    "cast('-1' as interval day)",
+    "cast('1 day' as interval day)",
+    "cast('abc' as interval day)",
+    "cast('1-2' as interval year to month)",
+    "cast('INTERVAL \\'1-2\\' YEAR TO MONTH' as interval year to month)",
+    "cast('INTERVAL \\'1\\' DAY' as interval day)",
+    "cast('1 02:03:04' as interval day to second)",
+    "try_cast('abc' as interval day)",
+    "cast('1 23' as interval day to hour)",
+    "cast('1 24' as interval day to hour)",
+    "cast('1 23:59' as interval day to minute)",
+    "cast('1 60:00' as interval day to minute)",
+    "cast('1 02:60:00' as interval day to second)",
+    "cast('1 02:03:60' as interval day to second)",
+    "cast('1 02:03:04.1234567' as interval day to second)",
+    "cast('23:59:59.999999' as interval hour to second)",
+    "cast('100:00:00' as interval hour to second)",
+    "cast('01:02' as interval hour to minute)",
+    "cast('100:00' as interval hour to minute)",
+    "cast('59:59.5' as interval minute to second)",
+    "cast('100:59.5' as interval minute to second)",
+    "cast('25' as interval hour)",
+    "cast('100' as interval minute)",
+    "cast('1.5' as interval second)",
+    "cast('100.5' as interval second)",
+    "cast('1.5' as interval minute)",
+    "cast('1.5' as interval day)",
+    "cast('1' as interval day to hour)",
+    "cast('1' as interval year to month)",
+    "cast('1-12' as interval year to month)",
+    "cast('1-11' as interval year to month)",
+    "cast('1-2' as interval year)",
+    "cast('2147483648' as interval month)",
+    "cast('178956971' as interval year)",
+    "cast('178956970-8' as interval year to month)",
+    "cast('-178956970-8' as interval year to month)",
+    "cast('106751992' as interval day)",
+    "cast('106751991' as interval day)",
+    "cast('+1' as interval day)",
+    "cast('-1-2' as interval year to month)",
+    "cast('  1  ' as interval day)",
+    "cast('interval -\\'1\\' day' as interval day)",
+    "cast('INTERVAL -\\'-1\\' DAY' as interval day)",
+    "cast('INTERVAL \\'1\\' HOUR' as interval day)",
+    "cast('INTERVAL \\'1 02\\' DAY TO HOUR' as interval day to hour)",
+    "cast('INTERVAL \\'1 02\\' DAY TO HOUR' as interval day to minute)",
+    "cast('INTERVAL \\'01:02:03.5\\' HOUR TO SECOND' as interval hour to second)",
+    "cast('INTERVAL \\'5\\' MONTH' as interval month)",
+    "cast('INTERVAL \\'5\\' YEAR' as interval month)",
+    "cast('INTERVAL   \\'5\\'   YEAR' as interval year)",
+    "try_cast('1 24' as interval day to hour)",
+    "try_cast('106751992' as interval day)",
+    "try_cast('2147483648' as interval month)",
+    "cast(null as interval day)",
+    "cast('' as interval day)",
+    "cast('' as interval)",
+    "cast('1 hour 2 foo' as interval)",
+    "cast('interval 1 day' as interval)",
+    "try_cast('abc' as interval)",
+    # calendar
+    "cast('1 day' as interval)",
+    "cast('abc' as interval)",
+    "cast('1 month 2 days 3 seconds' as interval)",
+    "cast(cast('1 day' as interval) as string)",
+    "cast(cast('1 day' as interval) as interval day)",
+    "cast(interval '1' day as interval)",
+    "cast('1 day' as interval) * 2",
+    "cast('1 day' as interval) / 2",
+    "2 * cast('1 day' as interval)",
+    "date'2024-01-31' + cast('1 month 1 day' as interval)",
+    "date'2024-01-31' + cast('1 hour' as interval)",
+    "timestamp'2024-01-31 00:00:00' + cast('1 month 1 hour' as interval)",
+    "cast('1 day' as interval) + interval '1' day",
+    "cast('2147483647 months' as interval) * 2",
+    # abs and sign
+    "abs(interval '-1' day)",
+    "abs(interval '-1-2' year to month)",
+    "abs(interval '1' hour)",
+    "abs(interval '-178956970-8' year to month)",
+    "sign(interval '-1' day)",
+    "sign(interval '1' month)",
+    "sign(interval '0' second)",
+    "signum(interval '-1' day)",
+    # extract
+    "extract(day from interval '1 02:03:04.5' day to second)",
+    "extract(hour from interval '1 02:03:04.5' day to second)",
+    "extract(minute from interval '1 02:03:04.5' day to second)",
+    "extract(second from interval '1 02:03:04.5' day to second)",
+    "extract(second from interval '-4.5' second)",
+    "extract(year from interval '1-2' year to month)",
+    "extract(month from interval '1-2' year to month)",
+    "extract(month from interval '-1-2' year to month)",
+    "extract(day from interval '1-2' year to month)",
+    "extract(year from interval '1' day)",
+    "date_part('day', interval '3' day)",
+    "date_part('year', interval '3' year)",
+    "datepart('hour', interval '3' hour)",
+    "extract(day from cast('1 month 2 days' as interval))",
+    "extract(month from cast('14 months' as interval))",
+    "extract(year from cast('14 months' as interval))",
+    "extract(second from cast('1.5 seconds' as interval))",
+    # make_*
+    "make_ym_interval(1, 2)",
+    "make_ym_interval(1)",
+    "make_ym_interval()",
+    "make_ym_interval(2147483647, 12)",
+    "make_ym_interval(null, 1)",
+    "make_dt_interval(1, 2, 3, 4.5)",
+    "make_dt_interval(1)",
+    "make_dt_interval()",
+    "make_dt_interval(1000000000, 0, 0, 0)",
+    "make_dt_interval(null, 1)",
+    "make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+    "make_interval(1)",
+    "make_interval()",
+    "make_interval(2147483647, 12)",
+    "try_make_interval(2147483647, 12)",
+    "make_interval(null, 1)",
+    # aggregates
+    f"SELECT sum(i) FROM {V_DAY}",
+    f"SELECT sum(i) FROM {V_MONTH}",
+    f"SELECT sum(i) FROM {V_MIXED}",
+    f"SELECT sum(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+    f"SELECT try_sum(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+    f"SELECT try_sum(i) FROM {V_DAY}",
+    f"SELECT avg(i) FROM {V_DAY}",
+    f"SELECT avg(i) FROM {V_MONTH}",
+    f"SELECT try_avg(i) FROM {V_DAY}",
+    f"SELECT avg(i) FROM {V_MIXED}",
+    f"SELECT min(i), max(i) FROM {V_DAY}",
+    f"SELECT count(distinct i) FROM {V_MONTH}",
+    f"SELECT median(i) FROM {V_DAY}",
+    f"SELECT median(i) FROM {V_MONTH}",
+    f"SELECT percentile(i, 0.5) FROM {V_DAY}",
+    f"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY i) FROM {V_MONTH}",
+    f"SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY i) FROM {V_DAY}",
+    f"SELECT stddev(i) FROM {V_DAY}",
+    "SELECT sum(i) FROM VALUES (cast('1 day' as interval)) AS t(i)",
+    "SELECT avg(i) FROM VALUES (cast('1 day' as interval)) AS t(i)",
+    "SELECT sum(i) OVER (ORDER BY i) FROM VALUES (interval '1' day) AS t(i)",
+    # other functions
+    "width_bucket(interval '0' year, interval '0' year, interval '10' year, 10)",
+    "width_bucket(interval '5' day, interval '0' day, interval '10' day, 10)",
+    "interval '5' month div interval '2' month",
+    "interval '5' day div interval '2' day",
+    "interval '5' day div interval '0' day",
+    "map(interval '1' day, 1)",
+    "map(1, interval '1' month)",
+    "cast(map(1, interval '1' month) as string)",
+    "hash(interval '1' day)",
+    "hash(interval '1' month)",
+    "xxhash64(interval '1' day)",
+]
+
+
 def condition(e: PySparkException) -> str:
     """The error condition; Spark raises some arithmetic errors with none."""
     return e.getCondition() or "UNCLASSIFIED"
@@ -311,7 +507,7 @@ def condition(e: PySparkException) -> str:
 def run(spark: SparkSession, expr: str, zone: str, ansi: bool) -> dict:
     case: dict = {"expr": expr, "zone": zone, "ansi": ansi}
     try:
-        df = spark.sql(f"SELECT {expr}")
+        df = spark.sql(expr if expr.startswith("SELECT ") else f"SELECT {expr}")
     except PySparkException as e:
         case["error_class"] = condition(e)
         return case
@@ -332,6 +528,7 @@ def run(spark: SparkSession, expr: str, zone: str, ansi: bool) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--section", choices=("arithmetic", "functions"), default="arithmetic")
     args = parser.parse_args()
     spark = (
         SparkSession.builder.master("local[1]")
@@ -341,11 +538,11 @@ def main() -> None:
     )
     spark.sparkContext.setLogLevel("OFF")
     cases = []
-    for zone, ansi, exprs in (
-        ("UTC", True, UTC),
-        ("America/Los_Angeles", True, LOS_ANGELES),
-        ("UTC", False, NON_ANSI),
-    ):
+    sections = {
+        "arithmetic": (("UTC", True, UTC), ("America/Los_Angeles", True, LOS_ANGELES), ("UTC", False, NON_ANSI)),
+        "functions": (("UTC", True, FUNCTIONS), ("UTC", False, FUNCTIONS)),
+    }
+    for zone, ansi, exprs in sections[args.section]:
         spark.conf.set("spark.sql.session.timeZone", zone)
         spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
         cases.extend(run(spark, e, zone, ansi) for e in exprs)

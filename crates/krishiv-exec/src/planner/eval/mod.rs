@@ -391,6 +391,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             Some(from) if *to == krishiv_types::DataType::String => {
                 Ok(cast::interval_to_string(compile(expr, input)?, from))
             }
+            from if cast::is_interval_cast(from.as_ref(), to) => {
+                cast::interval_cast(compile(expr, input)?, from, to, *mode)
+            }
             _ => {
                 let mut child = compile(expr, input)?;
                 if *to == krishiv_types::DataType::String

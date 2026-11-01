@@ -25,7 +25,12 @@ struct Answer {
 
 fn answer(session: &Session, expr: &str) -> Answer {
     block_on(async {
-        let df = match session.sql(&format!("SELECT {expr}")).await {
+        let sql = if expr.starts_with("SELECT ") {
+            expr.to_owned()
+        } else {
+            format!("SELECT {expr}")
+        };
+        let df = match session.sql(&sql).await {
             Ok(df) => df,
             Err(e) => {
                 return Answer {
@@ -71,9 +76,10 @@ fn answer(session: &Session, expr: &str) -> Answer {
     })
 }
 
-fn fixture() -> R<Value> {
+fn fixture(name: &str) -> R<Value> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/spark-4.2.0/interval-arithmetic.json");
+        .join("../../tests/fixtures/spark-4.2.0")
+        .join(name);
     Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
 }
 
@@ -81,9 +87,22 @@ fn fixture() -> R<Value> {
 /// `INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION`.
 const WITHOUT_SUGGESTION: &str = "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION";
 
+/// Spark raises a day-time cast's field out of range with no class either.
+const FIELD_OUT_OF_RANGE: &str = "INVALID_INTERVAL_FORMAT.INTERVAL_PARSING";
+
 #[test]
 fn intervals_match_spark() -> R {
-    let doc = fixture()?;
+    matches_spark("interval-arithmetic.json")
+}
+
+/// Unit 4's casts, aggregates and functions (`--section functions`).
+#[test]
+fn interval_functions_match_spark() -> R {
+    matches_spark("interval-functions.json")
+}
+
+fn matches_spark(file: &str) -> R {
+    let doc = fixture(file)?;
     let cases = doc["cases"].as_array().ok_or("no cases")?;
     assert!(cases.len() > 150, "{} cases", cases.len());
     let mut wrong = Vec::new();
@@ -103,7 +122,11 @@ fn intervals_match_spark() -> R {
             error_class: text("error_class").or_else(|| text("value_error_class")),
         };
         if want.error_class.as_deref() == Some("UNCLASSIFIED") {
-            want.error_class = Some(WITHOUT_SUGGESTION.to_owned());
+            want.error_class = Some(if expr.starts_with("cast('") {
+                FIELD_OUT_OF_RANGE.to_owned()
+            } else {
+                WITHOUT_SUGGESTION.to_owned()
+            });
         }
         if got != want {
             wrong.push(format!("{expr}\n   got {got:?}\n  want {want:?}"));
