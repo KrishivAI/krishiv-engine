@@ -81,3 +81,26 @@ fn the_column_is_named_date_format() {
         ["a", "date_format(TIMESTAMP '2020-03-04 05:06:07', yyyy)"]
     );
 }
+
+#[test]
+fn aggregate_clauses_are_still_refused() {
+    let s = session();
+    for sql in [
+        "SELECT to_char(date'2023-08-18', 'yyyy') WITHIN GROUP (ORDER BY 1)",
+        "SELECT to_varchar(date'2023-08-18', 'yyyy') WITHIN GROUP (ORDER BY 1)",
+        "SELECT to_char(date'2023-08-18', 'yyyy') FILTER (WHERE true)",
+        "SELECT to_char(DISTINCT date'2023-08-18', 'yyyy')",
+    ] {
+        let err = block_on(s.sql(sql)).err();
+        let err = match err {
+            Some(e) => e,
+            None => block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap_err(),
+        };
+        assert_eq!(
+            err.error_class(),
+            krishiv_common::error::ErrorClass::InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+            "{sql}"
+        );
+        assert!(err.to_string().contains("`date_format`"), "{sql}: {err}");
+    }
+}

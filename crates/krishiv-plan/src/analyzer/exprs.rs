@@ -1684,6 +1684,7 @@ impl Resolver<'_> {
                 // a binary keeps `to_char`.
                 if !session_qualified
                     && n == 2
+                    && !window_fn
                     && (lookup_name.eq_ignore_ascii_case("to_char")
                         || lookup_name.eq_ignore_ascii_case("to_varchar"))
                     && matches!(
@@ -1691,6 +1692,26 @@ impl Resolver<'_> {
                         Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
                     )
                 {
+                    // Spark builds `date_format` first, so its clauses are
+                    // refused under that name.
+                    let syntax = if f.distinct {
+                        Some("DISTINCT")
+                    } else if f.filter.is_some() {
+                        Some("FILTER CLAUSE")
+                    } else if !f.within_group.is_empty() {
+                        Some("WITHIN GROUP (ORDER BY ...)")
+                    } else {
+                        None
+                    };
+                    if let Some(syntax) = syntax {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: "`date_format`".to_owned(),
+                                syntax: syntax.to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
                     let call = Expr::function(
                         "date_format",
                         vec![Expr::clone(&kids[0].expr), Expr::clone(&kids[1].expr)],
