@@ -299,3 +299,15 @@ fn a_decimal_bound_past_the_key_precision_is_not_accepted() {
                FROM VALUES (CAST(1 AS DECIMAL(2,0))) AS b(x)";
     assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE");
 }
+
+/// `128 PRECEDING` is `-128` once cast, which a TINYINT key holds.
+#[test]
+fn a_tinyint_bound_of_128_preceding_fits() {
+    let s = session();
+    let got = rows(
+        &s,
+        "SELECT cast(count(*) OVER (ORDER BY x RANGE BETWEEN 128 PRECEDING AND CURRENT ROW) AS string) \
+         FROM VALUES (CAST(0 AS TINYINT)) AS t(x)",
+    );
+    assert_eq!(got, ["1"]);
+}

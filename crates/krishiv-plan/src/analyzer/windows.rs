@@ -240,18 +240,25 @@ impl RangeValue {
 /// The value of the `RANGE` frame bound `x` (a literal, or the negation of
 /// one for `PRECEDING`) cast to the type of the ordering key; `None` for
 /// anything but a literal, or a value the key's type cannot hold.
+fn range_value(x: &Arc<Expr>, key: &krishiv_types::DataType) -> Option<RangeValue> {
+    range_value_signed(x, key, false)
+}
+
+/// `range_value` with the sign applied to the literal before the cast, as
+/// Spark casts `UnaryMinus(n)` (so `128 PRECEDING` fits a TINYINT key).
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     reason = "a bound is cast to its key's type as Spark's cast does: doubles truncate to whole numbers and decimals become doubles"
 )]
-fn range_value(x: &Arc<Expr>, key: &krishiv_types::DataType) -> Option<RangeValue> {
+fn range_value_signed(
+    x: &Arc<Expr>,
+    key: &krishiv_types::DataType,
+    negate: bool,
+) -> Option<RangeValue> {
     use krishiv_types::DataType as T;
     if let Some(inner) = crate::expr::negated(x) {
-        return Some(match range_value(inner, key)? {
-            RangeValue::Int(v) => RangeValue::Int(v.checked_neg()?),
-            RangeValue::Float(v) => RangeValue::Float(-v),
-        });
+        return range_value_signed(inner, key, !negate);
     }
     let ExprNode::Literal(l) = &x.node else {
         return None;
@@ -273,6 +280,11 @@ fn range_value(x: &Arc<Expr>, key: &krishiv_types::DataType) -> Option<RangeValu
         Literal::Float(v) => Lit::Double(f64::from(*v)),
         Literal::Double(v) => Lit::Double(*v),
         _ => return None,
+    };
+    let lit = match (lit, negate) {
+        (lit, false) => lit,
+        (Lit::Exact(v, s), true) => Lit::Exact(v.checked_neg()?, s),
+        (Lit::Double(d), true) => Lit::Double(-d),
     };
     let fits =
         |v: i128, min: i128, max: i128| (min..=max).contains(&v).then_some(RangeValue::Int(v));
