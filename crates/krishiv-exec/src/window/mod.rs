@@ -42,8 +42,8 @@
 //!   cumulative sums, or an in-order fold where the order of additions
 //!   shows, as Spark's frames fold).
 //!
-//! `RANGE` frames with value bounds and the offset functions (`lag`,
-//! `lead`, `nth_value`) are planned with a later part of P2-T055.
+//! `RANGE` frames with value bounds (one numeric or date ordering key) are
+//! `Frame`s too: each row's edges are binary searches over the key.
 //!
 //! # Memory
 //! Before a batch is taken (`NeedMemory` otherwise) the operator reserves
@@ -163,6 +163,13 @@ pub enum FrameBound {
     /// it when negative: `n PRECEDING` is `-n`), as Spark keeps a frame's
     /// value bound.
     Offset(i64),
+    /// `RANGE` only: the rows whose ordering key is this far from the
+    /// current row's (negative: before it, as `Offset`; a descending order
+    /// moves the other way). An integer or date key's distance, or a
+    /// decimal key's in its unscaled units.
+    RangeInt(i128),
+    /// `RANGE` only: as `RangeInt`, for a float key (the bits of the `f64`).
+    RangeFloat(u64),
 }
 
 /// A window frame (Spark's `SpecifiedWindowFrame`).
@@ -249,6 +256,8 @@ crate::physical::data::plan_data!(
         CurrentRow,
         UnboundedFollowing,
         Offset(offset),
+        RangeInt(distance),
+        RangeFloat(bits),
     }
 );
 crate::physical::data::plan_data!(struct WindowFrame { units, lower, upper });
@@ -312,6 +321,50 @@ impl WindowFunctionPlan {
     }
 
     /// How the frame is evaluated.
+    /// A `RANGE` frame with value bounds needs one ordering key of a type
+    /// its bounds are taken over (integers, decimals and dates in integer
+    /// bounds, floats in float bounds).
+    fn check_range(&self, input: &SchemaRef, order: &[SortKey]) -> Result<()> {
+        let bounds = [self.frame.lower, self.frame.upper];
+        if self.frame.units != FrameUnits::Range || !bounds.into_iter().any(frames::is_range_offset)
+        {
+            return Ok(());
+        }
+        let [key] = order else {
+            return Err(internal(format!(
+                "a RANGE frame with value bounds over {} ordering keys",
+                order.len()
+            )));
+        };
+        let float = matches!(
+            input.field(key.column).data_type(),
+            DataType::Float32 | DataType::Float64
+        );
+        let int = matches!(
+            input.field(key.column).data_type(),
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Date32
+                | DataType::Decimal128(..)
+        );
+        for b in bounds {
+            let fits = match b {
+                FrameBound::RangeInt(_) => int,
+                FrameBound::RangeFloat(_) => float,
+                _ => true,
+            };
+            if !fits {
+                return Err(internal(format!(
+                    "a RANGE frame bound over an ordering key of type {}",
+                    input.field(key.column).data_type()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn shape(&self) -> Result<Shape> {
         use FrameBound as B;
         match (self.frame.units, self.frame.lower, self.frame.upper) {
@@ -324,6 +377,15 @@ impl WindowFunctionPlan {
                 Ok(Shape::Frame)
             }
             (FrameUnits::Range, B::CurrentRow, B::UnboundedFollowing) => Ok(Shape::Frame),
+            (
+                FrameUnits::Range,
+                B::UnboundedPreceding | B::CurrentRow | B::RangeInt(_) | B::RangeFloat(_),
+                B::CurrentRow | B::UnboundedFollowing | B::RangeInt(_) | B::RangeFloat(_),
+            ) if frames::is_range_offset(self.frame.lower)
+                || frames::is_range_offset(self.frame.upper) =>
+            {
+                Ok(Shape::Frame)
+            }
             (units, lower, upper) => Err(crate::aggregate::unsupported(format!(
                 "window frame {units:?} between {lower:?} and {upper:?}"
             ))),
@@ -512,6 +574,7 @@ impl Window {
                     return Err(internal("a window filter that is not boolean".to_owned()));
                 }
             }
+            f.check_range(&input, &plan.order_by)?;
             let (t, nullable) = f.output()?;
             fields.push(Field::new(&f.name, t, nullable));
         }

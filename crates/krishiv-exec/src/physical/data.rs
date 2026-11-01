@@ -107,6 +107,7 @@ value_types!(
     usize,
     i32,
     i64,
+    i128,
     f64,
     str,
     String,
