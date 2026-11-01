@@ -197,9 +197,27 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
             continue;
         }
         let (mut depth, mut arg) = (0_usize, 0_usize);
+        // Angle brackets of a complex type (`MAP<STRING,STRING>`) open only
+        // after a type word, so a comparison `a < b` never hides a comma.
+        let mut angle = 0_usize;
+        let mut prev_word = String::new();
         let mut range: Option<(usize, usize)> = None;
         for u in &code[i + 2..] {
+            let word = std::mem::take(&mut prev_word);
+            if u.kind == TokenKind::Word {
+                prev_word = u.span.text(sql).to_owned();
+            }
             match u.kind {
+                TokenKind::Sym(Sym::Lt)
+                    if angle > 0
+                        || ["map", "array", "struct"]
+                            .iter()
+                            .any(|w| word.eq_ignore_ascii_case(w)) =>
+                {
+                    angle += 1;
+                }
+                TokenKind::Sym(Sym::Gt) if angle > 0 => angle -= 1,
+                TokenKind::Sym(Sym::Comma) if angle > 0 => {}
                 TokenKind::Sym(Sym::LParen) => depth += 1,
                 TokenKind::Sym(Sym::RParen) if depth == 0 => break,
                 TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
