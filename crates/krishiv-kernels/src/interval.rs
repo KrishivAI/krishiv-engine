@@ -16,8 +16,8 @@
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray as _;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
-    Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrowPrimitiveType, DurationMicrosecondArray, Int32Array, IntervalYearMonthArray,
@@ -325,6 +325,8 @@ enum Numbers<'a> {
     F32(&'a PrimitiveArray<Float32Type>),
     F64(&'a PrimitiveArray<Float64Type>),
     Decimal(&'a PrimitiveArray<Decimal128Type>, u32),
+    /// A decimal of precision 18 or less, on its short carrier.
+    ShortDecimal(&'a PrimitiveArray<Decimal64Type>, u32),
 }
 
 impl<'a> Numbers<'a> {
@@ -337,6 +339,10 @@ impl<'a> Numbers<'a> {
             DataType::Float32 => Self::F32(by.as_primitive()),
             DataType::Float64 => Self::F64(by.as_primitive()),
             DataType::Decimal128(_, s) => Self::Decimal(
+                by.as_primitive(),
+                u32::try_from(*s).map_err(|_| KernelError::internal("a negative decimal scale"))?,
+            ),
+            DataType::Decimal64(_, s) => Self::ShortDecimal(
                 by.as_primitive(),
                 u32::try_from(*s).map_err(|_| KernelError::internal("a negative decimal scale"))?,
             ),
@@ -358,6 +364,7 @@ impl<'a> Numbers<'a> {
             Self::F32(a) => Number::Fraction(f64::from(a.value(i))),
             Self::F64(a) => Number::Fraction(a.value(i)),
             Self::Decimal(a, s) => Number::Decimal(a.value(i), *s),
+            Self::ShortDecimal(a, s) => Number::Decimal(i128::from(a.value(i)), *s),
         }
     }
 }
@@ -451,7 +458,9 @@ pub fn scale_day_time(
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array};
+    use arrow_array::{
+        ArrayRef, Decimal64Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
+    };
     use krishiv_common::error::ErrorClass;
 
     use super::*;
@@ -488,6 +497,36 @@ mod tests {
                 .with_precision_and_scale(38, scale)
                 .unwrap(),
         )
+    }
+
+    fn short_dec(unscaled: i64, scale: i8) -> ArrayRef {
+        Arc::new(
+            Decimal64Array::from(vec![unscaled])
+                .with_precision_and_scale(18, scale)
+                .unwrap(),
+        )
+    }
+
+    /// A decimal of precision 18 or less scales as on the long carrier.
+    #[test]
+    fn a_short_decimal_scales_as_a_long_one() {
+        use ScaleOp::{Divide, Multiply};
+        for (v, unscaled, scale, op) in [
+            (1, 15, 1, Multiply),
+            (-1, 15, 1, Multiply),
+            (1, 15, 1, Divide),
+            (1, 0, 1, Divide),
+            (i32::MIN, -10, 1, Divide),
+        ] {
+            assert_eq!(
+                ym(v, &short_dec(unscaled, scale), op),
+                ym(v, &dec(i128::from(unscaled), scale), op),
+                "{v} {unscaled} {scale}"
+            );
+        }
+        assert_eq!(ym(1, &short_dec(15, 1), Multiply), Ok(2));
+        let day = scale_day_time(&micros(86_400_000_000), &short_dec(25, 1), Multiply, false);
+        assert_eq!(day.map(|a| a.value(0)).ok(), Some(216_000_000_000));
     }
 
     #[test]
