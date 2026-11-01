@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "subqueries": [
-      3
-    ]
-  },
-  "file": "subquery/exists-subquery/exists-cte",
-  "format_version": 1
-}

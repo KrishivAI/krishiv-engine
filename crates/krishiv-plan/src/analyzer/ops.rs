@@ -2548,7 +2548,7 @@ impl Resolver<'_> {
             ..a.clone()
         };
         let (ln, rn) = match kind {
-            JoinKind::LeftOuter => (false, true),
+            JoinKind::LeftOuter | JoinKind::Single => (false, true),
             JoinKind::RightOuter => (true, false),
             JoinKind::FullOuter => (true, true),
             _ => (false, false),
