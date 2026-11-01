@@ -507,9 +507,6 @@ impl Session {
                 as_json,
                 ..
             } => {
-                if *as_json {
-                    return Err(unsupported("DESCRIBE ... AS JSON"));
-                }
                 let name = self.table_name(table, &env)?;
                 let columns = self.columns_of_relation(&name).await?;
                 let temp = self.temp_entry_of(&name, &env);
@@ -520,6 +517,17 @@ impl Session {
                     ),
                     None => None,
                 };
+                if *as_json {
+                    if temp {
+                        return Err(unsupported("DESCRIBE ... AS JSON of a temporary view"));
+                    }
+                    self.require_current_profile("DESCRIBE EXTENDED")?;
+                    let t = self.stored_relation(&name)?;
+                    let json = describe_json(&t, described.as_ref())?;
+                    return self
+                        .ordered_frame(&["json_metadata"], &[], vec![vec![s(json)]])
+                        .await;
+                }
                 if !column.is_empty() {
                     if mode.is_some() {
                         // Spark adds statistics rows; the engine keeps none.
@@ -760,6 +768,165 @@ impl Session {
         }
         Ok(rows)
     }
+}
+
+/// A JSON string literal.
+fn json_str(v: &str) -> String {
+    serde_json::Value::String(v.to_owned()).to_string()
+}
+
+/// A JSON array of strings.
+fn json_list<'a>(items: impl IntoIterator<Item = &'a str>) -> String {
+    format!(
+        "[{}]",
+        items
+            .into_iter()
+            .map(json_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+/// A JSON object of string values, keys in the order given, values redacted as `DESCRIBE` redacts them.
+fn json_map<'a>(items: impl IntoIterator<Item = (&'a String, &'a String)>) -> String {
+    format!(
+        "{{{}}}",
+        items
+            .into_iter()
+            .map(|(k, v)| format!("{}:{}", json_str(k), json_str(redact(k, v))))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+/// A column type as `DESCRIBE ... AS JSON` writes it (`DescribeTableJsonCommand`'s type objects).
+fn json_type(t: &DataType) -> Result<String, KrishivError> {
+    let name = match t {
+        DataType::Boolean => "boolean",
+        DataType::Byte => "byte",
+        DataType::Short => "short",
+        DataType::Integer => "int",
+        DataType::Long => "long",
+        DataType::Float => "float",
+        DataType::Double => "double",
+        DataType::Binary => "binary",
+        DataType::Date => "date",
+        DataType::Timestamp => "timestamp_ltz",
+        DataType::TimestampNtz => "timestamp_ntz",
+        DataType::String => return Ok(r#"{"name":"string","collation":"UTF8_BINARY"}"#.to_owned()),
+        DataType::Decimal(d) => {
+            return Ok(format!(
+                r#"{{"name":"decimal","precision":{},"scale":{}}}"#,
+                d.precision(),
+                d.scale()
+            ));
+        }
+        _ => return Err(unsupported("DESCRIBE ... AS JSON of a nested column type")),
+    };
+    Ok(format!(r#"{{"name":"{name}"}}"#))
+}
+
+/// `DESCRIBE EXTENDED [... PARTITION] ... AS JSON` of a stored table: one JSON object whose keys come in
+/// the order Spark's `DescribeTableJsonCommand` writes them (a partition's differ: its location, no table
+/// comment, and the bucket keys after `provider`).
+fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<String, KrishivError> {
+    if t.view.is_some() {
+        return Err(unsupported("DESCRIBE ... AS JSON of a view"));
+    }
+    let columns = t
+        .columns
+        .iter()
+        .map(|c| {
+            Ok(format!(
+                r#"{{"name":{},"type":{},"nullable":{}}}"#,
+                json_str(&c.name),
+                json_type(&c.data_type)?,
+                c.nullable
+            ))
+        })
+        .collect::<Result<Vec<_>, KrishivError>>()?;
+    let mut f: Vec<String> = vec![
+        format!(r#""table_name":{}"#, json_str(&t.name)),
+        format!(r#""catalog_name":{}"#, json_str(crate::catalog::CATALOG)),
+        format!(r#""namespace":{}"#, json_list([t.namespace.as_str()])),
+        format!(r#""schema_name":{}"#, json_str(&t.namespace)),
+        format!(r#""columns":[{}]"#, columns.join(",")),
+    ];
+    let buckets = t.layout.bucket.as_ref().map(|b| {
+        [
+            format!(r#""num_buckets":{}"#, b.num_buckets),
+            format!(
+                r#""bucket_columns":{}"#,
+                json_list(b.columns.iter().map(String::as_str))
+            ),
+            format!(
+                r#""sort_columns":{}"#,
+                json_list(b.sort_columns.iter().map(String::as_str))
+            ),
+        ]
+    });
+    let location = match p {
+        Some(p) => {
+            f.push(format!(
+                r#""partition_values":{}"#,
+                json_map(p.spec.iter().map(|(k, v)| (k, v)))
+            ));
+            &p.location
+        }
+        None => {
+            f.extend(buckets.iter().flatten().cloned());
+            &t.location
+        }
+    };
+    f.push(format!(
+        r#""location":{}"#,
+        json_str(&format!("file:{}", location.display()))
+    ));
+    let options = storage_options(t);
+    if !options.is_empty() {
+        f.push(format!(
+            r#""storage_properties":{}"#,
+            json_map(options.iter())
+        ));
+    }
+    if let Some(p) = p.filter(|p| !p.parameters.is_empty()) {
+        f.push(format!(
+            r#""partition_parameters":{}"#,
+            json_map(p.parameters.iter())
+        ));
+    }
+    let created = p.map_or(t.created_ms, |p| p.created_ms);
+    f.push(format!(
+        r#""created_time":{}"#,
+        json_str(&created_time(created))
+    ));
+    f.push(r#""last_access":"UNKNOWN""#.to_owned());
+    f.push(format!(r#""created_by":{}"#, json_str("Spark 4.2.0")));
+    f.push(format!(
+        r#""type":"{}""#,
+        if t.managed { "MANAGED" } else { "EXTERNAL" }
+    ));
+    f.push(format!(r#""provider":{}"#, json_str(&t.provider)));
+    if p.is_some() {
+        f.extend(buckets.iter().flatten().cloned());
+    } else if let Some(c) = &t.comment {
+        f.push(format!(r#""comment":{}"#, json_str(c)));
+    }
+    if !t.properties.is_empty() {
+        f.push(format!(
+            r#""table_properties":{}"#,
+            json_map(t.properties.iter())
+        ));
+    }
+    if t.is_partitioned() {
+        f.push(r#""partition_provider":"Catalog""#.to_owned());
+        f.push(format!(
+            r#""partition_columns":{}"#,
+            json_list(t.layout.partition_columns.iter().map(String::as_str))
+        ));
+    }
+    f.push(r#""collation":"UTF8_BINARY""#.to_owned());
+    Ok(format!("{{{}}}", f.join(",")))
 }
 
 /// `Num Buckets`, `Bucket Columns` and `Sort Columns` of a bucketed table (`BucketSpec.toLinkedHashMap`).

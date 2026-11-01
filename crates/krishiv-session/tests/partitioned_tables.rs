@@ -1048,3 +1048,49 @@ fn partitioned_ctas_keeps_dotted_column_names() {
     );
     assert_eq!(rows(&s, "SHOW PARTITIONS d"), ["p=x"]);
 }
+
+/// `DESCRIBE EXTENDED ... AS JSON` writes the keys in `DescribeTableJsonCommand`'s order (the `describe` golden's
+/// shape); a table without buckets or partitions leaves those keys out, and nested column types are refused.
+#[test]
+fn describe_as_json_lists_the_keys_in_spark_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE j (a STRING, b DECIMAL(5,2)) USING parquet COMMENT 'c' TBLPROPERTIES (password 'x')",
+    );
+    let json = rows(&s, "DESCRIBE EXTENDED j AS JSON").join("");
+    let keys = [
+        "table_name",
+        "catalog_name",
+        "namespace",
+        "schema_name",
+        "columns",
+        "location",
+        "created_time",
+        "last_access",
+        "created_by",
+        "type",
+        "provider",
+        "comment",
+        "table_properties",
+        "collation",
+    ];
+    let mut at = 0;
+    for k in keys {
+        let found = json[at..]
+            .find(&format!("\"{k}\":"))
+            .unwrap_or_else(|| panic!("{k} in {json}"));
+        at += found;
+    }
+    assert!(json.contains(
+        r#"{"name":"b","type":{"name":"decimal","precision":5,"scale":2},"nullable":true}"#
+    ));
+    assert!(json.contains(r#""table_properties":{"password":"*********(redacted)"}"#));
+    assert!(!json.contains("partition_columns") && !json.contains("num_buckets"));
+    run(&s, "CREATE TABLE n (a ARRAY<INT>) USING parquet");
+    assert_eq!(
+        class(&s, "DESCRIBE EXTENDED n AS JSON"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}
