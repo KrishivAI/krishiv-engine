@@ -583,6 +583,11 @@ impl Rewriter {
             PlanNode::Project { input, exprs } => {
                 self.project(&p, Arc::clone(input), exprs.clone())
             }
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                aggregates,
+            } => self.aggregate(&p, Arc::clone(input), keys, aggregates),
             PlanNode::Join {
                 left,
                 right,
@@ -879,6 +884,37 @@ impl Rewriter {
         let (base, exprs) = self.existence(input, exprs)?;
         let (base, exprs) = self.scalars(base, exprs)?;
         Ok(node(PlanNode::Project { input: base, exprs }, p.origin))
+    }
+
+    /// An aggregate whose keys or calls (or their `FILTER`s) read a
+    /// correlated subquery: the subquery joins to the input below the
+    /// aggregate, which reads the join's column (Spark pushes the
+    /// expression into a projection under the aggregate).
+    fn aggregate(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: Arc<LogicalPlan>,
+        keys: &[Arc<Expr>],
+        aggregates: &[Arc<Expr>],
+    ) -> R<Arc<LogicalPlan>> {
+        let all: Vec<Arc<Expr>> = keys.iter().chain(aggregates).cloned().collect();
+        if !all
+            .iter()
+            .any(|e| self.reads_correlated(e) || self.existential(e))
+        {
+            return Ok(Arc::clone(p));
+        }
+        let (base, all) = self.existence(input, all)?;
+        let (base, mut all) = self.scalars(base, all)?;
+        let aggregates = all.split_off(keys.len());
+        Ok(node(
+            PlanNode::Aggregate {
+                input: base,
+                grouping: Grouping::GroupBy(all),
+                aggregates,
+            },
+            p.origin,
+        ))
     }
 
     /// Whether `e` holds an `EXISTS` or `IN` subquery that an existence
