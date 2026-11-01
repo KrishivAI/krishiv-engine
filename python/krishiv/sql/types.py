@@ -775,6 +775,9 @@ class _DdlParser:
         if lower in _DDL_ATOMS:
             if self.peek() == "(":
                 raise ValueError(tok)
+            if lower == "string" and (self.peek() or "").lower() == "collate":
+                self.next()
+                return StringType(self.next())
             return _DDL_ATOMS[lower]()
         raise ValueError(tok)
 
