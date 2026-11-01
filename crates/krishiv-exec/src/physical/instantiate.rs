@@ -506,14 +506,23 @@ impl Instantiation<'_> {
         for sp in plans.iter() {
             let mut stack = vec![&sp.plan];
             let mut unbound = false;
+            // Loops this plan defines bind their own references.
+            let mut local = HashSet::new();
+            let mut refs = Vec::new();
             while let Some(n) = stack.pop() {
                 match n {
-                    PhysNode::LoopRef { id, .. } => unbound |= !self.loops.contains_key(id),
+                    PhysNode::UnionLoop { id, .. } => {
+                        local.insert(*id);
+                    }
+                    PhysNode::LoopRef { id, .. } => refs.push(*id),
                     PhysNode::SharedRead { id, .. } => unbound |= deferred.contains(id),
                     _ => {}
                 }
                 stack.extend(n.children());
             }
+            unbound |= refs
+                .iter()
+                .any(|id| !self.loops.contains_key(id) && !local.contains(id));
             if unbound {
                 deferred.insert(sp.id);
                 continue;

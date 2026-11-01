@@ -622,3 +622,14 @@ fn a_nondeterministic_cte_read_twice_inside_the_recursive_term_runs() {
               SELECT a.m FROM b a JOIN b c ON a.x = c.x)) SELECT * FROM r";
     assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
 }
+
+#[test]
+fn a_nondeterministic_recursive_cte_read_twice_outside_the_loop_runs() {
+    let s = Session::new().unwrap();
+    // The loop's own references are bound by the loop: the shared `r` is
+    // built, not deferred as if it read an outer loop.
+    let q = "WITH RECURSIVE r(n, x) AS (SELECT 1, rand() UNION ALL \
+             SELECT n + 1, x FROM r WHERE n < 3) \
+             SELECT a.n FROM r a JOIN r b ON a.n = b.n ORDER BY 1";
+    assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
+}

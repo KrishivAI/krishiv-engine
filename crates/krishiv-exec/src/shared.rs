@@ -163,7 +163,12 @@ impl Output {
                 0
             };
             if freed == 0 {
-                return Err(KrishivError::from(e));
+                // Nothing of this list is left to spill: arbitrate, so
+                // other consumers (the previous round's list, still read
+                // by the loop) release memory before the append fails.
+                drop(e);
+                reservation.grow(bytes).await.map_err(KrishivError::from)?;
+                break;
             }
         }
         lock(&self.state).push(Segment::Memory {
