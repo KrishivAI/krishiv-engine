@@ -478,26 +478,21 @@ fn grow_salted(old: &[u64], g: impl Fn(u32) -> u64) -> Result<Vec<u64>> {
     Ok(slots)
 }
 
-/// Prefetches every slot of a chunk, then the first salt-matching row of
-/// each, so their cache misses overlap before the chunk is resolved in order.
+/// Prefetches every slot of a chunk, then the row of each whose first slot has
+/// its salt, so their cache misses overlap before the chunk is resolved in
+/// order. It reads only the first slot: on a probe that mostly misses the salt
+/// test is well predicted, where walking the run takes the `s == 0` branch a
+/// second time, about even at load 1/2 (TPC-DS q72). An empty slot of salt 0
+/// prefetches row 0, a harmless hint.
 fn prefetch_chunk(slots: &[u64], gs: &[u64], src: &impl RowSource) {
     let mask = slots.len() - 1;
     for &g in gs {
         prefetch_read(slots, low(g, mask));
     }
     for &g in gs {
-        let salt = g & SALT_MASK;
-        let mut i = low(g, mask);
-        loop {
-            let s = slots[i];
-            if s == 0 {
-                break;
-            }
-            if s & SALT_MASK == salt {
-                src.prefetch(slot_id(s));
-                break;
-            }
-            i = (i + 1) & mask;
+        let s = slots[low(g, mask)];
+        if s & SALT_MASK == g & SALT_MASK {
+            src.prefetch(slot_id(s));
         }
     }
 }
