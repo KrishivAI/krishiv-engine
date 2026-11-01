@@ -5,6 +5,18 @@
     ],
     "sqlState" : "58030"
   },
+  "KRISHIV_COMMIT_LOG_CORRUPT" : {
+    "message" : [
+      "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
+    ],
+    "sqlState" : "58030"
+  },
+  "KRISHIV_CONCURRENT_COMMIT" : {
+    "message" : [
+      "The write to <root> conflicts with a commit made after it started (log version <version>). Another writer changed the directory; retry the write."
+    ],
+    "sqlState" : "40001"
+  },
   "KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE" : {
     "message" : [
       "The remainder of <dividend> divided by <divisor> needs an integral quotient of more than 39 significant digits, so it cannot be computed (Spark raises `ArithmeticException: Division impossible` here in every mode)."
