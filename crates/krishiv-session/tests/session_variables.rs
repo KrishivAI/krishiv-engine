@@ -1563,3 +1563,40 @@ fn a_date_plus_a_variable_keeps_the_variable_in_its_name() {
         assert_eq!(schema.field(0).name(), name, "{sql}");
     }
 }
+
+#[test]
+fn a_bare_default_in_a_row_query_reads_the_targets_default() {
+    let s = session();
+    for sql in [
+        "DECLARE OR REPLACE VARIABLE v1 STRING DEFAULT 'default1'",
+        "DECLARE OR REPLACE VARIABLE v2 INT",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    let value = |s: &Session, sql: &str| rows(s, sql).1;
+    for set in [
+        "SET VARIABLE (v1) = (SELECT DEFAULT FROM VALUES(1) AS T(c1))",
+        "SET VARIABLE (v1) = (SELECT DEFAULT FROM VALUES(1),(2),(3) AS T(c1) LIMIT 1 OFFSET 1)",
+        "SET VARIABLE (v1) = (WITH w(c1) AS (VALUES(1) AS T(c1)) SELECT DEFAULT FROM VALUES(1) AS T(c1))",
+    ] {
+        block_on(s.sql("SET VARIABLE v1 = 'hello'")).unwrap();
+        block_on(s.sql(set)).unwrap();
+        assert_eq!(
+            value(&s, "SELECT v1"),
+            vec![vec!["default1".to_owned()]],
+            "{set}"
+        );
+    }
+    // A column named default wins; a variable without a default gets NULL.
+    block_on(s.sql("SET VARIABLE (v1) = (SELECT DEFAULT FROM VALUES('world') AS T(default))"))
+        .unwrap();
+    assert_eq!(value(&s, "SELECT v1"), vec![vec!["world".to_owned()]]);
+    block_on(s.sql("SET VARIABLE v2 = 3")).unwrap();
+    block_on(s.sql("SET VARIABLE (v2) = (SELECT DEFAULT FROM VALUES(1) AS T(c1))")).unwrap();
+    assert_eq!(value(&s, "SELECT v2"), vec![vec!["NULL".to_owned()]]);
+    // Only a bare DEFAULT of a plain select list is the default.
+    assert!(
+        block_on(s.sql("SET VARIABLE (v2) = (SELECT DEFAULT + 1 FROM VALUES(1) AS T(c1))"))
+            .is_err()
+    );
+}

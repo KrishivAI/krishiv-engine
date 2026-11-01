@@ -663,3 +663,20 @@ fn share_cte_instances_defaults_on_and_parses() {
             .is_err()
     );
 }
+
+#[test]
+fn cte_recursion_limits_default_and_alias() {
+    use super::registry::{CTE_RECURSION_LEVEL_LIMIT, CTE_RECURSION_ROW_LIMIT};
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&CTE_RECURSION_LEVEL_LIMIT),
+        Some(&ConfigValue::Int(100))
+    );
+    assert_eq!(
+        c.get(&CTE_RECURSION_ROW_LIMIT),
+        Some(&ConfigValue::Int(1_000_000))
+    );
+    assert_eq!(c.set("spark.sql.cteRecursionRowLimit", "-1").unwrap(), None);
+    assert_eq!(c.get(&CTE_RECURSION_ROW_LIMIT), Some(&ConfigValue::Int(-1)));
+    assert!(c.set("krishiv.sql.cteRecursionLevelLimit", "many").is_err());
+}

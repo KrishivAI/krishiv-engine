@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "query": "SELECT '1' + cast('2017-12-11 09:30:00' as date)        FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "query": "SELECT '1' + cast('2017-12-11 09:30:00.0' as timestamp) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
       "query": "SELECT '1' - cast('2017-12-11 09:30:00' as date)        FROM t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
@@ -17,15 +9,7 @@
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
-      "query": "SELECT cast('2017-12-11 09:30:00' as date)        + '1' FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
       "query": "SELECT cast('2017-12-11 09:30:00' as date)        - '1' FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "query": "SELECT cast('2017-12-11 09:30:00.0' as timestamp) + '1' FROM t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {

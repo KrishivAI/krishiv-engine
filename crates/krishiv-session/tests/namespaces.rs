@@ -44,6 +44,11 @@ fn rows(s: &Session, sql: &str) -> Vec<Vec<String>> {
                         } else {
                             match c.data_type() {
                                 ArrowType::Utf8View => c.as_string_view().value(i).to_owned(),
+                                ArrowType::Boolean => c.as_boolean().value(i).to_string(),
+                                ArrowType::Int32 => c
+                                    .as_primitive::<arrow_array::types::Int32Type>()
+                                    .value(i)
+                                    .to_string(),
                                 _ => c.as_string::<i32>().value(i).to_owned(),
                             }
                         }
@@ -174,4 +179,228 @@ fn drop_cascade_never_deletes_outside_the_warehouse() {
     assert!(dir.path().join("d.db").join("a").is_dir());
     assert!(outside.path().join("keep.txt").is_file());
     run(&s, "INSERT INTO d.a VALUES (1)");
+}
+
+#[test]
+fn a_global_temporary_view_lives_in_global_temp() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW gv(a, b) AS SELECT 1, 'x'");
+    assert_eq!(
+        rows(&s, "SELECT b, a FROM global_temp.gv"),
+        vec![vec!["x".to_owned(), "1".to_owned()]]
+    );
+    // Not a temporary view, and not listed with them.
+    assert_eq!(class(&s, "SELECT * FROM gv"), "TABLE_OR_VIEW_NOT_FOUND");
+    assert!(rows(&s, "SHOW TABLES").is_empty());
+    assert_eq!(
+        rows(&s, "SHOW VIEWS IN global_temp"),
+        vec![vec![
+            "global_temp".to_owned(),
+            "gv".to_owned(),
+            "true".to_owned()
+        ]]
+    );
+    assert_eq!(
+        rows(&s, "SHOW COLUMNS IN gv FROM global_temp"),
+        vec![vec!["a".to_owned()], vec!["b".to_owned()]]
+    );
+    assert_eq!(
+        class(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 2"),
+        "TEMP_TABLE_OR_VIEW_ALREADY_EXISTS"
+    );
+    run(&s, "CREATE OR REPLACE GLOBAL TEMP VIEW gv AS SELECT 2 AS c");
+    assert_eq!(
+        rows(&s, "SELECT c FROM global_temp.gv"),
+        vec![vec!["2".to_owned()]]
+    );
+    assert_eq!(
+        class(&s, "CREATE VIEW pv AS SELECT * FROM global_temp.gv"),
+        "INVALID_TEMP_OBJ_REFERENCE"
+    );
+    run(&s, "DROP VIEW global_temp.gv");
+    assert_eq!(
+        class(&s, "SELECT * FROM global_temp.gv"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, "DROP VIEW global_temp.gv"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    run(&s, "DROP VIEW IF EXISTS global_temp.gv");
+}
+
+/// A global view is read through `global_temp.v.col` as well as `v.col`, and a view that reads itself
+/// (directly or through another global view) is `RECURSIVE_VIEW` before the catalog changes.
+#[test]
+fn global_views_qualify_columns_and_refuse_cycles() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW v AS SELECT 1 AS x");
+    for q in [
+        "SELECT global_temp.v.x FROM global_temp.v",
+        "SELECT v.x FROM global_temp.v",
+        "SELECT x FROM global_temp.v",
+    ] {
+        assert_eq!(rows(&s, q), vec![vec!["1".to_owned()]], "{q}");
+    }
+    assert_eq!(
+        class(
+            &s,
+            "CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT * FROM global_temp.v"
+        ),
+        "RECURSIVE_VIEW"
+    );
+    // The old definition survived.
+    assert_eq!(
+        rows(&s, "SELECT x FROM global_temp.v"),
+        vec![vec!["1".to_owned()]]
+    );
+    run(
+        &s,
+        "CREATE GLOBAL TEMP VIEW w AS SELECT x FROM global_temp.v",
+    );
+    assert_eq!(
+        class(
+            &s,
+            "CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT x FROM global_temp.w"
+        ),
+        "RECURSIVE_VIEW"
+    );
+}
+
+/// `global_temp` is reserved, a global view describes like a table, and dropping a cached global view
+/// evicts what was cached from it.
+#[test]
+fn global_temp_is_reserved_and_global_views_describe_and_uncache() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    assert_eq!(
+        class(&s, "CREATE DATABASE global_temp"),
+        "SCHEMA_ALREADY_EXISTS"
+    );
+    run(&s, "CREATE DATABASE IF NOT EXISTS global_temp");
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 1 AS x");
+    assert_eq!(
+        rows(&s, "DESCRIBE global_temp.gv")[0][..2],
+        ["x".to_owned(), "int".to_owned()]
+    );
+    run(&s, "CACHE TABLE c AS SELECT x FROM global_temp.gv");
+    run(&s, "DROP VIEW global_temp.gv");
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 2 AS x");
+    assert_eq!(
+        rows(&s, "SELECT x FROM global_temp.gv"),
+        vec![vec!["2".to_owned()]]
+    );
+}
+
+/// Statement introspection reads the statement the session would run, after `${name}` substitution.
+#[test]
+fn statement_info_substitutes_variables() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET value = 5");
+    let info = block_on(s.statement_info("SELECT ${value}"));
+    assert!(info.is_ok(), "{info:?}");
+}
+
+#[test]
+fn a_cached_global_view_can_be_uncached_refreshed_and_hinted() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 1 AS a");
+    run(&s, "CACHE TABLE global_temp.gv");
+    run(&s, "REFRESH TABLE global_temp.gv");
+    run(&s, "UNCACHE TABLE global_temp.gv");
+    run(&s, "UNCACHE TABLE IF EXISTS global_temp.nope");
+    assert_eq!(
+        class(&s, "UNCACHE TABLE global_temp.nope"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    // A hint names the view as written, with or without its namespace.
+    for hint in ["BROADCAST(gv)", "MERGE(global_temp.gv)"] {
+        assert_eq!(
+            rows(
+                &s,
+                &format!(
+                    "SELECT /*+ {hint} */ x.a FROM global_temp.gv x JOIN global_temp.gv y ON x.a = y.a"
+                )
+            ),
+            vec![vec!["1".to_owned()]],
+            "{hint}"
+        );
+    }
+}
+
+#[test]
+fn a_local_view_cannot_be_spelled_like_a_global_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW v AS SELECT 1 AS x");
+    let internal = "`\u{1}global_temp\u{1}v`";
+    assert_eq!(
+        class(
+            &s,
+            &format!("CREATE OR REPLACE TEMP VIEW {internal} AS SELECT 2 AS x")
+        ),
+        "KRISHIV_RESERVED_TEMP_VIEW_NAME"
+    );
+    // DROP VIEW and a read by that name find nothing; the global view survives.
+    assert_eq!(
+        class(&s, &format!("DROP VIEW {internal}")),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, &format!("SELECT * FROM {internal}")),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    // The same spelling in capitals is refused too: catalog keys are lower-cased.
+    let upper = "`\u{1}GLOBAL_TEMP\u{1}v`";
+    assert_eq!(
+        class(
+            &s,
+            &format!("CREATE OR REPLACE TEMP VIEW {upper} AS SELECT 2 AS x")
+        ),
+        "KRISHIV_RESERVED_TEMP_VIEW_NAME"
+    );
+    assert_eq!(
+        class(&s, &format!("DROP VIEW {upper}")),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        rows(&s, "SELECT x FROM global_temp.v"),
+        vec![vec!["1".to_owned()]]
+    );
+}
+
+#[test]
+fn a_dotted_local_view_name_is_not_a_global_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW v AS SELECT 1 AS x");
+    run(
+        &s,
+        "CREATE TEMP VIEW `global_temp.v` AS SELECT * FROM global_temp.v",
+    );
+    assert_eq!(
+        rows(&s, "SELECT x FROM `global_temp.v`"),
+        vec![vec!["1".to_owned()]]
+    );
+}
+
+#[test]
+fn describing_a_global_view_reports_current_dependency_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW base AS SELECT 1 AS x");
+    run(
+        &s,
+        "CREATE GLOBAL TEMP VIEW v AS SELECT x FROM global_temp.base",
+    );
+    run(
+        &s,
+        "CREATE OR REPLACE GLOBAL TEMP VIEW base AS SELECT 's' AS x",
+    );
+    let d = rows(&s, "DESCRIBE global_temp.v");
+    assert_eq!(d[0][1], "string");
 }

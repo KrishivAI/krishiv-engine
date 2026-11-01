@@ -84,6 +84,7 @@ impl Session {
 
     async fn statement_info_here(&self, sql: &str) -> Result<StatementInfo, KrishivError> {
         let env = self.query_env();
+        let sql = &*self.substituted(sql);
         let redacted = krishiv_sql::redact_sql(sql);
         let statement = krishiv_sql::parse_statement(sql, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;

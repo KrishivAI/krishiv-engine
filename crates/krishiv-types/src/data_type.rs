@@ -14,7 +14,7 @@ use crate::nested::{ArrayType, MapType, StructType};
 /// A Spark SQL data type.
 ///
 /// Covers void (the type of a bare `NULL`), boolean, integral, floating-point, string, binary, decimal, date,
-/// timestamp, time, geometry and geography types and the nested array, map and struct types. Interval, char/varchar
+/// timestamp, time, interval, geometry and geography types and the nested array, map and struct types. Char/varchar
 /// and variant types are not represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
 ///
 /// Build `Time`, `Geometry` and `Geography` with [`Self::time`],
@@ -68,12 +68,84 @@ pub enum DataType {
         /// The spatial reference of every value, or [`Srid::Any`].
         srid: Srid,
     },
+    /// `INTERVAL YEAR`, `INTERVAL MONTH` or `INTERVAL YEAR TO MONTH`: a count
+    /// of months. Build it with [`Self::year_month_interval`].
+    YearMonthInterval {
+        /// The leading field.
+        start: YearMonthField,
+        /// The trailing field; equal to `start` for a single-field type.
+        end: YearMonthField,
+    },
+    /// `INTERVAL DAY`, `INTERVAL HOUR TO SECOND`, ...: a count of microseconds.
+    /// Build it with [`Self::day_time_interval`].
+    DayTimeInterval {
+        /// The leading field.
+        start: DayTimeField,
+        /// The trailing field; equal to `start` for a single-field type.
+        end: DayTimeField,
+    },
+    /// `INTERVAL`: Spark's `CalendarIntervalType`, months, days and
+    /// microseconds, each counted on its own.
+    CalendarInterval,
     /// `ARRAY<element>`.
     Array(Arc<ArrayType>),
     /// `MAP<key, value>`.
     Map(Arc<MapType>),
     /// `STRUCT<name: type, ...>`.
     Struct(StructType),
+}
+
+/// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum YearMonthField {
+    /// `YEAR`.
+    Year,
+    /// `MONTH`.
+    Month,
+}
+
+impl YearMonthField {
+    /// The field's name in a `simpleString`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Year => "year",
+            Self::Month => "month",
+        }
+    }
+}
+
+/// A field of a day-time interval type (Spark's `DayTimeIntervalType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DayTimeField {
+    /// `DAY`.
+    Day,
+    /// `HOUR`.
+    Hour,
+    /// `MINUTE`.
+    Minute,
+    /// `SECOND`.
+    Second,
+}
+
+impl DayTimeField {
+    /// The field's name in a `simpleString`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Hour => "hour",
+            Self::Minute => "minute",
+            Self::Second => "second",
+        }
+    }
+}
+
+/// `interval start` or `interval start to end`.
+fn interval_string(start: &str, end: &str) -> String {
+    if start == end {
+        format!("interval {start}")
+    } else {
+        format!("interval {start} to {end}")
+    }
 }
 
 /// The spatial reference of a geometry or geography type: one SRID for
@@ -153,6 +225,41 @@ impl DataType {
     /// Spark's default precision of `TIME` (`TimeType.DEFAULT_PRECISION`).
     pub const TIME_DEFAULT_PRECISION: u8 = 6;
 
+    /// Spark's `YearMonthIntervalType()`, `INTERVAL YEAR TO MONTH`.
+    pub const DEFAULT_YEAR_MONTH_INTERVAL: Self = Self::YearMonthInterval {
+        start: YearMonthField::Year,
+        end: YearMonthField::Month,
+    };
+    /// Spark's `DayTimeIntervalType()`, `INTERVAL DAY TO SECOND`.
+    pub const DEFAULT_DAY_TIME_INTERVAL: Self = Self::DayTimeInterval {
+        start: DayTimeField::Day,
+        end: DayTimeField::Second,
+    };
+
+    /// `INTERVAL start [TO end]` of the year-month family.
+    ///
+    /// # Errors
+    /// `INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION` when `end` comes
+    /// before `start`.
+    pub fn year_month_interval(start: YearMonthField, end: YearMonthField) -> Result<Self> {
+        if end < start {
+            return Err(error::interval_from_to(start.name(), end.name()));
+        }
+        Ok(Self::YearMonthInterval { start, end })
+    }
+
+    /// `INTERVAL start [TO end]` of the day-time family.
+    ///
+    /// # Errors
+    /// `INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION` when `end` comes
+    /// before `start`.
+    pub fn day_time_interval(start: DayTimeField, end: DayTimeField) -> Result<Self> {
+        if end < start {
+            return Err(error::interval_from_to(start.name(), end.name()));
+        }
+        Ok(Self::DayTimeInterval { start, end })
+    }
+
     /// `TIME(precision)`.
     ///
     /// # Errors
@@ -211,7 +318,9 @@ impl DataType {
             Self::Decimal(_)
             | Self::Time { .. }
             | Self::Geometry { .. }
-            | Self::Geography { .. } => self.atomic_simple_string(),
+            | Self::Geography { .. }
+            | Self::YearMonthInterval { .. }
+            | Self::DayTimeInterval { .. } => self.atomic_simple_string(),
             other => other.keyword().to_owned(),
         }
     }
@@ -223,6 +332,8 @@ impl DataType {
             Self::Time { precision } => format!("time({precision})"),
             Self::Geometry { srid } => format!("geometry({srid})"),
             Self::Geography { srid } => format!("geography({srid})"),
+            Self::YearMonthInterval { start, end } => interval_string(start.name(), end.name()),
+            Self::DayTimeInterval { start, end } => interval_string(start.name(), end.name()),
             other => other.keyword().to_owned(),
         }
     }
@@ -315,6 +426,9 @@ impl DataType {
             Self::Time { .. } => "time",
             Self::Geometry { .. } => "geometry",
             Self::Geography { .. } => "geography",
+            Self::YearMonthInterval { .. }
+            | Self::DayTimeInterval { .. }
+            | Self::CalendarInterval => "interval",
             Self::Array(_) => "array",
             Self::Map(_) => "map",
             Self::Struct(_) => "struct",

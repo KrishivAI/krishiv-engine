@@ -87,6 +87,10 @@ struct Encoder {
     /// instance reads as its own attributes, so the bias is part of the key.
     ids: HashMap<(u64, u64), u64>,
     next: u64,
+    /// The normalized id per recursive-CTE loop id, in first-use order: the
+    /// raw ids come from a process-wide counter, so two lowerings of one
+    /// query differ in them.
+    loops: HashMap<u32, u64>,
     /// The digest of each plan and expression node already encoded, by
     /// address and shift bias. A shared (`Arc`) subtree is reached once per
     /// path; the digest makes that one encoding of its body, and a node
@@ -113,6 +117,11 @@ impl Encoder {
         self.next += 1;
         self.ids.insert(key, n);
         n
+    }
+
+    fn loop_id(&mut self, raw: u32) -> u64 {
+        let next = self.loops.len() as u64;
+        *self.loops.entry(raw).or_insert(next)
     }
 
     fn num(&mut self, v: u64) {
@@ -812,6 +821,36 @@ impl Encoder {
                     self.text(q);
                 }
                 self.plan(input, bias);
+            }
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                output,
+            } => {
+                self.tag("UnionLoop");
+                let id = self.loop_id(*id);
+                self.num(id);
+                self.flag(max_level.is_some());
+                if let Some(n) = max_level {
+                    self.num(u64::from(*n));
+                }
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
+                self.plan(anchor, bias);
+                self.plan(recursive, bias);
+            }
+            PlanNode::UnionLoopRef { id, output } => {
+                self.tag("UnionLoopRef");
+                let id = self.loop_id(*id);
+                self.num(id);
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
             }
             PlanNode::Expand {
                 input,

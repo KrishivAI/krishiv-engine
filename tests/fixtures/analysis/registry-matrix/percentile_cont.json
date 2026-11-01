@@ -30,11 +30,11 @@
     },
     {
       "id": "percentile_cont#ecb3426beb04/ansi_on",
-      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile_cont#ecb3426beb04/ansi_off",
-      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,
