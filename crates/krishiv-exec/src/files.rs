@@ -13,6 +13,11 @@
 //! | neither | `PATH_NOT_FOUND`, the path qualified (`file:/abs/path`) |
 //! | no file left | `UNABLE_TO_INFER_SCHEMA` |
 //!
+//! `name=value` directories under a path are partition columns (Spark's
+//! partition discovery, `krishiv_io::partition_columns`): typed by
+//! inference, appended after the data columns, read from the path of each
+//! file. A table with a known schema does not discover them yet.
+//!
 //! A name is hidden when it starts with `.`, or with `_` without a `=` in
 //! it, or ends with `._COPYING_`; hidden directories are skipped whole.
 //! The format infers the schema from the files by path (Spark without
@@ -20,8 +25,8 @@
 //! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
 //! [`StoreRegistry`]) are supported. Not yet supported, failing with
-//! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories (Spark's
-//! partition discovery), paths with any other scheme, file sources Spark
+//! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories that are
+//! not `name=value` partition directories, paths with any other scheme, file sources Spark
 //! knows but the engine has no [`FileFormat`] for, and merging the files'
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
 //! Spark's `DATA_SOURCE_NOT_FOUND`.
@@ -30,7 +35,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use arrow_schema::SchemaRef;
+use arrow_schema::{FieldRef, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
@@ -38,8 +43,8 @@ use krishiv_common::error::{
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
-    FileFormat, FileRef, FormatOptions, FormatRegistry, IoContext, IoScheduler, StoreId,
-    StoreRegistry, is_spark_file_source, parse_object_url,
+    FileFormat, FileRef, FormatOptions, FormatRegistry, IoContext, IoScheduler, Segment, StoreId,
+    StoreRegistry, is_spark_file_source, parse_object_url, parse_segment, partition_columns,
 };
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::DataType;
@@ -264,8 +269,12 @@ pub struct FileListing {
     pub format: Arc<dyn FileFormat>,
     /// The files, sorted by path.
     pub files: Arc<[FileRef]>,
-    /// The schema the format infers from the listed files.
+    /// The schema the format infers from the listed files, followed by the
+    /// partition columns.
     pub schema: SchemaRef,
+    /// The partition columns discovered from the `k=v` directories above
+    /// the files (already at the end of `schema`); empty for a flat read.
+    pub partition_columns: Arc<[FieldRef]>,
     /// The parsed read options.
     pub options: FormatOptions,
 }
@@ -395,8 +404,15 @@ impl FileReads {
         options: &BTreeMap<String, OptionValue>,
         known: Option<SchemaRef>,
     ) -> Result<FileListing> {
+        // Both change which directories are partitions or files.
+        if let Some(name) = ["recursiveFileLookup", "basePath"]
+            .iter()
+            .find(|n| options.keys().any(|k| k.eq_ignore_ascii_case(n)))
+        {
+            return Err(unsupported(format!("the {name} read option")));
+        }
         // Spark checks the paths before the format.
-        let mut files = Vec::new();
+        let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
         for p in paths {
             let Some(text) = p.as_plain() else {
                 return Err(unsupported("paths with credentials".to_owned()));
@@ -408,9 +424,9 @@ impl FileReads {
             // (plans stay pure data): the read's `fs.*` options override
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
-            self.list_path(&at, &mut files).await?;
+            self.list_path(&at, &mut listed).await?;
         }
-        files.sort_by(|a, b| a.path.as_ref().cmp(b.path.as_ref()));
+        listed.sort_by(|a, b| a.0.path.as_ref().cmp(b.0.path.as_ref()));
         let format = match self.formats.get(format) {
             Ok(format) => format,
             Err(e) => {
@@ -426,11 +442,23 @@ impl FileReads {
             ));
         }
         let (options, _) = format.options().parse(options, &self.session)?;
+        let discovered: Vec<(String, Vec<Segment>)> = listed
+            .iter()
+            .map(|(f, segs)| (f.display_path(), segs.clone()))
+            .collect();
+        let files: Vec<FileRef> = listed.into_iter().map(|(f, _)| f).collect();
+        let partition_columns = partition_columns(&discovered, self.infers_partition_types())?;
         if let Some(schema) = known {
+            if !partition_columns.is_empty() {
+                return Err(unsupported(
+                    "reading the subdirectory of a table (partition discovery)".to_owned(),
+                ));
+            }
             return Ok(FileListing {
                 format,
                 files: files.into(),
                 schema,
+                partition_columns: partition_columns.into(),
                 options,
             });
         }
@@ -444,12 +472,23 @@ impl FileReads {
             .infer_schema(&self.io, &files, &options)
             .await
             .map_err(|e| e.into_error(&files[0].display_path()))?;
+        let schema = with_partition_columns(schema, &partition_columns)?;
         Ok(FileListing {
             format,
             files: files.into(),
             schema,
+            partition_columns: partition_columns.into(),
             options,
         })
+    }
+
+    /// Whether partition values are typed by inference:
+    /// `spark.sql.sources.partitionColumnTypeInference.enabled` (default
+    /// true).
+    fn infers_partition_types(&self) -> bool {
+        self.session
+            .get_unregistered("spark.sql.sources.partitionColumnTypeInference.enabled")
+            .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
     }
 
     /// Whether the read asks to merge the files' schemas: the
@@ -467,11 +506,16 @@ impl FileReads {
         })
     }
 
-    /// Adds the files `at` names to `out`.
-    async fn list_path(&self, at: &LocatedPath, out: &mut Vec<FileRef>) -> Result<()> {
+    /// Adds the files `at` names to `out`, each with the `name=value`
+    /// directories between `at` and the file.
+    async fn list_path(
+        &self,
+        at: &LocatedPath,
+        out: &mut Vec<(FileRef, Vec<Segment>)>,
+    ) -> Result<()> {
         if let Some(meta) = self.io.head(&at.store, &at.path).await? {
             if !at.path.filename().is_some_and(hidden) {
-                out.push(FileRef::from_meta(at.store.clone(), &meta));
+                out.push((FileRef::from_meta(at.store.clone(), &meta), Vec::new()));
             }
             return Ok(());
         }
@@ -487,17 +531,54 @@ impl FileReads {
             if below.iter().any(|p| hidden(p.as_ref())) {
                 continue;
             }
-            if let [dir, _, ..] = below.as_slice() {
-                return Err(unsupported(format!(
-                    "reading the subdirectory {}/{} (partition discovery)",
-                    at.display,
-                    dir.as_ref()
-                )));
+            let dirs = below.len().saturating_sub(1);
+            let mut segments = Vec::with_capacity(dirs);
+            for dir in &below[..dirs] {
+                let Some(segment) = parse_segment(dir.as_ref()) else {
+                    return Err(unsupported(format!(
+                        "reading the subdirectory {}/{} (it is not a name=value partition directory)",
+                        at.display,
+                        dir.as_ref()
+                    )));
+                };
+                segments.push(segment);
             }
-            out.push(FileRef::from_meta(at.store.clone(), &meta));
+            out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
         }
         Ok(())
     }
+}
+
+/// `schema` followed by `partitions`.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` when a partition column has the name of a
+/// data column.
+fn with_partition_columns(schema: SchemaRef, partitions: &[FieldRef]) -> Result<SchemaRef> {
+    if partitions.is_empty() {
+        return Ok(schema);
+    }
+    if let Some(p) = partitions.iter().find(|p| {
+        schema
+            .fields()
+            .iter()
+            .any(|f| f.name().eq_ignore_ascii_case(p.name()))
+    }) {
+        return Err(unsupported(format!(
+            "a partition column ({}) with the name of a data column",
+            p.name()
+        )));
+    }
+    let fields: Vec<FieldRef> = schema
+        .fields()
+        .iter()
+        .cloned()
+        .chain(partitions.iter().cloned())
+        .collect();
+    Ok(Arc::new(arrow_schema::Schema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    )))
 }
 
 impl FileSchemaResolver for FileReads {

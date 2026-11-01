@@ -73,9 +73,10 @@ pub use options::{
 pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
 
 pub use partition::{
-    DEFAULT_PARTITION, check_partition_column, escape_partition_value, partition_dir_name,
-    partition_segment, partition_segments, partition_texts, renders_as_string,
-    spark_partitioned_file_name,
+    DEFAULT_PARTITION, check_partition_column,
+    discover::{Segment, constant_column, file_values, parse_segment, partition_columns},
+    escape_partition_value, partition_dir_name, partition_segment, partition_segments,
+    partition_texts, renders_as_string, spark_partitioned_file_name,
 };
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,

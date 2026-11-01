@@ -109,9 +109,10 @@ impl Planner<'_> {
         }
         // The build side: right, else left (a right outer join is a left
         // outer join with the sides swapped).
-        let build_left = choice.build_left || kind == JoinKind::RightOuter;
+        let build_left =
+            (choice.build_left && kind != JoinKind::Single) || kind == JoinKind::RightOuter;
         let join_type = match kind {
-            JoinKind::LeftOuter | JoinKind::RightOuter => JoinType::LeftOuter,
+            JoinKind::LeftOuter | JoinKind::RightOuter | JoinKind::Single => JoinType::LeftOuter,
             JoinKind::FullOuter => JoinType::FullOuter,
             JoinKind::LeftSemi => JoinType::LeftSemi,
             JoinKind::LeftAnti if null_aware => JoinType::NullAwareAnti,
@@ -147,9 +148,9 @@ impl Planner<'_> {
             (&logical.0, &logical.1)
         };
         let build_rows = self.estimated_rows(build_plan);
-        // No logical join is a scalar subquery's single-match join yet
-        // (design P2-T115 unit 2); orientation already refuses to flip one.
-        let single_match = false;
+        // A `Single` join is a scalar subquery's single-match join;
+        // orientation refuses to flip one.
+        let single_match = kind == JoinKind::Single;
         // Which side the statistics say to build (design P2-T166): a semi,
         // anti or left outer join whose right input is much larger builds
         // its left input instead, as a right semi, right anti or right
@@ -377,6 +378,10 @@ impl Planner<'_> {
         kind: JoinKind,
         residual: &[&Expr],
     ) -> Result<Planned> {
+        // The nested loop has no at-most-one-row check.
+        if kind == JoinKind::Single {
+            return Err(unsupported("a scalar subquery join without equality keys"));
+        }
         // Every probe row meets every build row: the build is broadcast.
         let build = self.require(build, Distribution::Broadcast)?;
         let filter = residual_of(&probe, &build, residual);
@@ -564,6 +569,7 @@ fn default_size(t: &arrow_schema::DataType) -> u64 {
 fn kind_sql(kind: JoinKind) -> &'static str {
     match kind {
         JoinKind::LeftOuter => "LEFT OUTER",
+        JoinKind::Single => "SINGLE",
         JoinKind::RightOuter => "RIGHT OUTER",
         JoinKind::FullOuter => "FULL OUTER",
         JoinKind::LeftSemi => "LEFT SEMI",
