@@ -149,3 +149,15 @@ fn a_group_by_number_beyond_int_is_a_constant_key() {
     );
     assert_eq!(got, ["2147483648,2"]);
 }
+
+#[test]
+fn set_with_a_generator_keeps_the_target_name() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select '{\"a\":1}' as x |> set x = json_tuple(x, 'a') |> select x"
+        ),
+        ["1"]
+    );
+}

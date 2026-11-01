@@ -340,8 +340,13 @@ impl Resolver<'_> {
         // reports them. Stars expand the item list, so the alias is matched
         // by call name rather than by position (as the analyzer matches
         // `struct` and `named_struct` by name elsewhere).
+        // `|> SET x = json_tuple(..)` names the output by its target.
         let alias = exprs.iter().find_map(|e| match &e.node {
             ExprNode::Alias { name, expr } if is_json_tuple_call(expr) => Some(name.clone()),
+            ExprNode::Star(s) => s
+                .replace
+                .iter()
+                .find_map(|(name, expr)| is_json_tuple_call(expr).then(|| name.clone())),
             _ => None,
         });
         if let Some(name) = &alias
