@@ -40,6 +40,8 @@ impl Column {
         let node = if parts.last().is_some_and(|p| p == "*") {
             parts.pop();
             ExprNode::Star(Star {
+                replace: Vec::new(),
+                position: None,
                 qualifier: parts,
                 except: Vec::new(),
                 plan_id,
