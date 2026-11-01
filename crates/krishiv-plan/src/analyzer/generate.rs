@@ -463,6 +463,16 @@ impl Resolver<'_> {
                         b.expr.origin,
                     ));
                 }
+                if let ExprNode::Resolved(ResolvedExpr::Function(g)) = &inner.node
+                    && g.args.iter().any(super::ops::has_generator)
+                {
+                    return Err(AnalysisError::new(
+                        UnsupportedGeneratorNestedInExpressions {
+                            expression: format!("\"{}\"", pretty(inner, zone)),
+                        },
+                        b.expr.origin,
+                    ));
+                }
                 found = Some(i);
             } else if super::ops::has_generator(inner) {
                 return Err(AnalysisError::new(

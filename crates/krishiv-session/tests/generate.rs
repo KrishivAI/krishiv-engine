@@ -755,3 +755,37 @@ fn an_aliased_stack_beside_group_by_and_json_tuple_named_arguments() {
         ErrorClass::KrishivUnsupportedFeature
     );
 }
+
+#[test]
+fn order_by_a_grouping_column_the_generator_select_does_not_list() {
+    let s = Session::new().unwrap();
+    let v = "values (1, array(1, 2)), (2, array(3)) t(k, arr)";
+    // Spark adds the missing grouping column below the Generate.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) e from {v} group by k, arr order by k")
+        ),
+        table(&[&["1"], &["2"], &["3"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) e, k from {v} group by k, arr order by k")
+        ),
+        table(&[&["1", "1"], &["2", "1"], &["3", "2"]])
+    );
+}
+
+#[test]
+fn nested_generators_under_group_by_are_nested_in_expressions() {
+    let s = Session::new().unwrap();
+    let e = error_of(
+        &s,
+        "select explode(explode(arr)) e from values (1, array(array(1, 2))) t(k, arr) group by k, arr",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedGeneratorNestedInExpressions
+    );
+}
