@@ -469,10 +469,10 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
             }
         }
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
-            Cell::Str(krishiv_kernels::cast::format_time(
+            Cell::Time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()
                     .value(row),
-            ))
+            )
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
             Cell::Array(list_cells(col, row, element)?)
@@ -644,6 +644,12 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         }
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
+            Cell::Time(
+                col.as_primitive::<arrow_array::types::Time64NanosecondType>()
+                    .value(row),
+            )
         }
         (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
             col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
