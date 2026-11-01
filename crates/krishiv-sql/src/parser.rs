@@ -4946,7 +4946,7 @@ impl<'s> Parser<'s> {
     /// `name(.name)*` or a string.
     fn option_key(&mut self) -> PR<OptionKey> {
         let start = self.start();
-        if let Some(text) = self.string_lit() {
+        if let Some(text) = self.single_string() {
             let span = self.span_from(start);
             return Ok(OptionKey {
                 parts: vec![Ident {

@@ -1245,8 +1245,18 @@ impl Session {
         }
         let mut options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
-        let external = t.external || t.location.is_some();
-        let location = match &t.location {
+        // A `path` option is the table's location, as in Spark.
+        let path_key = options
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("path"))
+            .cloned();
+        let location_text = match (&t.location, path_key) {
+            (Some(l), _) => Some(l.clone()),
+            (None, Some(k)) => options.remove(&k),
+            (None, None) => None,
+        };
+        let external = t.external || location_text.is_some();
+        let location = match &location_text {
             Some(l) if l.is_empty() => {
                 return Err(krishiv_common::error::InvalidEmptyLocation {
                     location: l.clone(),
@@ -1428,8 +1438,12 @@ impl Session {
         let location = table.location.clone();
         self.authorize_path(&location, &[Privilege::Create], StatementClass::Ddl)
             .await?;
-        std::fs::create_dir_all(&location)
-            .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        // Spark creates the directory of a managed table only; an external table's location is
+        // made by its first write.
+        if table.managed {
+            std::fs::create_dir_all(&location)
+                .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        }
         // Tables are never replaced, so nothing comes back from the store to clean up.
         self.state.catalog.store.create_table(table, mode)?;
         Ok(())

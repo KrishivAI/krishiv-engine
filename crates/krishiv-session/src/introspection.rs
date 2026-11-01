@@ -1129,6 +1129,15 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         if let Some(c) = &t.comment {
             out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
         }
+        if !t.properties.is_empty() {
+            let props = t
+                .properties
+                .iter()
+                .map(|(k, v)| format!("  {} = {}", sql_literal(k), sql_literal(redact(k, v))))
+                .collect::<Vec<_>>()
+                .join(",\n");
+            out.push_str(&format!("TBLPROPERTIES (\n{props})\n"));
+        }
         if let Some(mode) = crate::view_schema::effective_mode(view.schema_mode, binding_enabled) {
             out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
         }

@@ -867,6 +867,21 @@ impl Parser<'_> {
         out
     }
 
+    /// One string token, unescaped (a property key is a single `stringLit` token, so `'path' '/x'`
+    /// is the key `path` and the value `/x`).
+    pub(super) fn single_string(&mut self) -> Option<String> {
+        if !self.single_string_at(0) {
+            return None;
+        }
+        let s = unescape_string(
+            self.text(0),
+            !self.opts.escaped_string_literals,
+            self.opts.consecutive_string_literals,
+        );
+        self.bump();
+        Some(s)
+    }
+
     /// One string token (`singleStringLitWithoutMarker`) at offset `n`.
     pub(super) fn single_string_at(&self, n: usize) -> bool {
         match self.kind(n) {
