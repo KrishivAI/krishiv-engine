@@ -109,10 +109,12 @@ pub(crate) fn is_hidden_name(name: &str) -> bool {
 /// What every [`global_key`] starts with.
 const GLOBAL_PREFIX: &str = "\u{1}global_temp\u{1}";
 
-/// Whether `name` is spelled like a [`global_key`]: no user-written name may be, or a local view
-/// could overwrite, read or drop a global one without the global view's checks.
+/// Whether `name` is spelled like a [`global_key`], in any letter case (catalog keys are
+/// lower-cased): no user-written name may be, or a local view could overwrite, read or drop a
+/// global one without the global view's checks.
 pub(crate) fn is_global_key(name: &str) -> bool {
-    name.starts_with(GLOBAL_PREFIX)
+    name.get(..GLOBAL_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(GLOBAL_PREFIX))
 }
 
 /// Whether a user may not name a local view `name`: a snapshot pin, a cache entry or a global key.

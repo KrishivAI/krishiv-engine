@@ -354,6 +354,19 @@ fn a_local_view_cannot_be_spelled_like_a_global_one() {
         class(&s, &format!("SELECT * FROM {internal}")),
         "TABLE_OR_VIEW_NOT_FOUND"
     );
+    // The same spelling in capitals is refused too: catalog keys are lower-cased.
+    let upper = "`\u{1}GLOBAL_TEMP\u{1}v`";
+    assert_eq!(
+        class(
+            &s,
+            &format!("CREATE OR REPLACE TEMP VIEW {upper} AS SELECT 2 AS x")
+        ),
+        "KRISHIV_RESERVED_TEMP_VIEW_NAME"
+    );
+    assert_eq!(
+        class(&s, &format!("DROP VIEW {upper}")),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
     assert_eq!(
         rows(&s, "SELECT x FROM global_temp.v"),
         vec![vec!["1".to_owned()]]
