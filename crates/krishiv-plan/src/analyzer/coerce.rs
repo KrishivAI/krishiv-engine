@@ -108,6 +108,10 @@ pub(super) enum Mismatch {
         /// The day count's type.
         ty: Option<DataType>,
     },
+    /// `date + 'text'` / `'text' + date`: Spark reads it as `date_add(a, b)`
+    /// and finds the second argument is not an integral day count (a string
+    /// operand has been read as a DATE).
+    DateAddText,
     /// `DATA_DIFF_TYPES`: the argument types; whether Spark lists them as
     /// `["A", "B"]` (else `("A" or "B")`).
     DataDiff(Vec<Option<DataType>>, bool),
@@ -786,6 +790,24 @@ fn integral_divide(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Result<Typed, Mismat
     }
 }
 
+/// What Spark says of `+` between a date or timestamp and a string: a string
+/// operand is read as a number, which a timestamp does not add; a date reads it
+/// as a day count.
+fn datetime_text_sum(a: &Arg<'_>, b: &Arg<'_>) -> Option<Mismatch> {
+    use DataType as T;
+    let text = |t: Option<&DataType>| matches!(t, Some(T::String));
+    let other = match (a.ty, b.ty) {
+        (t, Some(d)) if text(t) => d,
+        (Some(d), t) if text(t) => d,
+        _ => return None,
+    };
+    match other {
+        T::Date => Some(Mismatch::DateAddText),
+        T::Timestamp | T::TimestampNtz => Some(Mismatch::WrongType(Some(other.clone()), ADDITIVE)),
+        _ => None,
+    }
+}
+
 /// What Spark says of `+` / `-` between a date or timestamp and a DECIMAL
 /// (`DateTimeOperations` only takes integral days and intervals).
 fn datetime_decimal(op: Builtin, a: &Arg<'_>, b: &Arg<'_>) -> Option<Mismatch> {
@@ -836,7 +858,13 @@ fn arithmetic(
         _ => NUMERIC,
     };
     if matches!(op, Builtin::Add | Builtin::Subtract) && (is_datetime(a.ty) || is_datetime(b.ty)) {
-        return Err(datetime_decimal(op, a, b)
+        let text = if op == Builtin::Add {
+            datetime_text_sum(a, b)
+        } else {
+            None
+        };
+        return Err(text
+            .or_else(|| datetime_decimal(op, a, b))
             .unwrap_or(Mismatch::Unsupported("date and timestamp arithmetic")));
     }
     legacy_strings(&[*a, *b], ansi)?;
@@ -1731,6 +1759,25 @@ mod tests {
             })
         ));
         assert!(shapes(Builtin::Add, &T::Date, &T::Integer).is_none());
+    }
+
+    /// `+` between a string and a date or timestamp: a timestamp rejects the
+    /// number the string is read as, a date reads it as `date_add`'s days.
+    #[test]
+    fn datetime_and_string_sums() {
+        let text = T::String;
+        let sum = |l: &T, r: &T| datetime_text_sum(&arg(Some(l)), &arg(Some(r)));
+        for ts in [T::Timestamp, T::TimestampNtz] {
+            assert_eq!(
+                sum(&text, &ts),
+                Some(Mismatch::WrongType(Some(ts.clone()), ADDITIVE))
+            );
+            assert!(sum(&ts, &text).is_some());
+        }
+        assert_eq!(sum(&T::Date, &text), Some(Mismatch::DateAddText));
+        assert_eq!(sum(&text, &T::Date), Some(Mismatch::DateAddText));
+        assert!(sum(&T::Date, &T::Integer).is_none());
+        assert!(sum(&text, &T::Integer).is_none());
     }
 
     /// Struct comparisons are NULL only when a whole struct operand is NULL:
