@@ -21,6 +21,7 @@ allow = [
     "Unicode-3.0",
     "MPL-2.0",
     "0BSD",
+    "bzip2-1.0.6", # libbz2-rs-sys (pure-Rust bzip2 for .bz2 text files); BSD-style
 ]
 # CC0-1.0 is deliberately absent: it carries no patent grant, so it is allowed only for
 # Python dependencies (dependency-review in security.yml), not Rust crates in the binary.

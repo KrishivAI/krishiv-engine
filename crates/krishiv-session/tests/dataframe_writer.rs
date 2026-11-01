@@ -531,7 +531,42 @@ fn csv_save_modes_append_overwrite_error_ignore() {
 }
 
 #[test]
-fn csv_compression_codec_fails_with_unsupported_feature() {
+fn csv_compression_codecs_write_suffixed_files_that_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let plain = out(&dir, "plain");
+    block_on(s.table("people").write().format("csv").save(&plain)).unwrap();
+    let want = csv_rows(&s, &plain, &[]);
+    for (codec, suffix) in [
+        ("gzip", ".csv.gz"),
+        ("bzip2", ".csv.bz2"),
+        ("lz4", ".csv.lz4"),
+        ("snappy", ".csv.snappy"),
+        ("deflate", ".csv.deflate"),
+    ] {
+        let path = out(&dir, codec);
+        block_on(
+            s.table("people")
+                .write()
+                .format("csv")
+                .option("compression", codec)
+                .save(&path),
+        )
+        .unwrap();
+        let names: Vec<String> = std::fs::read_dir(&path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with(suffix)),
+            "{codec}: {names:?}"
+        );
+        assert_eq!(csv_rows(&s, &path, &[]), want, "{codec}");
+    }
+}
+
+#[test]
+fn csv_unknown_compression_codec_fails_with_codec_not_available() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();
     let path = out(&dir, "t");
@@ -539,12 +574,14 @@ fn csv_compression_codec_fails_with_unsupported_feature() {
         s.table("people")
             .write()
             .format("csv")
-            .option("compression", "gzip")
+            .option("compression", "zstd")
             .save(&path),
     )
     .unwrap_err();
-    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    assert!(err.to_string().contains("compression codec gzip"), "{err}");
+    assert_eq!(
+        err.error_class().name(),
+        "CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION"
+    );
     assert!(!dir.path().join("t").exists());
 }
 

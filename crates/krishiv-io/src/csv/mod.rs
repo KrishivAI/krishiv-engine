@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Spark's CSV format: [`CsvFormat`], a line-oriented tokenizer and decoder
 //! with Spark's options, schema inference with Spark's `samplingRatio`
-//! semantics, and an encoder with Spark's quoting rules. Compressed files
-//! are `KRISHIV_UNSUPPORTED_FEATURE` for now.
+//! semantics, and an encoder with Spark's quoting rules. Files in the Hadoop codecs
+//! (`.gz`, `.deflate`, `.bz2`, `.lz4`, `.snappy`) read and write as in Spark (`text/codec.rs`).
 //!
 //! The tokenizer reproduces Univocity's handling of quotes, escapes,
 //! `charToEscapeQuoteEscaping`, white space and unescaped quotes; the
@@ -70,8 +70,8 @@ impl FileFormat for CsvFormat {
         c
     }
 
-    fn file_suffix(&self, _o: &FormatOptions) -> String {
-        ".csv".to_owned()
+    fn file_suffix(&self, o: &FormatOptions) -> String {
+        crate::text::output_suffix(".csv", o)
     }
 
     fn infer_schema<'a>(
@@ -130,7 +130,9 @@ impl FileFormat for CsvFormat {
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
         Box::pin(std::future::ready(
-            encode::CsvEncoder::new(&schema, o).map(|e| Box::new(e) as Box<dyn Encoder>),
+            encode::CsvEncoder::new(&schema, o)
+                .map(|e| Box::new(e) as Box<dyn Encoder>)
+                .and_then(|e| crate::text::compress_output(e, o)),
         ))
     }
 

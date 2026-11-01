@@ -154,13 +154,15 @@ fn readers_ask_for_chunks_and_refuse_misplaced_bytes() {
 }
 
 #[test]
-fn compressed_files_and_codecs_are_refused() {
+fn only_zstd_files_are_refused() {
     use krishiv_common::error::ErrorClass::KrishivUnsupportedFeature;
-    for path in ["a.gz", "a.deflate", "a.bz2", "a.lz4", "a.snappy", "a.zst"] {
+    for path in ["a.zst", "a.zstd"] {
         let e = super::check_plain(path).expect_err(path);
         assert_eq!(e.error_class(), KrishivUnsupportedFeature, "{path}");
     }
-    assert!(super::check_plain("a.csv").is_ok());
+    for path in ["a.csv", "a.gz", "a.deflate", "a.bz2", "a.lz4", "a.snappy"] {
+        assert!(super::check_plain(path).is_ok(), "{path}");
+    }
 }
 
 #[test]

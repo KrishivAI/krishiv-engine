@@ -63,6 +63,7 @@ fn read_split(
 ) -> Result<Vec<RecordBatch>, KrishivError> {
     let m: Arc<dyn FileMetadata> = Arc::new(TextMetadata {
         size: bytes.len() as u64,
+        codec: None,
     });
     let units = TextFormat
         .plan_units(m.as_ref(), &split, req)
@@ -346,18 +347,14 @@ fn write_checks_and_nulls() {
         let schema = Arc::new(Schema::new(vec![Field::new("value", dt, true)]));
         assert!(TextFormat.check_write(&schema, &o).is_ok());
     }
-    // Compression needs codecs this build lacks; compressed reads are refused.
-    for name in ["gzip", "snappy", "zstd"] {
-        let w = options(&serde_json::json!({"compression": name}));
-        let e = TextFormat
-            .check_write(&value_schema(), &w)
-            .expect_err("codec");
-        assert!(
-            matches!(&e, crate::error::FormatError::Other(e) if e.error_class() == Unsupported),
-            "{name}"
-        );
-    }
-    let e = infer_named(b"a\n", "a.txt.gz", &o).expect_err("compressed");
+    // Spark has no zstd text codec; the others are covered in `text::format_codec_tests`.
+    let w = options(&serde_json::json!({"compression": "zstd"}));
+    let e = TextFormat
+        .check_write(&value_schema(), &w)
+        .expect_err("codec");
+    assert!(matches!(&e, crate::error::FormatError::Other(e)
+        if e.error_class() == krishiv_common::error::ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion));
+    let e = infer_named(b"a\n", "a.txt.zst", &o).expect_err("zst");
     assert_eq!(e.error_class(), Unsupported);
 }
 

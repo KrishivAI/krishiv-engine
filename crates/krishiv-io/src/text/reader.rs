@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use bytes::Bytes;
 
+use super::codec::{Codec, Decompressor};
 use super::{CHUNK_BYTES, LineSep};
 use crate::error::{FormatError, FormatResult, internal};
 use crate::io::ByteRange;
@@ -32,6 +33,8 @@ struct Feed {
     buf_pos: u64,
     /// Index in `buf` of the next unread byte.
     cursor: usize,
+    /// Decompresses pushed bytes (then `size` and `fetched` count compressed bytes).
+    dec: Option<Decompressor>,
 }
 
 impl Feed {
@@ -42,6 +45,7 @@ impl Feed {
             buf: Vec::new(),
             buf_pos: start,
             cursor: 0,
+            dec: None,
         }
     }
 
@@ -73,7 +77,15 @@ impl Feed {
         self.buf.drain(..self.cursor);
         self.buf_pos += self.cursor as u64;
         self.cursor = 0;
-        self.buf.extend_from_slice(bytes);
+        match self.dec.as_mut() {
+            Some(d) => {
+                d.push(bytes, &mut self.buf)?;
+                if range.end >= self.size {
+                    d.finish(&mut self.buf)?;
+                }
+            }
+            None => self.buf.extend_from_slice(bytes),
+        }
         self.fetched = range.end;
         Ok(())
     }
@@ -139,6 +151,17 @@ impl LineReader {
             skip_to: (start != 0).then_some(start),
             finished,
         }
+    }
+
+    /// Reads a file of `codec` (if any): the whole file, decompressed, by the
+    /// split at byte 0.
+    #[must_use]
+    pub(crate) fn compressed(mut self, codec: Option<Codec>) -> Self {
+        if let Some(c) = codec {
+            self.feed.dec = Some(Decompressor::new(c));
+            self.end = u64::MAX;
+        }
+        self
     }
 
     /// The next line, or the bytes needed to find it.
@@ -219,6 +242,15 @@ impl WholeReader {
             feed: Feed::new(size, 0),
             taken: split.start != 0,
         }
+    }
+
+    /// Reads a file of `codec` (if any), decompressing it.
+    #[must_use]
+    pub(crate) fn compressed(mut self, codec: Option<Codec>) -> Self {
+        if let Some(c) = codec {
+            self.feed.dec = Some(Decompressor::new(c));
+        }
+        self
     }
 
     /// The next range to push, `None` once the file is read.

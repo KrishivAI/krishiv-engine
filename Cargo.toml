@@ -123,6 +123,11 @@ futures = { version = "0.3.34", default-features = false }
 roaring = { version = "0.11", default-features = false }
 smallvec = { version = "1.16", default-features = false }
 lz4_flex = { version = "0.14", default-features = false }
+# Hadoop text codecs of the CSV, JSON and text sources (T081a). flate2 and snap are
+# already built for parquet; bzip2 default feature = pure-Rust libbz2-rs-sys (no C; do not enable bzip2-sys).
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+snap = { version = "1", default-features = false }
+bzip2 = { version = "0.6", default-features = true }
 zstd = { version = "0.14", default-features = false }
 regex = { version = "1.13", default-features = false }
 regex-automata = { version = "0.4", default-features = false }

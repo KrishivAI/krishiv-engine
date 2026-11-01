@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use crate::error::Result;
 use crate::options::{FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec};
-use crate::text::{Charset, LineSep, check_write_codec, invalid_option};
+use crate::text::{Charset, LineSep, invalid_option, write_codec};
 use krishiv_kernels::csv::{Eol, Unescaped};
 pub(crate) use krishiv_kernels::csv::{ParseMode as Mode, Syntax};
 
@@ -122,7 +122,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         unescaped_spec();
         flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails.");
         conf("columnPruning", OptionKind::Bool, OptionDefault::Bool(true), "spark.sql.csv.parser.columnPruning.enabled", "Parse only the requested columns.");
-        string("compression", "Write codec: only none and uncompressed so far.");
+        string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
         string("locale", "The locale of numbers (only en-US).");
         conf("inferenceMaxPartitionBytes", OptionKind::String, NONE, "spark.sql.files.maxPartitionBytes", "Sampling: the split planning conf.");
@@ -249,7 +249,7 @@ impl CsvOptions {
     /// for a value that cannot be honoured.
     pub(crate) fn new(o: &FormatOptions, writing: bool) -> Result<Self> {
         if writing {
-            check_write_codec(o)?;
+            write_codec(o)?;
         }
         let charset = Charset::parse(o.str("encoding").or_else(|| o.str("charset")))?;
         if let Some(l) = o.str("locale")
