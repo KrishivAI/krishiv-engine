@@ -164,6 +164,14 @@ fn csv_tables_write_a_header_line_only_when_asked() {
     run(&s, "CREATE TABLE liked LIKE plain");
     run(&s, "INSERT INTO liked VALUES (3, 4)");
     assert_eq!(part_text(&wh.join("liked")), "3,4\n");
+    // LIKE copies the options, as Spark 4.2.0 does.
+    run(
+        &s,
+        "CREATE TABLE src (a INT, b INT) USING csv OPTIONS (header 'true', sep ';')",
+    );
+    run(&s, "CREATE TABLE liked_options LIKE src");
+    run(&s, "INSERT INTO liked_options VALUES (1, 2)");
+    assert_eq!(part_text(&wh.join("liked_options")), "a;b\n1;2\n");
 }
 
 #[test]

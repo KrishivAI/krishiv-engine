@@ -1483,8 +1483,10 @@ impl Session {
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
         let source = self.table_name(&t.source, &env)?;
-        // Spark's `CreateTableLikeCommand` copies the partition columns and the bucket specification.
+        // Spark's `CreateTableLikeCommand` copies the partition columns, the bucket specification and the
+        // storage options, under any provider.
         let mut layout = TableLayout::default();
+        let mut options = BTreeMap::new();
         let (columns, source_provider) = if let Some(s) = self
             .state
             .catalog
@@ -1495,6 +1497,7 @@ impl Session {
                 .partition_columns
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
+            options.clone_from(&s.options);
             (s.columns.clone(), s.provider.clone())
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
@@ -1545,7 +1548,7 @@ impl Session {
             provider,
             location,
             columns,
-            options: BTreeMap::new(),
+            options,
             properties: options_of(&t.tblproperties, original),
             comment: None,
             created_ms: now_ms(),

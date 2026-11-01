@@ -158,6 +158,19 @@ fn show_create_table() {
         rows(&s, "SHOW CREATE TABLE h")[0][0],
         "CREATE TABLE spark_catalog.default.h (\n  a INT)\nUSING csv\nOPTIONS (\n  'header' = 'true')\n"
     );
+    assert!(
+        rows(&s, "DESCRIBE EXTENDED h")
+            .iter()
+            .any(|r| r[0] == "Storage Properties" && r[1] == "[header=true]")
+    );
+    run(
+        &s,
+        "CREATE TABLE f (a INT) USING csv OPTIONS (header 'false')",
+    );
+    assert_eq!(
+        rows(&s, "SHOW CREATE TABLE f")[0][0],
+        "CREATE TABLE spark_catalog.default.f (\n  a INT)\nUSING csv\nOPTIONS (\n  'header' = 'false')\n"
+    );
     run(&s, "CREATE TABLE p (a INT) USING csv");
     assert_eq!(
         rows(&s, "SHOW CREATE TABLE p")[0][0],
