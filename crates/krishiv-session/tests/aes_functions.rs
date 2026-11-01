@@ -244,6 +244,8 @@ fn the_key_never_reaches_an_error_message() {
         "SELECT aes_encrypt('Spark', 'secretkey-123456', 'XYZ')",
         "SELECT aes_encrypt(1, 'secretkey-123456')",
         "SELECT aes_decrypt(unhex('00'), 'secretkey-123456', 'GCM')",
+        "SELECT AES_ENCRYPT(1, 'secretkey-123456')",
+        "SELECT Try_Aes_Decrypt(1, 'secretkey-123456')",
     ] {
         let err = one(&s, sql).expect_err(sql);
         assert!(
@@ -251,4 +253,21 @@ fn the_key_never_reaches_an_error_message() {
             "{sql}: {err}"
         );
     }
+}
+
+#[test]
+fn datepart_reads_the_time_precision_like_date_part() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let a = one(
+        &s,
+        "SELECT CAST(datepart('SECOND', CAST('09:08:01.987654' AS TIME(1))) AS STRING)",
+    )
+    .unwrap();
+    let b = one(
+        &s,
+        "SELECT CAST(date_part('SECOND', CAST('09:08:01.987654' AS TIME(1))) AS STRING)",
+    )
+    .unwrap();
+    assert_eq!(a, b);
 }

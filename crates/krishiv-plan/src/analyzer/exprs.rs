@@ -2270,7 +2270,7 @@ impl Resolver<'_> {
                 // of them, and Arrow's `Time64` does not carry `p`): the
                 // precision follows as a trailing literal.
                 if is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "extract" | "date_part")
+                    && matches!(entry.id.name(), "extract" | "date_part" | "datepart")
                     && n == 2
                     && let Some(DataType::Time { precision }) = &call_kids[1].ty.data_type
                     && *precision < 6
@@ -6884,7 +6884,7 @@ fn call(
 ) -> String {
     // The key of `aes_encrypt`/`aes_decrypt` never reaches a name, an error
     // message or a log (ADR 0042).
-    if matches!(name, "aes_encrypt" | "aes_decrypt" | "try_aes_decrypt") && k.len() >= 2 {
+    if super::is_aes_function(name) && k.len() >= 2 {
         let mut shown: Vec<&str> = k.to_vec();
         shown[1] = "***";
         return format!("{name}({})", shown.join(", "));

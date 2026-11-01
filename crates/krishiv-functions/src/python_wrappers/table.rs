@@ -509,15 +509,18 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "aes_encrypt",
             "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, iv: ColumnOrName = None, aad: ColumnOrName = None",
-        ),
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT"), ("iv", "")]),
         Row::new(
             "aes_decrypt",
             "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
-        ),
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT")]),
         Row::new(
             "try_aes_decrypt",
             "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
-        ),
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT")]),
     ]);
     rows.extend([
         Row::new(
@@ -659,6 +662,8 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("sha2", "col: ColumnOrName, numBits: int")
             .one_of("numBits", &[0, 224, 256, 384, 512]),
         Row::new("startswith", "str: ColumnOrName, prefix: ColumnOrName"),
+    ]);
+    rows.extend([
         Row::new(
             "schema_of_json",
             "json: Column | str, options: dict[str, str] = None",

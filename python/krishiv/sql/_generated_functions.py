@@ -403,13 +403,18 @@ def aes_decrypt(
     aad: ColumnOrName | None = None,
 ) -> Column:
     """Calls the registry function ``aes_decrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),)
+        if padding is None and (aad is not None)
+        else _opt(_named, padding, "padding")
+    )
     return _call(
-        "aes_decrypt",
-        _named(input, "input"),
-        _named(key, "key"),
-        *_opt(_named, mode, "mode"),
-        *_opt(_named, padding, "padding"),
-        *_opt(_named, aad, "aad"),
+        "aes_decrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_opt(_named, aad, "aad")
     )
 
 
@@ -422,14 +427,23 @@ def aes_encrypt(
     aad: ColumnOrName | None = None,
 ) -> Column:
     """Calls the registry function ``aes_encrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or iv is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),)
+        if padding is None and (iv is not None or aad is not None)
+        else _opt(_named, padding, "padding")
+    )
+    _iv = (
+        (_lit("", "iv"),)
+        if iv is None and (aad is not None)
+        else _opt(_named, iv, "iv")
+    )
     return _call(
-        "aes_encrypt",
-        _named(input, "input"),
-        _named(key, "key"),
-        *_opt(_named, mode, "mode"),
-        *_opt(_named, padding, "padding"),
-        *_opt(_named, iv, "iv"),
-        *_opt(_named, aad, "aad"),
+        "aes_encrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_iv, *_opt(_named, aad, "aad")
     )
 
 
@@ -2013,13 +2027,18 @@ def try_aes_decrypt(
     aad: ColumnOrName | None = None,
 ) -> Column:
     """Calls the registry function ``try_aes_decrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),)
+        if padding is None and (aad is not None)
+        else _opt(_named, padding, "padding")
+    )
     return _call(
-        "try_aes_decrypt",
-        _named(input, "input"),
-        _named(key, "key"),
-        *_opt(_named, mode, "mode"),
-        *_opt(_named, padding, "padding"),
-        *_opt(_named, aad, "aad"),
+        "try_aes_decrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_opt(_named, aad, "aad")
     )
 
 
