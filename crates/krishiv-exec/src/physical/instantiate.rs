@@ -35,7 +35,7 @@
 //! scans read the cells it hands out, and producers publish their partials
 //! to it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -499,7 +499,25 @@ impl Instantiation<'_> {
     /// ones.
     fn build_shared(&mut self) -> Result<()> {
         let plans = Arc::clone(&self.shared_plans);
+        // A shared plan that reads a loop's table (or a shared plan that
+        // does) can only be built where that table is bound: in a round of
+        // the loop. Elsewhere it is left out; nothing reads it there.
+        let mut deferred = HashSet::new();
         for sp in plans.iter() {
+            let mut stack = vec![&sp.plan];
+            let mut unbound = false;
+            while let Some(n) = stack.pop() {
+                match n {
+                    PhysNode::LoopRef { id, .. } => unbound |= !self.loops.contains_key(id),
+                    PhysNode::SharedRead { id, .. } => unbound |= deferred.contains(id),
+                    _ => {}
+                }
+                stack.extend(n.children());
+            }
+            if unbound {
+                deferred.insert(sp.id);
+                continue;
+            }
             let body = self.node(&sp.plan)?;
             let producer = Arc::new(SharedProducer {
                 sink: SharedSink::new(Arc::clone(&body.schema), self.spill.clone()),

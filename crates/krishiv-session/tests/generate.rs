@@ -755,3 +755,17 @@ fn an_aliased_stack_beside_group_by_and_json_tuple_named_arguments() {
         ErrorClass::KrishivUnsupportedFeature
     );
 }
+
+#[test]
+fn order_by_an_aggregate_over_a_generator_below_it() {
+    let s = Session::new().unwrap();
+    // The generator feeds the aggregate; nothing sits between sort and aggregate.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT k, sum(k + 1.0) FROM (SELECT explode(array(1, 2)) AS k) t GROUP BY k ORDER BY sum(k + 1.0)"
+        )
+        .len(),
+        2
+    );
+}

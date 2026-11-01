@@ -264,10 +264,16 @@ impl UnionLoopSource {
             .into());
         }
         if wanted.is_some_and(|w| st.rows >= w) {
-            // The rows past the limit are never read: stop, dropping the run.
+            // The rows past the limit are never read: stop the run, and wait
+            // for its query to finish, so nothing it holds outlives the
+            // outer query (dropping the stream only requests cancellation).
             st.done = true;
-            st.run = None;
             st.next = None;
+            if let Some(run) = st.run.take() {
+                run.child.cancel();
+                drop(run.stream);
+                run.child.finished().await;
+            }
             return Ok(Some(batch));
         }
         if let Some(round) = st.next.as_mut() {

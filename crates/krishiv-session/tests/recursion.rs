@@ -612,3 +612,13 @@ fn a_stored_view_keeps_the_case_sensitive_cte_names_it_was_created_with() {
     }
     assert_eq!(rows(&s, "SELECT * FROM v_case"), vec![vec!["1".to_owned()]]);
 }
+
+#[test]
+fn a_nondeterministic_cte_read_twice_inside_the_recursive_term_runs() {
+    let s = Session::new().unwrap();
+    // `b` is shared by its two reads and reads the recursive reference.
+    let q = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+             (WITH b AS (SELECT n + 1 AS m, rand() AS x FROM r WHERE n < 3) \
+              SELECT a.m FROM b a JOIN b c ON a.x = c.x)) SELECT * FROM r";
+    assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
+}
