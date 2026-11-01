@@ -41,6 +41,8 @@ pub enum TypedLiteralKind {
     TimestampNtz,
     /// `TIMESTAMP_LTZ '...'`.
     TimestampLtz,
+    /// `TIME '...'`.
+    Time,
 }
 
 /// The expression node kinds.

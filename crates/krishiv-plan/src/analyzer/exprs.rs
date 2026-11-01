@@ -607,6 +607,8 @@ fn typed_literal(
         TypedLiteralKind::Timestamp => "TIMESTAMP",
         TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
         TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+        // A time literal is resolved by the caller, as a cast.
+        TypedLiteralKind::Time => return Err(unsupported("a TIME literal here")),
     };
     // Clock-dependent spellings evaluate with the query clock, which the
     // analyzer has not got.
@@ -669,6 +671,7 @@ fn typed_literal(
         }
     };
     match kind {
+        TypedLiteralKind::Time => Err(unsupported("a TIME literal here")),
         TypedLiteralKind::Date => {
             use arrow_array::cast::AsArray as _;
             use arrow_array::types::Date32Type;
@@ -1453,6 +1456,45 @@ impl Resolver<'_> {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
             }),
+            ExprNode::TypedLiteral {
+                kind: TypedLiteralKind::Time,
+                value,
+            } => {
+                if !self.ctx.conf.time_type {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::UnsupportedTimeType {},
+                        e.origin,
+                    ));
+                }
+                // A time is a string cast to `TIME(6)` (design P2-T181): the
+                // value is checked again here, in case the plan came from a
+                // front end other than the SQL parser.
+                let Some(nanos) = krishiv_kernels::cast::parse_time(value) else {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::InvalidTypedLiteral {
+                            value: format!("'{value}'"),
+                            value_type: "\"TIME\"".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                };
+                let text = krishiv_kernels::cast::format_time(nanos);
+                let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
+                let cast = Expr::new(ExprNode::Cast {
+                    expr: text,
+                    to: DataType::Time { precision: 6 },
+                    mode: CastMode::Ansi,
+                })
+                .with_origin(e.origin);
+                Bound {
+                    expr: Arc::new(cast),
+                    shown: Some(Arc::clone(e)),
+                    ..keep(ArgType {
+                        nullable: false,
+                        data_type: Some(DataType::Time { precision: 6 }),
+                    })
+                }
+            }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
                 let ty = ArgType {
@@ -1636,6 +1678,58 @@ impl Resolver<'_> {
                 }
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
+                }
+                // `to_char(datetime, fmt)` and `to_varchar` are `date_format` to
+                // Spark (`ToCharacterBuilder`), which names them so; a number or
+                // a binary keeps `to_char`.
+                if !session_qualified
+                    && n == 2
+                    && !window_fn
+                    && (lookup_name.eq_ignore_ascii_case("to_char")
+                        || lookup_name.eq_ignore_ascii_case("to_varchar"))
+                    && matches!(
+                        kids[0].ty.data_type,
+                        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+                    )
+                {
+                    // Spark builds `date_format` first, so its clauses are
+                    // refused under that name.
+                    let syntax = if f.distinct {
+                        Some("DISTINCT")
+                    } else if f.filter.is_some() {
+                        Some("FILTER CLAUSE")
+                    } else if !f.within_group.is_empty() {
+                        Some("WITHIN GROUP (ORDER BY ...)")
+                    } else {
+                        None
+                    };
+                    if let Some(syntax) = syntax {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: "`date_format`".to_owned(),
+                                syntax: syntax.to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    let call = Expr::function(
+                        "date_format",
+                        vec![Expr::clone(&kids[0].expr), Expr::clone(&kids[1].expr)],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            "date_format",
+                            vec![kids[0].shown(), kids[1].shown()]
+                                .into_iter()
+                                .map(|k| Expr::clone(&k))
+                                .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
                 }
                 // `date + int`, `int + date` and `date - int` are `date_add`
                 // and `date_sub` to Spark, which names them so.
@@ -2301,7 +2395,8 @@ impl Resolver<'_> {
                 // Spark's parser rejects the `TIME` type before any cast
                 // is checked (`spark.sql.timeType.enabled` is false by
                 // default; TIME cannot be evaluated here either way).
-                if to.any_type(&|t| matches!(t, DataType::Time { .. })) {
+                if !self.ctx.conf.time_type && to.any_type(&|t| matches!(t, DataType::Time { .. }))
+                {
                     return Err(AnalysisError::new(
                         krishiv_common::error::UnsupportedTimeType {},
                         e.origin,
@@ -2925,6 +3020,7 @@ impl Resolver<'_> {
                 | DataType::Long
                 | DataType::Decimal(_)
                 | DataType::Date
+                | DataType::Time { .. }
                 | DataType::TimestampNtz
                 | DataType::Boolean
                 | DataType::Binary
@@ -6336,7 +6432,14 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
                 TypedLiteralKind::Timestamp => "TIMESTAMP",
                 TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
                 TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+                TypedLiteralKind::Time => "TIME",
             };
+            // Spark names a time by its value, not by the text written.
+            if *kind == TypedLiteralKind::Time
+                && let Some(n) = krishiv_kernels::cast::parse_time(value)
+            {
+                return format!("{keyword} '{}'", krishiv_kernels::cast::format_time(n));
+            }
             format!("{keyword} '{value}'")
         }
         // Spark's pretty SQL shows a cast to an array, map or struct type as
