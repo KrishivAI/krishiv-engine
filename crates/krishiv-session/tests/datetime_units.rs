@@ -501,3 +501,29 @@ fn legacy_identifier_call_with_a_modifier_is_not_a_column() {
     });
     assert!(r.is_err(), "{r:?}");
 }
+
+/// The legacy `IDENTIFIER(expr)` also names a table in `FROM` and `INSERT INTO`; a column list
+/// keeps the parser's error, and a unit of `TIMESTAMPADD` stays a keyword.
+#[test]
+fn legacy_identifier_function_names_a_table() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    block_on(s.sql("CREATE TEMPORARY VIEW IDENTIFIER('lv') AS SELECT 7 AS a")).unwrap();
+    let rows = block_on(async {
+        s.sql("SELECT * FROM IDENTIFIER('l' || 'v')")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(rows.is_ok(), "{rows:?}");
+    let refused = block_on(async {
+        s.sql("CREATE TABLE lt(IDENTIFIER('c1') INT) USING CSV")
+            .await
+    });
+    assert!(refused.is_err());
+    let routine = block_on(async {
+        s.sql("SELECT TIMESTAMPADD(IDENTIFIER('YEAR'), 1, DATE'2024-01-15')")
+            .await
+    });
+    assert!(routine.is_err());
+}

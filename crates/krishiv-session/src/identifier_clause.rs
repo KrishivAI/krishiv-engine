@@ -41,8 +41,11 @@ impl Session {
         sql: &'a str,
         options: &ParserOptions,
     ) -> Result<Cow<'a, str>, KrishivError> {
-        // The legacy mode reads `IDENTIFIER(expr)` as a function.
-        if options.legacy_identifier_clause {
+        let legacy = options.legacy_identifier_clause;
+        // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
+        // where a table or an expression may stand: a statement that does not parse as written
+        // (a column list, a rename target) keeps the parser's error.
+        if legacy && krishiv_sql::parse_statement(sql, options).is_err() {
             return Ok(Cow::Borrowed(sql));
         }
         let tokens: Vec<_> = tokenize(sql)
@@ -93,9 +96,22 @@ impl Session {
                     .filter(|w| !w.is_empty())
                     .unwrap_or_default()
             };
-            let plain_position = in_hint
+            let mut plain_position = in_hint
                 || prev(1).eq_ignore_ascii_case("SHOW")
                 || (prev(1) == "(" && prev(2).eq_ignore_ascii_case("EXTRACT"));
+            // The legacy mode reads `IDENTIFIER(expr)` as a function: it names a whole table or
+            // column, never a part of a dotted name, an alias or a `USING` column.
+            if legacy {
+                plain_position = plain_position
+                    || prev(1) == "."
+                    || prev(1).eq_ignore_ascii_case("AS")
+                    || (prev(1) == "(" && prev(2).eq_ignore_ascii_case("USING"))
+                    // A unit is a keyword there: the call stays an unresolved routine.
+                    || (prev(1) == "("
+                        && ["TIMESTAMPADD", "TIMESTAMPDIFF"]
+                            .iter()
+                            .any(|f| prev(2).eq_ignore_ascii_case(f)));
+            }
             if !is_clause || after_colon || plain_position {
                 i += 1;
                 continue;
@@ -122,6 +138,14 @@ impl Session {
             };
             // Nothing between the brackets: left to the parser to refuse.
             if close <= i + 2 {
+                i = close + 1;
+                continue;
+            }
+            if legacy
+                && tokens
+                    .get(close + 1)
+                    .is_some_and(|n| n.kind == TokenKind::Sym(Sym::Dot))
+            {
                 i = close + 1;
                 continue;
             }
