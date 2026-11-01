@@ -10,11 +10,11 @@
     },
     {
       "id": "sign#26732a952b46/ansi_on",
-      "reason": "SELECT sign(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT sign(CAST(NULL AS interval year)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sign#26732a952b46/ansi_off",
-      "reason": "SELECT sign(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT sign(CAST(NULL AS interval year)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sign#71aec8bd236a/ansi_on",

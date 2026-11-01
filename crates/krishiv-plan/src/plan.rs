@@ -70,6 +70,11 @@ pub struct LogicalPlan {
 /// quoted name with a dot in it stays one part.
 pub const TABLE_FUNCTION_NAME_SEP: char = '\u{1f}';
 
+/// What joins the parts of a multi-part [`PlanNode::SubqueryAlias`] alias (a
+/// global temporary view's `global_temp.v`): a control character no identifier
+/// holds, so a quoted alias with a dot in it stays one part.
+pub const ALIAS_PART_SEP: char = '\u{1e}';
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -429,6 +434,35 @@ pub enum PlanNode {
         /// The output attribute (`id BIGINT NOT NULL`), with the
         /// analyzer-assigned id.
         output: BoundColumn,
+    },
+    /// A recursive common table expression (Spark's `UnionLoop`): `anchor`
+    /// runs once; `recursive` then runs again and again, reading in its
+    /// [`PlanNode::UnionLoopRef`] (the same `id`) the rows the previous round
+    /// produced, until a round is empty. The node's rows are the anchor's
+    /// and every round's, in order. `recursive` is wrapped in a
+    /// [`PlanNode::WithCte`] that defines the CTE's name as the reference
+    /// while unresolved. The session executes the loop before physical
+    /// planning and replaces the node by a scan of its result.
+    UnionLoop {
+        /// Ties the node to its [`PlanNode::UnionLoopRef`]s.
+        id: u32,
+        /// The non-recursive term.
+        anchor: Arc<LogicalPlan>,
+        /// The recursive term.
+        recursive: Arc<LogicalPlan>,
+        /// `MAX RECURSION LEVEL n`; else the session's
+        /// `spark.sql.cteRecursionLevelLimit` applies.
+        max_level: Option<u32>,
+        /// The output columns (empty until resolved), named by the anchor.
+        output: Vec<BoundColumn>,
+    },
+    /// The recursive term's read of the previous round of its
+    /// [`PlanNode::UnionLoop`].
+    UnionLoopRef {
+        /// The loop's id.
+        id: u32,
+        /// The columns (empty until resolved).
+        output: Vec<BoundColumn>,
     },
 }
 
@@ -824,7 +858,14 @@ impl LogicalPlan {
             | PlanNode::InlineTable { .. }
             | PlanNode::TableFunction { .. }
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::OneRowRelation => {}
+            PlanNode::UnionLoop {
+                anchor, recursive, ..
+            } => {
+                f(anchor);
+                f(recursive);
+            }
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
@@ -866,7 +907,14 @@ impl LogicalPlan {
             | PlanNode::InlineTable { .. }
             | PlanNode::TableFunction { .. }
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::OneRowRelation => {}
+            PlanNode::UnionLoop {
+                anchor, recursive, ..
+            } => {
+                f(anchor);
+                f(recursive);
+            }
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
@@ -910,6 +958,8 @@ impl LogicalPlan {
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoop { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
@@ -990,6 +1040,8 @@ impl LogicalPlan {
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoop { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
@@ -1138,6 +1190,9 @@ impl LogicalPlan {
                     return Some(out);
                 }
                 PlanNode::Range { output, .. } => return Some(vec![output.clone()]),
+                PlanNode::UnionLoop { output, .. } | PlanNode::UnionLoopRef { output, .. } => {
+                    return Some(output.clone());
+                }
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),
                 PlanNode::Shift { input, offset } => {

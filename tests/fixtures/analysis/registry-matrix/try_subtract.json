@@ -102,11 +102,11 @@
     },
     {
       "id": "try_subtract#6e150f42bc2b/ansi_on",
-      "reason": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "try_subtract#6e150f42bc2b/ansi_off",
-      "reason": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "try_subtract#6eda5bc26985/ansi_on",
@@ -126,11 +126,11 @@
     },
     {
       "id": "try_subtract#788118e6c58c/ansi_on",
-      "reason": "SELECT try_subtract(date'2021-01-01', CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_subtract(date'2021-01-01', CAST(NULL AS interval year)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_subtract#788118e6c58c/ansi_off",
-      "reason": "SELECT try_subtract(date'2021-01-01', CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_subtract(date'2021-01-01', CAST(NULL AS interval year)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_subtract#847188c1be3e/ansi_off",
@@ -150,11 +150,11 @@
     },
     {
       "id": "try_subtract#b3a2ebb279d1/ansi_on",
-      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', CAST(NULL AS interval day)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', CAST(NULL AS interval day)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_subtract#b3a2ebb279d1/ansi_off",
-      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', CAST(NULL AS interval day)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', CAST(NULL AS interval day)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_subtract#b47d28681499/ansi_on",

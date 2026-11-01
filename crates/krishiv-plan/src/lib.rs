@@ -150,8 +150,8 @@ pub use partial::partial_state_columns;
 pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
 
 pub use plan::{
-    Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy,
-    LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
+    ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
+    JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
     TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
 };
 pub use raises::{conjuncts, may_raise};

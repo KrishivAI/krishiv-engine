@@ -18,14 +18,17 @@
 //! `INCOMPLETE_TYPE_DEFINITION.*`, and a single token after a complete
 //! complex type is "extra input".
 //!
-//! Interval, char/varchar, variant and collated string types are
-//! recognized and rejected with `KRISHIV_UNSUPPORTED_FEATURE`.
+//! `INTERVAL` alone is a calendar interval; followed by fields it is an ANSI
+//! interval (`INTERVAL YEAR TO MONTH`, `INTERVAL HOUR TO SECOND`, ...).
+//!
+//! Char/varchar, variant and collated string types are recognized and
+//! rejected with `KRISHIV_UNSUPPORTED_FEATURE`.
 
 use krishiv_common::error::ErrorClass;
 
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
-use crate::{DataType, DecimalType, Srid};
+use crate::{DataType, DayTimeField, DecimalType, Srid, YearMonthField};
 
 /// Parses a Spark DDL type string such as `int`, `DECIMAL(10, 2)` or
 /// `timestamp_ntz`.
@@ -59,6 +62,7 @@ pub fn parse_data_type(input: &str) -> Result<DataType> {
         tokens,
         pos: 0,
         deferred: None,
+        pinned: false,
     };
     let data_type = p.data_type(0)?;
     let left = p.tokens.len().saturating_sub(p.pos);
@@ -361,6 +365,9 @@ struct Parser<'a> {
     /// The first error that is not a syntax error, raised once the whole
     /// string has parsed.
     deferred: Option<krishiv_common::error::KrishivError>,
+    /// The current syntax error keeps its position inside a complex type,
+    /// as Spark reports one after an interval's `TO`.
+    pinned: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -448,6 +455,11 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(self.defer(error::unsupported(feature)));
             }
+            if lower == "interval"
+                && let Some(t) = self.interval(depth)?
+            {
+                return Ok(t);
+            }
             if lower == "timestamp" {
                 let lead = self.peek().cloned();
                 if let Some(lead) = lead.filter(|t| t.is_keyword("with")) {
@@ -484,6 +496,10 @@ impl<'a> Parser<'a> {
         if depth == 0
             && let Some(tok) = self.peek()
         {
+            // ANTLR drops a single word after a backquoted type name.
+            if quoted && self.pos + 1 == self.tokens.len() {
+                return Err(error::extra_input(&format!("'{}'", tok.raw)));
+            }
             return Err(self.unexpected(tok));
         }
         let resolved = if quoted {
@@ -553,7 +569,7 @@ impl<'a> Parser<'a> {
         };
         let body = body.and_then(|t| self.expect(|t| t.kind == Kind::Punct('>')).map(|_| t));
         body.map_err(|e| {
-            if e.error_class() == ErrorClass::ParseSyntaxError {
+            if e.error_class() == ErrorClass::ParseSyntaxError && !self.pinned {
                 lt.syntax_error()
             } else {
                 e
@@ -634,13 +650,97 @@ impl<'a> Parser<'a> {
     /// Recognized types that are not represented yet.
     fn unsupported_type(&self, lower: &str) -> Option<String> {
         let what = match lower {
-            "interval" => "interval data types",
             "char" | "character" | "varchar" => "char/varchar data types",
             "variant" => "the variant data type",
             "string" if self.peek().is_some_and(|t| t.is_keyword("collate")) => "collated strings",
             _ => return None,
         };
         Some(format!("{what} (\"{}\")", lower.to_ascii_uppercase()))
+    }
+
+    /// What follows `INTERVAL`: its fields, giving an ANSI interval type, or
+    /// `None` when none follow and the general path decides (a calendar
+    /// interval, or `INTERVAL(3)`, which names no type).
+    fn interval(&mut self, depth: usize) -> Result<Option<DataType>> {
+        let start = self.peek().and_then(IntervalField::of);
+        let Some(start) = start else {
+            // ANTLR drops a last token that cannot start a word.
+            return match self.peek() {
+                Some(t)
+                    if depth == 0
+                        && self.pos + 1 == self.tokens.len()
+                        && !matches!(t.kind, Kind::Word { .. } | Kind::Punct('(')) =>
+                {
+                    Err(error::extra_input(&format!("'{}'", t.raw)))
+                }
+                _ => Ok(None),
+            };
+        };
+        self.next();
+        let t = if self.peek().is_some_and(|t| t.is_keyword("to")) {
+            let end = self.interval_end(start)?;
+            self.after_interval_end(depth)?;
+            start.to(end)
+        } else {
+            Ok(start.single())
+        };
+        if depth == 0
+            && let Some(tok) = self.peek()
+        {
+            return Err(if self.pos + 1 == self.tokens.len() {
+                error::extra_input(&format!("'{}'", tok.raw))
+            } else {
+                tok.syntax_error()
+            });
+        }
+        Ok(Some(match t {
+            Ok(t) => t,
+            Err(e) => self.defer(e),
+        }))
+    }
+
+    /// The field after `TO`, at `TO`: the grammar takes `MONTH` after a
+    /// year-month field and `HOUR`, `MINUTE` or `SECOND` after a day-time
+    /// one, and `AstBuilder` then rejects a pair that does not increase.
+    fn interval_end(&mut self, start: IntervalField) -> Result<IntervalField> {
+        let to = self.next();
+        let raw = to.map_or("", |t| t.raw);
+        let end = self.peek().and_then(IntervalField::of);
+        if let Some(end) = end.filter(|e| start.grammar_allows(*e)) {
+            self.next();
+            return Ok(end);
+        }
+        self.pinned = true;
+        let dropped = match self.peek() {
+            None => true,
+            Some(t) => matches!(t.kind, Kind::Punct('>' | ',')),
+        };
+        Err(if dropped {
+            error::extra_input(&format!("'{raw}'"))
+        } else {
+            error::syntax_error(&format!("'{raw}'"))
+        })
+    }
+
+    /// Inside a complex type, ANTLR drops one extra token after `TO end`
+    /// (the complex type's syntax errors otherwise point at its `<`).
+    fn after_interval_end(&mut self, depth: usize) -> Result<()> {
+        let extra = self.peek().filter(|t| {
+            depth > 0
+                && !t.is_keyword("not")
+                && !t.is_keyword("comment")
+                && !matches!(t.kind, Kind::Punct('>' | ','))
+        });
+        let closes = self
+            .tokens
+            .get(self.pos + 1)
+            .is_some_and(|t| matches!(t.kind, Kind::Punct('>' | ',')));
+        if let Some(tok) = extra.filter(|_| closes) {
+            let e = error::extra_input(&format!("'{}'", tok.raw));
+            self.pinned = true;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// `WITHOUT TIME ZONE` after `TIME[(p)]`, at `WITHOUT`. As in Spark, a
@@ -703,6 +803,64 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// A field word of an interval type.
+#[derive(Clone, Copy)]
+enum IntervalField {
+    YearMonth(YearMonthField),
+    DayTime(DayTimeField),
+}
+
+impl IntervalField {
+    fn of(token: &Token<'_>) -> Option<Self> {
+        Some(match token.folded().to_ascii_lowercase().as_str() {
+            _ if token.kind != (Kind::Word { quoted: false }) => return None,
+            "year" => Self::YearMonth(YearMonthField::Year),
+            "month" => Self::YearMonth(YearMonthField::Month),
+            "day" => Self::DayTime(DayTimeField::Day),
+            "hour" => Self::DayTime(DayTimeField::Hour),
+            "minute" => Self::DayTime(DayTimeField::Minute),
+            "second" => Self::DayTime(DayTimeField::Second),
+            _ => return None,
+        })
+    }
+
+    /// Whether Spark's grammar has `start TO end` (`self` is `start`).
+    fn grammar_allows(self, end: Self) -> bool {
+        match (self, end) {
+            (Self::YearMonth(_), Self::YearMonth(e)) => e == YearMonthField::Month,
+            (Self::DayTime(_), Self::DayTime(e)) => e != DayTimeField::Day,
+            _ => false,
+        }
+    }
+
+    /// The type `INTERVAL self`.
+    fn single(self) -> DataType {
+        match self {
+            Self::YearMonth(f) => DataType::YearMonthInterval { start: f, end: f },
+            Self::DayTime(f) => DataType::DayTimeInterval { start: f, end: f },
+        }
+    }
+
+    /// The type `INTERVAL self TO end`; a pair that does not increase is an
+    /// error, `MONTH TO MONTH` too.
+    fn to(self, end: Self) -> Result<DataType> {
+        match (self, end) {
+            (Self::YearMonth(s), Self::YearMonth(e)) if s != e => {
+                DataType::year_month_interval(s, e)
+            }
+            (Self::DayTime(s), Self::DayTime(e)) if s != e => DataType::day_time_interval(s, e),
+            _ => Err(error::interval_from_to(self.name(), end.name())),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::YearMonth(f) => f.name(),
+            Self::DayTime(f) => f.name(),
+        }
+    }
+}
+
 /// The type named `lower` with `args`, or `None` if there is no such type.
 fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -717,6 +875,7 @@ fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
         ("double", []) => DataType::Double,
         ("string", []) => DataType::String,
         ("binary", []) => DataType::Binary,
+        ("interval", []) => DataType::CalendarInterval,
         ("date", []) => DataType::Date,
         ("timestamp" | "timestamp_ltz", []) => DataType::Timestamp,
         ("timestamp_ntz", []) => DataType::TimestampNtz,

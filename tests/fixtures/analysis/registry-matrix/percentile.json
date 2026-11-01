@@ -38,11 +38,11 @@
     },
     {
       "id": "percentile#7015048ed1f3/ansi_on",
-      "reason": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile#7015048ed1f3/ansi_off",
-      "reason": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile#7ba7a12eb10c/ansi_on",
@@ -62,11 +62,11 @@
     },
     {
       "id": "percentile#ed963f9b8486/ansi_on",
-      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile#ed963f9b8486/ansi_off",
-      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile#f106ca564764/ansi_on",

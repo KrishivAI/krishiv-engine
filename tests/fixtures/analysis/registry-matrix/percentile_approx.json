@@ -18,11 +18,11 @@
     },
     {
       "id": "percentile_approx#65b2e3cebfe8/ansi_on",
-      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile_approx#65b2e3cebfe8/ansi_off",
-      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile_approx#96af61639132/ansi_on",
@@ -38,11 +38,11 @@
     },
     {
       "id": "percentile_approx#d0b6a4f17650/ansi_on",
-      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile_approx#d0b6a4f17650/ansi_off",
-      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "percentile_approx#f30f6aaed73d/ansi_on",

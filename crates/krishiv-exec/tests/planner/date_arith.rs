@@ -54,7 +54,6 @@ fn other_mixes_of_dates_and_numbers_stay_refused() {
     for sql in [
         // Spark: DATATYPE_MISMATCH (date_add takes an int); here refused.
         "SELECT DATE'2020-01-30' + CAST(5 AS BIGINT)",
-        "SELECT DATE'2020-01-30' + 5.5",
         // `int - date` is not a date_sub.
         "SELECT 5 - DATE'2020-01-30'",
         // Two dates subtract to an interval.
@@ -71,4 +70,21 @@ fn other_mixes_of_dates_and_numbers_stay_refused() {
             "{sql}: {e}"
         );
     }
+}
+
+#[test]
+fn a_date_plus_a_decimal_is_spark_s_type_mismatch() {
+    let env = env();
+    let plan = krishiv_sql::parse_and_lower(
+        "SELECT DATE'2020-01-30' + 5.5",
+        &krishiv_sql::ParserOptions::default(),
+        SourceId(0),
+    )
+    .unwrap();
+    let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+        "{e}"
+    );
 }
