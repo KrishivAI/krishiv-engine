@@ -618,7 +618,7 @@ const CASES: &[(&str, Expect)] = &[
     (
         "SELECT var4 = var5, var4 = var6, var5 = var6",
         R {
-            schema: "struct<(var4 = var5):boolean,(var4 = var6):boolean,(var5 = var6):boolean>",
+            schema: "struct<(variablereference(system.session.var4=7) = variablereference(system.session.var5=7)):boolean,(variablereference(system.session.var4=7) = variablereference(system.session.var6=7)):boolean,(variablereference(system.session.var5=7) = variablereference(system.session.var6=7)):boolean>",
             rows: &[&["true", "true", "true"]],
         },
     ),
@@ -634,7 +634,7 @@ const CASES: &[(&str, Expect)] = &[
     (
         "SELECT var4 = var5, var4 = var6, var5 = var6",
         R {
-            schema: "struct<(var4 = var5):boolean,(var4 = var6):boolean,(var5 = var6):boolean>",
+            schema: "struct<(variablereference(system.session.var4=0.7604953758285915D) = variablereference(system.session.var5=0.7604953758285915D)):boolean,(variablereference(system.session.var4=0.7604953758285915D) = variablereference(system.session.var6=0.7604953758285915D)):boolean,(variablereference(system.session.var5=0.7604953758285915D) = variablereference(system.session.var6=0.7604953758285915D)):boolean>",
             rows: &[&["true", "true", "true"]],
         },
     ),
@@ -938,7 +938,7 @@ const CASES: &[(&str, Expect)] = &[
     (
         "SELECT substr('12345', var1, 1)",
         R {
-            schema: "struct<substr(12345, var1, 1):string>",
+            schema: "struct<substr(12345, variablereference(system.session.var1=1), 1):string>",
             rows: &[&["1"]],
         },
     ),
@@ -1495,7 +1495,7 @@ fn explain_variable_commands() {
 }
 
 /// A decimal session variable is no decimal literal: comparing an integral
-/// column with it keeps the variable's name and the comparison as written
+/// column with it keeps the variable (named `variablereference(...)`) and the comparison as written
 /// (Spark's decimal-literal narrowing matches `DecimalLiteral` only).
 #[test]
 fn decimal_variable_comparisons_keep_the_variable() {
@@ -1503,7 +1503,10 @@ fn decimal_variable_comparisons_keep_the_variable() {
     block_on(s.sql("DECLARE VARIABLE v DECIMAL(3,1) DEFAULT 1.5")).unwrap();
     let df = block_on(s.sql("SELECT id > v FROM range(3) ORDER BY id")).unwrap();
     let schema = block_on(df.schema()).unwrap();
-    assert_eq!(schema.field(0).name(), "(id > v)");
+    assert_eq!(
+        schema.field(0).name(),
+        "(id > variablereference(system.session.v=1.5))"
+    );
     let rows = block_on(df.collect()).unwrap();
     let got: Vec<bool> = rows
         .iter()
@@ -1598,5 +1601,33 @@ fn a_bare_default_in_a_row_query_reads_the_targets_default() {
     assert!(
         block_on(s.sql("SET VARIABLE (v2) = (SELECT DEFAULT + 1 FROM VALUES(1) AS T(c1))"))
             .is_err()
+    );
+}
+
+/// A variable inside another expression's name reads
+/// `variablereference(system.session.v=<value>)` (Spark 4.2.0); a bare select item keeps `v`.
+#[test]
+fn a_variable_in_a_name_is_a_variablereference() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "DECLARE VARIABLE v1 INT DEFAULT 1",
+        "DECLARE VARIABLE vs STRING DEFAULT 'x'",
+        "DECLARE VARIABLE vn INT",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    let names = |sql: &str| -> Vec<String> {
+        let df = block_on(s.sql(sql)).unwrap();
+        let schema = block_on(df.schema()).unwrap();
+        schema.fields().iter().map(|f| f.name().clone()).collect()
+    };
+    assert_eq!(names("SELECT v1, vs"), ["v1", "vs"]);
+    assert_eq!(
+        names("SELECT v1 + 1, upper(vs), vn + 1"),
+        [
+            "(variablereference(system.session.v1=1) + 1)",
+            "upper(variablereference(system.session.vs='x'))",
+            "(variablereference(system.session.vn=CAST(NULL AS INT)) + 1)",
+        ]
     );
 }
