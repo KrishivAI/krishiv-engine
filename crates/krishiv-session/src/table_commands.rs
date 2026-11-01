@@ -1122,7 +1122,7 @@ impl Session {
             }
             .into());
         }
-        let mut options = options_of(&t.options, original);
+        let options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
         let external = t.external || t.location.is_some();
         let location = match &t.location {
@@ -1135,11 +1135,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
-        }
         let mut table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1543,10 +1538,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        let mut options = BTreeMap::new();
-        if provider == "csv" {
-            options.insert("header".to_owned(), "true".to_owned());
-        }
         let table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1554,7 +1545,7 @@ impl Session {
             provider,
             location,
             columns,
-            options,
+            options: BTreeMap::new(),
             properties: options_of(&t.tblproperties, original),
             comment: None,
             created_ms: now_ms(),
@@ -2062,11 +2053,6 @@ impl Session {
                 return Err(unsupported("secret table options"));
             };
             options.insert(k.clone(), text.to_owned());
-        }
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
         }
         let table = CatalogTable {
             namespace: name.namespace.clone(),

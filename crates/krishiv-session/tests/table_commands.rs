@@ -108,6 +108,64 @@ fn csv_tables_read_back_what_they_were_given() {
     );
 }
 
+/// Spark reads a CSV table without a header unless the table's options ask for one, so a directory with one row
+/// per file reads every row, not none.
+#[test]
+fn csv_tables_read_files_without_a_header_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(data.join("part-00000.csv"), "1\n").unwrap();
+    std::fs::write(data.join("part-00001.csv"), "2\n").unwrap();
+    let s = session(&dir.path().join("wh"));
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (d INT) USING csv LOCATION '{}'",
+            data.display()
+        ),
+    );
+    assert_eq!(
+        col0(&s, "SELECT CAST(d AS STRING) FROM e ORDER BY d"),
+        ["1", "2"]
+    );
+}
+
+/// What a CSV table writes is Spark's text: no header line by default, and one when the table asks for it.
+#[test]
+fn csv_tables_write_a_header_line_only_when_asked() {
+    fn part_text(dir: &std::path::Path) -> String {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("part-"))
+            })
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let wh = dir.path().join("wh");
+    let s = session(&wh);
+    run(&s, "CREATE TABLE plain (a INT, b INT) USING csv");
+    run(&s, "INSERT INTO plain VALUES (1, 2)");
+    assert_eq!(part_text(&wh.join("plain")), "1,2\n");
+    run(
+        &s,
+        "CREATE TABLE headed (a INT, b INT) USING csv OPTIONS (header 'true')",
+    );
+    run(&s, "INSERT INTO headed VALUES (1, 2)");
+    assert_eq!(part_text(&wh.join("headed")), "a,b\n1,2\n");
+    assert_eq!(col0(&s, "SELECT concat_ws('|', a, b) FROM headed"), ["1|2"]);
+    run(&s, "CREATE TABLE ctas USING csv AS SELECT 1 AS x");
+    assert_eq!(part_text(&wh.join("ctas")), "1\n");
+    assert_eq!(col0(&s, "SELECT CAST(x AS STRING) FROM ctas"), ["1"]);
+    run(&s, "CREATE TABLE liked LIKE plain");
+    run(&s, "INSERT INTO liked VALUES (3, 4)");
+    assert_eq!(part_text(&wh.join("liked")), "3,4\n");
+}
+
 #[test]
 fn create_table_errors() {
     let dir = tempfile::tempdir().unwrap();
