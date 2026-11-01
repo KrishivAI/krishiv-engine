@@ -425,10 +425,6 @@ pub(super) fn rows() -> Vec<Row> {
             "start: ColumnOrName, days: ColumnOrName | int",
         ));
     }
-    rows.push(Row::new(
-        "width_bucket",
-        "v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int",
-    ));
     for name in ["atan2", "hypot"] {
         rows.push(Row::new(
             name,
