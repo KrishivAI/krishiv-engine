@@ -41,9 +41,10 @@ use crate::error::Result;
 use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
-    PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op,
-    filter_op, generate_op, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+    LoopLimits, PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode,
+    ScanRuntimeFilter, SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId,
+    Values, expand_op, filter_op, generate_op, project_op, replicate_op, scan_filter, sort_op,
+    top_n_op,
 };
 use crate::values::{LocalValues, ValueService};
 
@@ -266,6 +267,8 @@ pub(crate) struct Planner<'a> {
     pub(crate) scan_filters: HashMap<ScanId, Vec<ScanRuntimeFilter>>,
     /// The estimates of every relation of the plan, computed once.
     pub(crate) stats: PlanStats,
+    /// The schema of each loop being planned, by id, for its `LoopRef`s.
+    loops: HashMap<u32, SchemaRef>,
 }
 
 impl<'a> Planner<'a> {
@@ -298,6 +301,7 @@ impl<'a> Planner<'a> {
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
             next_exchange: 0,
             scan_filters: HashMap::new(),
+            loops: HashMap::new(),
         }
     }
 
@@ -538,6 +542,14 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.window(input, exprs, partition_by, order_by, None)
             }
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                output,
+            } => self.union_loop(*id, anchor, recursive, *max_level, output),
+            PlanNode::UnionLoopRef { id, output } => self.loop_ref(*id, output),
             PlanNode::OneRowRelation => Ok(one_row()),
             PlanNode::Range {
                 start,
@@ -554,6 +566,86 @@ impl<'a> Planner<'a> {
                 )))
             }
         }
+    }
+
+    /// A recursive CTE: the anchor, then the recursive term round after
+    /// round. Columns are matched by position; the node's schema is the
+    /// anchor's with the loop's names and nullability.
+    fn union_loop(
+        &mut self,
+        id: u32,
+        anchor: &Arc<LogicalPlan>,
+        recursive: &Arc<LogicalPlan>,
+        max_level: Option<u32>,
+        output: &[BoundColumn],
+    ) -> Result<Planned> {
+        let anchor = self.plan(anchor)?;
+        if anchor.schema.fields().len() != output.len() {
+            return Err(internal("a recursive CTE whose anchor has another width"));
+        }
+        let fields: Vec<arrow_schema::Field> = anchor
+            .schema
+            .fields()
+            .iter()
+            .zip(output)
+            .map(|(f, c)| {
+                arrow_schema::Field::new(c.name.clone(), f.data_type().clone(), c.nullable)
+                    .with_metadata(f.metadata().clone())
+            })
+            .collect();
+        let schema: SchemaRef = Arc::new(Schema::new(fields));
+        self.loops.insert(id, Arc::clone(&schema));
+        let recursive = self.plan(recursive);
+        self.loops.remove(&id);
+        let recursive = recursive?;
+        if recursive.schema.fields().len() != output.len() {
+            return Err(internal(
+                "a recursive CTE whose recursive term has another width",
+            ));
+        }
+        let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
+        let limits = loop_limits(&self.cx.config, max_level);
+        let explain = ExplainNode::new(
+            "UnionLoop",
+            format!("#{id} [{}]", columns(output)),
+            vec![anchor.explain, recursive.explain],
+        );
+        Ok(Planned {
+            node: PhysNode::UnionLoop {
+                id,
+                anchor: Box::new(anchor.node),
+                recursive: Box::new(recursive.node),
+                layout: layout.clone(),
+                limits,
+            },
+            schema,
+            layout,
+            explain,
+            sites: Vec::new(),
+            placement: Placement::Unknown,
+        })
+    }
+
+    /// The recursive term's read of the previous round.
+    fn loop_ref(&mut self, id: u32, output: &[BoundColumn]) -> Result<Planned> {
+        let schema = self
+            .loops
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| internal("a recursive reference outside its CTE"))?;
+        let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
+        let explain = ExplainNode::leaf("LoopRef", format!("#{id} [{}]", columns(output)));
+        Ok(Planned {
+            node: PhysNode::LoopRef {
+                id,
+                layout: layout.clone(),
+            },
+            schema,
+            layout,
+            explain,
+            sites: Vec::new(),
+            placement: Placement::Unknown,
+        })
     }
 
     /// A reference read from the definition's shared plan.
@@ -1805,6 +1897,25 @@ pub(crate) fn unsupported(feature: &str) -> KrishivError {
         feature: feature.to_owned(),
     }
     .into()
+}
+
+/// The bounds of a loop: `MAX RECURSION LEVEL` over
+/// `spark.sql.cteRecursionLevelLimit`, and `spark.sql.cteRecursionRowLimit`
+/// (a negative value: none).
+fn loop_limits(config: &krishiv_common::config::Config, max_level: Option<u32>) -> LoopLimits {
+    use krishiv_common::config::{CTE_RECURSION_LEVEL_LIMIT, CTE_RECURSION_ROW_LIMIT, ConfigValue};
+    let conf = |entry| config.get(entry).and_then(ConfigValue::as_int);
+    let bound = |v: Option<i64>, default: i64| match v.unwrap_or(default) {
+        n if n < 0 => i64::MAX,
+        n => n,
+    };
+    LoopLimits {
+        level: max_level.unwrap_or_else(|| {
+            u32::try_from(bound(conf(&CTE_RECURSION_LEVEL_LIMIT), 100)).unwrap_or(u32::MAX)
+        }),
+        rows: u64::try_from(bound(conf(&CTE_RECURSION_ROW_LIMIT), 1_000_000)).unwrap_or(u64::MAX),
+        pushed_limit: None,
+    }
 }
 
 #[cfg(test)]

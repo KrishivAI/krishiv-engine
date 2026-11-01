@@ -133,7 +133,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -187,6 +187,12 @@ pub mod node {
         /// feature: generate
         #[prost(message, tag = "20")]
         Generate(super::GenerateNode),
+        /// feature: union_loop
+        #[prost(message, tag = "21")]
+        UnionLoop(super::UnionLoopNode),
+        /// feature: union_loop
+        #[prost(message, tag = "22")]
+        LoopRef(super::LoopRefNode),
     }
 }
 /// feature: shared_subplan
@@ -319,6 +325,43 @@ pub struct ReplicateRowsNode {
     pub count: u32,
     #[prost(message, repeated, tag = "4")]
     pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
+}
+/// feature: union_loop
+/// A recursive common table expression: the anchor runs once, then the
+/// recursive term runs round after round, reading the previous round through
+/// its LoopRefNode, until a round is empty or a limit is reached.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UnionLoopNode {
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    #[prost(uint32, tag = "2")]
+    pub anchor: u32,
+    #[prost(uint32, tag = "3")]
+    pub recursive: u32,
+    #[prost(uint64, repeated, tag = "4")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "5")]
+    pub limits: ::core::option::Option<LoopLimits>,
+}
+/// feature: union_loop
+/// The bounds on a loop, decided at planning.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LoopLimits {
+    #[prost(uint32, tag = "1")]
+    pub level: u32,
+    #[prost(uint64, tag = "2")]
+    pub rows: u64,
+    #[prost(uint64, optional, tag = "3")]
+    pub pushed_limit: ::core::option::Option<u64>,
+}
+/// feature: union_loop
+/// The previous round of the enclosing loop with the same id.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LoopRefNode {
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: generate
 /// Each input row once per element of an array or map (explode, posexplode,

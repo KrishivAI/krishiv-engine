@@ -143,6 +143,7 @@ registry! {
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
+    (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -298,6 +299,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Generate { .. } => Some(Feature::Generate),
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
+            PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
@@ -496,6 +498,8 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::Scan(_)
         | PhysNode::OneRow
         | PhysNode::SharedRead { .. }
+        | PhysNode::UnionLoop { .. }
+        | PhysNode::LoopRef { .. }
         | PhysNode::Range(_)
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
@@ -614,6 +618,8 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
+        | PhysNode::UnionLoop { .. }
+        | PhysNode::LoopRef { .. }
         | PhysNode::Limit { .. }
         | PhysNode::Range(_)
         | PhysNode::Sort { .. }

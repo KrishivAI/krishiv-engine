@@ -224,6 +224,27 @@ impl Encoder {
                 id: id.0,
                 layout: layout.iter().map(|a| a.0).collect(),
             }),
+            PhysNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                layout: l,
+                limits,
+            } => Kind::UnionLoop(pb::UnionLoopNode {
+                id: *id,
+                anchor: self.node_index(anchor)?,
+                recursive: self.node_index(recursive)?,
+                layout: layout(l),
+                limits: Some(pb::LoopLimits {
+                    level: limits.level,
+                    rows: limits.rows,
+                    pushed_limit: limits.pushed_limit,
+                }),
+            }),
+            PhysNode::LoopRef { id, layout: l } => Kind::LoopRef(pb::LoopRefNode {
+                id: *id,
+                layout: layout(l),
+            }),
             PhysNode::Range(r) => Kind::Range(pb::RangeNode {
                 start: r.start,
                 end: r.end,

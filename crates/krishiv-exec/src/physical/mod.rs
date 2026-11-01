@@ -474,6 +474,47 @@ pub enum PhysNode {
         /// The attribute id of each of its output columns here.
         layout: Vec<AttrId>,
     },
+    /// A recursive common table expression: `anchor` runs once, then
+    /// `recursive` runs round after round, reading in its
+    /// [`PhysNode::LoopRef`] (the same `id`) the rows the previous round
+    /// produced, until a round is empty or a limit is reached. The node's
+    /// rows are the anchor's and then every round's, in order.
+    UnionLoop {
+        /// Ties the node to its [`PhysNode::LoopRef`]s.
+        id: u32,
+        /// The non-recursive term.
+        anchor: Box<PhysNode>,
+        /// The recursive term.
+        recursive: Box<PhysNode>,
+        /// The attribute of each output column.
+        layout: Vec<AttrId>,
+        /// The bounds on the loop.
+        limits: LoopLimits,
+    },
+    /// The previous round of the enclosing [`PhysNode::UnionLoop`] with the
+    /// same `id`, under the reader's attribute ids.
+    LoopRef {
+        /// The loop read.
+        id: u32,
+        /// The attribute id of each of its output columns here.
+        layout: Vec<AttrId>,
+    },
+}
+
+/// The bounds on a [`PhysNode::UnionLoop`], decided at planning from the
+/// configuration, `MAX RECURSION LEVEL` and a pushed `LIMIT`: the operator
+/// never reads session state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopLimits {
+    /// The most rounds after the anchor (`spark.sql.cteRecursionLevelLimit`
+    /// or `MAX RECURSION LEVEL`).
+    pub level: u32,
+    /// The most rows the loop may produce
+    /// (`spark.sql.cteRecursionRowLimit`).
+    pub rows: u64,
+    /// A `LIMIT` above the loop: the loop stops once it has produced this
+    /// many rows, and neither bound above applies to the rows past it.
+    pub pushed_limit: Option<u64>,
 }
 
 /// A table scan.
@@ -793,7 +834,10 @@ plan_data!(enum PhysNode {
     WriteFiles { input, write },
     Exchange(exchange),
     SharedRead { id, layout },
+    UnionLoop { id, anchor, recursive, layout, limits },
+    LoopRef { id, layout },
 });
+plan_data!(struct LoopLimits { level, rows, pushed_limit });
 plan_data!(struct WritePlan {
     format,
     options,
@@ -831,7 +875,11 @@ impl PhysNode {
     /// first.
     pub fn children(&self) -> Vec<&PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow | Self::Range(_) | Self::SharedRead { .. } => Vec::new(),
+            Self::Scan(_)
+            | Self::OneRow
+            | Self::Range(_)
+            | Self::SharedRead { .. }
+            | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -860,13 +908,20 @@ impl PhysNode {
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::Union { inputs } => inputs.iter().collect(),
+            Self::UnionLoop {
+                anchor, recursive, ..
+            } => vec![anchor.as_ref(), recursive.as_ref()],
         }
     }
 
     /// [`Self::children`], mutable.
     pub(crate) fn children_mut(&mut self) -> Vec<&mut PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow | Self::Range(_) | Self::SharedRead { .. } => Vec::new(),
+            Self::Scan(_)
+            | Self::OneRow
+            | Self::Range(_)
+            | Self::SharedRead { .. }
+            | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -895,6 +950,9 @@ impl PhysNode {
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::Union { inputs } => inputs.iter_mut().collect(),
+            Self::UnionLoop {
+                anchor, recursive, ..
+            } => vec![anchor.as_mut(), recursive.as_mut()],
         }
     }
 }

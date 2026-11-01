@@ -503,6 +503,12 @@ impl Instantiation<'_> {
                     }),
                 })
             }
+            PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => {
+                Err(krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: "the recursive CTE operator".to_owned(),
+                }
+                .into())
+            }
             PhysNode::OneRow => {
                 let source = one_row()?;
                 Ok(Built {

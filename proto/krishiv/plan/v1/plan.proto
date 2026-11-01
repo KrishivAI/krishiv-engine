@@ -150,6 +150,10 @@ message Node {
     SharedReadNode shared_read = 19;
     // feature: generate
     GenerateNode generate = 20;
+    // feature: union_loop
+    UnionLoopNode union_loop = 21;
+    // feature: union_loop
+    LoopRefNode loop_ref = 22;
   }
 }
 
@@ -245,6 +249,33 @@ message ReplicateRowsNode {
   repeated uint64 layout = 2;
   uint32 count = 3;
   repeated SubqueryPlan subqueries = 4;
+}
+
+// feature: union_loop
+// A recursive common table expression: the anchor runs once, then the
+// recursive term runs round after round, reading the previous round through
+// its LoopRefNode, until a round is empty or a limit is reached.
+message UnionLoopNode {
+  uint32 id = 1;
+  uint32 anchor = 2;
+  uint32 recursive = 3;
+  repeated uint64 layout = 4;
+  LoopLimits limits = 5;
+}
+
+// feature: union_loop
+// The bounds on a loop, decided at planning.
+message LoopLimits {
+  uint32 level = 1;
+  uint64 rows = 2;
+  optional uint64 pushed_limit = 3;
+}
+
+// feature: union_loop
+// The previous round of the enclosing loop with the same id.
+message LoopRefNode {
+  uint32 id = 1;
+  repeated uint64 layout = 2;
 }
 
 // feature: generate

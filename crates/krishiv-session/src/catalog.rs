@@ -922,7 +922,13 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
     fn go<'a>(node: &'a PhysNode, out: &mut Leaves<'a>) {
         match node {
             PhysNode::Scan(scan) => out.scans.push(scan),
-            PhysNode::OneRow | PhysNode::SharedRead { .. } => {}
+            PhysNode::OneRow | PhysNode::SharedRead { .. } | PhysNode::LoopRef { .. } => {}
+            PhysNode::UnionLoop {
+                anchor, recursive, ..
+            } => {
+                go(anchor, out);
+                go(recursive, out);
+            }
             PhysNode::Range(_) => out.range = true,
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
