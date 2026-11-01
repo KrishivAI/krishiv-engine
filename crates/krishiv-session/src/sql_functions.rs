@@ -248,6 +248,7 @@ impl QueryFunctions {
                         def.path.clone()
                     },
                     next_source: &|| next_source(views),
+                    qualify: None,
                     namespace: stored_in
                         .clone()
                         .unwrap_or_else(|| self.catalog.current_namespace()),
@@ -322,7 +323,7 @@ impl QueryFunctions {
     /// first schema of the function's frozen `path` holding a stored function
     /// of that name, else by `namespace`; `None` when nothing changed. Calls
     /// inside subquery plans are not entered.
-    fn qualify_calls(
+    pub(crate) fn qualify_calls(
         &self,
         body: &Arc<Expr>,
         namespace: &str,

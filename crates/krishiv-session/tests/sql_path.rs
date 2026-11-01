@@ -263,6 +263,24 @@ fn a_stored_function_calls_routines_through_the_path_it_was_created_under() {
 }
 
 #[test]
+fn a_view_calls_routines_through_the_path_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "CREATE SCHEMA va",
+        "CREATE SCHEMA vb",
+        "CREATE FUNCTION va.pick() RETURNS INT RETURN 1",
+        "CREATE FUNCTION vb.pick() RETURNS INT RETURN 2",
+        "SET PATH = spark_catalog.va, system.builtin",
+        "CREATE VIEW default.pick_view AS SELECT pick() AS v",
+        "SET PATH = spark_catalog.vb, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT pick()"), "2");
+    assert_eq!(first(&s, "SELECT v FROM default.pick_view"), "1");
+}
+
+#[test]
 fn a_session_only_path_reaches_temporary_views_not_stored_tables() {
     let s = session();
     for sql in [
