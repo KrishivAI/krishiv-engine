@@ -96,3 +96,53 @@ fn an_invalid_string_is_an_error_under_ansi() {
         krishiv_common::error::ErrorClass::CastInvalidInput
     );
 }
+
+/// `extract(SECOND ...)` cuts a `time(p)` to `p` digits even when the value
+/// holds more (a string cast keeps them): golden `time.sql` 47-52.
+#[test]
+fn extract_second_follows_the_declared_precision() {
+    for (p, want) in [
+        (0, "1.000000"),
+        (1, "1.900000"),
+        (2, "1.980000"),
+        (3, "1.987000"),
+        (4, "1.987600"),
+        (5, "1.987650"),
+        (6, "1.987654"),
+    ] {
+        let sql = format!("extract(SECOND FROM cast('09:08:01.987654' as time({p})))");
+        assert_eq!(text(&sql), want, "{sql}");
+    }
+    assert_eq!(
+        text("date_part('SECOND', cast('09:08:01.987654' as time(2)))"),
+        "1.980000"
+    );
+    assert_eq!(
+        text("(SELECT extract(SECOND FROM CAST(s AS time(3))) FROM (SELECT '09:08:01.987654' s))"),
+        "1.987000"
+    );
+    assert_eq!(
+        text("isnull(extract(SECOND FROM CAST(CAST(NULL AS STRING) AS time(3))))"),
+        "true"
+    );
+    // Other fields are not touched.
+    assert_eq!(
+        text("extract(MINUTE FROM cast('09:08:01.987654' as time(1)))"),
+        "8"
+    );
+}
+
+/// A cast to the type a value already has is a no-op (Spark 4.2.0:
+/// `time_to_micros(cast(cast('09:08:01.987654' as time(1)) as time(1)))` is
+/// 32881987654), while a cast to another precision truncates.
+#[test]
+fn a_cast_to_the_same_time_type_is_a_no_op() {
+    assert_eq!(
+        text("cast(cast(cast('09:08:01.987654' as time(1)) as time(1)) as string)"),
+        "09:08:01.987654"
+    );
+    assert_eq!(
+        text("cast(cast(cast('09:08:01.987654' as time(1)) as time(2)) as string)"),
+        "09:08:01.98"
+    );
+}

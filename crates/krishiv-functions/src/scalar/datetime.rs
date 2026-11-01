@@ -1179,7 +1179,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(make_date(&y, &m, &d, ansi, &ctx)?) as ArrayRef)
             })
         }
-        ("extract" | "date_part", [f, DataType::Time64(TimeUnit::Nanosecond)]) if is_string(f) => {
+        (
+            "extract" | "date_part",
+            [f, DataType::Time64(TimeUnit::Nanosecond)]
+            | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32],
+        ) if is_string(f) => {
+            // A third argument is the declared precision of a `time(p)`
+            // below 6, which cuts the seconds' fraction.
+            let precise = args.len() == 3;
             match field(&args[0]) {
                 Err(e) => return Some((listed, Err(e))),
                 Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {
@@ -1188,7 +1195,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Some(part @ (DatePart::Hour | DatePart::Minute | DatePart::Second))) => {
                     Binding::new(part.result_type(), move |x: &Inputs<'_>| {
                         let times = x.array::<Time64NanosecondType>(1)?;
-                        let v = time_field(&times, part);
+                        let mut v = time_field(&times, part);
+                        if precise && part == DatePart::Second {
+                            let p = x.array::<Int32Type>(2)?;
+                            if !p.is_empty() {
+                                let unit = 10_i64.pow(
+                                    6_u32.saturating_sub(p.value(0).clamp(0, 6).unsigned_abs()),
+                                );
+                                v = v.unary(|micros| micros - micros % unit);
+                            }
+                        }
                         Ok(if part == DatePart::Second {
                             Arc::new(
                                 v.unary::<_, Decimal128Type>(i128::from)
