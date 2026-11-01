@@ -219,3 +219,47 @@ fn rows_over_columns() {
     .unwrap();
     assert_eq!(got, ["[2]", "[3, 4]"]);
 }
+
+/// `cardinality` is `size`: a NULL is `-1` with ANSI off (Spark 4.2.0).
+#[test]
+fn cardinality_follows_size_without_ansi() {
+    let s = Session::new().unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    for sql in [
+        "cardinality(NULL)",
+        "cardinality(cast(NULL as array<int>))",
+        "size(NULL)",
+    ] {
+        let got = run(&s, &format!("SELECT {sql}")).unwrap();
+        assert_eq!(got, ["-1"], "{sql}");
+    }
+}
+
+/// An `INT` array and a `FLOAT` item meet at `FLOAT`, with ANSI on or off.
+#[test]
+fn array_remove_meets_int_and_float_at_float() {
+    let s = Session::new().unwrap();
+    for ansi in ["true", "false"] {
+        s.conf().set("spark.sql.ansi.enabled", ansi).unwrap();
+        let got = run(
+            &s,
+            "SELECT typeof(array_remove(array(1, 2), cast(1 as float)))",
+        )
+        .unwrap();
+        assert_eq!(got, ["array<float>"], "ansi={ansi}");
+    }
+}
+
+/// A count past what one array can hold is refused before allocating.
+#[test]
+fn array_repeat_refuses_a_huge_count() {
+    let s = Session::new().unwrap();
+    let err = run(&s, "SELECT array_repeat(1, 2147483647)").unwrap_err();
+    assert!(
+        matches!(
+            err.error_class().name(),
+            "COLLECTION_SIZE_LIMIT_EXCEEDED.FUNCTION" | "COLLECTION_SIZE_LIMIT_EXCEEDED.INITIALIZE"
+        ),
+        "{err}"
+    );
+}

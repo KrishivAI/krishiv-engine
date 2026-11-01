@@ -303,26 +303,48 @@ fn union(x: &Inputs<'_>, field: &Arc<Field>) -> Result<ArrayRef, KrishivError> {
     rezero(&out)
 }
 
-/// Whether `needle` (an index into `values`) equals an element among the
-/// `candidates` (indexes into `values`); NULL equals NULL.
+/// `candidates` (indexes into `values`) sorted as Spark orders elements,
+/// so a membership test is a binary search.
+fn sorted(values: &dyn Array, mut candidates: Vec<usize>) -> Result<Vec<usize>, KrishivError> {
+    if *values.data_type() == DataType::Null {
+        return Ok(candidates);
+    }
+    let mut failure = None;
+    candidates.sort_by(|&p, &q| {
+        cmp_rows(values, p, values, q).unwrap_or_else(|e| {
+            failure.get_or_insert(e);
+            Ordering::Equal
+        })
+    });
+    match failure {
+        Some(e) => Err(kernel(e)),
+        None => Ok(candidates),
+    }
+}
+
+/// Whether `needle` equals an element of `sorted_candidates` (NULL equals
+/// NULL; every NULL is the same value).
 fn member(
     values: &dyn Array,
-    nulls: Option<&NullBuffer>,
     needle: usize,
-    candidates: &[usize],
+    sorted_candidates: &[usize],
 ) -> Result<bool, KrishivError> {
-    let is_null = |i: usize| nulls.is_some_and(|n| n.is_null(i));
-    for &c in candidates {
-        let equal = match (is_null(needle), is_null(c)) {
-            (true, true) => true,
-            (false, false) => same_value(values, needle, values, c)?,
-            _ => false,
-        };
-        if equal {
-            return Ok(true);
-        }
+    if *values.data_type() == DataType::Null {
+        return Ok(!sorted_candidates.is_empty());
     }
-    Ok(false)
+    let mut failure = None;
+    let found = sorted_candidates
+        .binary_search_by(|&c| {
+            cmp_rows(values, c, values, needle).unwrap_or_else(|e| {
+                failure.get_or_insert(e);
+                Ordering::Equal
+            })
+        })
+        .is_ok();
+    match failure {
+        Some(e) => Err(kernel(e)),
+        None => Ok(found),
+    }
 }
 
 /// `array_intersect(a, b)` (`keep_matches`) and `array_except(a, b)`: the
@@ -340,7 +362,6 @@ fn filtered(
     let (ca, cb) = (x.column(0)?, x.column(1)?);
     let (a, b) = (list_of(&ca, name)?, list_of(&cb, name)?);
     let values = concat(&[a.values().as_ref(), b.values().as_ref()]).map_err(kernel)?;
-    let nulls = values.logical_nulls();
     let base = a.values().len();
     let mut rows = Vec::with_capacity(x.rows());
     for row in 0..x.rows() {
@@ -350,11 +371,10 @@ fn filtered(
         }
         let (sa, la) = span(a, row);
         let (sb, lb) = span(b, row);
-        let right: Vec<usize> = (sb..sb + lb).map(|i| base + i).collect();
-        let left: Vec<usize> = (sa..sa + la).collect();
+        let right = sorted(values.as_ref(), (sb..sb + lb).map(|i| base + i).collect())?;
         let mut picks = Vec::new();
-        for &i in &left {
-            if member(values.as_ref(), nulls.as_ref(), i, &right)? == keep_matches {
+        for i in sa..sa + la {
+            if member(values.as_ref(), i, &right)? == keep_matches {
                 picks.push(i);
             }
         }
@@ -384,20 +404,17 @@ fn overlap(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
         }
         let (sa, la) = span(a, row);
         let (sb, lb) = span(b, row);
-        let mut saw_null = false;
+        let right: Vec<usize> = (sb..sb + lb)
+            .map(|j| base + j)
+            .filter(|&j| !is_null(j))
+            .collect();
+        let saw_null = (sa..sa + la).any(&is_null) || right.len() < lb;
+        let right = sorted(values.as_ref(), right)?;
         let mut hit = false;
-        'scan: for i in sa..sa + la {
-            if is_null(i) {
-                saw_null = true;
-                continue;
-            }
-            for j in sb..sb + lb {
-                if is_null(base + j) {
-                    saw_null = true;
-                } else if same_value(values.as_ref(), i, values.as_ref(), base + j)? {
-                    hit = true;
-                    break 'scan;
-                }
+        for i in (sa..sa + la).filter(|&i| !is_null(i)) {
+            if member(values.as_ref(), i, &right)? {
+                hit = true;
+                break;
             }
         }
         out.push(if hit {

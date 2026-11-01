@@ -19,7 +19,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_kernels::order::cmp_rows;
 
 use super::args::{Inputs, Prim, internal};
-use super::array_edit::{MAX_ARRAY_LENGTH, index, list_of, rebuild, span, too_long};
+use super::array_edit::{MAX_ARRAY_LENGTH, index, list_of, no_memory, rebuild, span, too_long};
 use super::array_set::{kernel, orders, same_value};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
@@ -183,7 +183,10 @@ fn repeat(x: &Inputs<'_>, field: &FieldRef) -> Result<ArrayRef, KrishivError> {
         if n > MAX_ARRAY_LENGTH {
             return Err(too_long("array_repeat", n));
         }
-        rows.push(Some(vec![Some(index(row)?); n]));
+        let mut picks = Vec::new();
+        picks.try_reserve_exact(n).map_err(|_| no_memory(n))?;
+        picks.resize(n, Some(index(row)?));
+        rows.push(Some(picks));
     }
     if *element.data_type() == DataType::Null {
         let nulls = new_null_array(&DataType::Null, x.rows());

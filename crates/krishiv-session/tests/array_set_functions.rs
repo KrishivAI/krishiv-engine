@@ -612,3 +612,41 @@ fn lambda_variables_and_string_columns() {
         ["true", "false"]
     );
 }
+
+/// Rows of different lengths, with NULL arrays, through the three
+/// two-array functions.
+#[test]
+fn two_array_functions_over_rows() {
+    let s = Session::new().unwrap();
+    let from = "FROM VALUES (array(1,2,3,3), array(3,4)), (array(5), array()), \
+        (NULL, array(1)), (array(1,NULL), array(NULL,2)), (array(), array(NULL)) t(a, b)";
+    for (call, want) in [
+        (
+            "array_except(a, b)",
+            vec!["[1, 2]", "[5]", "NULL", "[1]", "[]"],
+        ),
+        (
+            "array_intersect(a, b)",
+            vec!["[3]", "[]", "NULL", "[NULL]", "[]"],
+        ),
+        (
+            "arrays_overlap(a, b)",
+            vec!["true", "false", "NULL", "NULL", "false"],
+        ),
+    ] {
+        let got = run(&s, &format!("SELECT {call} {from}")).unwrap();
+        assert_eq!(got, want, "{call}");
+    }
+}
+
+/// A long right side is searched, not scanned for every left element.
+#[test]
+fn large_arrays_do_not_blow_up() {
+    let s = Session::new().unwrap();
+    let got = run(
+        &s,
+        "SELECT size(array_except(sequence_like.a, sequence_like.a)) FROM \
+         (SELECT transform(array_repeat(1, 50000), (x, i) -> i) AS a) sequence_like",
+    );
+    assert_eq!(got.unwrap(), ["0"]);
+}

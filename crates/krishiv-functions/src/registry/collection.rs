@@ -22,10 +22,10 @@ fn size_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     collection_size("size", c.ansi(), c)
 }
 
-/// `cardinality(expr)`: `size` with `legacySizeOfNull` off, so a NULL is
-/// NULL whatever ANSI says.
+/// `cardinality(expr)`: another name of `size` (Spark 4.2 has no separate
+/// class).
 fn cardinality_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    collection_size("cardinality", true, c)
+    collection_size("cardinality", c.ansi(), c)
 }
 
 fn collection_size(

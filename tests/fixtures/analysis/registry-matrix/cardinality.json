@@ -9,18 +9,6 @@
       "reason": "SELECT cardinality(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "cardinality#2cd8dd16f50c/ansi_off",
-      "reason": "SELECT cardinality(CAST(NULL AS array<string>)) | int where Spark has int not null"
-    },
-    {
-      "id": "cardinality#32c042ff721b/ansi_off",
-      "reason": "SELECT cardinality(NULL) | int where Spark has int not null"
-    },
-    {
-      "id": "cardinality#3c0ea6fe8b1d/ansi_off",
-      "reason": "SELECT cardinality(CAST(NULL AS map<string,int>)) | int where Spark has int not null"
-    },
-    {
       "id": "cardinality#3f90ff4012d9/ansi_on",
       "reason": "SELECT cardinality(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

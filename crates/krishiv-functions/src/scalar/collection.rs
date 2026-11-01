@@ -31,8 +31,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             {
                 return Some((listed, Err(bad_types(listed, args))));
             }
-            // `cardinality` is `size` with Spark's `legacySizeOfNull` off.
-            let nulls_are_minus_one = listed == "size" && !opts.ansi;
+            // `cardinality` is another name of `size`.
+            let nulls_are_minus_one = !opts.ansi;
             Binding::new(DataType::Int32, move |x: &Inputs<'_>| {
                 size(x, nulls_are_minus_one)
             })

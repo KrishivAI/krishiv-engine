@@ -180,3 +180,13 @@ fn a_field_of_an_array_of_structs_is_the_field_of_every_element() {
     let err = run(&s, "SELECT array(named_struct('a', 1))['zz']").unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::FieldNotFound);
 }
+
+/// Spark 4.2.0 names the field of an array of structs `x.a`.
+#[test]
+fn a_field_of_an_array_of_structs_is_named_like_a_field() {
+    let s = Session::new().unwrap();
+    let df =
+        block_on(s.sql("SELECT x['a'] FROM VALUES (array(named_struct('a', 1))) t(x)")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "x.a");
+}

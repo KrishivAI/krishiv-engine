@@ -2224,11 +2224,12 @@ impl Resolver<'_> {
                     .with_origin(e.origin);
                     let mut b = self.expr(&Arc::new(call), cx)?;
                     b.carry_markers(&kids[..n]);
+                    // Spark names it as the field of the array (`x.a`).
                     b.shown = Some(Arc::new(
-                        Expr::function(
-                            "__subscript",
-                            vec![Expr::clone(&kids[0].shown()), Expr::clone(&kids[1].shown())],
-                        )
+                        Expr::new(ExprNode::Field {
+                            base: Arc::new(Expr::clone(&kids[0].shown())),
+                            name: field.name().to_owned(),
+                        })
                         .with_origin(e.origin),
                     ));
                     return Ok(b);
