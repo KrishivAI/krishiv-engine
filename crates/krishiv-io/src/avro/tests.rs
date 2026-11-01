@@ -4052,6 +4052,22 @@ fn spark_written_files_read_back_equal() {
         .map(|f| format!("{}", f.data_type()))
         .collect();
     assert_eq!(plain.num_rows(), 2);
+    let ty = |n: &str| schema.field_with_name(n).unwrap().data_type().clone();
+    assert!(
+        matches!(
+            ty("ts"),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_))
+        ),
+        "{types:?}"
+    );
+    assert!(
+        matches!(ty("ntz"), DataType::Timestamp(TimeUnit::Microsecond, None)),
+        "{types:?}"
+    );
+    assert!(
+        matches!(ty("dec"), DataType::Decimal128(10, 2)),
+        "{types:?}"
+    );
     // Row 1: every value, as `df.show()` printed it.
     let c = |name: &str| Arc::clone(plain.column_by_name(name).unwrap());
     assert_eq!(c("id").as_primitive::<Int32Type>().value(0), 1);

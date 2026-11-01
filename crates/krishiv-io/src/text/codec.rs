@@ -20,6 +20,8 @@ use crate::stats::Precision;
 
 /// Largest uncompressed block a block-framed file may declare.
 const MAX_BLOCK: usize = 64 << 20;
+/// Compressed bytes a reader asks for at a time (bounds what one push inflates to).
+pub(crate) const COMPRESSED_CHUNK: u64 = 64 << 10;
 /// Uncompressed bytes per block the block-framed writers cut.
 const WRITE_BLOCK: usize = 256_000;
 
@@ -91,8 +93,8 @@ fn corrupt(codec: Codec, what: impl std::fmt::Display) -> FormatError {
 
 enum Dec {
     Gzip(Box<flate2::write::MultiGzDecoder<Vec<u8>>>),
-    Deflate(Box<flate2::Decompress>, bool),
-    Bzip2(bzip2::write::BzDecoder<Vec<u8>>),
+    Deflate(Multi<flate2::Decompress>),
+    Bzip2(Multi<bzip2::Decompress>),
     Block(BlockDec),
 }
 
@@ -114,8 +116,8 @@ impl Decompressor {
     pub(crate) fn new(codec: Codec) -> Self {
         let dec = match codec {
             Codec::Gzip => Dec::Gzip(Box::new(flate2::write::MultiGzDecoder::new(Vec::new()))),
-            Codec::Deflate => Dec::Deflate(Box::new(flate2::Decompress::new(true)), false),
-            Codec::Bzip2 => Dec::Bzip2(bzip2::write::BzDecoder::new(Vec::new())),
+            Codec::Deflate => Dec::Deflate(Multi::new(|| flate2::Decompress::new(true))),
+            Codec::Bzip2 => Dec::Bzip2(Multi::new(|| bzip2::Decompress::new(false))),
             Codec::Lz4 | Codec::Snappy => Dec::Block(BlockDec::new(codec)),
         };
         Self {
@@ -134,13 +136,13 @@ impl Decompressor {
         match dec {
             Dec::Gzip(d) => {
                 d.write_all(input).map_err(io)?;
+                if d.get_ref().len() > MAX_PUSH_OUTPUT {
+                    return Err(corrupt(codec, "a chunk inflates past the size limit"));
+                }
                 out.append(d.get_mut());
             }
-            Dec::Deflate(d, ended) => inflate(d, ended, input, out)?,
-            Dec::Bzip2(d) => {
-                d.write_all(input).map_err(io)?;
-                out.append(d.get_mut());
-            }
+            Dec::Deflate(d) => d.run(codec, input, out)?,
+            Dec::Bzip2(d) => d.run(codec, input, out)?,
             Dec::Block(d) => d.push(input, out)?,
         }
         Ok(())
@@ -155,39 +157,93 @@ impl Decompressor {
         let io = |e: std::io::Error| corrupt(codec, e);
         match dec {
             Dec::Gzip(d) => out.extend((*d).finish().map_err(io)?),
-            Dec::Deflate(_, ended) => {
-                if !ended {
-                    return Err(corrupt(codec, "unexpected end of input stream"));
-                }
-            }
-            Dec::Bzip2(mut d) => out.extend(d.finish().map_err(io)?),
+            Dec::Deflate(d) => d.finish(codec)?,
+            Dec::Bzip2(d) => d.finish(codec)?,
             Dec::Block(d) => d.finish()?,
         }
         Ok(())
     }
 }
 
-/// Inflates `input` (a zlib stream) into `out`, noting the stream's end.
-fn inflate(
-    d: &mut flate2::Decompress,
-    ended: &mut bool,
-    mut input: &[u8],
-    out: &mut Vec<u8>,
-) -> FormatResult<()> {
-    while !input.is_empty() && !*ended {
-        out.reserve(input.len().saturating_mul(4).max(64 << 10));
-        let (before_in, before_out) = (d.total_in(), out.len());
-        let status = d
+/// One compression stream of a concatenation of streams (Hadoop's codecs
+/// read every stream of a file).
+trait Stream {
+    /// Decompresses from `input` into the spare capacity of `out`; the bytes
+    /// consumed and whether the stream ended.
+    fn step(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(usize, bool), String>;
+}
+
+impl Stream for flate2::Decompress {
+    fn step(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(usize, bool), String> {
+        let before = self.total_in();
+        let st = self
             .decompress_vec(input, out, flate2::FlushDecompress::None)
-            .map_err(|e| corrupt(Codec::Deflate, e))?;
-        let used = usize::try_from(d.total_in() - before_in).unwrap_or(input.len());
-        input = &input[used.min(input.len())..];
-        *ended = status == flate2::Status::StreamEnd;
-        if used == 0 && out.len() == before_out && !*ended {
-            return Err(corrupt(Codec::Deflate, "the stream made no progress"));
+            .map_err(|e| e.to_string())?;
+        let used = usize::try_from(self.total_in() - before).unwrap_or(input.len());
+        Ok((used, st == flate2::Status::StreamEnd))
+    }
+}
+
+impl Stream for bzip2::Decompress {
+    fn step(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(usize, bool), String> {
+        let before = self.total_in();
+        let st = self.decompress_vec(input, out).map_err(|e| e.to_string())?;
+        let used = usize::try_from(self.total_in() - before).unwrap_or(input.len());
+        Ok((used, st == bzip2::Status::StreamEnd))
+    }
+}
+
+/// Most plain bytes one pushed chunk may inflate to: gzip and zlib cannot
+/// exceed ~1032:1, so a chunk of [`COMPRESSED_CHUNK`] bytes stays within it;
+/// a bomb is an error, not an allocation.
+const MAX_PUSH_OUTPUT: usize = 128 << 20;
+
+/// A decoder of consecutive streams.
+struct Multi<D: Stream> {
+    make: fn() -> D,
+    dec: D,
+    /// Whether a stream has begun and not ended.
+    open: bool,
+}
+
+impl<D: Stream> Multi<D> {
+    fn new(make: fn() -> D) -> Self {
+        Self {
+            dec: make(),
+            make,
+            open: false,
         }
     }
-    Ok(())
+
+    fn run(&mut self, codec: Codec, mut input: &[u8], out: &mut Vec<u8>) -> FormatResult<()> {
+        let start = out.len();
+        while !input.is_empty() {
+            if out.len() - start > MAX_PUSH_OUTPUT {
+                return Err(corrupt(codec, "a chunk inflates past the size limit"));
+            }
+            self.open = true;
+            let (before_out, spare) = (out.len(), out.capacity() - out.len());
+            if spare < (64 << 10) {
+                out.reserve(input.len().saturating_mul(4).max(256 << 10));
+            }
+            let (used, ended) = self.dec.step(input, out).map_err(|e| corrupt(codec, e))?;
+            input = &input[used.min(input.len())..];
+            if ended {
+                self.dec = (self.make)();
+                self.open = false;
+            } else if used == 0 && out.len() == before_out {
+                return Err(corrupt(codec, "the stream made no progress"));
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self, codec: Codec) -> FormatResult<()> {
+        if self.open {
+            return Err(corrupt(codec, "unexpected end of input stream"));
+        }
+        Ok(())
+    }
 }
 
 /// Hadoop's `BlockDecompressorStream` framing.
@@ -241,9 +297,15 @@ impl BlockDec {
             let plain = match self.codec {
                 Codec::Lz4 => lz4_flex::block::decompress(chunk, self.remaining)
                     .map_err(|e| corrupt(self.codec, e))?,
-                _ => snap::raw::Decoder::new()
-                    .decompress_vec(chunk)
-                    .map_err(|e| corrupt(self.codec, e))?,
+                _ => {
+                    let declared =
+                        snap::raw::decompress_len(chunk).map_err(|e| corrupt(self.codec, e))?;
+                    if declared > self.remaining {
+                        return Err(corrupt(self.codec, "chunk longer than its block"));
+                    }
+                    snap::raw::Decoder::new().decompress_vec(chunk)
+                }
+                .map_err(|e| corrupt(self.codec, e))?,
             };
             if plain.len() > self.remaining {
                 return Err(corrupt(self.codec, "chunk longer than its block"));

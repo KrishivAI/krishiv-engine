@@ -59,7 +59,12 @@ impl Feed {
 
     /// The range to push next, if the file has more.
     fn want(&self) -> Option<Range<u64>> {
-        (!self.eof()).then(|| self.fetched..(self.fetched + CHUNK_BYTES).min(self.size))
+        let chunk = if self.dec.is_some() {
+            super::codec::COMPRESSED_CHUNK
+        } else {
+            CHUNK_BYTES
+        };
+        (!self.eof()).then(|| self.fetched..(self.fetched + chunk).min(self.size))
     }
 
     /// Hands over the bytes of a range asked for.

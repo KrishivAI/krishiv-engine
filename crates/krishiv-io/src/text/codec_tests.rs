@@ -112,3 +112,46 @@ fn write_codec_names() {
         Some(".snappy")
     );
 }
+
+/// Hadoop reads every stream of a `.deflate` or `.bz2` file (Spark 4.2
+/// returns both lines of two joined streams).
+#[test]
+fn joined_streams_are_all_read() {
+    for codec in [Codec::Deflate, Codec::Bzip2, Codec::Gzip] {
+        let mut two = pack(codec, b"a\n", 8);
+        two.extend(pack(codec, b"b\n", 8));
+        for step in [1, 7, two.len()] {
+            assert_eq!(
+                unpack(codec, &two, step).expect("two streams"),
+                b"a\nb\n",
+                "{codec:?} {step}"
+            );
+        }
+        // A second stream cut short is a truncated file.
+        let mut cut = pack(codec, b"a\n", 8);
+        cut.extend(&pack(codec, b"b\n", 8)[..6]);
+        assert!(unpack(codec, &cut, 4).is_err(), "{codec:?}");
+    }
+}
+
+#[test]
+fn a_chunk_that_inflates_past_the_limit_is_an_error() {
+    let zeros = vec![0u8; 150 << 20];
+    for codec in [Codec::Gzip, Codec::Deflate] {
+        let packed = pack(codec, &zeros, zeros.len());
+        assert!(packed.len() < 1 << 20);
+        assert!(unpack(codec, &packed, packed.len()).is_err(), "{codec:?}");
+    }
+}
+
+#[test]
+fn a_snappy_chunk_larger_than_its_block_is_corrupt() {
+    // Block of 4 bytes whose chunk declares 1000 plain bytes.
+    let chunk = snap::raw::Encoder::new()
+        .compress_vec(&[7u8; 1000])
+        .expect("compress");
+    let mut bad = 4u32.to_be_bytes().to_vec();
+    bad.extend(u32::try_from(chunk.len()).unwrap().to_be_bytes());
+    bad.extend(chunk);
+    assert!(unpack(Codec::Snappy, &bad, 3).is_err());
+}
