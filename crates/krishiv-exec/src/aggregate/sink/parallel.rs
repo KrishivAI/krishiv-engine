@@ -75,7 +75,7 @@ impl Task {
     /// (`Some(missing bytes)`). Each input partition is freed once merged.
     fn run(&mut self, query: &QueryContext) -> Result<Option<usize>> {
         if self.presize > 0 {
-            self.table.presize(std::mem::take(&mut self.presize));
+            self.table.presize(std::mem::take(&mut self.presize))?;
         }
         let Self {
             parts,
