@@ -57,6 +57,27 @@ use crate::store::{
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc"];
 
+/// The short name of a data source written fully qualified, as Spark maps its built-in classes
+/// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
+fn short_provider(written: &str) -> String {
+    let lower = written.to_lowercase();
+    for prefix in [
+        "org.apache.spark.sql.execution.datasources.",
+        "org.apache.spark.sql.",
+    ] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let name = rest.split('.').next().unwrap_or(rest);
+            if PROVIDERS.contains(&name) {
+                return name.to_owned();
+            }
+        }
+    }
+    if lower == "com.databricks.spark.csv" {
+        return "csv".to_owned();
+    }
+    lower
+}
+
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -610,19 +631,11 @@ impl Session {
         if crate::catalog::is_reserved_view_name(name) {
             return Err(crate::catalog::reserved_temp_view_name(name));
         }
-        if v.or_replace && v.if_not_exists {
-            return Err(krishiv_common::error::CreateViewWithIfNotExistsAndReplace {
-                view_name: format!("`{name}`"),
-            }
-            .into());
-        }
+        // The parser rejects IF NOT EXISTS on temporary views, as Spark does.
         let exists = self
             .state
             .catalog
             .exists(name, env.analysis.conf.case_sensitive);
-        if exists && v.if_not_exists {
-            return self.empty_frame().await;
-        }
         if exists && !v.or_replace {
             return Err(krishiv_common::error::TempTableOrViewAlreadyExists {
                 relation_name: format!("`{name}`"),
@@ -655,17 +668,28 @@ impl Session {
             .remove("path")
             .map(|p| vec![OptionValue::from_user("path", p)])
             .unwrap_or_default();
-        let provider = v
+        // Spark resolves the data source when the view is created.
+        let written = v
             .using
             .as_ref()
             .map(|u| {
                 u.parts
                     .iter()
-                    .map(|p| p.value.to_lowercase())
+                    .map(|p| p.value.clone())
                     .collect::<Vec<_>>()
                     .join(".")
             })
             .unwrap_or_default();
+        let provider = self.provider_of(Some(short_provider(&written)))?;
+        if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
+            let local = path.strip_prefix("file:").unwrap_or(path);
+            if !path.contains("://") && !std::path::Path::new(local).exists() {
+                return Err(krishiv_common::error::PathNotFound {
+                    path: format!("file:{local}"),
+                }
+                .into());
+            }
+        }
         let source = krishiv_plan::ReadSource::Files {
             format: provider,
             paths,

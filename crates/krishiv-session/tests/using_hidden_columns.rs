@@ -131,3 +131,21 @@ fn where_keeps_the_merged_columns_for_the_select_list() {
         ["NULL", "one", "one", "two"]
     );
 }
+
+#[test]
+fn a_qualified_star_lists_the_merged_away_key_first() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "CREATE TEMPORARY VIEW sa AS SELECT * FROM VALUES ('x', 'one') AS sa(a, k)",
+        "CREATE TEMPORARY VIEW sb AS SELECT * FROM VALUES ('one', 'y') AS sb(k, b)",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    // Spark: the hidden key, then the output columns.
+    for kind in ["RIGHT", "FULL"] {
+        let df = block_on(s.sql(&format!("SELECT sa.* FROM sa {kind} JOIN sb USING (k)"))).unwrap();
+        let schema = block_on(df.schema()).unwrap();
+        let names: Vec<_> = schema.fields().iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["k", "a"], "{kind}");
+    }
+}

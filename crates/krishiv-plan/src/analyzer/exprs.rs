@@ -1263,7 +1263,7 @@ impl Resolver<'_> {
                 .collect(),
         };
         // A qualified star reaches the columns a `USING` join merged
-        // away, in the join's column order (ids follow it).
+        // away, ahead of the output columns as in Spark.
         let out = match cx.rels {
             [r] if s.plan_id.is_none()
                 && !s.qualifier.is_empty()
@@ -1272,14 +1272,14 @@ impl Resolver<'_> {
                     .iter()
                     .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs)) =>
             {
-                let mut all = out;
-                all.extend(
-                    r.hidden
-                        .iter()
-                        .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
-                        .cloned(),
-                );
-                all.sort_by_key(|a| a.col.id.0);
+                // Spark lists the merged-away columns first, then the output.
+                let mut all: Vec<_> = r
+                    .hidden
+                    .iter()
+                    .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                    .cloned()
+                    .collect();
+                all.extend(out);
                 all
             }
             _ => out,
