@@ -339,6 +339,7 @@ fn an_operand_read_as_another_type_can_make_the_result_null() -> R {
         "INTERVAL '1' DAY * s",
         "s + INTERVAL '1' DAY",
         "s - INTERVAL '1' DAY",
+        "s - DATE '2024-01-01'",
     ] {
         assert_eq!(
             rows(
@@ -348,6 +349,127 @@ fn an_operand_read_as_another_type_can_make_the_result_null() -> R {
             ["true"],
             "{expr}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_mixed_timestamp_difference_reads_both_sides_without_a_zone() -> R {
+    let session = Session::new()?;
+    block_on(session.sql("SET spark.sql.session.timeZone = America/Los_Angeles"))?;
+    // 02:30 doesn't exist in that zone on that day.
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT date'2024-03-11' - timestamp_ntz'2024-03-10 02:30:00', \
+             timestamp_ntz'2024-03-10 02:30:00' - timestamp'2024-03-10 00:00:00', \
+             timestamp'2024-03-11 00:00:00' - timestamp_ntz'2024-03-10 02:30:00', \
+             '2024-03-10 02:30:00' - timestamp_ntz'2024-03-11 00:00:00'"
+        )?,
+        [
+            "INTERVAL '0 21:30:00' DAY TO SECOND|INTERVAL '0 02:30:00' DAY TO SECOND|\
+             INTERVAL '0 21:30:00' DAY TO SECOND|INTERVAL '-0 21:30:00' DAY TO SECOND"
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn an_interval_expression_over_no_rows_is_empty() -> R {
+    let session = Session::new()?;
+    for expr in [
+        "transform(CAST(array() AS ARRAY<INT>), x -> INTERVAL '1' DAY * x)",
+        "transform(CAST(array() AS ARRAY<INT>), x -> x * INTERVAL '1' MONTH)",
+        "transform(CAST(array() AS ARRAY<INT>), x -> INTERVAL '1' DAY / x)",
+        "transform(CAST(array() AS ARRAY<INTERVAL DAY>), x -> x * 2)",
+        "transform(CAST(array() AS ARRAY<DATE>), x -> x + INTERVAL '1' MONTH)",
+        "transform(CAST(array() AS ARRAY<TIMESTAMP>), x -> x + INTERVAL '1' DAY)",
+        "transform(CAST(array() AS ARRAY<DATE>), x -> DATE '2024-01-01' - x)",
+        "transform(CAST(array() AS ARRAY<TIMESTAMP>), x -> TIMESTAMP '2024-01-01' - x)",
+        "transform(CAST(array() AS ARRAY<INTERVAL DAY>), x -> x + INTERVAL '1' DAY)",
+        "transform(CAST(array() AS ARRAY<INTERVAL DAY>), x -> try_add(x, INTERVAL '1' DAY))",
+    ] {
+        assert_eq!(rows(&session, &format!("SELECT {expr}"))?, ["[]"], "{expr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_lambda_can_return_an_interval() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT transform(array(1, 2), x -> INTERVAL '1' MONTH * x), \
+             transform(array(INTERVAL '1' DAY), x -> x + INTERVAL '1' DAY), \
+             filter(array(INTERVAL '1' DAY, INTERVAL '-1' DAY), x -> x > INTERVAL '0' DAY)"
+        )?,
+        [
+            "[INTERVAL '0-1' YEAR TO MONTH, INTERVAL '0-2' YEAR TO MONTH]|\
+             [INTERVAL '2' DAY]|[INTERVAL '1' DAY]"
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_nested_interval_cast_to_strings_renders_each_value() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT CAST(array(INTERVAL '1' DAY) AS ARRAY<STRING>), \
+             CAST(named_struct('i', INTERVAL '1' DAY, 'j', 1) AS STRUCT<i: STRING, j: STRING>)"
+        )?,
+        ["[INTERVAL '1' DAY]|{INTERVAL '1' DAY, 1}"]
+    );
+    Ok(())
+}
+
+#[test]
+fn legacy_interval_differences_are_refused_by_name() -> R {
+    let session = Session::new()?;
+    block_on(session.sql("SET spark.sql.legacy.interval.enabled = true"))?;
+    for expr in [
+        "DATE '2024-02-01' - DATE '2024-01-01'",
+        "TIMESTAMP '2024-02-01' - TIMESTAMP '2024-01-01'",
+        "try_subtract(DATE '2024-02-01', DATE '2024-01-01')",
+    ] {
+        assert_eq!(
+            answer(&session, expr).error_class.as_deref(),
+            Some("KRISHIV_UNSUPPORTED_FEATURE"),
+            "{expr}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn internal_interval_builtins_are_not_routines() -> R {
+    let session = Session::new()?;
+    for expr in [
+        "tryeval(1)",
+        "subtract_dates(DATE '2024-01-01', DATE '2024-01-01')",
+    ] {
+        assert_eq!(
+            answer(&session, expr).error_class.as_deref(),
+            Some("UNRESOLVED_ROUTINE"),
+            "{expr}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_string_where_date_arithmetic_takes_days_reads_as_a_double() -> R {
+    let session = Session::new()?;
+    block_on(session.sql("SET spark.sql.ansi.enabled = false"))?;
+    for expr in ["date'2020-01-30' - '1'", "date'2020-01-30' + '1'"] {
+        let e = block_on(session.sql(&format!("SELECT {expr}")))
+            .err()
+            .ok_or("it resolved")?;
+        let text = e.to_string();
+        assert!(text.contains("\"1\" has the type \"DOUBLE\""), "{text}");
     }
     Ok(())
 }

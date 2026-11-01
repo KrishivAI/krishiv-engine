@@ -1135,6 +1135,18 @@ fn interval_types_and_literals_need_their_feature() {
     use krishiv_plan::{Expr, ExprNode, Literal, YearMonthField};
     use krishiv_types::DataType;
     assert_eq!(message("interval_literals").features, ["interval_types"]);
+    // A bare literal is baseline: older plans hold them with no feature.
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "interval_literals")
+        .unwrap();
+    let mut root = plan.root().clone();
+    let PhysNode::Project { items, layout, .. } = &mut root else {
+        panic!("not a project");
+    };
+    items.truncate(1);
+    layout.truncate(1);
+    assert!(to_message(&plan_of(root)).unwrap().features.is_empty());
     assert_eq!(message("interval_scan").features, ["interval_types"]);
     assert_eq!(
         message("interval_nested").features,

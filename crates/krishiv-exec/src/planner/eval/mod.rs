@@ -393,8 +393,8 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             }
             _ => {
                 let mut child = compile(expr, input)?;
-                if *to == krishiv_types::DataType::String
-                    && let Some(from) = expr.nested_interval_type()
+                if let Some(from) = expr.nested_interval_type()
+                    && nested_cast::intervals_become_strings(&from, to)
                 {
                     child = nested_cast::interval_leaves(child, from);
                 }

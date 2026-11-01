@@ -115,6 +115,34 @@ impl PhysExpr for IntervalLeaves {
     }
 }
 
+/// Whether casting `from` to `to` takes each interval of `from` to a string.
+pub(super) fn intervals_become_strings(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        (_, DataType::String) => true,
+        (
+            DataType::YearMonthInterval { .. }
+            | DataType::DayTimeInterval { .. }
+            | DataType::CalendarInterval,
+            _,
+        ) => false,
+        (DataType::Array(a), DataType::Array(b)) => {
+            intervals_become_strings(a.element_type(), b.element_type())
+        }
+        (DataType::Map(a), DataType::Map(b)) => {
+            intervals_become_strings(a.key_type(), b.key_type())
+                && intervals_become_strings(a.value_type(), b.value_type())
+        }
+        (DataType::Struct(a), DataType::Struct(b)) => {
+            a.fields().len() == b.fields().len()
+                && a.fields()
+                    .iter()
+                    .zip(b.fields())
+                    .all(|(x, y)| intervals_become_strings(x.data_type(), y.data_type()))
+        }
+        _ => true,
+    }
+}
+
 /// `e`, already cast to `to`, with each interval cut to its end field. Both
 /// families keep one carrier whatever their fields, so the cast itself leaves
 /// the value as it was.
