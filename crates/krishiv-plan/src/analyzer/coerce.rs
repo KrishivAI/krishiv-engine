@@ -1321,12 +1321,14 @@ pub(super) fn can_cast(
     if *from == T::String || *to == T::String {
         return Ok(());
     }
-    // A time casts to another time and to the integral types (seconds).
-    // Spark also casts it to `decimal`; that is not built yet (T181 U1
-    // follow-up), so it is refused here like the rest.
+    // A time casts to another time, to the integral types (whole seconds)
+    // and to `decimal` (seconds with the fraction).
     if matches!(from, T::Time { .. }) || matches!(to, T::Time { .. }) {
         return match (from, to) {
-            (T::Time { .. }, T::Time { .. } | T::Byte | T::Short | T::Integer | T::Long) => Ok(()),
+            (
+                T::Time { .. },
+                T::Time { .. } | T::Byte | T::Short | T::Integer | T::Long | T::Decimal(_),
+            ) => Ok(()),
             _ => Err(BadCast::Without),
         };
     }

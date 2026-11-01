@@ -539,6 +539,19 @@ pub fn cast(
             .with_data_type(DataType::Decimal128(*p, *s));
         return cast(&wide, to, opts);
     }
+    // A time is its seconds with the fraction: the nanoseconds as a
+    // `decimal(38, 9)`, then the ordinary decimal rescale (half-up; an
+    // overflow quotes the value at scale 9, as Spark does).
+    if matches!(from, DataType::Time64(TimeUnit::Nanosecond))
+        && matches!(to, DataType::Decimal128(..) | DataType::Decimal64(..))
+    {
+        let nanos = input
+            .as_primitive::<Time64NanosecondType>()
+            .unary::<_, Decimal128Type>(i128::from)
+            .with_precision_and_scale(38, 9)
+            .map_err(|e| KernelError::internal(e.to_string()))?;
+        return cast(&nanos, to, opts);
+    }
     if let DataType::Decimal64(p, s) = to {
         let out = cast(input, &DataType::Decimal128(*p, *s), opts)?;
         // A valid value is within precision `p <= 18`, so it fits an `i64`;

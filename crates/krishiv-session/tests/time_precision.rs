@@ -177,3 +177,33 @@ fn extract_second_on_a_column_and_the_output_schema() {
     got.sort_unstable();
     assert_eq!(got, vec![123_000, 1_987_000]);
 }
+
+/// `CAST(TIME AS DECIMAL(p, s))` is the seconds with the fraction, rounded
+/// half-up; a value that does not fit is `NUMERIC_VALUE_OUT_OF_RANGE` quoting
+/// it at scale 9 (golden `cast.sql`).
+#[test]
+fn a_time_casts_to_decimal_as_seconds() {
+    for (expr, want) in [
+        ("CAST(TIME '12:00:00' AS decimal(7, 2))", "43200.00"),
+        ("CAST(TIME '01:30:45' AS decimal(8, 3))", "5445.000"),
+        ("CAST(TIME '23:59:59.001' AS decimal(8, 3))", "86399.001"),
+        (
+            "CAST(TIME '23:59:59.999999' AS decimal(11, 6))",
+            "86399.999999",
+        ),
+        ("CAST(TIME '23:59:59.9' AS decimal(6, 0))", "86400"),
+        ("CAST(TIME '00:00:00' AS decimal(1, 0))", "0"),
+    ] {
+        assert_eq!(text(expr), want, "{expr}");
+    }
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let e = block_on(s.sql("SELECT CAST(TIME '00:01:00' AS decimal(1, 0))"))
+        .and_then(|df| block_on(df.collect()))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::NumericValueOutOfRangeWithSuggestion
+    );
+    assert!(e.to_string().contains("60.000000000"), "{e}");
+}
