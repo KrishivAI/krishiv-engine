@@ -48,6 +48,10 @@ impl FunctionRegistry for Registry {
         self.base.lookup(name, profile)
     }
 
+    fn spark_deterministic(&self, name: &str) -> Option<bool> {
+        name.eq_ignore_ascii_case("rand").then_some(false)
+    }
+
     fn version(&self) -> u64 {
         self.version
     }

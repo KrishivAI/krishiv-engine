@@ -964,6 +964,7 @@ impl Resolver<'_> {
                         );
                         continue;
                     }
+                    self.unknown_routine_first(&x)?;
                     stack.push(Step::Exit(Arc::clone(&x), ctx));
                     let kids = self.child_ctx(&x, ctx);
                     stack.extend(kids.into_iter().rev().map(|(c, k)| Step::Enter(c, k)));
@@ -1915,6 +1916,9 @@ impl Resolver<'_> {
                 }
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
+                    if entry.kind == FunctionKind::Aggregate {
+                        self.nondeterministic_arguments(e, &kids[..n])?;
+                    }
                 }
                 // `struct(a, ...)`: children with names keep them (a column
                 // contributes its name, a struct field its field name), so a
@@ -6355,6 +6359,88 @@ fn scala_set_order(strings: &[&str]) -> Vec<usize> {
 /// The longest generated name, in bytes.
 const MAX_NAME: usize = 64 << 10;
 
+impl Resolver<'_> {
+    /// A call of a function that does not exist is reported before the
+    /// errors of its arguments (Spark's `CheckAnalysis` reports the
+    /// outermost unresolved node first).
+    fn unknown_routine_first(&self, x: &Expr) -> Result<(), AnalysisError> {
+        let ExprNode::Function(f) = &x.node else {
+            return Ok(());
+        };
+        let n = f.args.len();
+        if !f.qualifier.is_empty()
+            || GroupingFn::from_name(&f.name).is_some()
+            || builtin_op(&f.name, n).is_some()
+            || !matches!(
+                self.ctx
+                    .functions
+                    .lookup(std::slice::from_ref(&f.name), self.ctx.profile),
+                FunctionLookup::NotFound
+            )
+        {
+            return Ok(());
+        }
+        let (parts, _) = qualified_parts(f, &self.b.search_path, x.origin)?;
+        Err(AnalysisError::new(
+            UnresolvedRoutine {
+                routine_name: quoted(&parts),
+                search_path: self.b.search_path.clone(),
+            },
+            x.origin,
+        ))
+    }
+
+    /// `AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION`: an argument
+    /// of an aggregate calls a nondeterministic function. A call of a SQL
+    /// function is as deterministic as its body, whatever its arguments.
+    fn nondeterministic_arguments(
+        &self,
+        e: &Arc<Expr>,
+        args: &[Bound],
+    ) -> Result<(), AnalysisError> {
+        let Some(bad) = args.iter().find(|k| {
+            !super::sqlfn::is_deterministic(&k.expr) && self.nondeterministic(&k.shown())
+        }) else {
+            return Ok(());
+        };
+        let shown = with_children(e, args.iter().map(Bound::shown).collect());
+        Err(AnalysisError::new(
+            AggregateFunctionWithNondeterministicExpression {
+                sql_expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
+            },
+            bad.expr.origin,
+        ))
+    }
+
+    /// Whether `e`, as written, calls a nondeterministic function outside
+    /// the arguments of a SQL function.
+    fn nondeterministic(&self, e: &Expr) -> bool {
+        if let ExprNode::Function(f) = &e.node {
+            let mut name = f.qualifier.clone();
+            name.push(f.name.clone());
+            if matches!(
+                self.ctx.functions.lookup(&name, self.ctx.profile),
+                FunctionLookup::Sql(_)
+            ) {
+                return false;
+            }
+            if f.qualifier.is_empty()
+                && self.ctx.functions.spark_deterministic(&f.name) == Some(false)
+            {
+                return true;
+            }
+        }
+        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+            && !f.deterministic
+        {
+            return true;
+        }
+        let mut found = false;
+        e.for_each_child(&mut |c| found = found || self.nondeterministic(c));
+        found
+    }
+}
+
 /// The checks of a call that is not a window's function, out of line (the
 /// binding frame stays small): a window function needs `OVER`; an
 /// aggregate holds no aggregate and no window. A window aggregate
@@ -6380,18 +6466,6 @@ fn call_checks(
         }
         if kids[..n].iter().any(|k| k.win.is_some()) {
             return Err(super::windows::window_in_aggregate(e.origin));
-        }
-        if let Some(bad) = kids[..n]
-            .iter()
-            .find(|k| !super::sqlfn::is_deterministic(&k.expr))
-        {
-            let shown = with_children(e, kids.iter().map(Bound::shown).collect());
-            return Err(AnalysisError::new(
-                AggregateFunctionWithNondeterministicExpression {
-                    sql_expr: format!("\"{}\"", pretty(&shown, None)),
-                },
-                bad.expr.origin,
-            ));
         }
     }
     Ok(())
