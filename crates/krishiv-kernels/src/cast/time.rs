@@ -490,4 +490,40 @@ mod tests {
             assert!(time_from_units([Some(bad)].into_iter(), 1_000_000).is_err());
         }
     }
+    #[test]
+    fn to_time_reads_the_default_grammar_or_a_pattern() {
+        let text = StringArray::from(vec![Some("01:02:03"), Some("23-59-59.999999"), None]);
+        let fmts = StringArray::from(vec![Some("HH:mm:ss"), Some("HH-mm-ss.SSSSSS"), Some("HH")]);
+        let plain = to_time(&text.slice(0, 1), None, true).unwrap();
+        assert_eq!(plain.value(0), 3723 * S);
+        let piped = to_time(&text, Some(&fmts), false).unwrap();
+        assert_eq!(piped.value(0), 3723 * S);
+        assert_eq!(piped.value(1), 86_399 * S + 999_999_000);
+        assert!(piped.is_null(2));
+        // A NULL pattern is NULL.
+        let none = StringArray::from(vec![None::<&str>]);
+        assert!(
+            to_time(&text.slice(0, 1), Some(&none), true)
+                .unwrap()
+                .is_null(0)
+        );
+    }
+
+    #[test]
+    fn to_time_refuses_or_nulls_what_does_not_parse() {
+        let text = StringArray::from(vec![Some("13-60"), Some("abc")]);
+        let fmts = StringArray::from(vec![Some("HH-mm"), Some("HH:mm")]);
+        let e = to_time(&text, Some(&fmts), true).unwrap_err();
+        assert_eq!(
+            e.error().error_class(),
+            krishiv_common::error::ErrorClass::CannotParseTime
+        );
+        let e = to_time(&text.slice(1, 1), None, true).unwrap_err();
+        assert_eq!(
+            e.error().error_class(),
+            krishiv_common::error::ErrorClass::CannotParseTime
+        );
+        let nulls = to_time(&text, Some(&fmts), false).unwrap();
+        assert_eq!(nulls.null_count(), 2);
+    }
 }

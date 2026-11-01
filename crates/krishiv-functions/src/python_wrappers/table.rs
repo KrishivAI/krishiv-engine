@@ -22,12 +22,24 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("if", "no PySpark function"),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
-    ("time_from_micros", "TIME has no Python mapping yet (P2-T181)"),
-    ("time_from_millis", "TIME has no Python mapping yet (P2-T181)"),
-    ("time_from_seconds", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "time_from_micros",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
+    (
+        "time_from_millis",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
+    (
+        "time_from_seconds",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
     ("time_to_micros", "TIME has no Python mapping yet (P2-T181)"),
     ("time_to_millis", "TIME has no Python mapping yet (P2-T181)"),
-    ("time_to_seconds", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "time_to_seconds",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
     ("to_time", "TIME has no Python mapping yet (P2-T181)"),
     ("try_to_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time_diff", "TIME has no Python mapping yet (P2-T181)"),
