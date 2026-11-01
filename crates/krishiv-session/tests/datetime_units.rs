@@ -508,6 +508,14 @@ fn legacy_identifier_call_with_a_modifier_is_not_a_column() {
 fn a_sql_function_is_refused_in_sort_limit_and_generate() {
     let s = session();
     block_on(s.sql("CREATE FUNCTION udf_id(x INT) RETURNS INT RETURN x")).unwrap();
+    // A call in the select list is fine under an ORDER BY of plain columns.
+    let ok = block_on(async {
+        s.sql("SELECT udf_id(c1) FROM VALUES(1) AS t(c1) ORDER BY c1")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(ok.is_ok(), "{ok:?}");
     for (sql, node) in [
         (
             "SELECT * FROM VALUES(1) AS t(c1) ORDER BY udf_id(c1)",
