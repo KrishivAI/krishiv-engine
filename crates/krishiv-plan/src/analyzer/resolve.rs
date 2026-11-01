@@ -96,6 +96,11 @@ pub(super) struct Rel {
     pub(super) agg: Option<Arc<AggInfo>>,
     /// Where dropped columns come back from, if anywhere.
     pub(super) widen: Option<Arc<Widen>>,
+    /// Attributes the output hides but a qualified name (`t.k`, `t.*`)
+    /// still reaches: the key columns a `USING` join merges (Spark's
+    /// hidden output). Filters, sorts and limits pass them on; a
+    /// projection drops them.
+    pub(super) hidden: Arc<[Attr]>,
 }
 
 /// An enclosing query's operator, as a subquery sees it.
@@ -467,8 +472,19 @@ impl Resolver<'_> {
         out: Vec<Attr>,
         kids: &[&Rel],
     ) -> Rel {
+        let passes = matches!(
+            node,
+            PlanNode::Filter { .. }
+                | PlanNode::Sort { .. }
+                | PlanNode::Limit { .. }
+                | PlanNode::Offset { .. }
+        );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
-        self.wrap(plan, origin.plan_id, out, kids)
+        let mut r = self.wrap(plan, origin.plan_id, out, kids);
+        if let ([k], true) = (kids, passes) {
+            r.hidden = Arc::clone(&k.hidden);
+        }
+        r
     }
 
     pub(super) fn wrap(
@@ -506,6 +522,7 @@ impl Resolver<'_> {
             carriers,
             agg: None,
             widen: None,
+            hidden: Arc::from(Vec::new()),
         }
     }
 
