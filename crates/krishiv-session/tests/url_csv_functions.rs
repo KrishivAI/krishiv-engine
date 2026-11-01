@@ -434,18 +434,19 @@ fn schema_of_csv_rejects_an_untokenizable_literal() {
     );
 }
 
-/// A session variable as the CSV keeps the name the call already shows (the
-/// same form any function over a variable shows), not the folded DDL
+/// A session variable as the CSV keeps the name the call already shows, not the folded DDL
 /// literal. Spark 4.2.0 spells a variable argument
-/// `variablereference(system.session.v='1,abc')` in every function's name;
-/// that spelling is a gap of the engine's naming of variables in general,
-/// not of this function.
+/// `variablereference(system.session.v='1,abc')` in every function's name.
 #[test]
 fn schema_of_csv_of_a_variable_keeps_its_shown_form() {
     let s = session();
     run(&s, "DECLARE OR REPLACE VARIABLE v STRING DEFAULT '1,abc'");
-    assert_eq!(names(&s, "select upper(v)"), ["upper(v)"]);
-    assert_eq!(names(&s, "select schema_of_csv(v)"), ["schema_of_csv(v)"]);
+    let shown = "variablereference(system.session.v='1,abc')";
+    assert_eq!(names(&s, "select upper(v)"), [format!("upper({shown})")]);
+    assert_eq!(
+        names(&s, "select schema_of_csv(v)"),
+        [format!("schema_of_csv({shown})")]
+    );
     assert_eq!(
         run(&s, "select schema_of_csv(v)"),
         ["STRUCT<_c0: INT, _c1: STRING>"]
