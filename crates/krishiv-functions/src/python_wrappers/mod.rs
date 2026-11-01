@@ -347,10 +347,23 @@ fn render_function(row: &Row, params: &[Param]) -> (String, String) {
             continue;
         }
         let helper = params[at].conv.helper();
-        prelude.push_str(&format!(
-            "    _{name} = (\n        (_lit(\"{default}\", \"{name}\"),)\n        if {name} is None and ({})\n        else _opt({helper}, {name}, \"{name}\")\n    )\n",
-            later.join(" or ")
-        ));
+        let (given, cond) = (
+            format!("(_lit(\"{default}\", \"{name}\"),)"),
+            format!("{name} is None and ({})", later.join(" or ")),
+        );
+        let rest = format!("_opt({helper}, {name}, \"{name}\")");
+        let line = format!("    _{name} = {given} if {cond} else {rest}\n");
+        if line.len() <= 121 {
+            prelude.push_str(&line);
+        } else if 8 + given.len() + cond.len() + rest.len() + 11 <= 120 {
+            prelude.push_str(&format!(
+                "    _{name} = (\n        {given} if {cond} else {rest}\n    )\n"
+            ));
+        } else {
+            prelude.push_str(&format!(
+                "    _{name} = (\n        {given}\n        if {cond}\n        else {rest}\n    )\n"
+            ));
+        }
         args[at] = format!("*_{name}");
     }
     if row.reversed {
