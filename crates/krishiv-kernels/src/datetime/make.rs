@@ -10,7 +10,10 @@
 //! 0..59 is out of bounds. A local time inside a DST gap moves forward, an
 //! ambiguous one takes the earlier offset (`ZonedDateTime.of`).
 
-use arrow_array::{Array, Decimal128Array, Int32Array, TimestampMicrosecondArray};
+use arrow_array::{
+    Array, Date32Array, Decimal128Array, Int32Array, Time64NanosecondArray,
+    TimestampMicrosecondArray,
+};
 use arrow_buffer::NullBuffer;
 
 use super::Zones;
@@ -194,4 +197,55 @@ fn seconds_text(unscaled: i128) -> String {
     }
     let digits = format!("{frac:06}");
     format!("{sign}{whole}.{}", digits.trim_end_matches('0'))
+}
+
+/// `make_timestamp(date[, time[, zone]])` and its `_ntz` / `try_` forms: the
+/// date at `time` (midnight with no time), as a wall clock read in `zones`
+/// (`None` for a `TIMESTAMP_NTZ`). A NULL date, time or zone gives NULL. The
+/// time's nanoseconds are truncated to microseconds; no field can be invalid.
+///
+/// # Errors
+/// `INTERNAL_ERROR` for inputs of different lengths;
+/// `DATETIME_OVERFLOW` if a zone conversion leaves the timestamp range.
+pub fn make_timestamp_from_date(
+    dates: &Date32Array,
+    times: Option<&Time64NanosecondArray>,
+    zones: Option<&Zones<'_>>,
+) -> Result<TimestampMicrosecondArray, KernelError> {
+    let rows = dates.len();
+    if times.is_some_and(|t| t.len() != rows) {
+        return Err(KernelError::internal(
+            "make_timestamp arguments of different lengths",
+        ));
+    }
+    let mut values = with_capacity::<i64>(rows)?;
+    let mut valid = with_capacity::<bool>(rows)?;
+    for row in 0..rows {
+        let zone = zones.and_then(|z| z.at(row));
+        let missing = dates.is_null(row)
+            || times.is_some_and(|t| t.is_null(row))
+            || (zones.is_some() && zone.is_none());
+        if missing {
+            values.push(0);
+            valid.push(false);
+            continue;
+        }
+        let nanos = times.map_or(0, |t| t.value(row));
+        let local = i64::from(dates.value(row))
+            .checked_mul(MICROS_PER_DAY)
+            .and_then(|d| d.checked_add(nanos / 1_000))
+            .ok_or_else(|| KernelError::datetime_overflow(row, "make_timestamp"))?;
+        let instant = match zone {
+            Some(tz) => local_to_utc(local, tz),
+            None => Some(local),
+        };
+        let instant =
+            instant.ok_or_else(|| KernelError::datetime_overflow(row, "make_timestamp"))?;
+        values.push(instant);
+        valid.push(true);
+    }
+    Ok(TimestampMicrosecondArray::new(
+        values.into(),
+        Some(NullBuffer::from(valid)),
+    ))
 }

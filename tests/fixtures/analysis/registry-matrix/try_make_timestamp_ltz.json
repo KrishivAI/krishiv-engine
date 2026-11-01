@@ -330,11 +330,11 @@
     },
     {
       "id": "try_make_timestamp_ltz#5c9609f17705/ansi_on",
-      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp_ltz#5c9609f17705/ansi_off",
-      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp_ltz#5cca63a78318/ansi_on",
@@ -626,11 +626,11 @@
     },
     {
       "id": "try_make_timestamp_ltz#b2d9d9096836/ansi_on",
-      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL, 'CET') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL, 'CET') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp_ltz#b2d9d9096836/ansi_off",
-      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL, 'CET') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', NULL, 'CET') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp_ltz#bc2458ec7284/ansi_on",

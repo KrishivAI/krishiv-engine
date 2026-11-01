@@ -514,7 +514,27 @@ fn seconds_input() -> InputType {
     ))
 }
 
+/// The `(date[, time[, zone]])` forms of `make_timestamp`.
+fn make_timestamp_date_inputs(n: usize) -> Vec<InputType> {
+    let time = InputType::OneOf(
+        (0..=6)
+            .map(|precision| DataType::Time { precision })
+            .collect(),
+    );
+    [
+        InputType::Strict(DataType::Date),
+        time,
+        exact(DataType::String),
+    ]
+    .into_iter()
+    .take(n)
+    .collect()
+}
+
 fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.args().len() <= 3 {
+        return make_timestamp_date_inputs(c.args().len());
+    }
     let mut inputs = vec![exact(DataType::Integer); 5];
     inputs.push(seconds_input());
     if c.args().len() == 7 {
@@ -523,7 +543,10 @@ fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     inputs
 }
 
-fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+fn make_timestamp_ntz_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.args().len() <= 2 {
+        return make_timestamp_date_inputs(c.args().len());
+    }
     let mut inputs = vec![exact(DataType::Integer); 5];
     inputs.push(seconds_input());
     inputs
@@ -532,7 +555,9 @@ fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
 /// A malformed field is NULL with ANSI off and always for the `try_`
 /// forms, so the result may be null then whatever the arguments.
 fn make_timestamp_result(c: &CallTypes<'_>, ty: DataType, try_form: bool) -> ArgType {
-    ArgType::new(ty, try_form || !c.ansi() || c.any_nullable())
+    // The date forms have no field that can be malformed.
+    let can_fail = c.args().len() > 3 && (try_form || !c.ansi());
+    ArgType::new(ty, can_fail || c.any_nullable())
 }
 
 fn make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {

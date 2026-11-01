@@ -35,7 +35,9 @@ use krishiv_kernels::datetime::{
     parse_timestamps, seconds_to_timestamps, timestamp_add, timestamp_diff, to_utc_timestamp,
     trunc_date, trunc_timestamp, unix_date,
 };
-use krishiv_kernels::datetime::{TimeZoneRules, TimestampFields, TimestampUnit, make_timestamp};
+use krishiv_kernels::datetime::{
+    TimeZoneRules, TimestampFields, TimestampUnit, make_timestamp, make_timestamp_from_date,
+};
 use krishiv_kernels::datetime::{
     date_from_unix_date, timestamp_from_integral, timestamp_from_seconds,
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
@@ -950,6 +952,57 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let out = trunc_timestamp(&x.strings(0)?, &utc, o.time_zone.as_ref(), ansi)?;
                 Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
             })
+        }
+        (
+            "make_timestamp"
+            | "make_timestamp_ltz"
+            | "make_timestamp_ntz"
+            | "try_make_timestamp"
+            | "try_make_timestamp_ltz"
+            | "try_make_timestamp_ntz",
+            [DataType::Date32, ..],
+        ) if types.len() <= 3
+            && types
+                .get(1)
+                .is_none_or(|t| *t == DataType::Time64(TimeUnit::Nanosecond))
+            && types.get(2).is_none_or(is_string) =>
+        {
+            let ntz = listed.ends_with("_ntz");
+            let zone = if ntz || types.len() < 3 {
+                None
+            } else {
+                Some(match zone_arg(args, 2) {
+                    Ok(z) => z,
+                    Err(e) => return Some((listed, Err(e))),
+                })
+            };
+            let session_zone = !ntz && types.len() < 3;
+            Binding::new(
+                if ntz { ntz_type() } else { timestamp() },
+                move |x: &Inputs<'_>| {
+                    let times = if types.len() > 1 {
+                        Some(x.array::<Time64NanosecondType>(1)?)
+                    } else {
+                        None
+                    };
+                    let names;
+                    let zones = match &zone {
+                        None if session_zone => Some(Zones::One(o.time_zone.as_ref())),
+                        None => None,
+                        Some(ZoneArg::Literal(Some(one))) => Some(Zones::One(one)),
+                        Some(ZoneArg::Literal(None)) => {
+                            return Ok(Arc::new(null_instants(x.rows())) as ArrayRef);
+                        }
+                        Some(ZoneArg::Column) => {
+                            names = column_zones(&x.strings(2)?)?;
+                            Some(Zones::PerRow(&names))
+                        }
+                    };
+                    let out =
+                        make_timestamp_from_date(&x.dates(0)?, times.as_ref(), zones.as_ref())?;
+                    Ok(Arc::new(if ntz { out } else { out.with_timezone("UTC") }) as ArrayRef)
+                },
+            )
         }
         (
             "make_timestamp"

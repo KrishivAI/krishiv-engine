@@ -202,11 +202,11 @@
     },
     {
       "id": "make_timestamp_ntz#ba18932bc0ac/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ntz(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_timestamp_ntz#ba18932bc0ac/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ntz(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_timestamp_ntz#c0f4d1828bfa/ansi_on",
