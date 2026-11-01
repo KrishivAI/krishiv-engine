@@ -13,7 +13,8 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind, WritePlan,
+    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryPlan,
+    SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -313,6 +314,7 @@ impl Encoder {
                 Kind::Aggregate(self.aggregate(input, aggregate)?)
             }
             PhysNode::HashJoin(join) => Kind::HashJoin(self.hash_join(join)?),
+            PhysNode::SortMergeJoin(join) => Kind::SortMergeJoin(self.merge_join(join)?),
             PhysNode::NestedLoopJoin(join) => Kind::NestedLoopJoin(self.nested_loop(join)?),
             PhysNode::Union { inputs } => Kind::Union(pb::UnionNode {
                 inputs: inputs
@@ -431,6 +433,19 @@ impl Encoder {
             distribution: distribution(join.distribution) as i32,
             single_match: join.single_match,
             distinct_build: join.distinct_build,
+        })
+    }
+
+    fn merge_join(&mut self, join: &SortMergeJoinPlan) -> Result<pb::SortMergeJoinNode> {
+        Ok(pb::SortMergeJoinNode {
+            probe: self.node_index(&join.probe)?,
+            build: self.node_index(&join.build)?,
+            join_type: join_type(join.join_type) as i32,
+            probe_keys: indexes(&join.probe_keys),
+            build_keys: indexes(&join.build_keys),
+            null_safe: join.null_safe.clone(),
+            residual: self.residual(join.residual.as_ref())?,
+            single_match: join.single_match,
         })
     }
 
@@ -1148,6 +1163,23 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Time { precision } => (Kind::Time, u32::from(*precision), 0, 0),
         DataType::Geometry { srid } => (Kind::Geometry, 0, 0, srid.to_i32()),
         DataType::Geography { srid } => (Kind::Geography, 0, 0, srid.to_i32()),
+        DataType::YearMonthInterval { start, end } => {
+            return Ok(pb::DataType {
+                kind: Kind::YearMonthInterval as i32,
+                ym_start: year_month_field(*start) as i32,
+                ym_end: year_month_field(*end) as i32,
+                ..pb::DataType::default()
+            });
+        }
+        DataType::DayTimeInterval { start, end } => {
+            return Ok(pb::DataType {
+                kind: Kind::DayTimeInterval as i32,
+                dt_start: day_time_field(*start) as i32,
+                dt_end: day_time_field(*end) as i32,
+                ..pb::DataType::default()
+            });
+        }
+        DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
         _ => {
             return Err(CodecError::Unsupported(
                 "a Spark type this version does not know".to_owned(),
@@ -1159,7 +1191,7 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         precision,
         scale,
         srid,
-        json: String::new(),
+        ..pb::DataType::default()
     })
 }
 
@@ -1199,6 +1231,15 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
             micros: *micros,
             start: day_time_field(*start) as i32,
             end: day_time_field(*end) as i32,
+        }),
+        Literal::CalendarInterval {
+            months,
+            days,
+            micros,
+        } => Kind::Calendar(pb::CalendarLiteral {
+            months: *months,
+            days: *days,
+            micros: *micros,
         }),
         _ => {
             return Err(CodecError::Unsupported(

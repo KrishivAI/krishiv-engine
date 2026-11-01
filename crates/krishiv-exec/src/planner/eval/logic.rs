@@ -368,6 +368,12 @@ pub(crate) fn cmp(
         ArrowType::Date32 => prim!(Date32Type),
         ArrowType::Timestamp(..) => prim!(TimestampMicrosecondType),
         ArrowType::Time64(_) => prim!(Time64NanosecondType),
+        ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth) => {
+            prim!(arrow_array::types::IntervalYearMonthType)
+        }
+        ArrowType::Duration(arrow_schema::TimeUnit::Microsecond) => {
+            prim!(arrow_array::types::DurationMicrosecondType)
+        }
         ArrowType::Boolean => {
             let (a, b) = (bool_operand(l), bool_operand(r));
             match kind {

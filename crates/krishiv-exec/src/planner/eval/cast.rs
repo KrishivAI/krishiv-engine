@@ -8,7 +8,7 @@ use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_plan::CastMode;
-use krishiv_types::DataType;
+use krishiv_types::{DataType, DayTimeField, YearMonthField};
 
 use super::nested_cast;
 use super::strings::{from_view, to_view};
@@ -109,8 +109,10 @@ struct Cast {
 /// Whether a cast between `from` and `to` reads the session time zone.
 fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
-    (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(..)))
-        || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(..)))
+    let wall_clock = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, None));
+    (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
+        || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
+        || (wall_clock(from) && zoned(to))
 }
 
 /// A cast's plan data, without its child: what [`NullIf`](super::cond::NullIf)
@@ -344,6 +346,106 @@ fn check_geography(spatial: &ArrayRef) -> Result<()> {
         rewrite(wkb.value(row), SpatialKind::Geography, ByteOrder::Ndr)?;
     }
     Ok(())
+}
+
+/// `CAST(interval AS STRING)`. The Arrow carrier has no fields, so the
+/// source's Spark type comes along.
+#[derive(Debug)]
+struct IntervalToString {
+    e: Arc<dyn PhysExpr>,
+    from: DataType,
+}
+
+pub(super) fn interval_to_string(e: Arc<dyn PhysExpr>, from: DataType) -> Arc<dyn PhysExpr> {
+    Arc::new(IntervalToString { e, from })
+}
+
+/// `a`, of the interval type `from`, as `CAST(.. AS STRING)` writes it.
+pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef> {
+    use arrow_array::StringViewArray;
+    use arrow_array::types::{
+        DurationMicrosecondType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    };
+    use krishiv_types::interval::{calendar_string, day_time_string, year_month_string};
+    let out: StringViewArray = match (from, a.data_type()) {
+        (DataType::YearMonthInterval { start, end }, ArrowType::Interval(_)) => a
+            .as_primitive::<IntervalYearMonthType>()
+            .iter()
+            .map(|v| v.map(|m| year_month_string(m, *start, *end)))
+            .collect(),
+        (DataType::DayTimeInterval { start, end }, ArrowType::Duration(_)) => a
+            .as_primitive::<DurationMicrosecondType>()
+            .iter()
+            .map(|v| v.map(|m| day_time_string(m, *start, *end)))
+            .collect(),
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => a
+            .as_primitive::<IntervalMonthDayNanoType>()
+            .iter()
+            .map(|v| v.map(|i| calendar_string(i.months, i.days, i.nanoseconds / 1000)))
+            .collect(),
+        (from, carrier) => {
+            return Err(internal(&format!("a {from} value carried as {carrier}")));
+        }
+    };
+    Ok(Arc::new(out))
+}
+
+/// The size of a year-month type's end field, in months.
+const fn month_unit(end: YearMonthField) -> i32 {
+    match end {
+        YearMonthField::Year => 12,
+        YearMonthField::Month => 1,
+    }
+}
+
+/// The microseconds a day-time type with this end field keeps a multiple of;
+/// SECOND keeps its fraction.
+const fn micro_step(end: DayTimeField) -> i64 {
+    match end {
+        DayTimeField::Day => 86_400_000_000,
+        DayTimeField::Hour => 3_600_000_000,
+        DayTimeField::Minute => 60_000_000,
+        DayTimeField::Second => 1,
+    }
+}
+
+/// An interval column of type `to`, without what is below `to`'s end field.
+pub(super) fn truncate_interval(to: &DataType, a: &dyn Array) -> Result<ArrayRef> {
+    use krishiv_kernels::interval::{truncate_day_time, truncate_year_month};
+    Ok(match to {
+        DataType::YearMonthInterval { end, .. } => {
+            Arc::new(truncate_year_month(a.as_primitive(), month_unit(*end)))
+        }
+        DataType::DayTimeInterval { end, .. } => {
+            Arc::new(truncate_day_time(a.as_primitive(), micro_step(*end)))
+        }
+        // A calendar interval has no fields to cut.
+        DataType::CalendarInterval => arrow_array::make_array(a.to_data()),
+        other => return Err(internal(&format!("truncating a {other} as an interval"))),
+    })
+}
+
+impl PhysExpr for IntervalToString {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Utf8View
+    }
+
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
+    fn nullable(&self) -> bool {
+        self.e.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
+        let out = render_interval(&self.from, v.array().as_ref())?;
+        Ok(match v {
+            Value::Scalar(_) => Value::Scalar(out),
+            Value::Array(_) => Value::Array(out),
+        })
+    }
 }
 
 impl PhysExpr for Cast {

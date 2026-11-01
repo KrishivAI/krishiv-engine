@@ -28,8 +28,8 @@
 //! With `spark.sql.ansi.enabled` off Spark promotes strings differently
 //! (string to `double` in arithmetic, to the other side's type in
 //! comparisons); those operator coercions are not implemented and fail with
-//! `KRISHIV_UNSUPPORTED_FEATURE`. Arithmetic on dates and timestamps
-//! (`date_add`, intervals) is not implemented either.
+//! `KRISHIV_UNSUPPORTED_FEATURE`. Arithmetic on dates, timestamps and
+//! intervals is rewritten before it gets here (`analyzer/intervals.rs`).
 
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType, StructField, StructType};
 
@@ -147,13 +147,6 @@ fn integral_digits(t: &DataType) -> Option<u8> {
 fn is_numeric(t: &DataType) -> bool {
     integral_digits(t).is_some()
         || matches!(t, DataType::Float | DataType::Double | DataType::Decimal(_))
-}
-
-fn is_datetime(t: Option<&DataType>) -> bool {
-    matches!(
-        t,
-        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
-    )
 }
 
 fn decimal(precision: u32, scale: u32) -> DecimalType {
@@ -374,10 +367,34 @@ fn common_in(
         (T::Geography { .. }, T::Geography { .. }) => T::Geography {
             srid: krishiv_types::Srid::Any,
         },
+        (T::YearMonthInterval { .. } | T::DayTimeInterval { .. }, _) => {
+            return widen_intervals(x, y).map(Some);
+        }
         (T::Timestamp, T::TimestampNtz) | (T::TimestampNtz, T::Timestamp) => T::Timestamp,
         _ => return None,
     };
     Some(Some(t))
+}
+
+/// The type two ANSI intervals of one family widen to: the lowest start and
+/// the highest end. `None` across families.
+pub(super) fn widen_intervals(a: &DataType, b: &DataType) -> Option<DataType> {
+    use DataType as T;
+    match (a, b) {
+        (T::YearMonthInterval { start: s, end: e }, T::YearMonthInterval { start: u, end: v }) => {
+            Some(T::YearMonthInterval {
+                start: *s.min(u),
+                end: *e.max(v),
+            })
+        }
+        (T::DayTimeInterval { start: s, end: e }, T::DayTimeInterval { start: u, end: v }) => {
+            Some(T::DayTimeInterval {
+                start: *s.min(u),
+                end: *e.max(v),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// The common type of all of `args` (`findWiderCommonType`: strings
@@ -416,7 +433,9 @@ fn legacy_string_type(args: &[Arg<'_>]) -> Option<Option<Option<DataType>>> {
         return None;
     }
     let promotes = |t: &&DataType| {
-        is_numeric(t) || matches!(t, T::String | T::Date | T::Timestamp | T::TimestampNtz)
+        is_numeric(t)
+            || is_ansi_interval(t)
+            || matches!(t, T::String | T::Date | T::Timestamp | T::TimestampNtz)
     };
     Some(typed.iter().all(promotes).then_some(Some(T::String)))
 }
@@ -494,13 +513,49 @@ fn comparison_nullable(args: &[Arg<'_>]) -> bool {
     any_nullable(args)
 }
 
-/// Strings meet other types differently with ANSI off.
+fn is_datetime(t: Option<&DataType>) -> bool {
+    matches!(
+        t,
+        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+    )
+}
+
+/// Whether `t` is a year-month or day-time interval.
+const fn is_ansi_interval(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }
+    )
+}
+
+/// Whether one of two operands is a string and the other satisfies `other`,
+/// with ANSI off.
+fn legacy_string_beside(
+    a: &Arg<'_>,
+    b: &Arg<'_>,
+    ansi: bool,
+    other: fn(&DataType) -> bool,
+) -> bool {
+    !ansi
+        && match (a.ty, b.ty) {
+            (Some(DataType::String), Some(t)) | (Some(t), Some(DataType::String)) => other(t),
+            _ => false,
+        }
+}
+
+/// Strings meet other types differently with ANSI off. An interval takes the
+/// string's type where types widen (`legacy_string_type`).
 fn legacy_strings(args: &[Arg<'_>], ansi: bool) -> Result<(), Mismatch> {
     let strings = args
         .iter()
         .filter(|a| matches!(a.ty, Some(DataType::String)))
         .count();
-    if !ansi && strings > 0 && strings < args.iter().filter(|a| a.ty.is_some()).count() {
+    let intervals = args.iter().any(|a| a.ty.is_some_and(is_ansi_interval));
+    if !ansi
+        && !intervals
+        && strings > 0
+        && strings < args.iter().filter(|a| a.ty.is_some()).count()
+    {
         return Err(Mismatch::Unsupported(
             "implicit string casts with spark.sql.ansi.enabled off",
         ));
@@ -548,6 +603,9 @@ fn operator_types(
     };
     match (op, args) {
         (B::Eq | B::EqNullSafe | B::Lt | B::LtEq | B::Gt | B::GtEq, [a, b]) => {
+            if legacy_string_beside(a, b, ansi, is_ansi_interval) {
+                return Err(Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()));
+            }
             legacy_strings(args, ansi)?;
             // Types equal but for field names and nullability compare as
             // they are (Spark's `DataTypeUtils.sameType` check passes).
@@ -662,7 +720,10 @@ fn same_shape(args: &[Arg<'_>]) -> bool {
 pub(super) fn orderable(t: &DataType) -> bool {
     match t {
         // A geometry or geography neither orders nor compares.
-        DataType::Map(_) | DataType::Geometry { .. } | DataType::Geography { .. } => false,
+        DataType::Map(_)
+        | DataType::CalendarInterval
+        | DataType::Geometry { .. }
+        | DataType::Geography { .. } => false,
         DataType::Array(a) => orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| orderable(f.data_type())),
         _ => true,
@@ -871,15 +932,20 @@ fn arithmetic(
         Builtin::Divide => DIVISIBLE,
         _ => NUMERIC,
     };
+    // Spark promotes the string to a number, which meets neither of these.
+    let no_number = |t: &T| is_ansi_interval(t) || matches!(t, T::Timestamp | T::TimestampNtz);
+    if legacy_string_beside(a, b, ansi, no_number) {
+        return Err(Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()));
+    }
     if matches!(op, Builtin::Add | Builtin::Subtract) && (is_datetime(a.ty) || is_datetime(b.ty)) {
         let text = if op == Builtin::Add {
             datetime_text_sum(a, b, ansi)
         } else {
             None
         };
-        return Err(text
-            .or_else(|| datetime_decimal(op, a, b))
-            .unwrap_or(Mismatch::Unsupported("date and timestamp arithmetic")));
+        if let Some(m) = text.or_else(|| datetime_decimal(op, a, b)) {
+            return Err(m);
+        }
     }
     legacy_strings(&[*a, *b], ansi)?;
     let (x, y) = match (a.ty, b.ty) {
@@ -1280,6 +1346,13 @@ fn declared(
     let mut casts = Vec::new();
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
+        // Spark takes these and answers in the interval; they run from unit 4
+        // of P2-T001b.
+        if matches!(want, InputType::Numeric { intervals: true })
+            && a.ty.is_some_and(is_ansi_interval)
+        {
+            return Err(Mismatch::Unsupported("an interval as this argument"));
+        }
         let to = implicit(a.ty, want, ansi).ok_or_else(|| Mismatch::Unexpected {
             arg: i,
             param: i,
@@ -1418,6 +1491,19 @@ pub(super) fn can_cast(
     }
     if *from == T::String || *to == T::String {
         return Ok(());
+    }
+    // Within a family, and between an ANSI interval and a number (which runs
+    // from unit 4 of P2-T001b); nothing else.
+    let number = |t: &T| integral_digits(t).is_some() || matches!(t, T::Decimal(_));
+    match (from, to) {
+        (T::YearMonthInterval { .. }, T::YearMonthInterval { .. })
+        | (T::DayTimeInterval { .. }, T::DayTimeInterval { .. }) => return Ok(()),
+        (i, n) | (n, i) if is_ansi_interval(i) && number(n) => return Ok(()),
+        (T::YearMonthInterval { .. } | T::DayTimeInterval { .. } | T::CalendarInterval, _)
+        | (_, T::YearMonthInterval { .. } | T::DayTimeInterval { .. } | T::CalendarInterval) => {
+            return Err(BadCast::Without);
+        }
+        _ => {}
     }
     // A time casts to another time, to the integral types (whole seconds)
     // and to `decimal` (seconds with the fraction).

@@ -25,6 +25,7 @@ fn join(sql: &str) -> (ExplainNode, bool, Vec<String>) {
     all.extend(plan.warnings().iter().cloned());
     let root = plan.explain().clone();
     let j = find(&root, "HashJoin")
+        .or_else(|| find(&root, "SortMergeJoin"))
         .or_else(|| find(&root, "NestedLoopJoin"))
         .unwrap_or_else(|| panic!("{sql}: no join in\n{root}"))
         .clone();
@@ -61,12 +62,7 @@ fn hint_precedence_and_overrides() {
         "SELECT /*+ SHUFFLE_HASH(x), MERGE(y) */ x.s, y.s {EQUI}"
     ));
     assert!(y, "MERGE wins and keeps the default side");
-    assert_eq!(
-        w,
-        [
-            "Hint (strategy=merge) is not supported in the query: no sort-merge join in a single-node plan; a hash join runs instead."
-        ]
-    );
+    assert!(w.is_empty(), "{w:?}");
     // On one relation the first hint written wins.
     let (_, y, w) = join(&format!(
         "SELECT /*+ BROADCAST(x), MERGE(x) */ x.s, y.s {EQUI}"
@@ -345,4 +341,38 @@ fn partitioning_hint_messages() {
             .unwrap_err();
         assert_eq!(err.error.message(), message, "{sql}");
     }
+}
+
+/// `MERGE` plans a sort-merge join with both sorts in `EXPLAIN`, `NOT IN`
+/// and no-hint joins stay hash joins; the results are the unhinted query's.
+#[test]
+fn merge_plans_a_sort_merge_join() {
+    let env = env();
+    for hint in ["MERGE(y)", "SHUFFLE_MERGE(x)", "MERGEJOIN(y)"] {
+        let (j, _, w) = join(&format!("SELECT /*+ {hint} */ x.s, y.s {EQUI}"));
+        assert_eq!(j.name, "SortMergeJoin", "{hint}: {j}");
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(j.children[0].name, "Sort", "{j}");
+        assert_eq!(j.children[1].name, "Sort", "{j}");
+    }
+    let (j, _, _) = join(&format!("SELECT x.s, y.s {EQUI}"));
+    assert_eq!(j.name, "HashJoin", "{j}");
+    let sorted = |sql: &str| {
+        let (_, mut rows) = env.rows(sql);
+        rows.sort();
+        rows
+    };
+    let plain = sorted(&format!("SELECT x.a, y.b {EQUI}"));
+    assert!(!plain.is_empty());
+    assert_eq!(
+        plain,
+        sorted(&format!("SELECT /*+ MERGE(y) */ x.a, y.b {EQUI}"))
+    );
+    // `MERGE` over a key the sort cannot order falls through, as in Spark.
+    let (j, _, w) = join("SELECT /*+ MERGE(y) */ x.a FROM t x JOIN t y ON array(x.a) = array(y.a)");
+    assert_eq!(j.name, "HashJoin", "{j}");
+    assert!(w.is_empty(), "{w:?}");
+    // `NOT IN` needs the whole build side: a hash join whatever is asked.
+    let (j, _, _) = join("SELECT /*+ MERGE(x) */ x.a FROM t x WHERE x.a NOT IN (SELECT a FROM t)");
+    assert_eq!(j.name, "HashJoin", "{j}");
 }

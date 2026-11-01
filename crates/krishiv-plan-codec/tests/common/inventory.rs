@@ -13,8 +13,8 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind, WritePlan,
+    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
+    SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
@@ -987,6 +987,22 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
         (
+            "sort_merge_join",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::Inner);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: j.residual,
+                    single_match: false,
+                }
+            }),
+        ),
+        (
             "partial_aggregate",
             PhysNode::HashJoin(HashJoinPlan {
                 probe: boxed(partial_aggregate()),
@@ -1623,7 +1639,60 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    let ym = |months, start, end| lit(Literal::YearMonthInterval { months, start, end });
+    let dt = |micros, start, end| lit(Literal::DayTimeInterval { micros, start, end });
+    let interval_literals = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: [
+            ym(14, YearMonthField::Year, YearMonthField::Month),
+            dt(5_000_000, DayTimeField::Hour, DayTimeField::Second),
+            lit(Literal::CalendarInterval {
+                months: 14,
+                days: 3,
+                micros: 4,
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| ProjectItemPlan::Expr {
+            name: format!("i{i}"),
+            expr,
+        })
+        .collect(),
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    let mut interval_columns = file_scan();
+    interval_columns.scan.output = vec![
+        column(
+            3,
+            "ym",
+            DataType::YearMonthInterval {
+                start: YearMonthField::Month,
+                end: YearMonthField::Month,
+            },
+            true,
+        ),
+        column(4, "dt", DataType::DEFAULT_DAY_TIME_INTERVAL, true),
+        column(5, "cal", DataType::CalendarInterval, true),
+    ];
+    let nested_intervals = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "intervals".to_owned(),
+            expr: lit(Literal::Null(Some(DataType::Array(
+                krishiv_types::ArrayType::new(DataType::DEFAULT_YEAR_MONTH_INTERVAL, true).into(),
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
     vec![
+        ("interval_literals", interval_literals),
+        ("interval_scan", PhysNode::Scan(interval_columns)),
+        ("interval_nested", nested_intervals),
         ("time_nested", nested_times),
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),

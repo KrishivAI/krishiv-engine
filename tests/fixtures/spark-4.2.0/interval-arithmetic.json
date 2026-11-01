@@ -1,0 +1,1888 @@
+{
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_interval_goldens.py",
+ "cases": [
+  {
+   "expr": "interval '1 day'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1' DAY",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "interval '1 day 2 hours'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1 02' DAY TO HOUR",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 02' DAY TO HOUR"
+  },
+  {
+   "expr": "interval '1 month'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1' MONTH",
+   "type": "interval month",
+   "value": "INTERVAL '1' MONTH"
+  },
+  {
+   "expr": "interval '1 year 2 months'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1-2' YEAR TO MONTH",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1 hour'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '01' HOUR",
+   "type": "interval hour",
+   "value": "INTERVAL '01' HOUR"
+  },
+  {
+   "expr": "interval '1 week'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '7' DAY",
+   "type": "interval day",
+   "value": "INTERVAL '7' DAY"
+  },
+  {
+   "expr": "interval '1 millisecond'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '00.001' SECOND",
+   "type": "interval second",
+   "value": "INTERVAL '00.001' SECOND"
+  },
+  {
+   "expr": "interval '1 microsecond'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '00.000001' SECOND",
+   "type": "interval second",
+   "value": "INTERVAL '00.000001' SECOND"
+  },
+  {
+   "expr": "interval '0 seconds'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '00' SECOND",
+   "type": "interval second",
+   "value": "INTERVAL '00' SECOND"
+  },
+  {
+   "expr": "interval '0'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_TYPED_LITERAL"
+  },
+  {
+   "expr": "interval '-1 day'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '-1' DAY",
+   "type": "interval day",
+   "value": "INTERVAL '-1' DAY"
+  },
+  {
+   "expr": "- interval '1 day'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(- INTERVAL '1' DAY)",
+   "type": "interval day",
+   "value": "INTERVAL '-1' DAY"
+  },
+  {
+   "expr": "interval -'1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '-1' DAY",
+   "type": "interval day",
+   "value": "INTERVAL '-1' DAY"
+  },
+  {
+   "expr": "interval 1 day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1' DAY",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "interval 1 day 2 hours",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1 02' DAY TO HOUR",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 02' DAY TO HOUR"
+  },
+  {
+   "expr": "interval 1 year 2 months",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1-2' YEAR TO MONTH",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval 2 months",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '2' MONTH",
+   "type": "interval month",
+   "value": "INTERVAL '2' MONTH"
+  },
+  {
+   "expr": "interval 1 week",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '7' DAY",
+   "type": "interval day",
+   "value": "INTERVAL '7' DAY"
+  },
+  {
+   "expr": "interval 1 millisecond",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '00.001' SECOND",
+   "type": "interval second",
+   "value": "INTERVAL '00.001' SECOND"
+  },
+  {
+   "expr": "interval 1 second 1 millisecond",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '01.001' SECOND",
+   "type": "interval second",
+   "value": "INTERVAL '01.001' SECOND"
+  },
+  {
+   "expr": "interval 1.5 second",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '01.5' SECOND",
+   "type": "interval second",
+   "value": "INTERVAL '01.5' SECOND"
+  },
+  {
+   "expr": "interval 1.5 day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_INTERVAL_FORMAT.INVALID_FRACTION"
+  },
+  {
+   "expr": "interval '1' year",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1' YEAR",
+   "type": "interval year",
+   "value": "INTERVAL '1' YEAR"
+  },
+  {
+   "expr": "interval '1 2' day to hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1 02' DAY TO HOUR",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 02' DAY TO HOUR"
+  },
+  {
+   "expr": "interval '1-2' year to month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1-2' YEAR TO MONTH",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1 2:3:4.5' day to second",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1 02:03:04.5' DAY TO SECOND",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 02:03:04.5' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1:2' hour to minute",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '01:02' HOUR TO MINUTE",
+   "type": "interval hour to minute",
+   "value": "INTERVAL '01:02' HOUR TO MINUTE"
+  },
+  {
+   "expr": "interval '10' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '10' HOUR",
+   "type": "interval hour",
+   "value": "INTERVAL '10' HOUR"
+  },
+  {
+   "expr": "interval '5.5' second",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '05.5' SECOND",
+   "type": "interval second",
+   "value": "INTERVAL '05.5' SECOND"
+  },
+  {
+   "expr": "interval 1 day 1 month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "_LEGACY_ERROR_TEMP_0029"
+  },
+  {
+   "expr": "interval '1 day 1 month'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "_LEGACY_ERROR_TEMP_0029"
+  },
+  {
+   "expr": "interval '1 month 0 day'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "_LEGACY_ERROR_TEMP_0029"
+  },
+  {
+   "expr": "interval 0 month 1 day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "_LEGACY_ERROR_TEMP_0029"
+  },
+  {
+   "expr": "interval '1 year -12 months'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '0-0' YEAR TO MONTH",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-0' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval 'interval 1 day'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1' DAY",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "interval '1day'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_TYPED_LITERAL"
+  },
+  {
+   "expr": "interval '1 nanosecond'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_TYPED_LITERAL"
+  },
+  {
+   "expr": "interval 1 nanosecond",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_INTERVAL_FORMAT.INVALID_UNIT"
+  },
+  {
+   "expr": "interval '1 hour 1 day'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1 01' DAY TO HOUR",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 01' DAY TO HOUR"
+  },
+  {
+   "expr": "interval 1 second 1 day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '1 00:00:01' DAY TO SECOND",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 00:00:01' DAY TO SECOND"
+  },
+  {
+   "expr": "interval 1 week 1 hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '7 01' DAY TO HOUR",
+   "type": "interval day to hour",
+   "value": "INTERVAL '7 01' DAY TO HOUR"
+  },
+  {
+   "expr": "interval '1 hour -60 minutes'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '00:00' HOUR TO MINUTE",
+   "type": "interval hour to minute",
+   "value": "INTERVAL '00:00' HOUR TO MINUTE"
+  },
+  {
+   "expr": "interval 1 hour 3 millisecond",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '01:00:00.003' HOUR TO SECOND",
+   "type": "interval hour to second",
+   "value": "INTERVAL '01:00:00.003' HOUR TO SECOND"
+  },
+  {
+   "expr": "interval '106751992' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "interval 2147483647 month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "INTERVAL '2147483647' MONTH",
+   "type": "interval month",
+   "value": "INTERVAL '2147483647' MONTH"
+  },
+  {
+   "expr": "interval 1000000000000 hour",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_INTERVAL_FORMAT.ARITHMETIC_EXCEPTION"
+  },
+  {
+   "expr": "interval '2147483647 days 25 hours'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' day as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(INTERVAL '1' DAY AS STRING)",
+   "type": "string",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "cast(interval '-1 2' day to hour as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(INTERVAL '-1 02' DAY TO HOUR AS STRING)",
+   "type": "string",
+   "value": "INTERVAL '-1 02' DAY TO HOUR"
+  },
+  {
+   "expr": "cast(interval '-1-2' year to month as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(INTERVAL '-1-2' YEAR TO MONTH AS STRING)",
+   "type": "string",
+   "value": "INTERVAL '-1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "cast(null as interval day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(NULL AS INTERVAL DAY)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "cast(null as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(NULL AS INTERVAL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "typeof(cast(null as interval hour to second))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "typeof(CAST(NULL AS INTERVAL HOUR TO SECOND))",
+   "type": "string",
+   "value": "interval hour to second"
+  },
+  {
+   "expr": "typeof(interval '1' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "typeof(INTERVAL '01' SECOND)",
+   "type": "string",
+   "value": "interval second"
+  },
+  {
+   "expr": "date'2024-01-31' + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + INTERVAL '1' MONTH",
+   "type": "date",
+   "value": "2024-02-29"
+  },
+  {
+   "expr": "date'2024-01-31' - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' - INTERVAL '1' MONTH",
+   "type": "date",
+   "value": "2023-12-31"
+  },
+  {
+   "expr": "interval '1' month + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + INTERVAL '1' MONTH",
+   "type": "date",
+   "value": "2024-02-29"
+  },
+  {
+   "expr": "interval '1' hour + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + INTERVAL '01' HOUR",
+   "type": "timestamp",
+   "value": "2024-01-31 01:00:00"
+  },
+  {
+   "expr": "interval '1' day + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "date_add(DATE '2024-01-31', extractansiintervaldays(INTERVAL '1' DAY))",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "date'2024-01-31' + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "date_add(DATE '2024-01-31', extractansiintervaldays(INTERVAL '1' DAY))",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "date'2024-01-31' - interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "date_add(DATE '2024-01-31', (- extractansiintervaldays(INTERVAL '1' DAY)))",
+   "type": "date",
+   "value": "2024-01-30"
+  },
+  {
+   "expr": "date'2024-01-31' - interval '1' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' - INTERVAL '01' HOUR",
+   "type": "timestamp",
+   "value": "2024-01-30 23:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + INTERVAL '1' MONTH",
+   "type": "timestamp",
+   "value": "2024-02-29 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - INTERVAL '1' MONTH",
+   "type": "timestamp",
+   "value": "2023-12-31 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + INTERVAL '1' DAY",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - INTERVAL '1' DAY",
+   "type": "timestamp",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "interval '1' day + timestamp'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + INTERVAL '1' DAY",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "interval '1' month + timestamp'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + INTERVAL '1' MONTH",
+   "type": "timestamp",
+   "value": "2024-02-29 00:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' + INTERVAL '1' DAY",
+   "type": "timestamp_ntz",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' - INTERVAL '1' MONTH",
+   "type": "timestamp_ntz",
+   "value": "2023-12-31 00:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - interval '1 2' day to hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' - INTERVAL '1 02' DAY TO HOUR",
+   "type": "timestamp_ntz",
+   "value": "2024-01-29 22:00:00"
+  },
+  {
+   "expr": "date'9999-12-31' + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "date_add(DATE '9999-12-31', extractansiintervaldays(INTERVAL '1' DAY))",
+   "type": "date",
+   "value": "+10000-01-01"
+  },
+  {
+   "expr": "'2024-01-31' + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "2024-01-31 + INTERVAL '1' DAY",
+   "type": "string",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "'2024-01-31' - interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "2024-01-31 - INTERVAL '1' DAY",
+   "type": "string",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "interval '1' day + '2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "2024-01-31 + INTERVAL '1' DAY",
+   "type": "string",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "'2024-01-31' + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "'2024-01-31' - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' month + '2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "date'2024-01-31' + null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + NULL",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "null + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + NULL",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "date'2024-01-31' - null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(DATE '2024-01-31' - NULL)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "null - date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(NULL - DATE '2024-01-31')",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "null + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(NULL + INTERVAL '1' MONTH)",
+   "type": "interval month",
+   "value": null
+  },
+  {
+   "expr": "interval '1' month - null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH - NULL)",
+   "type": "interval month",
+   "value": null
+  },
+  {
+   "expr": "null - interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(NULL - INTERVAL '1' DAY)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "null * interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * NULL)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "interval '1' day * null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * NULL)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "interval '1' day / null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY / NULL)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "null / interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "date'2024-01-31' - date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(DATE '2024-01-31' - DATE '2024-01-01')",
+   "type": "interval day",
+   "value": "INTERVAL '30' DAY"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - timestamp'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(TIMESTAMP '2024-01-31 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "date'2024-01-31' - timestamp'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(DATE '2024-01-31' - TIMESTAMP '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(TIMESTAMP '2024-01-31 00:00:00' - DATE '2024-01-01')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - timestamp_ntz'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(TIMESTAMP_NTZ '2024-01-31 00:00:00' - TIMESTAMP_NTZ '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - timestamp'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(TIMESTAMP_NTZ '2024-01-31 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - timestamp_ntz'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(TIMESTAMP '2024-01-31 00:00:00' - TIMESTAMP_NTZ '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "date'2024-01-31' - timestamp_ntz'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(DATE '2024-01-31' - TIMESTAMP_NTZ '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "'2024-01-31' - date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(2024-01-31 - DATE '2024-01-01')",
+   "type": "interval day",
+   "value": "INTERVAL '30' DAY"
+  },
+  {
+   "expr": "date'2024-01-31' - '2024-01-01'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(DATE '2024-01-31' - 2024-01-01)",
+   "type": "interval day",
+   "value": "INTERVAL '30' DAY"
+  },
+  {
+   "expr": "'2024-01-31' - timestamp'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(2024-01-31 - TIMESTAMP '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - '2024-01-01'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(TIMESTAMP '2024-01-31 00:00:00' - 2024-01-01)",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "1 - date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "1 - timestamp'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "timestamp'2024-01-01 00:00:00' - 1",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2020-01-30' + cast(5 as bigint)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2020-01-30' + 5.5",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "5.5 + date'2020-01-30'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2020-01-30' - cast(5 as bigint)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2020-01-30' + '1'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "'1' + date'2020-01-30'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2020-01-30' - '1'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(DATE '2020-01-30' - 1)",
+   "type": "interval day",
+   "value_error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "expr": "date'2020-01-30' + date'2020-01-30'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' + 5",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "5 + timestamp'2020-01-30 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' + '1'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' + timestamp'2020-01-30 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' + date'2020-01-30'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2020-01-30' + timestamp'2020-01-30 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' + null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2020-01-30 00:00:00' + NULL",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "null + timestamp'2020-01-30 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2020-01-30 00:00:00' + NULL",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "date'2020-01-30' * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day + 1",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "1 + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' month + 1",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "1 + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day - 1",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "1 - interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "1 - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' month + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' month - interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day + interval '2' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY + INTERVAL '02' HOUR)",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 02' DAY TO HOUR"
+  },
+  {
+   "expr": "interval '1' year + interval '2' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' YEAR + INTERVAL '2' MONTH)",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1' day - interval '2' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY - INTERVAL '02' HOUR)",
+   "type": "interval day to hour",
+   "value": "INTERVAL '0 22' DAY TO HOUR"
+  },
+  {
+   "expr": "interval '178956970-7' year to month + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '178956970-7' YEAR TO MONTH + INTERVAL '1' MONTH)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "interval '-178956970-8' year to month - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '-178956970-8' YEAR TO MONTH - INTERVAL '1' MONTH)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "- interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(- INTERVAL '1' MONTH)",
+   "type": "interval month",
+   "value": "INTERVAL '-1' MONTH"
+  },
+  {
+   "expr": "- interval '-2147483648' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(- INTERVAL '-2147483648' MONTH)",
+   "type": "interval month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "interval '1' day * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "2 * interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day / 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY / 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "2 / interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day % 2",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day * interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day * '2'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "'2' * interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day / '2'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY / 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' month * 1.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH * 1.5)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1' month * 1.5D",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH * 1.5)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1' day * 2.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2.5)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day * 2Y",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day * 2S",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day * 2L",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day * 2F",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 2.0)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' month / 2Y",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH / 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1' month / 1.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH / 1.5)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '3' month / 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '3' MONTH / 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1' day / 0",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY / 0)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "interval '1' month / 0",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH / 0)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "interval '1' month / 0D",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH / 0.0)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "interval '1' month / 0.0",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH / 0.0)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "interval '-2147483648' month / -1",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '-2147483648' MONTH / -1)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "interval '-2147483648' month / -1D",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '-2147483648' MONTH / -1.0)",
+   "type": "interval year to month",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "interval '-2147483648' month / -1.0",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '-2147483648' MONTH / -1.0)",
+   "type": "interval year to month",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "interval '1' day * 9223372036854775807",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY * 9223372036854775807)",
+   "type": "interval day to second",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "interval '2147483647' month * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '2147483647' MONTH * 2)",
+   "type": "interval year to month",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "interval '2147483647' month * 2147483648L",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '2147483647' MONTH * 2147483648)",
+   "type": "interval year to month",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "interval '1' month * cast('NaN' as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH * CAST(NaN AS DOUBLE))",
+   "type": "interval year to month",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "interval '1' month / cast('inf' as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' MONTH / CAST(inf AS DOUBLE))",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-0' YEAR TO MONTH"
+  },
+  {
+   "expr": "try_add(interval '1' month, interval '2147483647' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(INTERVAL '1' MONTH, INTERVAL '2147483647' MONTH)",
+   "type": "interval month",
+   "value": null
+  },
+  {
+   "expr": "try_add(date'2024-01-31', interval '1' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(DATE '2024-01-31', INTERVAL '1' MONTH)",
+   "type": "date",
+   "value": "2024-02-29"
+  },
+  {
+   "expr": "try_add(interval '1' day, interval '1' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(INTERVAL '1' DAY, INTERVAL '01' HOUR)",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 01' DAY TO HOUR"
+  },
+  {
+   "expr": "try_add(interval '1' year, interval '1' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "try_subtract(interval '-2147483648' month, interval '1' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_subtract(INTERVAL '-2147483648' MONTH, INTERVAL '1' MONTH)",
+   "type": "interval month",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(interval '2147483647' month, 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_multiply(INTERVAL '2147483647' MONTH, 2)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "try_divide(interval '1' month, 0)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_divide(INTERVAL '1' MONTH, 0)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "try_divide(interval '1' day, 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_divide(INTERVAL '1' DAY, 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "+ interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(+ INTERVAL '1' MONTH)",
+   "type": "interval month",
+   "value": "INTERVAL '1' MONTH"
+  },
+  {
+   "expr": "positive(interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(+ INTERVAL '1' DAY)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "interval '1' day > interval '1' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY > INTERVAL '01' HOUR)",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "interval '1' day = interval '24' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY = INTERVAL '24' HOUR)",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "interval '1-1' year to month > interval '13' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1-1' YEAR TO MONTH > INTERVAL '13' MONTH)",
+   "type": "boolean",
+   "value": "false"
+  },
+  {
+   "expr": "interval '1' day = '1'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day = interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day = 1",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "case when true then interval '1' day else interval '2' hour end",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CASE WHEN true THEN INTERVAL '1' DAY ELSE INTERVAL '02' HOUR END",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 00' DAY TO HOUR"
+  },
+  {
+   "expr": "coalesce(interval '1' day, interval '2' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "coalesce(INTERVAL '1' DAY, INTERVAL '02' HOUR)",
+   "type": "interval day to hour",
+   "value": "INTERVAL '1 00' DAY TO HOUR"
+  },
+  {
+   "expr": "if(true, interval '1' year, interval '2' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(IF(true, INTERVAL '1' YEAR, INTERVAL '2' MONTH))",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-0' YEAR TO MONTH"
+  },
+  {
+   "expr": "interval '1' day in (interval '24' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' DAY IN (INTERVAL '24' HOUR))",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "cast(array(interval '1' day) as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(array(INTERVAL '1' DAY) AS STRING)",
+   "type": "string",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "cast(named_struct('i', interval '1' day) as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(named_struct(i, INTERVAL '1' DAY) AS STRING)",
+   "type": "string",
+   "value": "{INTERVAL '1' DAY}"
+  },
+  {
+   "expr": "cast((select interval '1' day) as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(scalarsubquery() AS STRING)",
+   "type": "string",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "to_json(named_struct('i', interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "to_json(named_struct(i, INTERVAL '1' DAY))",
+   "type": "string",
+   "value": "{\"i\":\"INTERVAL '1' DAY\"}"
+  },
+  {
+   "expr": "to_json(array(interval '1-2' year to month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "to_json(array(INTERVAL '1-2' YEAR TO MONTH))",
+   "type": "string",
+   "value": "[\"INTERVAL '1-2' YEAR TO MONTH\"]"
+  },
+  {
+   "expr": "to_csv(named_struct('i', interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "to_csv(named_struct(i, INTERVAL '1' DAY))",
+   "type": "string",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "cast(interval '1' day as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' day as boolean)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' day as timestamp)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' day as date)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' day as binary)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' day as interval month)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' month as interval day)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' month as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '1' day as interval hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(INTERVAL '1' DAY AS INTERVAL HOUR)",
+   "type": "interval hour",
+   "value": "INTERVAL '24' HOUR"
+  },
+  {
+   "expr": "timestamp'2024-03-11 00:00:00' - timestamp'2024-03-10 00:00:00'",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "(TIMESTAMP '2024-03-11 00:00:00' - TIMESTAMP '2024-03-10 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "date'2024-03-11' - timestamp'2024-03-10 00:00:00'",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "(DATE '2024-03-11' - TIMESTAMP '2024-03-10 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp_ntz'2024-03-11 00:00:00' - timestamp'2024-03-10 00:00:00'",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "(TIMESTAMP_NTZ '2024-03-11 00:00:00' - TIMESTAMP '2024-03-10 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp'2024-03-11 00:00:00' - timestamp_ntz'2024-03-10 00:00:00'",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "(TIMESTAMP '2024-03-11 00:00:00' - TIMESTAMP_NTZ '2024-03-10 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "date'2024-03-11' - timestamp_ntz'2024-03-10 00:00:00'",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "(DATE '2024-03-11' - TIMESTAMP_NTZ '2024-03-10 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp_ntz'2024-03-11 00:00:00' - timestamp_ntz'2024-03-10 00:00:00'",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "(TIMESTAMP_NTZ '2024-03-11 00:00:00' - TIMESTAMP_NTZ '2024-03-10 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "timestamp'2024-03-09 01:30:00' + interval '1' day",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-09 01:30:00' + INTERVAL '1' DAY",
+   "type": "timestamp",
+   "value": "2024-03-10 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 01:30:00' + interval '24' hour",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-09 01:30:00' + INTERVAL '24' HOUR",
+   "type": "timestamp",
+   "value": "2024-03-10 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 01:30:00' - interval '1' month",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-09 01:30:00' - INTERVAL '1' MONTH",
+   "type": "timestamp",
+   "value": "2024-02-09 01:30:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-03-09 02:30:00' + interval '1' day",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-03-09 02:30:00' + INTERVAL '1' DAY",
+   "type": "timestamp_ntz",
+   "value": "2024-03-10 02:30:00"
+  },
+  {
+   "expr": "date'2024-03-10' + interval '3' hour",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "DATE '2024-03-10' + INTERVAL '03' HOUR",
+   "type": "timestamp",
+   "value": "2024-03-10 04:00:00"
+  },
+  {
+   "expr": "date'2020-01-30' + '1'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "'1' + date'2020-01-30'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2020-01-30' - '1'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2024-01-31' - '2024-01-01'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "'2024-01-31' - date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(2024-01-31 - DATE '2024-01-01')",
+   "type": "interval day",
+   "value": "INTERVAL '30' DAY"
+  },
+  {
+   "expr": "'2024-01-31' - timestamp'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - '2024-01-01'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' + '1'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "'2024-01-31' + interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "2024-01-31 + INTERVAL '1' DAY",
+   "type": "string",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "'2024-01-31' - interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "2024-01-31 - INTERVAL '1' DAY",
+   "type": "string",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "'2024-01-31' + interval '1' month",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "'2024-01-31' - interval '1' month",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "case when true then interval '1' day else '1' end",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CASE WHEN true THEN INTERVAL '1' DAY ELSE 1 END",
+   "type": "string",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "interval '1' day * '2'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "'2' * interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '1' DAY * 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '2 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day / '2'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '1' DAY / 2)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "interval '1' day = '1'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' day in ('1')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '1' DAY IN (1))",
+   "type": "boolean",
+   "value": "false"
+  },
+  {
+   "expr": "coalesce(interval '1' day, '1')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "coalesce(INTERVAL '1' DAY, 1)",
+   "type": "string",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "interval '1' day + 1",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day + interval '1' month",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "date'2024-01-31' + interval '1' month",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + INTERVAL '1' MONTH",
+   "type": "date",
+   "value": "2024-02-29"
+  },
+  {
+   "expr": "date'2024-01-31' + interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "date_add(DATE '2024-01-31', extractansiintervaldays(INTERVAL '1' DAY))",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "date'2024-01-31' + null",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + NULL",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "date'2024-01-31' - null",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(DATE '2024-01-31' - NULL)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "date'2024-01-31' - date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(DATE '2024-01-31' - DATE '2024-01-01')",
+   "type": "interval day",
+   "value": "INTERVAL '30' DAY"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - timestamp'2024-01-01 00:00:00'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(TIMESTAMP '2024-01-31 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')",
+   "type": "interval day to second",
+   "value": "INTERVAL '30 00:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "date'2020-01-30' + 5.5",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "timestamp'2020-01-30 00:00:00' + 5",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "date'9999-12-31' + interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "date_add(DATE '9999-12-31', extractansiintervaldays(INTERVAL '1' DAY))",
+   "type": "date",
+   "value": "+10000-01-01"
+  },
+  {
+   "expr": "interval '1' day / 0",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '1' DAY / 0)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "interval '1' month / 0",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '1' MONTH / 0)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "interval '2147483647' month * 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '2147483647' MONTH * 2)",
+   "type": "interval year to month",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "interval '178956970-7' year to month + interval '1' month",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '178956970-7' YEAR TO MONTH + INTERVAL '1' MONTH)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "try_add(interval '1' month, interval '2147483647' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(INTERVAL '1' MONTH, INTERVAL '2147483647' MONTH)",
+   "type": "interval month",
+   "value": null
+  },
+  {
+   "expr": "try_divide(interval '1' month, 0)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_divide(INTERVAL '1' MONTH, 0)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "cast(interval '1' day as double)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  }
+ ]
+}
