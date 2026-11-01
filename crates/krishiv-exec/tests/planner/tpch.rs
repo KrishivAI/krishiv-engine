@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Date32Type, Decimal64Type, Decimal128Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
@@ -257,6 +258,9 @@ pub(crate) fn render(a: &dyn Array, row: usize) -> String {
         ArrowType::Float64 => python_float(a.as_primitive::<Float64Type>().value(row)),
         ArrowType::Utf8View => a.as_string_view().value(row).to_owned(),
         ArrowType::Utf8 => a.as_string::<i32>().value(row).to_owned(),
+        ArrowType::Decimal64(_, s) => {
+            decimal(i128::from(a.as_primitive::<Decimal64Type>().value(row)), *s)
+        }
         ArrowType::Decimal128(_, s) => decimal(a.as_primitive::<Decimal128Type>().value(row), *s),
         ArrowType::Date32 => {
             let days = a.as_primitive::<Date32Type>().value(row);

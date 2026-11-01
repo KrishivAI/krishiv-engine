@@ -73,6 +73,7 @@ only where a requirement is unmet; on one worker instantiation lowers each excha
 
 ## Key files
 Paths are relative to this crate.
+- `src/carrier.rs` moves a value between decimal carriers (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`
 - `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)

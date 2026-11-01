@@ -295,7 +295,7 @@ impl DataFrame {
         while let Some(batch) = stream.next().await {
             let batch = batch?;
             if keep {
-                out.push(batch);
+                out.push(crate::carrier::client_batch(&batch)?);
             }
         }
         drop(stream);
