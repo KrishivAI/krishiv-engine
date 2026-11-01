@@ -246,6 +246,8 @@ fn the_key_never_reaches_an_error_message() {
         "SELECT aes_decrypt(unhex('00'), 'secretkey-123456', 'GCM')",
         "SELECT AES_ENCRYPT(1, 'secretkey-123456')",
         "SELECT Try_Aes_Decrypt(1, 'secretkey-123456')",
+        "SELECT aes_encrypt('Spark', array('secretkey-123456'))",
+        "SELECT aes_decrypt(unhex('00'), map('secretkey-123456', 1))",
     ] {
         let err = one(&s, sql).expect_err(sql);
         assert!(

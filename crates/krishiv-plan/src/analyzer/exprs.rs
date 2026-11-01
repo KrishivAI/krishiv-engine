@@ -4741,12 +4741,17 @@ impl Resolver<'_> {
                     sql_expr,
                     param_index: ordinal(param),
                     required_type: required,
-                    input_sql: format!(
-                        "\"{}\"",
-                        kids.get(arg)
-                            .map(|k| pretty(&k.shown(), zone))
-                            .unwrap_or_default()
-                    ),
+                    input_sql: if arg == 1 && super::is_aes_function(function) {
+                        // The key never reaches an error message (ADR 0042).
+                        "\"***\"".to_owned()
+                    } else {
+                        format!(
+                            "\"{}\"",
+                            kids.get(arg)
+                                .map(|k| pretty(&k.shown(), zone))
+                                .unwrap_or_default()
+                        )
+                    },
                     input_type: quoted_type(ty.as_ref()),
                 }
                 .into()
