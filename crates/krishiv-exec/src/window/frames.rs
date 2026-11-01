@@ -70,8 +70,6 @@ pub(super) struct RangeKeys {
     nulls_first: bool,
     /// The range of the key's integer type (none for decimals and dates).
     limits: Option<(i128, i128)>,
-    /// The key's `(precision, scale)` when it is a decimal.
-    decimal: Option<(u8, i8)>,
     ansi: bool,
     /// The keys are `FLOAT`: the sum is rounded to a single.
     single: bool,
@@ -176,18 +174,8 @@ impl RangeKeys {
             limits: match ty {
                 DataType::Int8 => Some((i8::MIN.into(), i8::MAX.into())),
                 DataType::Int16 => Some((i16::MIN.into(), i16::MAX.into())),
-                DataType::Int32 => Some((i32::MIN.into(), i32::MAX.into())),
+                DataType::Int32 | DataType::Date32 => Some((i32::MIN.into(), i32::MAX.into())),
                 DataType::Int64 => Some((i64::MIN.into(), i64::MAX.into())),
-                DataType::Decimal128(p, _) => {
-                    let max = 10_i128
-                        .checked_pow(u32::from(p))
-                        .map_or(i128::MAX, |m| m - 1);
-                    Some((-max, max))
-                }
-                _ => None,
-            },
-            decimal: match ty {
-                DataType::Decimal128(p, s) => Some((p, s)),
                 _ => None,
             },
             ansi,
@@ -255,20 +243,6 @@ impl RangeKeys {
                 if (min..=max).contains(&sum) {
                     return Ok(Some(Target::Int(sum)));
                 }
-                if let Some((precision, scale)) = self.decimal {
-                    // The key plus the bound does not fit the key's decimal type.
-                    if self.ansi {
-                        return Err(crate::aggregate::out_of_range(
-                            decimal_text(sum, scale),
-                            precision,
-                            scale,
-                        ));
-                    }
-                    return Err(internal(
-                        "a RANGE frame target past the key's decimal precision without ANSI mode"
-                            .to_owned(),
-                    ));
-                }
                 if self.ansi {
                     return Err(if max <= i128::from(i16::MAX) {
                         BinaryArithmeticOverflow {
@@ -301,21 +275,6 @@ impl RangeKeys {
             )),
         }
     }
-}
-
-/// `unscaled` shown with `scale` fractional digits.
-fn decimal_text(unscaled: i128, scale: i8) -> String {
-    let Ok(scale) = usize::try_from(scale) else {
-        return unscaled.to_string();
-    };
-    if scale == 0 {
-        return unscaled.to_string();
-    }
-    let digits = unscaled.unsigned_abs().to_string();
-    let digits = format!("{digits:0>width$}", width = scale + 1);
-    let (whole, frac) = digits.split_at(digits.len() - scale);
-    let sign = if unscaled < 0 { "-" } else { "" };
-    format!("{sign}{whole}.{frac}")
 }
 
 #[derive(Clone)]

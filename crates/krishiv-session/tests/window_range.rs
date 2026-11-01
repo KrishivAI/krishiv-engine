@@ -260,11 +260,33 @@ fn float_bounds_are_ordered_after_narrowing() {
     assert_eq!(got, ["1.0,0"]);
 }
 
-/// A target past the key's decimal precision raises under ANSI instead of comparing.
+/// A decimal target past the key's precision still orders (Spark adds without an overflow check).
 #[test]
-fn a_decimal_target_past_the_precision_raises() {
+fn a_decimal_target_past_the_precision_is_kept() {
     let s = session();
-    let sql = "SELECT count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) \
-               FROM VALUES (CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))) AS b(x)";
-    assert_eq!(class(&s, sql), "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION");
+    let got = rows(
+        &s,
+        "SELECT cast(count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) AS string) \
+         FROM VALUES (CAST(99 AS DECIMAL(2,0))) AS b(x)",
+    );
+    assert_eq!(got, ["1"]);
+}
+
+/// A DATE target past the day range wraps without ANSI.
+#[test]
+fn a_date_target_past_the_day_range_wraps_without_ansi() {
+    let s = session();
+    block_on(async {
+        s.sql("SET spark.sql.ansi.enabled=false")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    let got = rows(
+        &s,
+        "SELECT cast(count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 2147483647 FOLLOWING) AS string) \
+         FROM VALUES (DATE'2020-01-01') AS b(x)",
+    );
+    assert_eq!(got, ["0"]);
 }
