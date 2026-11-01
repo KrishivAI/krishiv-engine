@@ -222,13 +222,18 @@ impl Sort {
 
     /// A reader of bucket `b` alone, for [`Source::get_data`]: no claim, and
     /// its merge waits for its memory with arbitration.
-    pub(crate) fn bucket_reader(&self, env: &crate::join::MergeEnv, b: usize) -> LocalState {
+    pub(crate) fn bucket_reader(
+        &self,
+        env: &crate::join::MergeEnv,
+        handle: &Arc<ConsumerHandle>,
+        b: usize,
+    ) -> LocalState {
         Box::new(SortSource {
             state: SourceState::Start,
             bucket: Some(b),
             query: Arc::clone(&env.query),
             executor: Arc::clone(&env.executor),
-            handle: Arc::clone(&env.handle),
+            handle: Arc::clone(handle),
             batch_rows: env.query.config().batch_size.max(1),
         })
     }
@@ -1186,8 +1191,22 @@ impl Sort {
             return Ok(());
         }
         let handle = Arc::clone(ctx.consumer().consumer());
+        let mut max_fan_in = self.max_fan_in;
+        // A merge join reads two final merges at once: each keeps to a quarter
+        // of the pool, so the two and the join's group fit together.
+        if let Some(limit) = handle
+            .pool()
+            .effective_limit()
+            .filter(|_| self.read_by_bucket)
+        {
+            while max_fan_in > 2
+                && merge_need(runs, max_fan_in.min(runs.len()), batch_rows, false) > limit / 4
+            {
+                max_fan_in /= 2;
+            }
+        }
         let (mut budget, fan_in) =
-            merge_budget(runs, self.max_fan_in, batch_rows, &handle, true).await?;
+            merge_budget(runs, max_fan_in, batch_rows, &handle, true).await?;
         let target = budget.size();
         while runs.len() > fan_in {
             self.counters.passes.fetch_add(1, Ordering::Relaxed);

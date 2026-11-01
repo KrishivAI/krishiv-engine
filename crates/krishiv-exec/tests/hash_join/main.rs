@@ -736,6 +736,7 @@ async fn a_partition_skewed_on_one_key_fails_at_the_depth_limit() {
 }
 
 async fn skewed_fails_at_the_depth_limit(join_row_layout: bool) {
+    // `NOT IN` reads build-wide facts, so it cannot fall back to sort-merge.
     let build: Vec<Row> = (0..60_000).map(|i| r(Some(7), Some("a"), i)).collect();
     let probe = vec![r(Some(7), Some("a"), 1); 10];
     let root = root(1 << 20);
@@ -746,7 +747,7 @@ async fn skewed_fails_at_the_depth_limit(join_row_layout: bool) {
     };
     let q = query(&root, 1, config);
     let plan = join(
-        case(JoinType::Inner, 1, false, false).spec(Some(scope.clone())),
+        case(JoinType::NullAwareAnti, 1, false, false).spec(Some(scope.clone())),
         scan(&schema(), batches(&data(&build), 2048)),
         scan(&schema(), batches(&data(&probe), 2048)),
     );

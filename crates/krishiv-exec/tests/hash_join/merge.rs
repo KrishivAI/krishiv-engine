@@ -277,3 +277,127 @@ async fn single_match_fails_on_a_second_match() {
         assert_released(&root);
     }
 }
+
+/// A hot build key that repartitioning cannot split (design #9): the partition
+/// switches to sort-merge, the query completes with the oracle's answer for
+/// every join type and key format, and `EXPLAIN ANALYZE` counts the fallback.
+#[tokio::test(start_paused = true)]
+async fn a_partition_that_will_not_split_falls_back_to_sort_merge() {
+    let mut build: Vec<Row> = (0..40_000).map(|i| r(Some(7), Some("a"), i % 50)).collect();
+    build.extend((0..200).map(|i| r(Some(i), Some("b"), i % 50)));
+    build.push(r(None, None, 1));
+    let probe = vec![
+        r(Some(7), Some("a"), 1),
+        r(Some(7), Some("a"), 2),
+        r(Some(3), Some("b"), 3),
+        r(Some(5000), None, 4),
+        r(None, None, 5),
+    ];
+    // The merge's own tests cover every type; here, the types' two output shapes
+    // and each key format.
+    for (jt, filter, row_layout) in [
+        (JoinType::Inner, true, true),
+        (JoinType::LeftOuter, false, false),
+        (JoinType::RightOuter, true, false),
+        (JoinType::FullOuter, false, true),
+    ] {
+        {
+            let c = Case {
+                row_layout,
+                ..case(jt, 1, false, filter)
+            };
+            let (got, q) = super::run_case(&c, &probe, &build, 2048, 2, MIB).await;
+            assert_eq!(got, c.oracle(&probe, &build), "{c:?}");
+            // Semi and anti joins this lopsided index the probe side instead.
+            let reversed = metric(&q, "HashJoinProbe", "reversed_partitions") > 0;
+            assert!(
+                reversed || metric(&q, "HashJoinProbe", "merge_fallbacks") > 0,
+                "{c:?}: repartitions {}",
+                metric(&q, "HashJoinProbe", "repartitions")
+            );
+        }
+    }
+}
+
+/// Cancelled mid-merge with spilled sorts and a spilled group: every
+/// reservation and spill file goes (design #10).
+#[tokio::test(start_paused = true)]
+async fn cancelling_mid_merge_releases_everything() {
+    let build: Vec<Row> = (0..120_000)
+        .map(|i| r(Some(i % 3), Some("k"), i % 40))
+        .collect();
+    let probe: Vec<Row> = (0..120_000)
+        .map(|i| r(Some(i % 3), Some("k"), i % 40))
+        .collect();
+    let limit = 4 * MIB;
+    let root = root(limit);
+    let (_manager, scope) = spill();
+    let config = ExecConfig {
+        join_merge_buffer_bytes: 4 << 10,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, 9, config);
+    let plan = merge_join(
+        case(JoinType::Inner, 1, false, false).spec(Some(scope.clone())),
+        scan(&schema(), batches(&data(&build), 1024)),
+        scan(&schema(), batches(&data(&probe), 1024)),
+    );
+    let runner = runner_for(2, limit);
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
+    let first = futures::StreamExt::next(&mut stream).await;
+    first.expect("a first batch").unwrap();
+    q.cancel();
+    drop(stream);
+    q.finished().await;
+    assert_released(&root);
+    assert_eq!(spill_files(&scope), 0);
+}
+
+/// The acceptance's sizes (design #7, #8): a 2 GB join under 256 MiB with
+/// both sides unsorted, then one key's 1 GB group; each completes with the
+/// right row count, whatever spills. Run by hand:
+/// `cargo nextest run -p krishiv-exec --release --run-ignored only --test hash_join merge_join_full_size`.
+#[tokio::test(start_paused = true)]
+#[ignore = "2 GB of rows: run by hand for the design's measurement"]
+async fn merge_join_full_size() {
+    const WIDE: &str =
+        "row-padding-so-that-a-row-holds-about-a-hundred-bytes-of-data-0123456789-0123456789";
+    let run_it = async |c: Case, build: Vec<Row>, probe: Vec<Row>, expect: usize| {
+        let limit = 256 * MIB;
+        let root = root(limit);
+        let (_manager, scope) = spill();
+        let q = query(&root, 1, ExecConfig::default());
+        let plan = merge_join(
+            c.spec(Some(scope.clone())),
+            scan(&schema(), batches(&data(&build), 8192)),
+            scan(&schema(), batches(&data(&probe), 8192)),
+        );
+        let start = std::time::Instant::now();
+        let out = run(&runner(4), plan, &q).await.unwrap();
+        let rows: usize = out.iter().map(krishiv_types::batch::Batch::num_rows).sum();
+        assert_eq!(rows, expect);
+        println!(
+            "{rows} rows in {:?}, peak {} MiB, groups spilled {}",
+            start.elapsed(),
+            q.metrics().memory.peak_reserved >> 20,
+            metric(&q, "SortMergeJoin", "groups_spilled")
+        );
+        assert_released(&root);
+    };
+    // About 2 GB a side: 20M rows of 100 bytes, keys out of order.
+    let n: i64 = 20_000_000;
+    let spread = |i: i64| (i * 7_919) % n;
+    let side: Vec<Row> = (0..n)
+        .map(|i| r(Some(spread(i)), Some(WIDE), i % 7))
+        .collect();
+    let inner = case(JoinType::Inner, 1, false, false);
+    run_it(inner, side.clone(), side, usize::try_from(n).unwrap()).await;
+    // One key's 1 GB group: 10M rows, against ten left rows.
+    let hot: Vec<Row> = (0..10_000_000)
+        .map(|i| r(Some(1), Some(WIDE), i % 7))
+        .collect();
+    // A semi join with a residual reads the whole group per left slice and
+    // returns only the left rows.
+    let few = vec![r(Some(1), Some(WIDE), 0); 10];
+    run_it(case(JoinType::LeftSemi, 1, false, true), hot, few, 10).await;
+}

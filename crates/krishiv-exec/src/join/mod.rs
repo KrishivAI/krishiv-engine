@@ -93,9 +93,11 @@
 //! rows and the headroom to read its probe rows back. Once one does not
 //! fit, that driver becomes the only one that claims partitions: it waits
 //! until no other holds one, then repartitions build and probe rows 8 ways
-//! on the next hash bits, at most six levels deep, then fails with
-//! `KRISHIV_JOIN_PARTITION_TOO_LARGE` (a partition that does not split is
-//! skewed on very few keys). Built tables are not spilled while probing.
+//! on the next hash bits. A partition at the sixth level, or one that kept
+//! nearly all its parent's rows (skewed on very few keys), joins by sort-merge
+//! instead ([`fallback`]); only a join that cannot (`NOT IN`, row-layout keys
+//! with out-of-line strings) fails with `KRISHIV_JOIN_PARTITION_TOO_LARGE`.
+//! Built tables are not spilled while probing.
 //!
 //! Spill I/O needs scratch: a spill writer's 64 KiB buffer plus twice the
 //! slice it encodes (writes are sliced to 64 KiB). A spill the arbitrator
@@ -147,11 +149,13 @@
 //! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`. Probe:
 //! `probe_rows`, `probe_spilled_rows`, `spill_file_bytes`,
 //! `grace_partitions` (spilled partitions joined), `repartitions`,
-//! `recursion_depth` (deepest level joined) and `probe_table_ns` (time in
+//! `recursion_depth` (deepest level joined), `merge_fallbacks` (partitions
+//! joined by sort-merge) and `probe_table_ns` (time in
 //! the tables: two clock reads per batch, for
 //! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share)).
 
 mod build;
+mod fallback;
 mod grace;
 mod keys;
 mod merge;
@@ -370,6 +374,8 @@ pub(crate) enum Counter {
     /// Time probe drivers spent in the tables (ns, summed): the batch's
     /// lookups and the walk of its match chains.
     ProbeTableNs,
+    /// Spilled partitions that would not split, joined by sort-merge.
+    MergeFallbacks,
 }
 
 /// The build sink's counters, by name.
@@ -385,7 +391,7 @@ const BUILD_COUNTERS: [(Counter, &str); 9] = [
     (Counter::MaxPartitionNs, "finalize_max_partition_ns"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 10] = [
+const PROBE_COUNTERS: [(Counter, &str); 11] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
@@ -396,6 +402,7 @@ const PROBE_COUNTERS: [(Counter, &str); 10] = [
     (Counter::GraceHashBuckets, "grace_hash_buckets"),
     (Counter::ReversedPartitions, "reversed_partitions"),
     (Counter::ProbeTableNs, "probe_table_ns"),
+    (Counter::MergeFallbacks, "merge_fallbacks"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -406,7 +413,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 23]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 24]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {

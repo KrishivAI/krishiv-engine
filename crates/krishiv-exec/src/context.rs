@@ -558,6 +558,18 @@ impl TaskContext {
         )
     }
 
+    /// A further consumer of this operator that never spills, for memory kept
+    /// apart from the driver's consumer: grant credit is per consumer, so two
+    /// merges on one would take each other's.
+    pub(crate) fn register_plain_consumer(&self, name: &str) -> Arc<ConsumerHandle> {
+        ConsumerHandle::register_counted(
+            Arc::clone(self.query.pool()),
+            name,
+            None,
+            self.query.spill_stats(self.op),
+        )
+    }
+
     /// The consumer, if the operator registered one.
     pub(crate) fn registered(&self) -> Option<&MemoryHandle> {
         self.memory.get()

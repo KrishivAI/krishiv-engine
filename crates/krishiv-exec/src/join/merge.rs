@@ -67,7 +67,7 @@ const WRITE_SCRATCH: usize = super::SPILL_SCRATCH;
 /// The group bound without a pool limit.
 const UNLIMITED_POOL_GROUP_BYTES: usize = 1 << 30;
 /// The least group bound a pool share gives.
-const MIN_GROUP_BYTES: usize = 1 << 20;
+const MIN_GROUP_BYTES: usize = 64 << 10;
 
 /// The bytes a group may hold before it spills: `configured`, or (0) a
 /// quarter of the pool's limit shared by the drivers.
@@ -77,7 +77,7 @@ pub(crate) fn group_bytes(configured: usize, handle: &ConsumerHandle, drivers: u
     }
     handle
         .pool()
-        .limit()
+        .effective_limit()
         .map_or(UNLIMITED_POOL_GROUP_BYTES, |l| {
             (l / 4 / drivers.max(1)).max(MIN_GROUP_BYTES)
         })
@@ -88,7 +88,12 @@ pub(crate) fn group_bytes(configured: usize, handle: &ConsumerHandle, drivers: u
 pub(crate) struct MergeEnv {
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
+    /// The group's memory.
     pub(crate) handle: Arc<ConsumerHandle>,
+    /// Each sort's merge: a merge takes all the grant credit of its consumer
+    /// between its steps, so the three never share one.
+    pub(crate) left: Arc<ConsumerHandle>,
+    pub(crate) right: Arc<ConsumerHandle>,
     pub(crate) partition: u32,
 }
 
@@ -97,7 +102,9 @@ impl MergeEnv {
         Self {
             query: Arc::clone(ctx.query()),
             executor: Arc::clone(ctx.executor()),
-            handle: Arc::clone(ctx.consumer().consumer()),
+            handle: ctx.register_plain_consumer("SortMergeJoin group"),
+            left: ctx.register_plain_consumer("SortMergeJoin left merge"),
+            right: ctx.register_plain_consumer("SortMergeJoin right merge"),
             partition: ctx.partition(),
         }
     }
@@ -669,9 +676,14 @@ impl Merge {
                     .spill
                     .clone()
                     .ok_or_else(|| internal("a group spilled without a scope".to_owned()))?;
+                // The group's own bytes fund the writer first: they leave
+                // memory once written.
+                let held = std::mem::take(&mut self.group.bytes);
+                self.memory.shrink_to_credit(held.min(self.memory.size()));
+                let missing = WRITE_SCRATCH.saturating_sub(self.handle.credit());
                 let mut lent = self.handle.reservation();
-                lent.grow(WRITE_SCRATCH).await.map_err(KrishivError::from)?;
-                lent.shrink_to_credit(WRITE_SCRATCH);
+                lent.grow(missing).await.map_err(KrishivError::from)?;
+                lent.shrink_to_credit(missing);
                 self.counters.groups_spilled.fetch_add(1, Ordering::Relaxed);
                 scope
                     .writer(
@@ -695,9 +707,6 @@ impl Merge {
         })
         .await?;
         self.group.writer = Some(writer);
-        // Everything in memory moved to the file.
-        let held = std::mem::take(&mut self.group.bytes);
-        self.memory.shrink(held.min(self.memory.size()));
         Ok(())
     }
 
@@ -1286,6 +1295,8 @@ impl Source for SortMergeJoin {
                     }
                     l.merge = None;
                     l.env.handle.release_credit();
+                    l.env.left.release_credit();
+                    l.env.right.release_credit();
                 }
                 let Some((bucket, slot)) = self.claim(g, &l.env).await? else {
                     return Ok(None);
@@ -1294,12 +1305,12 @@ impl Source for SortMergeJoin {
                     left: MergeInput {
                         sort: Arc::clone(&self.left_sort),
                         global: Arc::clone(&g.left),
-                        local: self.left_sort.bucket_reader(&l.env, bucket),
+                        local: self.left_sort.bucket_reader(&l.env, &l.env.left, bucket),
                     },
                     right: MergeInput {
                         sort: Arc::clone(&self.right_sort),
                         global: Arc::clone(&g.right),
-                        local: self.right_sort.bucket_reader(&l.env, bucket),
+                        local: self.right_sort.bucket_reader(&l.env, &l.env.right, bucket),
                     },
                     left_keys: Arc::clone(&self.left_keys),
                     right_keys: Arc::clone(&self.right_keys),
@@ -1350,7 +1361,7 @@ impl SortMergeJoin {
                 let pool = env.handle.pool();
                 let spare = need == 0
                     || pool
-                        .limit()
+                        .effective_limit()
                         .is_none_or(|limit| pool.reserved().saturating_add(need) <= limit / 2);
                 if s.active == 0 || spare {
                     s.next += 1;
