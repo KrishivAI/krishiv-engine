@@ -27,6 +27,7 @@ use krishiv_kernels::cast::{
     CastMode, CastOptions, cast, make_time, time_diff, time_from_units, time_to_units, time_trunc,
     to_time,
 };
+use krishiv_kernels::datetime::TimePattern;
 use krishiv_kernels::datetime::{
     DatePart, ParsePolicy, ZoneRef, Zones, convert_timezone, current_date, date_add,
     date_add_months, date_diff, date_sub, day_name, extract_date, extract_timestamp,
@@ -40,7 +41,7 @@ use krishiv_kernels::datetime::{
     date_from_unix_date, timestamp_from_integral, timestamp_from_seconds,
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
 };
-use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
+use krishiv_kernels::datetime_pattern::{Purpose, Zone};
 
 use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -363,11 +364,16 @@ const PATTERN_CACHE_CAP: usize = 8;
 /// literal), a column per distinct value at each invocation.
 enum PatternArg {
     Null,
-    Literal(DateTimePattern),
+    Literal(TimePattern),
     Column,
 }
 
-fn pattern_arg(args: &[BindArg], i: usize, purpose: Purpose) -> Result<PatternArg, KrishivError> {
+fn pattern_arg(
+    args: &[BindArg],
+    i: usize,
+    purpose: Purpose,
+    legacy: bool,
+) -> Result<PatternArg, KrishivError> {
     let arg = args
         .get(i)
         .ok_or_else(|| internal(format!("missing pattern argument {i}")))?;
@@ -378,29 +384,31 @@ fn pattern_arg(args: &[BindArg], i: usize, purpose: Purpose) -> Result<PatternAr
     if text.is_null(0) {
         return Ok(PatternArg::Null);
     }
-    DateTimePattern::new(text.value(0), purpose).map(PatternArg::Literal)
+    TimePattern::new(text.value(0), purpose, legacy).map(PatternArg::Literal)
 }
 
 /// The compiled column patterns of one invocation, keyed by pattern text.
 struct PatternCache {
     purpose: Purpose,
-    map: std::collections::HashMap<String, DateTimePattern>,
+    legacy: bool,
+    map: std::collections::HashMap<String, TimePattern>,
 }
 
 impl PatternCache {
-    fn new(purpose: Purpose) -> Self {
+    fn new(purpose: Purpose, legacy: bool) -> Self {
         Self {
             purpose,
+            legacy,
             map: std::collections::HashMap::new(),
         }
     }
 
-    fn get(&mut self, text: &str) -> Result<&DateTimePattern, KrishivError> {
+    fn get(&mut self, text: &str) -> Result<&TimePattern, KrishivError> {
         if !self.map.contains_key(text) {
             if self.map.len() >= PATTERN_CACHE_CAP {
                 self.map.clear();
             }
-            let compiled = DateTimePattern::new(text, self.purpose)?;
+            let compiled = TimePattern::new(text, self.purpose, self.legacy)?;
             self.map.insert(text.to_owned(), compiled);
         }
         self.map
@@ -493,8 +501,8 @@ fn is_longish(t: &DataType) -> bool {
 
 /// The default pattern (`yyyy-MM-dd HH:mm:ss`) for the calls that omit
 /// one: it always compiles.
-fn default_pattern(purpose: Purpose) -> Result<PatternArg, KrishivError> {
-    DateTimePattern::new("yyyy-MM-dd HH:mm:ss", purpose).map(PatternArg::Literal)
+fn default_pattern(purpose: Purpose, legacy: bool) -> Result<PatternArg, KrishivError> {
+    TimePattern::new("yyyy-MM-dd HH:mm:ss", purpose, legacy).map(PatternArg::Literal)
 }
 
 /// Any date, timestamp or string value as an instant in the session zone
@@ -543,7 +551,7 @@ fn parse_dates_column(
     policy: ParsePolicy,
     operation: &str,
 ) -> Result<ArrayRef, KrishivError> {
-    let mut cache = PatternCache::new(Purpose::Parse);
+    let mut cache = PatternCache::new(Purpose::Parse, o.legacy_time_parser);
     let mut out = reserve::<Option<i32>>(strings.len())?;
     for i in 0..strings.len() {
         if strings.is_null(i) || fmts.is_null(i) {
@@ -571,7 +579,7 @@ fn parse_timestamps_column(
     policy: ParsePolicy,
     operation: &str,
 ) -> Result<TimestampMicrosecondArray, KrishivError> {
-    let mut cache = PatternCache::new(Purpose::Parse);
+    let mut cache = PatternCache::new(Purpose::Parse, o.legacy_time_parser);
     let mut out = reserve::<Option<i64>>(strings.len())?;
     for i in 0..strings.len() {
         if strings.is_null(i) || fmts.is_null(i) {
@@ -595,10 +603,11 @@ fn parse_timestamps_column(
 fn parse_ntz_column(
     strings: &StringArray,
     fmts: &StringArray,
+    legacy: bool,
     policy: ParsePolicy,
     operation: &str,
 ) -> Result<ArrayRef, KrishivError> {
-    let mut cache = PatternCache::new(Purpose::Parse);
+    let mut cache = PatternCache::new(Purpose::Parse, legacy);
     let mut out = reserve::<Option<i64>>(strings.len())?;
     for i in 0..strings.len() {
         if strings.is_null(i) || fmts.is_null(i) {
@@ -1299,7 +1308,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             )
         }
         ("date_format", [t, s]) if is_string(s) && is_date_or_timestamp_or_string(t) => {
-            let pat = match pattern_arg(args, 1, Purpose::Format) {
+            let pat = match pattern_arg(args, 1, Purpose::Format, opts.legacy_time_parser) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
             };
@@ -1318,7 +1327,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     }
                     PatternArg::Column => {
                         let fmts = x.strings(1)?;
-                        let mut cache = PatternCache::new(Purpose::Format);
+                        let mut cache = PatternCache::new(Purpose::Format, o.legacy_time_parser);
                         let mut out = reserve::<Option<String>>(x.rows())?;
                         for i in 0..x.rows() {
                             if instants.is_null(i) || fmts.is_null(i) {
@@ -1371,7 +1380,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     })),
                 ));
             }
-            let pat = match pattern_arg(args, 1, Purpose::Parse) {
+            let pat = match pattern_arg(args, 1, Purpose::Parse, opts.legacy_time_parser) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
             };
@@ -1466,7 +1475,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     })),
                 ));
             }
-            let pat = match pattern_arg(args, 1, Purpose::Parse) {
+            let pat = match pattern_arg(args, 1, Purpose::Parse, opts.legacy_time_parser) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
             };
@@ -1526,7 +1535,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     })),
                 ));
             }
-            let pat = match pattern_arg(args, 1, Purpose::Parse) {
+            let pat = match pattern_arg(args, 1, Purpose::Parse, opts.legacy_time_parser) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
             };
@@ -1541,9 +1550,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                                 as ArrayRef,
                         )
                     }
-                    PatternArg::Column => {
-                        parse_ntz_column(&strings, &x.strings(1)?, policy, "to_timestamp_ntz")
-                    }
+                    PatternArg::Column => parse_ntz_column(
+                        &strings,
+                        &x.strings(1)?,
+                        o.legacy_time_parser,
+                        policy,
+                        "to_timestamp_ntz",
+                    ),
                 }
             })
         }
@@ -1563,12 +1576,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let pat = if !is_string(&first) {
                 PatternArg::Null
             } else if has_fmt {
-                match pattern_arg(args, 1, Purpose::Parse) {
+                match pattern_arg(args, 1, Purpose::Parse, opts.legacy_time_parser) {
                     Ok(p) => p,
                     Err(e) => return Some((listed, Err(e))),
                 }
             } else {
-                match default_pattern(Purpose::Parse) {
+                match default_pattern(Purpose::Parse, opts.legacy_time_parser) {
                     Ok(p) => p,
                     Err(e) => return Some((listed, Err(e))),
                 }
@@ -1619,12 +1632,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         ("from_unixtime", [n] | [n, _]) if is_longish(n) => {
             let has_fmt = types.len() == 2;
             let pat = if has_fmt {
-                match pattern_arg(args, 1, Purpose::Format) {
+                match pattern_arg(args, 1, Purpose::Format, opts.legacy_time_parser) {
                     Ok(p) => p,
                     Err(e) => return Some((listed, Err(e))),
                 }
             } else {
-                match default_pattern(Purpose::Format) {
+                match default_pattern(Purpose::Format, opts.legacy_time_parser) {
                     Ok(p) => p,
                     Err(e) => return Some((listed, Err(e))),
                 }
@@ -1646,7 +1659,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     }
                     PatternArg::Column => {
                         let fmts = x.strings(1)?;
-                        let mut cache = PatternCache::new(Purpose::Format);
+                        let mut cache = PatternCache::new(Purpose::Format, o.legacy_time_parser);
                         let mut out = reserve::<Option<String>>(x.rows())?;
                         for i in 0..x.rows() {
                             if stamps.is_null(i) || fmts.is_null(i) {

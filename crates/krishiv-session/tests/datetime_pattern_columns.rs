@@ -319,38 +319,39 @@ fn etc_gmt_zones_reject_a_padded_hour() {
     );
 }
 
-/// The legacy time parser is not implemented: pattern functions refuse it
-/// by name instead of answering with the new parser; the other policies
-/// behave as before.
+/// `spark.sql.legacy.timeParserPolicy = LEGACY` reads and prints patterns
+/// with the `SimpleDateFormat` family; the other policies behave as before.
 #[test]
-fn the_legacy_time_parser_is_refused() {
+fn the_legacy_time_parser_reads_and_prints_legacy_patterns() {
     let s = session();
     block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
-    for sql in [
-        "SELECT to_timestamp('2024-01-05', 'yyyy-MM-dd')",
-        "SELECT date_format(TIMESTAMP '2024-01-05 10:00:00', 'yyyy')",
-        "SELECT unix_timestamp('2024-01-05', 'yyyy-MM-dd')",
-        // The default pattern of the one-argument string forms is a pattern too.
-        "SELECT unix_timestamp('2024-01-05 10:00:00')",
-        "SELECT to_unix_timestamp('2024-01-05 10:00:00')",
-    ] {
-        let err = block_on(s.sql(sql))
-            .err()
-            .unwrap_or_else(|| panic!("{sql} resolved"));
-        assert_eq!(
-            err.error_class(),
-            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-        assert!(err.to_string().contains("timeParserPolicy"), "{err}");
-    }
+    // `S` is the millisecond count, not fraction digits.
+    assert_eq!(
+        column(
+            &s,
+            "date_format(TIMESTAMP '2024-01-05 10:00:00.123456', 'SSSS')",
+            ""
+        ),
+        text(&[Some("0123")])
+    );
+    // A two-digit year reads in the 80/20 window.
+    assert_eq!(
+        column(&s, "to_date('99-01-05', 'yy-MM-dd')", ""),
+        text(&[Some("1999-01-05")])
+    );
+    // `Q` is no legacy pattern letter.
+    let err = block_on(s.sql("SELECT date_format(TIMESTAMP '2024-01-05 10:00:00', 'Q')"))
+        .and_then(|df| block_on(df.collect()))
+        .expect_err("Q is rejected");
+    assert!(
+        err.to_string().contains("INVALID_DATETIME_PATTERN"),
+        "{err}"
+    );
     // One-argument forms are casts, not patterns.
     assert_eq!(
         column(&s, "to_timestamp('2024-01-05')", ""),
         text(&[Some("2024-01-05 00:00:00")])
     );
-    // A timestamp argument has no text to parse: not refused.
-    block_on(s.sql("SELECT unix_timestamp(TIMESTAMP '2024-01-05 10:00:00')")).unwrap();
     block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = CORRECTED")).unwrap();
     assert_eq!(
         column(&s, "to_date('2024-01-05', 'yyyy-MM-dd')", ""),

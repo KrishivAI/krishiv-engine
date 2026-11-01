@@ -316,6 +316,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
         legacy_java_charsets: env.legacy_java_charsets.unwrap_or(false),
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
+        legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));

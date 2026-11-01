@@ -58,7 +58,8 @@ Paths are relative to this crate.
   `etc/utc`, `Etc/GMT+05`) is `INVALID_TIMEZONE`. Region zones work as function arguments, in patterns and as the session zone (`spark.sql.session.timeZone`, whose
   default is the machine's zone, as in Spark: `krishiv-session/src/conf.rs`). The
   database is `jiff-tzdb` 0.1.9 as pinned in `Cargo.lock`; the crate does not record its IANA release. `spark.sql.legacy.timeParserPolicy=LEGACY`
-  (the `SimpleDateFormat` parser) is refused by name for the pattern functions. A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
+  (the `SimpleDateFormat` parser) switches the pattern functions to `LegacyPattern` (`BindOptions::legacy_time_parser`, plan data
+  through the `legacy_time_parser` codec feature; the JSON/CSV `dateFormat` options do not read it yet). A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
   NULL for every row), a column resolves per row (the resolution itself is cached per thread). Out-of-range results raise `DATETIME_OVERFLOW` with ANSI on and are NULL
   with it off (as `next_day`'s bad name and `make_date`'s bad field already do). A literal pattern compiles once per bind;
   a column pattern compiles per distinct value behind a small bounded cache. Parse failures are `CANNOT_PARSE_TIMESTAMP`
