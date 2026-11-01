@@ -20,6 +20,8 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    ("time_diff", "TIME has no Python mapping yet (P2-T181)"),
+    ("time_trunc", "TIME has no Python mapping yet (P2-T181)"),
     (
         "__subscript",
         "the lowering of `base[index]`; PySpark: `Column.getItem`",
@@ -429,6 +431,10 @@ pub(super) fn rows() -> Vec<Row> {
             "col1: ColumnOrName | float, col2: ColumnOrName | float",
         ));
     }
+    rows.push(Row::new(
+        "width_bucket",
+        "v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int",
+    ));
     for name in ["bround", "ceil", "ceiling", "floor", "round"] {
         rows.push(Row::new(
             name,
@@ -578,6 +584,15 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("array_contains", "col: ColumnOrName, value: Any"),
         Row::new("array_distinct", "col: ColumnOrName"),
         Row::new("array_union", "col1: ColumnOrName, col2: ColumnOrName"),
+        Row::new("array_except", "col1: ColumnOrName, col2: ColumnOrName"),
+        Row::new("array_intersect", "col1: ColumnOrName, col2: ColumnOrName"),
+        Row::new("arrays_overlap", "a1: ColumnOrName, a2: ColumnOrName"),
+        Row::new("array_max", "col: ColumnOrName"),
+        Row::new("array_min", "col: ColumnOrName"),
+        Row::new("array_position", "col: ColumnOrName, value: Any"),
+        Row::new("array_remove", "col: ColumnOrName, element: Any"),
+        Row::new("array_repeat", "col: ColumnOrName, count: ColumnOrName | int"),
+        Row::new("cardinality", "col: ColumnOrName"),
         Row::new("sort_array", "col: ColumnOrName, asc: bool = True"),
         Row::new("arrays_zip", "*cols: ColumnOrName"),
         Row::new("get", "col: ColumnOrName, index: ColumnOrName | int"),

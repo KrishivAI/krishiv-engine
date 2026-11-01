@@ -14,7 +14,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::build::BuildGlobal;
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
-use super::keys::Hashing;
+use super::keys::{Hashing, MAX_RADIX_BITS};
 use super::table::{JoinTable, NONE, RowArena};
 use super::{Counter, JoinType, Shared, record, take_batch};
 use crate::context::TaskContext;
@@ -55,7 +55,25 @@ impl<'a> Tables<'a> {
     fn spilled(self, part: usize) -> bool {
         matches!(self, Self::Level0(_, mask) if mask & (1 << part) != 0)
     }
+
+    /// The table of each partition a row can route to ([`Self::part`]), to
+    /// read once per row, without [`Self::get`]'s match and bounds check.
+    fn by_part(self) -> [Option<&'a JoinTable>; PARTS] {
+        let mut out = [None; PARTS];
+        match self {
+            Self::Level0(..) => {
+                for (part, slot) in out.iter_mut().enumerate() {
+                    *slot = self.get(part);
+                }
+            }
+            Self::Single(t) => out[0] = Some(t),
+        }
+        out
+    }
 }
+
+/// The most partitions: `2^MAX_RADIX_BITS`.
+const PARTS: usize = 1 << MAX_RADIX_BITS;
 
 const UNMATCHED: u8 = 0;
 const MATCHED: u8 = 1;
@@ -72,6 +90,9 @@ pub(crate) struct Cursor {
     state: Vec<u8>,
     pos: usize,
     chain: u32,
+    /// How many rows have a match: the pairs to expect, about, to size one
+    /// output's buffers without paying for rows that match nothing.
+    matches: usize,
     /// Build rows are in the row layout (payload rows).
     rows: bool,
 }
@@ -96,10 +117,17 @@ impl Cursor {
         let hashes = keys.hashes();
         let mut state = vec![UNMATCHED; n];
         let mut parts = vec![0u8; n];
-        let mut lookup = vec![Vec::new(); hashing.fanout0()];
-        let mut deferred = vec![Vec::new(); hashing.fanout0()];
-        for i in 0..n {
-            let row = u32::try_from(i).map_err(|_| internal("probe batch too large".to_owned()))?;
+        let by_part = tables.by_part();
+        let fanout = hashing.fanout0();
+        // Hashes spread the rows evenly: a little over a share each.
+        let share = n / fanout + n / (4 * fanout) + 1;
+        let mut lookup: Vec<Vec<u32>> = by_part[..fanout]
+            .iter()
+            .map(|t| Vec::with_capacity(if t.is_some() { share } else { 0 }))
+            .collect();
+        let mut deferred = vec![Vec::new(); fanout];
+        let rows = u32::try_from(n).map_err(|_| internal("probe batch too large".to_owned()))?;
+        for (i, row) in (0..rows).enumerate() {
             if !keys.is_valid(i) {
                 if shared.join_type == JoinType::NullAwareAnti {
                     state[i] = SKIP;
@@ -108,7 +136,7 @@ impl Cursor {
             }
             let p = tables.part(hashing, hashes[i]);
             parts[i] = u8::try_from(p).unwrap_or(0);
-            if tables.get(p).is_some() {
+            if by_part[p % PARTS].is_some() {
                 lookup[p].push(row);
             } else if tables.spilled(p) {
                 state[i] = SKIP;
@@ -136,8 +164,10 @@ impl Cursor {
             shared.counters.add(Counter::KeyCompares, count.compares);
             shared.counters.max(Counter::MaxProbeLength, count.max);
         }
+        let matches = heads.iter().filter(|&&h| h != NONE).count();
         let cursor = Self {
             batch,
+            matches,
             heads,
             parts,
             state,
@@ -168,8 +198,10 @@ impl Cursor {
         // A right semi or anti join only needs to know which build rows
         // match: a build row already marked needs no other pair.
         let marks_only = shared.join_type.builds_preserved() && !shared.join_type.emits_build();
-        let mut probe = Vec::new();
-        let mut build = Vec::new();
+        let by_part = tables.by_part();
+        let room = limit.min(self.matches);
+        let mut probe = Vec::with_capacity(room);
+        let mut build = Vec::with_capacity(room);
         while probe.len() < limit && self.pos < n {
             let i = self.pos;
             if self.chain == NONE {
@@ -177,7 +209,7 @@ impl Cursor {
                 if head == NONE || quick {
                     if head != NONE {
                         self.state[i] = MATCHED;
-                        if marks_only && let Some(t) = tables.get(usize::from(self.parts[i])) {
+                        if marks_only && let Some(t) = by_part[usize::from(self.parts[i]) % PARTS] {
                             t.mark_chain(head);
                         }
                     }
@@ -187,7 +219,7 @@ impl Cursor {
                 self.chain = head;
             }
             let p = usize::from(self.parts[i]);
-            let table = tables.get(p);
+            let table = by_part[p % PARTS];
             if !(marks_only && table.is_some_and(|t| t.is_marked(self.chain))) {
                 probe.push(u32::try_from(i).unwrap_or(u32::MAX));
                 build.push((p, self.chain));
@@ -262,10 +294,13 @@ impl Cursor {
         if !shared.join_type.emits_build() {
             return Ok(None);
         }
+        // Of every table, not only those of these pairs: once per batch.
         let unweighted = taken.is_unweighted()
-            && build
+            && tables
+                .by_part()
                 .iter()
-                .all(|&(p, _)| arena(p).is_none_or(RowArena::is_unweighted));
+                .flatten()
+                .all(|t| t.arena().is_unweighted());
         let weights = if unweighted {
             Weights::Const(1)
         } else {

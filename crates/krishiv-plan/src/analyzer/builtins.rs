@@ -7,7 +7,7 @@ use std::sync::Arc;
 use krishiv_functions::registry::{self, Lookup, Registry};
 
 use super::{FunctionEntry, FunctionLookup, FunctionRegistry, SparkProfile};
-use crate::FunctionId;
+use crate::{FunctionId, FunctionKind};
 
 /// The built-in functions (`krishiv_functions::registry::builtins`).
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +18,17 @@ impl BuiltinFunctions {
     #[must_use]
     pub fn new() -> Self {
         Self(registry::builtins())
+    }
+
+    /// Whether `name` is a built-in aggregate function (in the default
+    /// profile), for the front ends that must know before analysis whether
+    /// a select list aggregates.
+    #[must_use]
+    pub fn is_aggregate(name: &str) -> bool {
+        matches!(
+            registry::builtins().lookup(name, SparkProfile::default()),
+            Lookup::Found(def) if def.kind == FunctionKind::Aggregate
+        )
     }
 }
 

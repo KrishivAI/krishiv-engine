@@ -21,8 +21,9 @@ use krishiv_common::error::{
     DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
-    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
-    InvalidExtractFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    GroupByPosOutOfRange, InternalError, InvalidAggregateFilterNotBoolean,
+    InvalidExtractBaseFieldType, InvalidExtractFieldType,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
     InvalidWithinGroupExpressionDistinctUnsupported,
@@ -607,6 +608,8 @@ fn typed_literal(
         TypedLiteralKind::Timestamp => "TIMESTAMP",
         TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
         TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+        // A time literal is resolved by the caller, as a cast.
+        TypedLiteralKind::Time => return Err(unsupported("a TIME literal here")),
     };
     // Clock-dependent spellings evaluate with the query clock, which the
     // analyzer has not got.
@@ -669,6 +672,7 @@ fn typed_literal(
         }
     };
     match kind {
+        TypedLiteralKind::Time => Err(unsupported("a TIME literal here")),
         TypedLiteralKind::Date => {
             use arrow_array::cast::AsArray as _;
             use arrow_array::types::Date32Type;
@@ -1255,6 +1259,19 @@ impl Resolver<'_> {
                 .cloned()
                 .collect(),
         };
+        let out = match s.position {
+            Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
+            Some(n) => {
+                return Err(AnalysisError::new(
+                    GroupByPosOutOfRange {
+                        index: n.to_string(),
+                        size: out.len().to_string(),
+                    },
+                    origin,
+                ));
+            }
+            None => out,
+        };
         if out.is_empty() && !s.qualifier.is_empty() {
             return Err(AnalysisError::new(
                 CannotResolveStarExpand {
@@ -1453,6 +1470,45 @@ impl Resolver<'_> {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
             }),
+            ExprNode::TypedLiteral {
+                kind: TypedLiteralKind::Time,
+                value,
+            } => {
+                if !self.ctx.conf.time_type {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::UnsupportedTimeType {},
+                        e.origin,
+                    ));
+                }
+                // A time is a string cast to `TIME(6)` (design P2-T181): the
+                // value is checked again here, in case the plan came from a
+                // front end other than the SQL parser.
+                let Some(nanos) = krishiv_kernels::cast::parse_time(value) else {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::InvalidTypedLiteral {
+                            value: format!("'{value}'"),
+                            value_type: "\"TIME\"".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                };
+                let text = krishiv_kernels::cast::format_time(nanos);
+                let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
+                let cast = Expr::new(ExprNode::Cast {
+                    expr: text,
+                    to: DataType::Time { precision: 6 },
+                    mode: CastMode::Ansi,
+                })
+                .with_origin(e.origin);
+                Bound {
+                    expr: Arc::new(cast),
+                    shown: Some(Arc::clone(e)),
+                    ..keep(ArgType {
+                        nullable: false,
+                        data_type: Some(DataType::Time { precision: 6 }),
+                    })
+                }
+            }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
                 let ty = ArgType {
@@ -1636,6 +1692,58 @@ impl Resolver<'_> {
                 }
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
+                }
+                // `to_char(datetime, fmt)` and `to_varchar` are `date_format` to
+                // Spark (`ToCharacterBuilder`), which names them so; a number or
+                // a binary keeps `to_char`.
+                if !session_qualified
+                    && n == 2
+                    && !window_fn
+                    && (lookup_name.eq_ignore_ascii_case("to_char")
+                        || lookup_name.eq_ignore_ascii_case("to_varchar"))
+                    && matches!(
+                        kids[0].ty.data_type,
+                        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+                    )
+                {
+                    // Spark builds `date_format` first, so its clauses are
+                    // refused under that name.
+                    let syntax = if f.distinct {
+                        Some("DISTINCT")
+                    } else if f.filter.is_some() {
+                        Some("FILTER CLAUSE")
+                    } else if !f.within_group.is_empty() {
+                        Some("WITHIN GROUP (ORDER BY ...)")
+                    } else {
+                        None
+                    };
+                    if let Some(syntax) = syntax {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: "`date_format`".to_owned(),
+                                syntax: syntax.to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    let call = Expr::function(
+                        "date_format",
+                        vec![Expr::clone(&kids[0].expr), Expr::clone(&kids[1].expr)],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            "date_format",
+                            vec![kids[0].shown(), kids[1].shown()]
+                                .into_iter()
+                                .map(|k| Expr::clone(&k))
+                                .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
                 }
                 // `date + int`, `int + date` and `date - int` are `date_add`
                 // and `date_sub` to Spark, which names them so.
@@ -2089,24 +2197,56 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
-                // `array_of_structs['a']` is Spark's `GetArrayStructFields` (the
-                // field of every element); not built yet, so it is refused
-                // rather than read as a position.
+                // `array_of_structs['a']` is Spark's `GetArrayStructFields`: the
+                // field of every element, a NULL element giving NULL. It is
+                // built as `transform(arr, x -> x.a)` once the field is known.
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "__subscript"
                     && n == 2
-                    && matches!(
-                        &kids[0].ty.data_type,
-                        Some(DataType::Array(a)) if matches!(a.element_type(), DataType::Struct(_))
-                    )
-                    && matches!(&kids[1].expr.node, ExprNode::Literal(Literal::String(_)))
+                    && let Some(DataType::Array(arr)) = &kids[0].ty.data_type
+                    && let DataType::Struct(st) = arr.element_type()
+                    && let ExprNode::Literal(Literal::String(name)) = &kids[1].expr.node
                 {
-                    return Err(AnalysisError::new(
-                        KrishivUnsupportedFeature {
-                            feature: "subscripts of an array of structs by field name".to_owned(),
-                        },
-                        e.origin,
+                    let cs = self.ctx.conf.case_sensitive;
+                    let Some(field) = st.fields().iter().find(|f| same(f.name(), name, cs)) else {
+                        return Err(unresolved_field(
+                            &[
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone),
+                                name.clone(),
+                            ],
+                            st,
+                            e.origin,
+                        ));
+                    };
+                    let element = Expr::new(ExprNode::Column(ColumnRef {
+                        name: vec!["__subscript_element".to_owned()],
+                        plan_id: None,
+                    }))
+                    .with_origin(e.origin);
+                    let body = Expr::new(ExprNode::Field {
+                        base: Arc::new(element),
+                        name: field.name().to_owned(),
+                    })
+                    .with_origin(e.origin);
+                    let call = Expr::function(
+                        "transform",
+                        vec![
+                            Expr::clone(&kids[0].expr),
+                            Expr::lambda(vec!["__subscript_element".to_owned()], body),
+                        ],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    // Spark names it as the field of the array (`x.a`).
+                    b.shown = Some(Arc::new(
+                        Expr::new(ExprNode::Field {
+                            base: Arc::new(Expr::clone(&kids[0].shown())),
+                            name: field.name().to_owned(),
+                        })
+                        .with_origin(e.origin),
                     ));
+                    return Ok(b);
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `arrays_zip(a, b)` names its struct fields after columns,
@@ -2177,8 +2317,12 @@ impl Resolver<'_> {
                 // Only for the built-in: a qualified session UDF of the
                 // same name runs the UDF.
                 let is_schema_of_csv = is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "schema_of_csv" | "schema_of_xml");
+                    && matches!(
+                        entry.id.name(),
+                        "schema_of_csv" | "schema_of_xml" | "schema_of_json"
+                    );
                 let of_xml = entry.id.name() == "schema_of_xml";
+                let of_json = entry.id.name() == "schema_of_json";
                 // `from_csv` and `to_csv` show only their first argument.
                 let is_csv = is_builtin_entry(&entry)
                     && matches!(
@@ -2275,7 +2419,7 @@ impl Resolver<'_> {
                 // `SchemaOfCsv` evaluates its foldable child): the DDL
                 // literal, shown as the call.
                 if is_schema_of_csv {
-                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml)?;
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml, of_json)?;
                 }
                 // `from_csv` and `to_csv` show only their first argument
                 // (Spark's `toPrettySQL` drops the schema and options).
@@ -2301,7 +2445,8 @@ impl Resolver<'_> {
                 // Spark's parser rejects the `TIME` type before any cast
                 // is checked (`spark.sql.timeType.enabled` is false by
                 // default; TIME cannot be evaluated here either way).
-                if to.any_type(&|t| matches!(t, DataType::Time { .. })) {
+                if !self.ctx.conf.time_type && to.any_type(&|t| matches!(t, DataType::Time { .. }))
+                {
                     return Err(AnalysisError::new(
                         krishiv_common::error::UnsupportedTimeType {},
                         e.origin,
@@ -2925,6 +3070,7 @@ impl Resolver<'_> {
                 | DataType::Long
                 | DataType::Decimal(_)
                 | DataType::Date
+                | DataType::Time { .. }
                 | DataType::TimestampNtz
                 | DataType::Boolean
                 | DataType::Binary
@@ -3139,6 +3285,7 @@ impl Resolver<'_> {
         kids: &[Bound],
         bound: &mut Bound,
         xml: bool,
+        json: bool,
     ) -> Result<(), AnalysisError> {
         if kids.is_empty() || kids.len() > 2 {
             return Ok(());
@@ -3149,7 +3296,23 @@ impl Resolver<'_> {
         let Some(Constant::String(csv)) = csv else {
             return Ok(());
         };
-        let ddl = if xml {
+        let ddl = if json {
+            // `schema_of_json`: only a `map(...)` literal of options folds;
+            // anything else keeps the call.
+            let pairs = match kids.get(1) {
+                None => Vec::new(),
+                Some(opts) => match &opts.expr.node {
+                    ExprNode::Literal(Literal::Map(pairs)) => pairs.clone(),
+                    _ => return Ok(()),
+                },
+            };
+            match krishiv_functions::scalar::schema_of_json_ddl(&csv, &pairs)
+                .map_err(|err| AnalysisError::new(err, e.origin))?
+            {
+                Some(ddl) => ddl,
+                None => return Ok(()),
+            }
+        } else if xml {
             // `schema_of_xml`: the document under the written options.
             let pairs = match kids.get(1) {
                 None => Vec::new(),
@@ -4952,9 +5115,11 @@ impl Resolver<'_> {
         let mut names = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             let name = match &k.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
-                    c.name.clone()
-                }
+                ExprNode::Resolved(
+                    ResolvedExpr::Column(c)
+                    | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::LambdaVar(c),
+                ) => c.name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
                 _ => format!("col{}", i + 1),
@@ -6291,30 +6456,41 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         names
     }
     let mut names = collect(Node::Plan(plan));
-    // Spark lists each reference of a union's branches, not once per column.
+    // Spark lists each reference of a set operation's branches, not once per
+    // column. `INTERSECT` and `EXCEPT` are a semi or an anti join by now.
     let mut union = None;
     let _ = visit_distinct(Node::Plan(plan), |n| {
-        if let Node::Plan(p) = n
-            && let crate::PlanNode::Union { inputs, .. } = &p.node
-        {
-            union = Some(inputs.clone());
-            return std::ops::ControlFlow::Break(());
+        let Node::Plan(p) = n else {
+            return std::ops::ControlFlow::Continue(());
+        };
+        match &p.node {
+            crate::PlanNode::Union { inputs, .. } => union = Some(inputs.clone()),
+            crate::PlanNode::Join {
+                left,
+                right,
+                kind: crate::JoinKind::LeftSemi | crate::JoinKind::LeftAnti,
+                ..
+            } => union = Some(vec![Arc::clone(left), Arc::clone(right)]),
+            _ => return std::ops::ControlFlow::Continue(()),
         }
-        std::ops::ControlFlow::Continue(())
+        std::ops::ControlFlow::Break(())
     });
-    if let Some(inputs) = union {
-        // Under a union, once per reference of each branch.
+    // Only when a branch reads the outer query: over an uncorrelated set
+    // operation, the references above it are listed as anywhere else.
+    if union.is_some_and(|inputs: Vec<_>| {
+        inputs
+            .iter()
+            .any(|input| !collect(Node::Plan(input)).is_empty())
+    }) {
         names = Vec::new();
-        for input in &inputs {
-            let _ = visit_distinct(Node::Plan(input), |n| {
-                if let Node::Expr(e) = n
-                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-                {
-                    names.push((c.id, c.name.clone()));
-                }
-                std::ops::ControlFlow::Continue(())
-            });
-        }
+        let _ = visit_distinct(Node::Plan(plan), |n| {
+            if let Node::Expr(e) = n
+                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+            {
+                names.push((c.id, c.name.clone()));
+            }
+            std::ops::ControlFlow::Continue(())
+        });
     }
     names
         .into_iter()
@@ -6336,7 +6512,14 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
                 TypedLiteralKind::Timestamp => "TIMESTAMP",
                 TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
                 TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+                TypedLiteralKind::Time => "TIME",
             };
+            // Spark names a time by its value, not by the text written.
+            if *kind == TypedLiteralKind::Time
+                && let Some(n) = krishiv_kernels::cast::parse_time(value)
+            {
+                return format!("{keyword} '{}'", krishiv_kernels::cast::format_time(n));
+            }
             format!("{keyword} '{value}'")
         }
         // Spark's pretty SQL shows a cast to an array, map or struct type as
@@ -6824,6 +7007,17 @@ fn call(
         }
         // `JsonToStructs` has the JSON text as its only child: the schema and
         // the options are not shown.
+        // A map schema is the exception: Spark 4.2 names the column `entries`.
+        _ if name.eq_ignore_ascii_case("from_json")
+            && k.get(1).is_some_and(|schema| {
+                let text = schema.trim_matches('\'').trim_start();
+                text.get(..3)
+                    .is_some_and(|head| head.eq_ignore_ascii_case("map"))
+                    && text[3..].trim_start().starts_with('<')
+            }) =>
+        {
+            "entries".to_owned()
+        }
         _ if name.eq_ignore_ascii_case("from_json") && !k.is_empty() => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("from_json({d}{})", k[0])
@@ -7353,6 +7547,8 @@ mod tests {
     #[test]
     fn stars_print_as_sql() {
         let star = Expr::new(ExprNode::Star(crate::Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: Vec::new(),
             except: Vec::new(),
             plan_id: None,

@@ -385,9 +385,16 @@ impl RowLayout {
             return Err(KrishivUnsupportedFeature { feature }.into());
         }
         let w = c.kind.width();
-        let mut values = MutableBuffer::new(rows.len() * w);
-        for r in rows {
-            values.extend_from_slice(&r[at..at + w]);
+        let mut values = MutableBuffer::from_len_zeroed(rows.len() * w);
+        match w {
+            4 => gather::<4>(values.as_slice_mut(), rows, at),
+            8 => gather::<8>(values.as_slice_mut(), rows, at),
+            16 => gather::<16>(values.as_slice_mut(), rows, at),
+            _ => {
+                for (out, r) in values.as_slice_mut().chunks_exact_mut(w.max(1)).zip(rows) {
+                    out.copy_from_slice(&r[at..at + w]);
+                }
+            }
         }
         let data = ArrayData::builder(c.data_type.clone())
             .len(rows.len())
@@ -923,6 +930,14 @@ impl EncodedKeys {
             self.heap.extend_from_slice(bytes);
         }
         Ok(())
+    }
+}
+
+/// Copies the `N` bytes at `at` of each row into `out`, one row after another:
+/// a fixed-size copy, where a width known only at run time calls `memcpy`.
+fn gather<const N: usize>(out: &mut [u8], rows: &[&[u8]], at: usize) {
+    for (out, r) in out.as_chunks_mut::<N>().0.iter_mut().zip(rows) {
+        out.copy_from_slice(&r[at..at + N]);
     }
 }
 

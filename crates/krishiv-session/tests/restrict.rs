@@ -115,6 +115,7 @@ fn value(a: &dyn Array, row: usize) -> String {
     match a.data_type() {
         ArrowType::Int32 => a.as_primitive::<Int32Type>().value(row).to_string(),
         ArrowType::Int64 => a.as_primitive::<Int64Type>().value(row).to_string(),
+        ArrowType::Utf8View => a.as_string_view().value(row).to_owned(),
         ArrowType::Float64 => format!("{:?}", a.as_primitive::<Float64Type>().value(row)),
         other => panic!("unexpected column type {other}"),
     }
@@ -201,4 +202,184 @@ fn unread_groups_raise_no_errors() {
     let query = "SELECT a FROM t WHERE b = 'x' AND c < (SELECT sum(w.v) FROM w WHERE w.k = t.a)";
     assert!(restricted(&s, query));
     assert_eq!(rows(&s, query), ["1"]);
+}
+
+/// A correlated scalar subquery without an aggregate is a single-match
+/// join: NULL without a match, the row with one, and
+/// `SCALAR_SUBQUERY_TOO_MANY_ROWS` with several (Spark's `Single` join).
+#[test]
+fn a_scalar_subquery_without_an_aggregate_matches_at_most_one_row() {
+    let s = session();
+    let query = "SELECT a, (SELECT d FROM u WHERE u.a = t.a AND u.a > 1) FROM t WHERE b = 'x'";
+    assert_eq!(
+        rows(&s, query),
+        ["1,NULL", "1,NULL", "2,x", "3,NULL", "5,NULL", "NULL,NULL"]
+    );
+    let many = "SELECT a, (SELECT d FROM u WHERE u.a = t.a) FROM t WHERE b = 'x'";
+    let err = block_on(block_on(s.sql(many)).unwrap().collect()).unwrap_err();
+    assert!(
+        err.to_string().contains("SCALAR_SUBQUERY_TOO_MANY_ROWS"),
+        "{err}"
+    );
+}
+
+/// `IN (... WHERE g = o ORDER BY y LIMIT 1)` ranks by the subquery's order
+/// even when the sort column is not selected, and partitions only by an
+/// equality whose outer side reads no inner column.
+#[test]
+fn a_correlated_limit_keeps_its_order_and_partitions_by_clean_keys() {
+    let s = correlated_session();
+    let desc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC LIMIT 1)";
+    assert_eq!(rows(&s, desc), ["4"]);
+    let asc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y ASC LIMIT 1)";
+    assert_eq!(rows(&s, asc), ["1", "4"]);
+    // An outer side reading inner columns is refused, never partitioned on it.
+    let mixed = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g + lc.y = lt.id + lc.y ORDER BY lc.k DESC LIMIT 1)";
+    assert!(failure(&s, mixed).contains("LIMIT of this form"));
+    // A sort below a derived table still decides the ranks.
+    let derived = "SELECT id FROM lt WHERE k IN (SELECT k FROM (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC) q LIMIT 1)";
+    assert_eq!(rows(&s, derived), ["4"]);
+    // A filter between them would have to rank after filtering: refused.
+    let filtered = "SELECT id FROM lt WHERE k IN (SELECT k FROM (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC) q WHERE k < 9 LIMIT 1)";
+    assert!(failure(&s, filtered).contains("LIMIT of this form"));
+    // And a key the window and the join would evaluate apart.
+    let random = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE CAST(rand(1) * 2 AS INT) = lt.id ORDER BY y LIMIT 1)";
+    assert!(failure(&s, random).contains("LIMIT of this form"));
+}
+
+/// A correlated column that is a grouping key but not selected still reaches
+/// the aggregate's output, so the join above can read it.
+#[test]
+fn a_correlated_grouping_key_need_not_be_selected() {
+    let s = correlated_session();
+    let value =
+        "SELECT id FROM lt WHERE k IN (SELECT min(lc.k) FROM lc WHERE lc.g = lt.id GROUP BY lc.g)";
+    assert_eq!(rows(&s, value), ["1", "4"]);
+    let having = "SELECT id FROM lt WHERE EXISTS (SELECT 1 FROM lc WHERE lc.g = lt.id GROUP BY lc.g HAVING count(*) > 1)";
+    assert_eq!(rows(&s, having), ["1", "2"]);
+    let nested = "SELECT id, (SELECT max(c) FROM (SELECT count(*) c FROM lc WHERE lc.g = lt.id GROUP BY lc.g) q) FROM lt";
+    assert_eq!(rows(&s, nested), ["1,2", "2,2", "3,NULL", "4,1"]);
+}
+
+/// Outer references Spark refuses, also where the rows would not matter.
+#[test]
+fn correlated_references_spark_refuses() {
+    let s = correlated_session();
+    for query in [
+        "SELECT id FROM lt WHERE (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY lt.id) = 1",
+        "SELECT id FROM lt WHERE k IN (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY lt.id)",
+        "SELECT id FROM lt WHERE EXISTS (SELECT count(*) FROM (SELECT * FROM lc ORDER BY lt.id) q)",
+    ] {
+        let err = failure(&s, query);
+        assert!(err.contains("CORRELATED_REFERENCE"), "{query}: {err}");
+    }
+}
+
+/// Each outer row reads the subquery as if it ran for that row alone.
+#[test]
+fn correlated_rewrites_keep_per_row_results() {
+    let s = correlated_session();
+    for (query, want) in [
+        // A global aggregate has one row even with no matches: NULL here.
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT max(lc.k) FROM lc WHERE lc.g = lt.id)",
+            vec!["4"],
+        ),
+        (
+            "SELECT id FROM lt WHERE k NOT IN (SELECT max(lc.k) FROM lc WHERE lc.g = lt.id)",
+            vec!["1", "2"],
+        ),
+        // A count over no matches is 0, so the value is 3 for id 3.
+        (
+            "SELECT id FROM lt WHERE id IN (SELECT count(*) + 3L FROM lc WHERE lc.g = lt.id)",
+            vec!["3", "4"],
+        ),
+        // EXISTS: a grouped aggregate or a LIMIT has a row when its input has.
+        (
+            "SELECT id FROM lt WHERE EXISTS (SELECT max(y) FROM lc WHERE lc.g = lt.id GROUP BY lc.g)",
+            vec!["1", "2", "4"],
+        ),
+        (
+            "SELECT id FROM lt WHERE EXISTS (SELECT 1 FROM lc WHERE lc.g = lt.id LIMIT 1)",
+            vec!["1", "2", "4"],
+        ),
+        // The correlated column is neither a key nor selected.
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT min(lc.k) FROM lc WHERE lc.g = lt.id GROUP BY lc.y)",
+            vec!["1", "4"],
+        ),
+        // The equality either way round; a LIMIT with no sort (id 4 has one row).
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lt.id = lc.g ORDER BY y DESC LIMIT 1)",
+            vec!["4"],
+        ),
+        (
+            "SELECT id FROM lt WHERE id = 4 AND k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id LIMIT 1)",
+            vec!["4"],
+        ),
+        // Grouped by a constant: no row, so NULL and not the count 0.
+        (
+            "SELECT id, (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY 'a') FROM lt",
+            vec!["1,2", "2,2", "3,NULL", "4,1"],
+        ),
+    ] {
+        assert_eq!(rows(&s, query), want, "{query}");
+    }
+}
+
+/// Shapes the rewrites cannot keep correct stay named refusals.
+#[test]
+fn correlated_shapes_without_a_rewrite_are_refused() {
+    let s = correlated_session();
+    for (query, want) in [
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT max(lc.k) FROM lc WHERE lc.g > lt.id GROUP BY lc.y)",
+            "not equalities",
+        ),
+        (
+            "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g > lt.id ORDER BY y LIMIT 1)",
+            "LIMIT of this form",
+        ),
+        (
+            "SELECT id, (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY lc.y + 1) FROM lt",
+            "with GROUP BY",
+        ),
+        (
+            "SELECT id, (SELECT sum(v) FROM (SELECT lc.k v FROM lc WHERE lc.g = lt.id UNION ALL SELECT k FROM lc) GROUP BY v) FROM lt",
+            "with GROUP BY",
+        ),
+        (
+            "SELECT id, (SELECT c FROM (SELECT count(*) c FROM lc WHERE lc.g = lt.id GROUP BY lc.g) q) FROM lt",
+            "of this shape",
+        ),
+        (
+            "SELECT id, (SELECT lc.y FROM lc WHERE lc.g + 1 = lt.id) FROM lt",
+            "correlation key of this form",
+        ),
+    ] {
+        let err = failure(&s, query);
+        assert!(err.contains(want), "{query}: {err}");
+    }
+}
+
+fn correlated_session() -> Session {
+    let s = session();
+    for ddl in [
+        "CREATE TEMPORARY VIEW lt AS SELECT * FROM VALUES (1, 1), (2, 2), (3, CAST(NULL AS INT)), (4, 4) AS lt(id, k)",
+        "CREATE TEMPORARY VIEW lc AS SELECT * FROM VALUES (1, 1, 10), (1, 5, 20), (2, 9, 30), (2, CAST(NULL AS INT), 5), (4, 4, 1) AS lc(g, k, y)",
+    ] {
+        block_on(s.sql(ddl)).unwrap();
+    }
+    s
+}
+
+/// The error of `query`, from analysis or from running it; empty if it works.
+fn failure(s: &Session, query: &str) -> String {
+    match block_on(s.sql(query)) {
+        Err(e) => e.to_string(),
+        Ok(df) => block_on(df.collect())
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default(),
+    }
 }

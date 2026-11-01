@@ -104,6 +104,15 @@ impl TableProvider for FileTable {
 }
 
 impl FileTable {
+    /// The same table with `columns` (the last columns of its schema) read
+    /// as partition columns: their values come from the `name=value`
+    /// directories above each file.
+    #[must_use]
+    pub fn with_partition_columns(mut self, columns: Vec<arrow_schema::FieldRef>) -> Self {
+        self.scan = self.scan.with_partition_columns(columns);
+        self
+    }
+
     /// The listed files, in listing order (split file indexes refer to
     /// them).
     #[must_use]

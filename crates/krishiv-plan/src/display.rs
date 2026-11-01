@@ -689,6 +689,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 crate::TypedLiteralKind::Timestamp => "TIMESTAMP",
                 crate::TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
                 crate::TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+                crate::TypedLiteralKind::Time => "TIME",
             };
             out.push(Piece::Owned(format!("{keyword} '{value}'")));
         }
@@ -704,6 +705,13 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 let cols: Vec<String> =
                     s.except.iter().map(|path| Name(path).to_string()).collect();
                 text.push_str(&format!(" EXCEPT ({})", cols.join(", ")));
+            }
+            if let Some(n) = s.position {
+                text.push_str(&format!(" @{n}"));
+            }
+            if !s.replace.is_empty() {
+                let cols: Vec<&str> = s.replace.iter().map(|(n, _)| n.as_str()).collect();
+                text.push_str(&format!(" REPLACE ({})", cols.join(", ")));
             }
             out.push(Piece::Owned(text));
         }

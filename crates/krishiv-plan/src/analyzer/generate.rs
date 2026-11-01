@@ -11,19 +11,25 @@
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DatatypeMismatchUnexpectedInputType, UdtfAliasNumberMismatch,
-    UnsupportedGeneratorMultiGenerator, UnsupportedGeneratorNestedInExpressions,
+    DatatypeMismatchStackColumnDiffTypes, DatatypeMismatchUnexpectedInputType,
+    UdtfAliasNumberMismatch, UnresolvedColumnWithoutSuggestion, UnsupportedGeneratorMultiGenerator,
+    UnsupportedGeneratorNestedInExpressions,
 };
 use krishiv_types::DataType;
 
 use super::AnalysisError;
+use super::bind::unsupported;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, pretty};
+use super::exprs::{Bound, Cx, pretty};
 use super::ops::col_expr;
-use super::resolve::{Attr, Env, Rel, Resolver};
+use super::resolve::{Attr, Env, Rel, Resolver, Widen};
 use crate::{
-    BoundColumn, Expr, ExprNode, GeneratorKind, LogicalPlan, Origin, PlanNode, ResolvedExpr,
+    BoundColumn, Expr, ExprNode, GeneratorKind, Literal, LogicalPlan, Origin, PlanNode,
+    ResolvedExpr,
 };
+
+/// The most rows `stack` generates: its rows become expressions.
+const STACK_MAX_ROWS: usize = 4096;
 
 /// The generated columns' names and types for an argument of type `ty`, or
 /// `None` when the generator does not take the type.
@@ -98,6 +104,7 @@ impl Resolver<'_> {
         let c = self.child(input, env)?;
         let rels = [&c];
         let cx = Self::cx(&c.out, &rels, env, "Generate");
+        let arg = &self.stack_rows(arg, &cx)?;
         let b = self.bind(arg, &cx)?;
         if super::ops::has_generator(&b.expr) {
             return Err(AnalysisError::new(
@@ -164,6 +171,102 @@ impl Resolver<'_> {
             qualifier: None,
         };
         Ok(self.make(origin, node, out, &[&below]))
+    }
+
+    /// `stack(n, e1, ..., ek)` as the array of `n` structs (`col0`, `col1`,
+    /// ... the fields; a short last row is padded with NULL) `inline`
+    /// generates its rows from, after Spark's `Stack` checks: the count is
+    /// an INT literal and every column holds one type (NULLs aside). Any
+    /// other argument is returned as it is.
+    fn stack_rows(&mut self, arg: &Arc<Expr>, cx: &Cx<'_>) -> Result<Arc<Expr>, AnalysisError> {
+        let ExprNode::Function(f) = &arg.node else {
+            return Ok(Arc::clone(arg));
+        };
+        if f.unqualified() != Some("stack") || f.args.len() < 2 {
+            return Ok(Arc::clone(arg));
+        }
+        let origin = arg.origin;
+        let bound = f
+            .args
+            .iter()
+            .map(|a| self.bind(a, cx))
+            .collect::<Result<Vec<_>, _>>()?;
+        let shown = format!(
+            "\"stack({})\"",
+            bound
+                .iter()
+                .map(|b| pretty(&b.expr, self.ctx.conf.session_zone))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let count = &bound[0];
+        if count.ty.data_type != Some(DataType::Integer) {
+            let input = pretty(&count.expr, self.ctx.conf.session_zone);
+            return Err(AnalysisError::new(
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: shown,
+                    param_index: "first".to_owned(),
+                    required_type: "\"INT\"".to_owned(),
+                    input_sql: format!("\"{input}\""),
+                    input_type: quoted_type(count.ty.data_type.as_ref()),
+                },
+                origin,
+            ));
+        }
+        let rows = match &f.args[0].node {
+            ExprNode::Literal(Literal::Integer(n)) => usize::try_from(*n)
+                .ok()
+                .filter(|n| (1..=STACK_MAX_ROWS).contains(n)),
+            _ => None,
+        };
+        let Some(rows) = rows else {
+            return Err(unsupported(
+                "stack with a row count that is no INT literal from 1 to 4096",
+                origin,
+            ));
+        };
+        let values = &bound[1..];
+        let width = values.len().div_ceil(rows);
+        // Spark compares row by row, each value with its column's first typed value.
+        let mut base: Vec<Option<(usize, &DataType)>> = vec![None; width];
+        for (i, b) in values.iter().enumerate() {
+            let col = i % width;
+            let Some(ty) = b.ty.data_type.as_ref().filter(|t| **t != DataType::Null) else {
+                continue;
+            };
+            let Some((left, left_ty)) = base[col] else {
+                base[col] = Some((i, ty));
+                continue;
+            };
+            if left_ty != ty {
+                return Err(AnalysisError::new(
+                    DatatypeMismatchStackColumnDiffTypes {
+                        sql_expr: shown,
+                        column_index: col.to_string(),
+                        left_type: quoted_type(Some(left_ty)),
+                        left_param_index: (left + 1).to_string(),
+                        right_type: quoted_type(Some(ty)),
+                        right_param_index: (i + 1).to_string(),
+                    },
+                    origin,
+                ));
+            }
+        }
+        let structs = (0..rows)
+            .map(|row| {
+                let fields = (0..width).flat_map(|col| {
+                    let value = match f.args.get(1 + row * width + col) {
+                        Some(v) => (**v).clone(),
+                        None => Expr::literal(Literal::Null(None)),
+                    };
+                    [Expr::literal(Literal::String(format!("col{col}"))), value]
+                });
+                Expr::function("named_struct", fields.collect()).with_origin(origin)
+            })
+            .collect();
+        Ok(Arc::new(
+            Expr::function("array", structs).with_origin(origin),
+        ))
     }
 
     fn generated_columns(
@@ -314,6 +417,22 @@ impl Resolver<'_> {
         let Some(index) = found else {
             return Ok((items, None));
         };
+        // The generated columns are no lateral alias: another item reading
+        // the generator's alias is unresolved, as in Spark.
+        if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &items[index].expr.node
+            && let Some(user) = items
+                .iter()
+                .enumerate()
+                .find(|(i, b)| *i != index && b.lateral.contains(&output.id))
+                .map(|(_, b)| b)
+        {
+            return Err(AnalysisError::new(
+                UnresolvedColumnWithoutSuggestion {
+                    object_name: super::catalog::quoted(std::slice::from_ref(&output.name)),
+                },
+                user.expr.origin,
+            ));
+        }
         // The item's name is the generated one unless the user wrote an
         // alias (`select_items` names every item): only a written alias
         // renames the generated columns.
@@ -336,7 +455,9 @@ impl Resolver<'_> {
         };
         let (data_type, nullable) = super::subquery::typed(arg);
         let ty = super::exprs::arg_type(data_type.unwrap_or(DataType::Null), nullable);
-        let input = self.attr(&format!("_gen_input_{index}"), &ty);
+        // Spark names the hidden column after the generator's child index:
+        // the one argument of the explode family is child 0.
+        let input = self.attr("_gen_input_0", &ty);
         let mut items = items;
         let replaced = Arc::new(
             Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
@@ -407,7 +528,10 @@ impl Resolver<'_> {
             names: Vec::new(),
             qualifier: None,
         };
-        let generate = self.make(origin, node, out, &[agg]);
+        let mut generate = self.make(origin, node, out, &[agg]);
+        // A grouping column the select list leaves out (`ORDER BY k`) comes
+        // back through the aggregate below.
+        generate.widen = Some(Arc::new(Widen::Through { child: agg.clone() }));
         // Select-list order: the aggregate's outputs, the generated
         // columns in the place of the argument.
         let mut exprs = Vec::new();

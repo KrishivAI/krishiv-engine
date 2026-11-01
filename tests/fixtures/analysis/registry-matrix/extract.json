@@ -17,36 +17,12 @@
       "reason": "SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "extract#2d8b0ce6fd9b/ansi_on",
-      "reason": "SELECT extract(SECOND FROM time '09:08:01.000001') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "extract#2d8b0ce6fd9b/ansi_off",
-      "reason": "SELECT extract(SECOND FROM time '09:08:01.000001') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
       "id": "extract#3119033962f4/ansi_on",
       "reason": "SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "extract#3119033962f4/ansi_off",
       "reason": "SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "extract#41d71df79123/ansi_on",
-      "reason": "SELECT extract(HOUR FROM time '09:08:01.000001') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "extract#41d71df79123/ansi_off",
-      "reason": "SELECT extract(HOUR FROM time '09:08:01.000001') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "extract#a4c46c6c106f/ansi_on",
-      "reason": "SELECT extract(MINUTE FROM time '09:08:01.000001') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "extract#a4c46c6c106f/ansi_off",
-      "reason": "SELECT extract(MINUTE FROM time '09:08:01.000001') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "extract#dd28af7ed0f0/ansi_on",

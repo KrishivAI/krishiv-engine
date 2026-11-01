@@ -169,9 +169,6 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
     )
 }
 
-/// The most rows `stack` lowers: its rows become expressions.
-const STACK_MAX_ROWS: usize = 4096;
-
 struct Lowerer {
     source: SourceId,
     depth: usize,
@@ -547,6 +544,8 @@ impl Lowerer {
         let star = |l: &Self, except: Vec<Vec<String>>| {
             arc(l.ex(
                 ExprNode::Star(Star {
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: Vec::new(),
                     except,
                     plan_id: None,
@@ -556,22 +555,34 @@ impl Lowerer {
         };
         Ok(match &op.kind {
             PipeOpKind::Select(s) => {
-                if let Some(g) = &s.group_by {
-                    return Err(unsupported("GROUP BY in a pipe SELECT", g.span));
-                }
                 let exprs = self.with_windows(&s.windows, |l| {
                     s.projection
                         .iter()
                         .map(|i| l.select_item(i))
                         .collect::<R<Vec<_>>>()
                 })?;
-                let plan = self.node(
-                    PlanNode::Project {
-                        input: arc(plan),
-                        exprs,
-                    },
-                    s.span,
-                );
+                // `|> SELECT items GROUP BY keys` is an aggregate whose
+                // select list is the items.
+                let plan = match &s.group_by {
+                    Some(g) => {
+                        let grouping = self.grouping(g)?;
+                        self.node(
+                            PlanNode::Aggregate {
+                                input: arc(plan),
+                                grouping,
+                                aggregates: exprs,
+                            },
+                            s.span,
+                        )
+                    }
+                    None => self.node(
+                        PlanNode::Project {
+                            input: arc(plan),
+                            exprs,
+                        },
+                        s.span,
+                    ),
+                };
                 self.wrap_distinct_hints(plan, s.quantifier, &s.hints, s.span)?
             }
             PipeOpKind::Extend(items) => {
@@ -650,12 +661,53 @@ impl Lowerer {
                 )?
             }
             PipeOpKind::Aggregate(a) => self.pipe_aggregate(plan, a)?,
-            PipeOpKind::Set(_) => return Err(unsupported("pipe SET", op.span)),
+            PipeOpKind::Set(assignments) => {
+                // One projection per assignment, so a later one reads the
+                // value an earlier one set (`SET z = 1, zz = z + 1`).
+                let mut plan = plan;
+                for a in assignments {
+                    // Validation rejects multi-part keys.
+                    let Some(name) = a.key.last() else { continue };
+                    let value = arc(self.expr(&a.value)?);
+                    let star = self.ex(
+                        ExprNode::Star(Star {
+                            qualifier: Vec::new(),
+                            except: Vec::new(),
+                            replace: vec![(name.value.clone(), value)],
+                            position: None,
+                            plan_id: None,
+                        }),
+                        a.span,
+                    );
+                    plan = self.node(
+                        PlanNode::Project {
+                            input: arc(plan),
+                            exprs: vec![arc(star)],
+                        },
+                        a.span,
+                    );
+                }
+                plan
+            }
             PipeOpKind::Sample(t) => return Err(unsupported("TABLESAMPLE", t.span)),
             PipeOpKind::Pivot(_, Some(_)) | PipeOpKind::Unpivot(_, Some(_)) => {
                 return Err(unsupported("PIVOT with UNPIVOT", op.span));
             }
         })
+    }
+
+    /// The input column a pipe `GROUP BY` number names.
+    fn position(&self, e: &Expr) -> Option<usize> {
+        match &e.kind {
+            ExprKind::Literal(Literal::Number {
+                text,
+                kind: NumKind::Int,
+            }) => text
+                .parse::<i32>()
+                .ok()
+                .and_then(|n| usize::try_from(n).ok()),
+            _ => None,
+        }
     }
 
     /// `AGGREGATE [aggregates] [GROUP BY keys]`: the result is the keys,
@@ -666,13 +718,21 @@ impl Lowerer {
         for g in a.group_by.iter().flat_map(|g| &g.items) {
             match &g.kind {
                 GroupItemKind::Expr(e) => {
-                    if matches!(e.kind, ExprKind::Literal(Literal::Number { .. })) {
-                        return Err(unsupported(
-                            "a position in a pipe AGGREGATE GROUP BY",
-                            g.span,
-                        ));
-                    }
-                    let key = arc(self.expr(e)?);
+                    // A number names an input column, unlike `GROUP BY n`
+                    // of a query, which names a select item.
+                    let key = match self.position(e) {
+                        Some(position) => arc(self.ex(
+                            ExprNode::Star(Star {
+                                qualifier: Vec::new(),
+                                except: Vec::new(),
+                                replace: Vec::new(),
+                                position: Some(position),
+                                plan_id: None,
+                            }),
+                            e.span,
+                        )),
+                        None => arc(self.expr(e)?),
+                    };
                     items.push(Arc::clone(&key));
                     keys.push(key);
                 }
@@ -935,6 +995,21 @@ impl Lowerer {
         ))
     }
 
+    /// Whether `e` calls a built-in aggregate function outside a window
+    /// (so a select list holding it aggregates even without `GROUP BY`).
+    fn has_aggregate_call(e: &Expr) -> bool {
+        if let ExprKind::Function(f) = &e.kind
+            && f.over.is_none()
+            && let [name] = &f.name.parts[..]
+            && krishiv_plan::analyzer::BuiltinFunctions::is_aggregate(&name.value)
+        {
+            return true;
+        }
+        let mut found = false;
+        e.for_each_child(&mut |c| found = found || Self::has_aggregate_call(c));
+        found
+    }
+
     /// The one argument a generator call reads: the argument of `explode`,
     /// `posexplode` and `inline`, or for `stack(n, e1, ..., ek)` the array
     /// of `n` structs `inline` generates the rows from (`col0`, `col1`, ...
@@ -963,51 +1038,15 @@ impl Lowerer {
             };
             return self.arg(&arg.expr);
         }
-        let Some((first, values)) = args.split_first().filter(|(_, v)| !v.is_empty()) else {
+        if args.len() < 2 {
             return Err(wrong("> 1", args.len()));
-        };
-        // The row count is an INT literal (Spark requires an integer
-        // foldable); the rows are built here, so it is bounded.
-        let rows = match &first.expr.kind {
-            ExprKind::Literal(Literal::Number {
-                text,
-                kind: crate::ast::NumKind::Int,
-            }) => text
-                .parse::<usize>()
-                .ok()
-                .filter(|n| (1..=STACK_MAX_ROWS).contains(n)),
-            _ => None,
-        };
-        let Some(rows) = rows else {
-            return Err(unsupported(
-                "stack with a row count that is no INT literal from 1 to 4096",
-                first.span,
-            ));
-        };
-        let width = values.len().div_ceil(rows);
-        let lowered = values
+        }
+        // The analyzer types the call and generates the rows from it.
+        let call_args = args
             .iter()
             .map(|a| self.arg(&a.expr))
             .collect::<R<Vec<_>>>()?;
-        let mut structs = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let mut fields = Vec::with_capacity(2 * width);
-            for col in 0..width {
-                let name = self.ex(
-                    ExprNode::Literal(krishiv_plan::Literal::String(format!("col{col}"))),
-                    span,
-                );
-                fields.push(arc(name));
-                fields.push(match lowered.get(row * width + col) {
-                    Some(v) => Arc::clone(v),
-                    None => {
-                        arc(self.ex(ExprNode::Literal(krishiv_plan::Literal::Null(None)), span))
-                    }
-                });
-            }
-            structs.push(arc(self.call("named_struct", fields, span)));
-        }
-        Ok(arc(self.call("array", structs, span)))
+        Ok(arc(self.call("stack", call_args, span)))
     }
 
     /// `generator(arg)` over `plan` (a [`PlanNode::Generate`]) and the
@@ -1045,6 +1084,8 @@ impl Lowerer {
         );
         let star = self.ex(
             ExprNode::Star(Star {
+                replace: Vec::new(),
+                position: None,
                 qualifier: vec![qualifier],
                 except: Vec::new(),
                 plan_id: None,
@@ -1067,11 +1108,22 @@ impl Lowerer {
             );
         }
         let mut items = Vec::new();
+        // A select list with an aggregate call is an aggregate even without
+        // `GROUP BY`: its generators run above it, in the analyzer.
+        let aggregates = s
+            .projection
+            .iter()
+            .any(|i| Self::has_aggregate_call(&i.expr));
+        let has_generator = s
+            .projection
+            .iter()
+            .any(|i| Self::generator_of(&i.expr).is_some());
         for (index, item) in s.projection.iter().enumerate() {
             // With GROUP BY or HAVING the analyzer extracts the generator
             // from the aggregate (Spark's `ExtractGenerator`).
             if s.group_by.is_none()
                 && s.having.is_none()
+                && !(aggregates && has_generator)
                 && Self::generator_of(&item.expr).is_some()
             {
                 let taken =
@@ -1083,7 +1135,7 @@ impl Lowerer {
             }
             items.push(self.select_item(item)?);
         }
-        if s.group_by.is_none() && s.having.is_none() {
+        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
             plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
@@ -1798,6 +1850,8 @@ impl Lowerer {
             }
             ExprKind::Wildcard { qualifier, except } => self.ex(
                 ExprNode::Star(Star {
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: qualifier.iter().map(|p| p.value.clone()).collect(),
                     except: except
                         .iter()
@@ -2214,10 +2268,8 @@ impl Lowerer {
                     sp,
                 )
             }
-            ExprKind::Row(_) => {
-                return Err(unsupported("row and struct constructors", sp));
-            }
-            ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
+            // `(a, b)` is `struct(a, b)` to Spark's `AstBuilder`.
+            ExprKind::Row(items) | ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
             // Every variant is lowered above; the wildcard stays because
             // `ExprKind` is non-exhaustive.
             #[expect(unreachable_patterns, reason = "every ExprKind variant is lowered")]
@@ -2352,6 +2404,10 @@ fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
                 },
                 TypedKind::TimestampLtz => ExprNode::TypedLiteral {
                     kind: IrTypedKind::TimestampLtz,
+                    value: value.clone(),
+                },
+                TypedKind::Time => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Time,
                     value: value.clone(),
                 },
                 TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(

@@ -14,7 +14,7 @@ use arrow_array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
     Int64Type, TimestampMicrosecondType,
 };
-use arrow_array::{ArrayRef, Float64Array, new_null_array};
+use arrow_array::{Array, ArrayRef, Float64Array, Int64Array, new_null_array};
 use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::OverflowMode;
@@ -27,10 +27,50 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
 pub(super) const NAMES: &[&str] = &[
-    "sqrt", "cbrt", "exp", "expm1", "ln", "log10", "log2", "log1p", "sin", "cos", "tan", "asin",
-    "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cot", "csc", "sec",
-    "degrees", "radians", "rint", "sign", "signum", "log", "pow", "power", "atan2", "hypot", "pi",
-    "e", "round", "bround", "ceil", "ceiling", "floor", "pmod", "greatest", "least",
+    "sqrt",
+    "cbrt",
+    "exp",
+    "expm1",
+    "ln",
+    "log10",
+    "log2",
+    "log1p",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "sinh",
+    "cosh",
+    "tanh",
+    "asinh",
+    "acosh",
+    "atanh",
+    "cot",
+    "csc",
+    "sec",
+    "degrees",
+    "radians",
+    "rint",
+    "sign",
+    "signum",
+    "log",
+    "pow",
+    "power",
+    "atan2",
+    "hypot",
+    "pi",
+    "e",
+    "round",
+    "bround",
+    "ceil",
+    "ceiling",
+    "floor",
+    "pmod",
+    "greatest",
+    "least",
+    "width_bucket",
 ];
 
 fn unary_fn(name: &str) -> Option<UnaryFn> {
@@ -63,6 +103,44 @@ fn unary_fn(name: &str) -> Option<UnaryFn> {
         "rint" => UnaryFn::Rint,
         "sign" | "signum" => UnaryFn::Signum,
         _ => return None,
+    })
+}
+
+/// Spark's `WidthBucket.computeBucketNumber`: the 1-based bucket of `value`
+/// among `buckets` equal-width buckets between `min` and `max` (either
+/// order); 0 below the range and `buckets + 1` above it. NULL for a
+/// non-positive or `Long.MaxValue` bucket count, a `NaN` value, equal
+/// bounds, or a bound that is not finite.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Java's (long) of a double saturates and truncates toward zero, as `as` does"
+)]
+fn width_bucket(value: f64, min: f64, max: f64, buckets: i64) -> Option<i64> {
+    if buckets <= 0
+        || buckets == i64::MAX
+        || value.is_nan()
+        || min == max
+        || !min.is_finite()
+        || !max.is_finite()
+    {
+        return None;
+    }
+    let (lower, upper) = if min < max { (min, max) } else { (max, min) };
+    let n = buckets as f64;
+    Some(if min < max {
+        if value < lower {
+            0
+        } else if value >= upper {
+            buckets + 1
+        } else {
+            ((n * (value - lower) / (upper - lower)) as i64).wrapping_add(1)
+        }
+    } else if value > upper {
+        0
+    } else if value <= lower {
+        buckets + 1
+    } else {
+        ((n * (upper - value) / (upper - lower)) as i64).wrapping_add(1)
     })
 }
 
@@ -336,6 +414,34 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(math::binary(f, l.operand(), r.operand())?) as ArrayRef)
             })
         }
+        (
+            "width_bucket",
+            [
+                DataType::Float64,
+                DataType::Float64,
+                DataType::Float64,
+                DataType::Int64,
+            ],
+        ) => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+            let value = x.array::<Float64Type>(0)?;
+            let min = x.array::<Float64Type>(1)?;
+            let max = x.array::<Float64Type>(2)?;
+            let buckets = x.array::<Int64Type>(3)?;
+            let out: Int64Array = (0..value.len())
+                .map(|i| {
+                    let all = value.is_valid(i)
+                        && min.is_valid(i)
+                        && max.is_valid(i)
+                        && buckets.is_valid(i);
+                    if all {
+                        width_bucket(value.value(i), min.value(i), max.value(i), buckets.value(i))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            Ok(Arc::new(out) as ArrayRef)
+        }),
         ("pi", []) => constant(std::f64::consts::PI),
         ("e", []) => constant(std::f64::consts::E),
         ("round" | "bround", [t] | [t, _]) => {

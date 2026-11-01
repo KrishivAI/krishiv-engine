@@ -12,11 +12,6 @@
       9,
       14,
       15
-    ],
-    "nested-interval-types": [
-      16,
-      17,
-      18
     ]
   },
   "file": "typeCoercion/native/mapZipWith",

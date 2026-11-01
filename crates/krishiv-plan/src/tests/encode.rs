@@ -416,7 +416,7 @@ fn keys_are_stable() {
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
     assert_eq!(encoding.len(), 509, "{encoding:?}");
-    assert_eq!(hash.to_string(), "18fb46a96faba73f2df9c154e49a4f89");
+    assert_eq!(hash.to_string(), "53c7271b1f33af7693ee032c8e587d46");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -428,7 +428,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "8b398126fa73d3a01fe43b57c60d0590");
+    assert_eq!(hash.to_string(), "90e9721c8189ffb4d4732ce9a9c27db7");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in
@@ -531,4 +531,27 @@ fn qualifier_and_arg_names_enter_the_key() {
         assert!(!l.structurally_eq(r));
         assert_ne!(l.structural_hash(), r.structural_hash());
     }
+}
+
+/// A `|> SET` value is part of the star's identity.
+#[test]
+fn star_replacement_values_enter_the_key() {
+    let with = |v: i32| {
+        Plan::try_new(
+            LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Star(crate::Star {
+                qualifier: Vec::new(),
+                except: Vec::new(),
+                replace: vec![(
+                    "x".to_owned(),
+                    Arc::new(Expr::literal(crate::Literal::Integer(v))),
+                )],
+                position: None,
+                plan_id: None,
+            }))]),
+        )
+        .unwrap()
+    };
+    assert!(with(1).structurally_eq(&with(1)));
+    assert!(!with(1).structurally_eq(&with(2)));
+    assert_ne!(with(1).structural_hash(), with(2).structural_hash());
 }

@@ -10,10 +10,10 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, FailedToParseTooComplex, GroupByAggregate,
     GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
     InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
-    OrderByPosOutOfRange, QualifyAggregateNotAllowed, QualifyRequiresWindowFunction,
-    StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
-    UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin,
-    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    NumTableValueAliasesMismatch, OrderByPosOutOfRange, QualifyAggregateNotAllowed,
+    QualifyRequiresWindowFunction, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt,
+    TableOrViewNotFound, UdtfAliasNumberMismatch, UnresolvedAllInGroupBy,
+    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
 };
 
@@ -340,8 +340,13 @@ impl Resolver<'_> {
         // reports them. Stars expand the item list, so the alias is matched
         // by call name rather than by position (as the analyzer matches
         // `struct` and `named_struct` by name elsewhere).
+        // `|> SET x = json_tuple(..)` names the output by its target.
         let alias = exprs.iter().find_map(|e| match &e.node {
             ExprNode::Alias { name, expr } if is_json_tuple_call(expr) => Some(name.clone()),
+            ExprNode::Star(s) => s
+                .replace
+                .iter()
+                .find_map(|(name, expr)| is_json_tuple_call(expr).then(|| name.clone())),
             _ => None,
         });
         if let Some(name) = &alias
@@ -480,8 +485,26 @@ impl Resolver<'_> {
         for e in exprs {
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
-                for a in self.expand(s, &cx, e.origin)? {
-                    items.push(column_bound(&a, e.origin));
+                let expanded = self.expand(s, &cx, e.origin)?;
+                let replaced = self.replacements(s, &expanded, e.origin)?;
+                for (a, with) in expanded.iter().zip(replaced) {
+                    let Some(with) = with else {
+                        items.push(column_bound(a, e.origin));
+                        continue;
+                    };
+                    // `|> SET name = expr`: the expression takes the
+                    // column's place and name.
+                    let item = Arc::new(
+                        Expr::new(ExprNode::Alias {
+                            expr: with,
+                            name: a.col.name.clone(),
+                        })
+                        .with_origin(e.origin),
+                    );
+                    let mut cx = Self::cx(&c.out, &rels, env, op);
+                    cx.lateral = lca.then_some(&lateral[..]);
+                    cx.windows = WindowUse::Allowed;
+                    items.push(self.bind(&item, &cx)?);
                 }
                 continue;
             }
@@ -506,6 +529,32 @@ impl Resolver<'_> {
         Ok(items)
     }
 
+    /// For each column of a star's expansion, the expression of its
+    /// `|> SET` assignment (the last one naming it). A name that is not
+    /// a column of the expansion is `UNRESOLVED_COLUMN`.
+    fn replacements(
+        &self,
+        s: &crate::Star,
+        out: &[Attr],
+        origin: Origin,
+    ) -> Result<Vec<Option<Arc<Expr>>>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        let mut with: Vec<Option<Arc<Expr>>> = vec![None; out.len()];
+        for (name, expr) in &s.replace {
+            let mut found = false;
+            for (slot, a) in with.iter_mut().zip(out) {
+                if super::bind::same(&a.col.name, name, cs) {
+                    *slot = Some(Arc::clone(expr));
+                    found = true;
+                }
+            }
+            if !found {
+                return Err(unresolved(std::slice::from_ref(name), out, origin));
+            }
+        }
+        Ok(with)
+    }
+
     /// `b` as a named expression: an attribute, or aliased by Spark's
     /// generated name (a cast of a column keeps the column's name, a
     /// lateral alias otherwise reads `lateralAliasReference(name)`).
@@ -527,7 +576,9 @@ impl Resolver<'_> {
             // lambdas read `namedlambdavariable()`, and a three-argument
             // `aggregate`/`reduce` shows the identity `finish` (see `hof`
             // and Spark's `toPrettySQL`).
-            _ if matches!(&b.expr.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if super::hof::Hof::of(f.id.name()).is_some()) => {
+            _ if !matches!(shown.node, ExprNode::Field { .. })
+                && matches!(&b.expr.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if super::hof::Hof::of(f.id.name()).is_some()) =>
+            {
                 pretty(&lateral_refs(&b.expr, &b.lateral), zone)
             }
             _ => pretty(&lateral_refs(&shown, &b.lateral), zone),
@@ -1611,6 +1662,14 @@ impl Resolver<'_> {
         for (slot, k) in group.iter_mut().zip(keys) {
             if let Some(n) = self.ordinal(k) {
                 *slot = Some(self.group_ordinal(n, k.origin, items, c)?);
+            } else if let ExprNode::Star(s) = &k.node
+                && s.position.is_some()
+            {
+                // `|> AGGREGATE ... GROUP BY n`: the n-th input column.
+                let rels = [c];
+                let cx = Self::cx(&c.out, &rels, env, "Aggregate");
+                let attrs = self.expand(s, &cx, k.origin)?;
+                *slot = attrs.first().map(|a| column_bound(a, k.origin));
             }
         }
         // Spark resolves the select list first, then ordinals, then the
@@ -2490,10 +2549,20 @@ impl Resolver<'_> {
         global: bool,
     ) -> Result<(), AnalysisError> {
         let mut seen = HashSet::new();
+        // A lateral alias is an item of the list itself, checked there.
+        let aliases: HashSet<AttrId> = items
+            .iter()
+            .flat_map(|b| b.lateral.iter().copied())
+            .collect();
         for b in items {
             let mut stack = vec![Arc::clone(&b.expr)];
             while let Some(x) = stack.pop() {
                 if !seen.insert(super::bind::addr(&*x)) || keys.contains(&semantic_key(&x, memo)) {
+                    continue;
+                }
+                if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
+                    && aliases.contains(&c.id)
+                {
                     continue;
                 }
                 match &x.node {
@@ -2548,7 +2617,7 @@ impl Resolver<'_> {
             ..a.clone()
         };
         let (ln, rn) = match kind {
-            JoinKind::LeftOuter => (false, true),
+            JoinKind::LeftOuter | JoinKind::Single => (false, true),
             JoinKind::RightOuter => (true, false),
             JoinKind::FullOuter => (true, true),
             _ => (false, false),
@@ -3127,6 +3196,16 @@ impl Resolver<'_> {
             c
         } else {
             if columns.len() != c.out.len() {
+                if let Some(func) = generator_relation_name(input) {
+                    return Err(AnalysisError::new(
+                        NumTableValueAliasesMismatch {
+                            func_name: format!("`{func}`"),
+                            aliases_num: columns.len().to_string(),
+                            out_cols_num: c.out.len().to_string(),
+                        },
+                        p.origin,
+                    ));
+                }
                 return Err(AnalysisError::new(
                     AssignmentArityMismatch {
                         num_target: c.out.len().to_string(),
@@ -3176,6 +3255,43 @@ impl Resolver<'_> {
             columns: Vec::new(),
         };
         Ok(self.make(p.origin, node, out, &[&inner]))
+    }
+}
+
+/// The function a table-valued generator relation was written as
+/// (`FROM explode(..)`, `FROM stack(..)`, `FROM json_tuple(..)`), for the
+/// alias-count error; `None` for any other relation.
+fn generator_relation_name(plan: &LogicalPlan) -> Option<String> {
+    match &plan.node {
+        PlanNode::Generate {
+            input,
+            kind,
+            outer,
+            arg,
+            ..
+        } if matches!(input.node, PlanNode::OneRowRelation) => {
+            if let ExprNode::Function(f) = &arg.node
+                && f.unqualified() == Some("stack")
+            {
+                return Some("stack".to_owned());
+            }
+            Some(format!(
+                "{}{}",
+                kind.name(),
+                if *outer { "_outer" } else { "" }
+            ))
+        }
+        PlanNode::Project { input, exprs }
+            if matches!(input.node, PlanNode::OneRowRelation) && exprs.len() == 1 =>
+        {
+            match &exprs[0].node {
+                ExprNode::Function(f) if f.unqualified() == Some("json_tuple") => {
+                    Some("json_tuple".to_owned())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

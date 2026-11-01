@@ -41,6 +41,17 @@ fn dec(p: u32, s: u32) -> DataType {
     DataType::Decimal(DecimalType::try_new(p, s).unwrap())
 }
 
+/// The input of the time fields: either timestamp, or a time of any
+/// precision.
+fn timestamp_or_time() -> InputType {
+    InputType::OneOf(
+        [DataType::Timestamp, DataType::TimestampNtz]
+            .into_iter()
+            .chain((0..=6).map(|precision| DataType::Time { precision }))
+            .collect(),
+    )
+}
+
 #[test]
 fn every_definition_is_in_sparks_catalog() {
     let r = builtins();
@@ -296,7 +307,7 @@ fn datetime_signatures() {
     assert_eq!(err.error_class(), ErrorClass::NonFoldableArgument);
     // The source's cast follows the field.
     let inputs = |c: Option<Constant>| def("extract").inputs.expected(&CallTypes::new(&args, &[c]));
-    let ts = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    let ts = timestamp_or_time();
     assert_eq!(inputs(field("hour")).unwrap()[1], ts);
     assert_eq!(
         inputs(field("year")).unwrap()[1],
@@ -441,7 +452,7 @@ fn calendar_signatures() {
         );
     }
     // The time fields read either timestamp; a date is cast to the first.
-    let any_ts = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    let any_ts = timestamp_or_time();
     for name in ["hour", "minute", "second"] {
         assert_eq!(
             inputs(name, std::slice::from_ref(&date)),
@@ -2217,10 +2228,11 @@ fn json_signatures() {
     let s = ty(DataType::String);
     let map_ss = || DataType::Map(MapType::new(DataType::String, DataType::String, true).into());
     let string_lit = |text: &str| Some(Constant::String(text.to_owned()));
-    // `json_array_length` and `get_json_object` take strings exactly.
+    // `json_array_length` takes a string and nothing else; `get_json_object`
+    // takes strings exactly.
     assert_eq!(
         def("json_array_length").inputs,
-        Inputs::Expects(vec![InputType::Exact(DataType::String)])
+        Inputs::Expects(vec![InputType::Strict(DataType::String)])
     );
     assert_eq!(
         result("json_array_length", std::slice::from_ref(&s), &[]).unwrap(),

@@ -21,6 +21,7 @@
 
 pub(crate) mod datetime;
 pub(crate) mod text;
+pub(crate) mod time;
 pub(crate) mod timestamp;
 
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType,
+    Int32Type, Int64Type, Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, GenericStringArray, OffsetSizeTrait,
@@ -38,6 +39,7 @@ use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
 
 pub use datetime::{FixedOffset, TimeZoneRules};
+pub use time::{TimeTruncUnit, format_time, parse_time, time_diff, time_trunc};
 pub use timestamp::{TimestampText, timestamp_has_zone, timestamp_text};
 
 use crate::decimal::DecimalNative;
@@ -82,6 +84,7 @@ pub fn spark_type_name(t: &DataType) -> String {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "STRING".to_owned(),
         DataType::Binary | DataType::LargeBinary => "BINARY".to_owned(),
         DataType::Date32 => "DATE".to_owned(),
+        DataType::Time64(TimeUnit::Nanosecond) => "TIME(6)".to_owned(),
         DataType::Timestamp(_, Some(_)) => "TIMESTAMP".to_owned(),
         DataType::Timestamp(_, None) => "TIMESTAMP_NTZ".to_owned(),
         other => other.to_string(),
@@ -601,6 +604,47 @@ pub fn cast(
         }};
     }
     match (from, to) {
+        // Whole seconds since midnight: always an `int`; a `tinyint` or
+        // `smallint` that cannot hold them is `CAST_OVERFLOW` (ANSI).
+        (
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64,
+        ) => {
+            let t = input.as_primitive::<Time64NanosecondType>();
+            let secs = |i: usize| t.value(i).div_euclid(time::NANOS_PER_SECOND);
+            let narrow = |i: usize| -> Result<Option<i64>, KernelError> {
+                fail(mode, None, || {
+                    KernelError::cast_overflow(
+                        i,
+                        format!("TIME '{}'", time::format_time(t.value(i))),
+                        &from_name,
+                        &to_name,
+                    )
+                })
+            };
+            match to {
+                DataType::Int64 => {
+                    Ok(Arc::new(map_rows::<Int64Type>(input, |i| Ok(Some(secs(i))))?) as ArrayRef)
+                }
+                DataType::Int32 => Ok(Arc::new(map_rows::<Int32Type>(input, |i| {
+                    Ok(i32::try_from(secs(i)).ok())
+                })?) as ArrayRef),
+                DataType::Int16 => {
+                    Ok(Arc::new(map_rows::<Int16Type>(input, |i| {
+                        match i16::try_from(secs(i)) {
+                            Ok(v) => Ok(Some(v)),
+                            Err(_) => Ok(narrow(i)?.and_then(|v| i16::try_from(v).ok())),
+                        }
+                    })?) as ArrayRef)
+                }
+                _ => Ok(Arc::new(map_rows::<Int8Type>(input, |i| {
+                    match i8::try_from(secs(i)) {
+                        Ok(v) => Ok(Some(v)),
+                        Err(_) => Ok(narrow(i)?.and_then(|v| i8::try_from(v).ok())),
+                    }
+                })?) as ArrayRef),
+            }
+        }
         // Spark: a number is `true` unless it is zero; NaN is not zero.
         (f, DataType::Boolean) if is_numeric(f) && *f != DataType::Boolean => {
             let nums = nums.ok_or_else(unsupported)?;
@@ -683,6 +727,20 @@ pub fn cast(
             )
             .map_err(|e| KernelError::internal(e.to_string()))?;
             Ok(Arc::new(out))
+        }
+        // Without ANSI an integral is its big-endian bytes at its own width
+        // (Spark's `Cast.castToBinary`); the analyzer refuses it otherwise.
+        (DataType::Int8, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int8Type>(), i8::to_be_bytes)
+        }
+        (DataType::Int16, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int16Type>(), i16::to_be_bytes)
+        }
+        (DataType::Int32, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int32Type>(), i32::to_be_bytes)
+        }
+        (DataType::Int64, DataType::Binary) => {
+            integral_bytes(input.as_primitive::<Int64Type>(), i64::to_be_bytes)
         }
         (DataType::Utf8, DataType::Binary) => {
             // A `STRING` carrier holds bytes: reinterpreting them as
@@ -952,6 +1010,14 @@ fn from_string<O: OffsetSizeTrait>(
             })?;
             decimal_out(out, p, sc)
         }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            let out =
+                map_rows::<Time64NanosecondType>(s, |i| match time::parse_time(s.value(i)) {
+                    Some(n) => Ok(Some(n)),
+                    None => fail(mode, None, || invalid(i)),
+                })?;
+            Ok(Arc::new(out))
+        }
         DataType::Boolean => {
             let mut out = arrow_array::builder::BooleanBuilder::with_capacity(s.len());
             for i in 0..s.len() {
@@ -1026,6 +1092,22 @@ fn from_string<O: OffsetSizeTrait>(
             "CAST from STRING to {to_name}"
         ))),
     }
+}
+
+/// The big-endian bytes of each value of `a`; NULL stays NULL.
+fn integral_bytes<T: ArrowPrimitiveType, const N: usize>(
+    a: &PrimitiveArray<T>,
+    bytes: fn(T::Native) -> [u8; N],
+) -> Result<ArrayRef, KernelError> {
+    let mut out =
+        arrow_array::builder::BinaryBuilder::with_capacity(a.len(), a.len().saturating_mul(N));
+    for v in a.iter() {
+        match v {
+            Some(x) => out.append_value(bytes(x)),
+            None => out.append_null(),
+        }
+    }
+    Ok(Arc::new(out.finish()))
 }
 
 /// `DATE` ↔ `TIMESTAMP` ↔ `TIMESTAMP_NTZ`; `None` for other targets.
@@ -1127,6 +1209,11 @@ fn to_string(input: &dyn Array, opts: &CastOptions<'_>) -> Result<StringArray, K
                 Num::Dec(v, s) => write_decimal_plain(v, s, &mut out),
                 Num::Float(v, is_f32) => out.push_str(&float_string(v, is_f32)),
             },
+            (DataType::Time64(TimeUnit::Nanosecond), _) => {
+                out.push_str(&time::format_time(
+                    input.as_primitive::<Time64NanosecondType>().value(i),
+                ));
+            }
             (DataType::Date32, _) => {
                 datetime::format_date(
                     i64::from(input.as_primitive::<Date32Type>().value(i)),

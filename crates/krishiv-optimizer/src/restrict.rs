@@ -130,7 +130,10 @@ impl Restrict<'_> {
             JoinKind::Inner | JoinKind::Cross | JoinKind::LeftSemi => (true, true),
             // An existence join keeps every left row (`exists` says whether
             // it matched), so only the right side may be restricted.
-            JoinKind::LeftOuter | JoinKind::LeftAnti | JoinKind::Existence(_) => (false, true),
+            JoinKind::LeftOuter
+            | JoinKind::Single
+            | JoinKind::LeftAnti
+            | JoinKind::Existence(_) => (false, true),
             JoinKind::RightOuter => (true, false),
             _ => (false, false),
         };

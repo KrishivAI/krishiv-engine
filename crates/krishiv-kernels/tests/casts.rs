@@ -897,3 +897,36 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn integrals_to_binary_are_big_endian_at_their_width() {
+    // Spark 4.2.0, ANSI off: HEX(CAST(-123 AS binary)) is FFFFFF85, and so on.
+    let cases: [(ArrayRef, &str); 4] = [
+        (Arc::new(Int8Array::from(vec![Some(-123), None])), "85"),
+        (Arc::new(Int16Array::from(vec![Some(-123), None])), "FF85"),
+        (
+            Arc::new(Int32Array::from(vec![Some(-123), None])),
+            "FFFFFF85",
+        ),
+        (
+            Arc::new(Int64Array::from(vec![Some(-123), None])),
+            "FFFFFFFFFFFFFF85",
+        ),
+    ];
+    for (input, want) in cases {
+        let out = run(&input, &DataType::Binary, Legacy).unwrap();
+        let out = out
+            .as_any()
+            .downcast_ref::<arrow_array::BinaryArray>()
+            .unwrap();
+        let hex: String = out.value(0).iter().map(|b| format!("{b:02X}")).collect();
+        assert_eq!(hex, want, "{}", input.data_type());
+        assert!(out.is_null(1), "{}", input.data_type());
+    }
+    let max = run(&i32s(i32::MAX), &DataType::Binary, Legacy).unwrap();
+    let max = max
+        .as_any()
+        .downcast_ref::<arrow_array::BinaryArray>()
+        .unwrap();
+    assert_eq!(max.value(0), [0x7F, 0xFF, 0xFF, 0xFF]);
+}

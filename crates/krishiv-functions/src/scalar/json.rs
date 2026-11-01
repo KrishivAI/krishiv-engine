@@ -135,6 +135,30 @@ fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
     }))
 }
 
+/// The DDL `schema_of_json(json[, options])` evaluates to for one
+/// constant JSON text, for the analyzer to fold (`None`: the type is
+/// deeper than Jackson's limit, so no DDL names it).
+///
+/// # Errors
+/// `KRISHIV_MALFORMED_JSON` for malformed text and the option errors of
+/// the JSON data source.
+pub fn schema_of_json_ddl(
+    json: &str,
+    pairs: &[(String, String)],
+) -> Result<Option<String>, KrishivError> {
+    let options = JsonOptions::from_map(&pairs.iter().cloned().collect())?;
+    let drop = options.drop_field_if_all_null;
+    let text = StringArray::from(vec![Some(json)]);
+    let inferred = infer_json(&text, &options)?;
+    Ok(inferred
+        .into_iter()
+        .next()
+        .flatten()
+        .and_then(|ty| render_schema(&ty, drop))
+        .and_then(|rendered| DataType::from_arrow(&rendered).ok())
+        .map(|parsed| parsed.sql()))
+}
+
 /// The schema `schema_of_json` renders: a `VOID` reads as `STRING`,
 /// recursively, as Spark renders an all-null field or element; with
 /// `dropFieldIfAllNull` void struct fields are dropped instead (structs

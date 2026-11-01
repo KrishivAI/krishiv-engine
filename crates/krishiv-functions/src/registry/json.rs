@@ -31,9 +31,11 @@ use crate::signature::{ArgType, CallTypes, Constant, FunctionKind, InputType, In
 /// is wrapped in `struct<...>`), the options as Spark's JSON data source
 /// reads them.
 pub(super) fn specs() -> Vec<Spec> {
-    let string = Inputs::Expects(vec![exact(DataType::String)]);
-    let mut out = scalar(&["json_array_length"], &string, int_result);
-    out.extend(scalar(&["json_object_keys"], &string, array_result));
+    // `LengthOfJsonArray` and `JsonObjectKeys` are `ExpectsInputTypes`: a
+    // non-string is a type mismatch, never an implicit cast.
+    let strict = Inputs::Expects(vec![InputType::Strict(DataType::String)]);
+    let mut out = scalar(&["json_array_length"], &strict, int_result);
+    out.extend(scalar(&["json_object_keys"], &strict, array_result));
     out.extend(scalar(
         &["get_json_object"],
         &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),

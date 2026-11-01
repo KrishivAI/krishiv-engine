@@ -2,22 +2,7 @@
   "cases": {
     "depends-on-command": [
       3,
-      7,
-      8,
-      11,
-      13,
-      16,
-      17,
-      18,
-      19,
-      20,
-      21,
-      22,
-      23,
-      24,
-      25,
-      26,
-      27
+      11
     ]
   },
   "file": "subquery/in-subquery/in-set-operations",

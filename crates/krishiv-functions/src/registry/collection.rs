@@ -19,10 +19,24 @@ use crate::signature::{ArgType, CallTypes, FunctionKind, Inputs};
 /// default) and NULL with ANSI on, so the result is non-nullable with
 /// ANSI off and as nullable as the argument otherwise.
 fn size_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    collection_size("size", c.ansi(), c)
+}
+
+/// `cardinality(expr)`: another name of `size` (Spark 4.2 has no separate
+/// class).
+fn cardinality_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    collection_size("cardinality", c.ansi(), c)
+}
+
+fn collection_size(
+    name: &str,
+    null_is_null: bool,
+    c: &CallTypes<'_>,
+) -> Result<ArgType, KrishivError> {
     let arg = c.args().first();
     let nullable = match arg.and_then(|a| a.data_type.as_ref()) {
         Some(DataType::Array(_) | DataType::Map(_)) | None => {
-            if c.ansi() {
+            if null_is_null {
                 arg.is_none_or(|a| a.nullable)
             } else {
                 false
@@ -30,7 +44,7 @@ fn size_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         }
         other => {
             return Err(DatatypeMismatchUnexpectedInputType {
-                sql_expr: call_sql("size", c),
+                sql_expr: call_sql(name, c),
                 param_index: "first".to_owned(),
                 required_type: "(\"ARRAY\" or \"MAP\")".to_owned(),
                 input_sql: format!("\"{}\"", c.sql(0).unwrap_or_default()),
@@ -49,6 +63,15 @@ fn size_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 pub(super) fn split_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(
         DataType::Array(ArrayType::new(DataType::String, false).into()),
+        c.any_nullable(),
+    ))
+}
+
+/// `regexp_extract_all`: Spark's `ArrayType(subject.dataType)`, so unlike
+/// `split` the items are nullable; the result is nullable when an argument is.
+pub(super) fn extract_all_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(DataType::String, true).into()),
         c.any_nullable(),
     ))
 }
@@ -72,6 +95,7 @@ fn spec(
 /// The signatures of this family.
 pub(super) fn specs() -> Vec<Spec> {
     vec![
+        spec("cardinality", Inputs::Any, cardinality_result),
         spec("size", Inputs::Any, size_result),
         spec(
             "split",
