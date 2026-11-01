@@ -14,6 +14,7 @@
 //! [`Lookup::NotFound`] in older ones (as for an unknown name).
 
 mod array_edit;
+mod array_scan;
 mod array_set;
 mod bitwise;
 mod catalog;

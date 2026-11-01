@@ -15,14 +15,14 @@ use super::args::{Inputs, internal};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
-pub(super) const NAMES: &[&str] = &["size"];
+pub(super) const NAMES: &[&str] = &["cardinality", "size"];
 
 /// Binds the collection function `name` to `args`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let binding = match listed {
-        "size" => {
+        "size" | "cardinality" => {
             if types.len() != 1
                 || !matches!(
                     types[0],
@@ -31,8 +31,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             {
                 return Some((listed, Err(bad_types(listed, args))));
             }
-            let ansi = opts.ansi;
-            Binding::new(DataType::Int32, move |x: &Inputs<'_>| size(x, ansi))
+            // `cardinality` is `size` with Spark's `legacySizeOfNull` off.
+            let nulls_are_minus_one = listed == "size" && !opts.ansi;
+            Binding::new(DataType::Int32, move |x: &Inputs<'_>| {
+                size(x, nulls_are_minus_one)
+            })
         }
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };
@@ -42,13 +45,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
 /// `size(arg)`: the number of elements of the array or map, NULL for NULL
 /// input with ANSI on and `-1` with ANSI off (Spark's `legacySizeOfNull`
 /// default under ANSI gating).
-fn size(x: &Inputs<'_>, ansi: bool) -> Result<ArrayRef, krishiv_common::error::KrishivError> {
+fn size(
+    x: &Inputs<'_>,
+    nulls_are_minus_one: bool,
+) -> Result<ArrayRef, krishiv_common::error::KrishivError> {
     let c = x.column(0)?;
     let mut out = Vec::with_capacity(x.rows());
     for row in 0..x.rows() {
         // An untyped NULL has no validity buffer: every row is NULL.
         if c.data_type() == &DataType::Null || c.is_null(row) {
-            out.push(if ansi { None } else { Some(-1) });
+            out.push(nulls_are_minus_one.then_some(-1));
             continue;
         }
         let n = if let Some(list) = c.as_list_opt::<i32>() {

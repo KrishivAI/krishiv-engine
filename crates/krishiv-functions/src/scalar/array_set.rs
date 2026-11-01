@@ -81,7 +81,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
 }
 
 /// Whether the kernel orders elements of type `t`.
-fn orders(t: &DataType) -> bool {
+pub(super) fn orders(t: &DataType) -> bool {
     matches!(t, DataType::Null | DataType::Time64(TimeUnit::Nanosecond)) || kh::supports_key(t)
 }
 
@@ -138,12 +138,17 @@ fn without_negative_zero(a: &ArrayRef) -> Result<ArrayRef, KrishivError> {
     })
 }
 
-fn kernel(e: impl std::fmt::Display) -> KrishivError {
+pub(super) fn kernel(e: impl std::fmt::Display) -> KrishivError {
     internal(e.to_string())
 }
 
 /// Whether `a[i]` equals `b[j]` (both non-null) as Spark compares them.
-fn same_value(a: &dyn Array, i: usize, b: &dyn Array, j: usize) -> Result<bool, KrishivError> {
+pub(super) fn same_value(
+    a: &dyn Array,
+    i: usize,
+    b: &dyn Array,
+    j: usize,
+) -> Result<bool, KrishivError> {
     if a.data_type() == b.data_type() {
         Ok(cmp_rows(a, i, b, j).map_err(kernel)? == Ordering::Equal)
     } else {

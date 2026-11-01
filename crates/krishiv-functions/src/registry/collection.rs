@@ -19,10 +19,24 @@ use crate::signature::{ArgType, CallTypes, FunctionKind, Inputs};
 /// default) and NULL with ANSI on, so the result is non-nullable with
 /// ANSI off and as nullable as the argument otherwise.
 fn size_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    collection_size("size", c.ansi(), c)
+}
+
+/// `cardinality(expr)`: `size` with `legacySizeOfNull` off, so a NULL is
+/// NULL whatever ANSI says.
+fn cardinality_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    collection_size("cardinality", true, c)
+}
+
+fn collection_size(
+    name: &str,
+    null_is_null: bool,
+    c: &CallTypes<'_>,
+) -> Result<ArgType, KrishivError> {
     let arg = c.args().first();
     let nullable = match arg.and_then(|a| a.data_type.as_ref()) {
         Some(DataType::Array(_) | DataType::Map(_)) | None => {
-            if c.ansi() {
+            if null_is_null {
                 arg.is_none_or(|a| a.nullable)
             } else {
                 false
@@ -30,7 +44,7 @@ fn size_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         }
         other => {
             return Err(DatatypeMismatchUnexpectedInputType {
-                sql_expr: call_sql("size", c),
+                sql_expr: call_sql(name, c),
                 param_index: "first".to_owned(),
                 required_type: "(\"ARRAY\" or \"MAP\")".to_owned(),
                 input_sql: format!("\"{}\"", c.sql(0).unwrap_or_default()),
@@ -72,6 +86,7 @@ fn spec(
 /// The signatures of this family.
 pub(super) fn specs() -> Vec<Spec> {
     vec![
+        spec("cardinality", Inputs::Any, cardinality_result),
         spec("size", Inputs::Any, size_result),
         spec(
             "split",

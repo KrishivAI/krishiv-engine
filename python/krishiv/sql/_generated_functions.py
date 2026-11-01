@@ -38,7 +38,12 @@ __all__ = [
     "array_contains",
     "array_distinct",
     "array_insert",
+    "array_max",
+    "array_min",
+    "array_position",
     "array_prepend",
+    "array_remove",
+    "array_repeat",
     "array_size",
     "array_union",
     "arrays_zip",
@@ -64,6 +69,7 @@ __all__ = [
     "bool_or",
     "bround",
     "btrim",
+    "cardinality",
     "cbrt",
     "ceil",
     "ceiling",
@@ -417,9 +423,34 @@ def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Colu
     return _call("array_insert", _named(arr, "arr"), _int_or_col(pos, "pos"), _lit(value, "value"))
 
 
+def array_max(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_max``."""
+    return _call("array_max", _named(col, "col"))
+
+
+def array_min(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_min``."""
+    return _call("array_min", _named(col, "col"))
+
+
+def array_position(col: ColumnOrName, value: Any) -> Column:
+    """Calls the registry function ``array_position``."""
+    return _call("array_position", _named(col, "col"), _lit(value, "value"))
+
+
 def array_prepend(col: ColumnOrName, value: Any) -> Column:
     """Calls the registry function ``array_prepend``."""
     return _call("array_prepend", _named(col, "col"), _lit(value, "value"))
+
+
+def array_remove(col: ColumnOrName, element: Any) -> Column:
+    """Calls the registry function ``array_remove``."""
+    return _call("array_remove", _named(col, "col"), _lit(element, "element"))
+
+
+def array_repeat(col: ColumnOrName, count: ColumnOrName | int) -> Column:
+    """Calls the registry function ``array_repeat``."""
+    return _call("array_repeat", _named(col, "col"), _int_or_col(count, "count"))
 
 
 def array_size(col: ColumnOrName) -> Column:
@@ -546,6 +577,11 @@ def bround(col: ColumnOrName, scale: Column | int | None = None) -> Column:
 def btrim(str: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``btrim``."""
     return _call("btrim", _named(str, "str"), *_opt(_named, trim, "trim"))
+
+
+def cardinality(col: ColumnOrName) -> Column:
+    """Calls the registry function ``cardinality``."""
+    return _call("cardinality", _named(col, "col"))
 
 
 def cbrt(col: ColumnOrName) -> Column:
