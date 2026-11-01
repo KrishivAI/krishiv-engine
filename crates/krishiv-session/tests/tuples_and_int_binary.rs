@@ -52,3 +52,20 @@ fn integrals_cast_to_binary_without_ansi() {
     );
     assert_eq!(got, ["85", "FF85", "FFFFFF85", "FFFFFFFFFFFFFF85", "NULL"]);
 }
+
+#[test]
+fn a_tuple_of_lambda_variables_names_its_fields_after_them() {
+    let s = Session::new().unwrap();
+    let got = row(
+        &s,
+        "SELECT typeof(zip_with(array(1, 2), array('a', 'b'), (x, y) -> (y, x))), \
+         typeof(transform(array(1, 2), x -> (x, 1)))",
+    );
+    assert_eq!(
+        got,
+        [
+            "array<struct<y:string,x:int>>",
+            "array<struct<x:int,col2:int>>"
+        ]
+    );
+}
