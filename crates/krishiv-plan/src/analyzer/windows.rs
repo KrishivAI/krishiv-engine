@@ -286,10 +286,15 @@ fn range_value(x: &Arc<Expr>, key: &krishiv_types::DataType) -> Option<RangeValu
         T::Short => fits(truncated(&lit)?, i16::MIN.into(), i16::MAX.into()),
         T::Integer | T::Date => fits(truncated(&lit)?, i32::MIN.into(), i32::MAX.into()),
         T::Long => fits(truncated(&lit)?, i64::MIN.into(), i64::MAX.into()),
-        T::Float | T::Double => Some(RangeValue::Float(match lit {
-            Lit::Exact(v, s) => v as f64 / 10_f64.powi(i32::from(s)),
-            Lit::Double(d) => d,
-        })),
+        T::Float | T::Double => Some(match lit {
+            Lit::Exact(v, s) => RangeValue::Float(v as f64 / 10_f64.powi(i32::from(s))),
+            Lit::Double(d) => RangeValue::Float(d),
+        })
+        // A FLOAT key's bounds are single precision before they are ordered.
+        .map(|v| match (key, v) {
+            (T::Float, RangeValue::Float(d)) => RangeValue::Float(f64::from(d as f32)),
+            (_, v) => v,
+        }),
         T::Decimal(d) => match lit {
             Lit::Exact(v, s) if s <= d.scale() => v
                 .checked_mul(10_i128.checked_pow(u32::from(d.scale() - s))?)

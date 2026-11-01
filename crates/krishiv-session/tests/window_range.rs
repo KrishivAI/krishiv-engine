@@ -247,3 +247,24 @@ fn float_keys_add_in_single_precision() {
     );
     assert_eq!(got, ["0.1,2", "0.3,1"]);
 }
+
+/// FLOAT bounds are single precision before they are ordered: 16777217 and 16777216 are the same FLOAT.
+#[test]
+fn float_bounds_are_ordered_after_narrowing() {
+    let s = session();
+    let got = rows(
+        &s,
+        "SELECT concat_ws(',', cast(x AS string), c) FROM (SELECT x, count(*) OVER (ORDER BY x RANGE BETWEEN 16777217 FOLLOWING AND 16777216 FOLLOWING) c \
+         FROM VALUES (CAST(1 AS FLOAT)) AS b(x)) ORDER BY x",
+    );
+    assert_eq!(got, ["1.0,0"]);
+}
+
+/// A target past the key's decimal precision raises under ANSI instead of comparing.
+#[test]
+fn a_decimal_target_past_the_precision_raises() {
+    let s = session();
+    let sql = "SELECT count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) \
+               FROM VALUES (CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0))) AS b(x)";
+    assert_eq!(class(&s, sql), "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION");
+}
