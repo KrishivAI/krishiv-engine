@@ -49,7 +49,7 @@ SELECT a FROM t WINDOW w AS (ORDER BY a)
 SELECT a FROM t QUALIFY a > 1
   => Filter qualify((a > 1)) | +- Project [a] |    +- Read t | 
 WITH RECURSIVE r AS (SELECT a FROM t) SELECT * FROM r
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature recursive CTEs is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..37
+  => WithCte [r] | :- Project [a] | :  +- Read t | +- Project [*] |    +- Read r | 
 SELECT * EXCEPT (a) FROM t
   => Project [* EXCEPT (a)] | +- Read t | 
 SELECT a FROM t INTERSECT SELECT a FROM u
@@ -119,7 +119,7 @@ TABLE t
 FROM t SELECT a UNION SELECT b
   => Distinct | +- Union |    :- Project [a] |    :  +- Read t |    +- Project [b] |       +- OneRowRelation | 
 WITH RECURSIVE c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature recursive CTEs is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..59
+  => WithCte [c] | :- Project [a] | :  +- Read t | +- Project [a] |    +- Read c | 
 SELECT explode(a) AS (x, y) FROM t
   => Project [__krishiv_generate_0.*] | +- Generate explode(a), false, [] |    +- Read t | 
 SELECT * FROM t JOIN LATERAL (SELECT a) s
