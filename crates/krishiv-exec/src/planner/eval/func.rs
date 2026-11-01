@@ -131,7 +131,7 @@ fn wide_literal(l: &Literal) -> Result<ArrayRef> {
 }
 
 /// Whether `a` and `b` differ at most in the nullability of nested fields.
-fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
+pub(super) fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
     match (a, b) {
         (ArrowType::List(x), ArrowType::List(y)) => same_shape(x.data_type(), y.data_type()),
         (ArrowType::Struct(x), ArrowType::Struct(y)) => {
@@ -145,7 +145,7 @@ fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
 }
 
 /// `array` with the nested field flags of `to` (see [`same_shape`]).
-fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
+pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
     match to {
         ArrowType::List(f) if array.data_type() != to => {
             let list = array

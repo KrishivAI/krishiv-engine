@@ -132,7 +132,7 @@ impl Bound {
     /// Adds the analysis markers of `kids` to this expression: rebinding an
     /// already resolved child drops its markers, so a rewrite that rebinds
     /// its children carries them over.
-    fn carry_markers(&mut self, kids: &[Self]) {
+    pub(super) fn carry_markers(&mut self, kids: &[Self]) {
         for k in kids {
             self.agg = self.agg.or(k.agg);
             self.win = self.win.or(k.win);
@@ -559,7 +559,15 @@ pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
         Literal::Date(_) => DataType::Date,
         Literal::Timestamp(_) => DataType::Timestamp,
         Literal::TimestampNtz(_) => DataType::TimestampNtz,
-        Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. } => return None,
+        Literal::YearMonthInterval { start, end, .. } => DataType::YearMonthInterval {
+            start: *start,
+            end: *end,
+        },
+        Literal::DayTimeInterval { start, end, .. } => DataType::DayTimeInterval {
+            start: *start,
+            end: *end,
+        },
+        Literal::CalendarInterval { .. } => DataType::CalendarInterval,
     })
 }
 
@@ -1490,7 +1498,12 @@ impl Resolver<'_> {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
             ExprNode::Literal(
                 Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. },
-            ) => return Err(unsupported("interval values", e.origin)),
+            ) if self.ctx.conf.legacy_interval => {
+                return Err(unsupported(
+                    "interval literals under spark.sql.legacy.interval.enabled",
+                    e.origin,
+                ));
+            }
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
@@ -1768,6 +1781,12 @@ impl Resolver<'_> {
                         )
                         .with_origin(e.origin),
                     ));
+                    return Ok(b);
+                }
+                if !session_qualified
+                    && let Some(b) =
+                        self.interval_operator(lookup_name, e.origin, &kids[..n], cx)?
+                {
                     return Ok(b);
                 }
                 // `date + int`, `int + date` and `date - int` are `date_add`
@@ -4711,7 +4730,7 @@ impl Resolver<'_> {
     }
 
     /// The analysis error of a call that does not type.
-    fn mismatch(
+    pub(super) fn mismatch(
         &self,
         m: Mismatch,
         call: &Arc<Expr>,
@@ -6564,7 +6583,7 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
     if name.eq_ignore_ascii_case("negative") {
         return None;
     }
-    crate::Builtin::from_name(name)
+    crate::Builtin::from_name(name).filter(|b| !b.is_analyzer_internal())
 }
 
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
@@ -7063,6 +7082,16 @@ fn call(
         (Some(Builtin::And), 2) => infix("AND"),
         (Some(Builtin::Or), 2) => infix("OR"),
         (Some(Builtin::Add), 2) => infix("+"),
+        // Spark's interval rewrites print without parentheses.
+        (
+            Some(
+                Builtin::DateAddYmInterval
+                | Builtin::TimestampAddYmInterval
+                | Builtin::TimestampAddInterval,
+            ),
+            2,
+        ) => format!("{} + {}", k[0], k[1]),
+        (Some(Builtin::DatetimeSub), 2) => format!("{} - {}", k[0], k[1]),
         (Some(Builtin::Subtract), 2) => infix("-"),
         (Some(Builtin::Multiply), 2) => infix("*"),
         (Some(Builtin::Divide), 2) => infix("/"),
@@ -7572,22 +7601,21 @@ fn is_pattern_function(name: &str, args: &[Bound]) -> bool {
     }
 }
 
-/// The function Spark rewrites `+`/`-` to when one operand is a date and
-/// the other a byte, short or int (`date_add`, `date_sub`), and whether the
-/// operands swap (`int + date`). Other mixes of dates and numbers stay
-/// refused by the coercion.
+/// The function Spark rewrites `+`/`-` to when an operand is a date and the
+/// other no interval (`date_add`, `date_sub`, whose input check then refuses
+/// a type it does not take), and whether the operands swap. A string never
+/// swaps: `'1' + DATE'...'` is `date_add('1', DATE'...')`.
 fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static str, bool)> {
-    let days = |t: &ArgType| {
-        matches!(
-            t.data_type,
-            Some(DataType::Byte | DataType::Short | DataType::Integer)
-        )
-    };
     let date = |t: &ArgType| matches!(t.data_type, Some(DataType::Date));
+    let typed = |t: &ArgType| !matches!(t.data_type, None | Some(DataType::Null));
+    let string = |t: &ArgType| matches!(t.data_type, Some(DataType::String));
     match op {
-        "+" if date(left) && days(right) => Some(("date_add", false)),
-        "+" if days(left) && date(right) => Some(("date_add", true)),
-        "-" if date(left) && days(right) => Some(("date_sub", false)),
+        "+" if date(left) && typed(right) => Some(("date_add", false)),
+        "+" if date(right) && string(left) => Some(("date_add", false)),
+        "+" if date(right) && typed(left) => Some(("date_add", true)),
+        "-" if date(left) && typed(right) && !string(right) && !date(right) => {
+            Some(("date_sub", false))
+        }
         _ => None,
     }
 }

@@ -13,8 +13,8 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind, WritePlan,
+    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
+    SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::physical::{SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
@@ -545,6 +545,7 @@ impl Decoder {
                 aggregate: aggregate(a)?,
             },
             Kind::HashJoin(j) => PhysNode::HashJoin(self.hash_join(j)?),
+            Kind::SortMergeJoin(j) => PhysNode::SortMergeJoin(self.merge_join(j)?),
             Kind::NestedLoopJoin(j) => PhysNode::NestedLoopJoin(NestedLoopPlan {
                 probe: self.boxed(j.probe)?,
                 build: self.boxed(j.build)?,
@@ -642,6 +643,35 @@ impl Decoder {
             ));
         }
         Ok(plan)
+    }
+
+    fn merge_join(&mut self, j: &pb::SortMergeJoinNode) -> Result<SortMergeJoinPlan> {
+        let (probe_keys, build_keys) = (usizes(&j.probe_keys)?, usizes(&j.build_keys)?);
+        if probe_keys.is_empty()
+            || probe_keys.len() != build_keys.len()
+            || probe_keys.len() != j.null_safe.len()
+        {
+            return Err(corrupt(
+                "a sort-merge join whose key lists differ in length",
+            ));
+        }
+        let join_type = join_type(j.join_type)?;
+        if j.single_match && join_type != JoinType::LeftOuter {
+            return Err(corrupt("single match on a join that is not left outer"));
+        }
+        if join_type == JoinType::NullAwareAnti {
+            return Err(corrupt("a null-aware anti sort-merge join"));
+        }
+        Ok(SortMergeJoinPlan {
+            probe: self.boxed(j.probe)?,
+            build: self.boxed(j.build)?,
+            join_type,
+            probe_keys,
+            build_keys,
+            null_safe: j.null_safe.clone(),
+            residual: self.residual(j.residual.as_ref())?,
+            single_match: j.single_match,
+        })
     }
 
     fn exchange(&mut self, e: &pb::ExchangeNode) -> Result<ExchangePlan> {
@@ -1242,6 +1272,9 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
             .map_err(|_| corrupt("an invalid geometry type"))?,
         Geography => DataType::geography(Srid::from_i32(t.srid))
             .map_err(|_| corrupt("an invalid geography type"))?,
+        YearMonthInterval => interval_year_month(t)?,
+        DayTimeInterval => interval_day_time(t)?,
+        CalendarInterval => DataType::CalendarInterval,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1249,13 +1282,33 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         DataType::Geometry { .. } | DataType::Geography { .. } => (false, false, true),
         _ => (false, false, false),
     };
-    if (!precision && t.precision != 0) || (!scale && t.scale != 0) || (!srid && t.srid != 0) {
+    let (year_month, day_time) = match data_type {
+        DataType::YearMonthInterval { .. } => (true, false),
+        DataType::DayTimeInterval { .. } => (false, true),
+        _ => (false, false),
+    };
+    if (!precision && t.precision != 0)
+        || (!scale && t.scale != 0)
+        || (!srid && t.srid != 0)
+        || (!year_month && (t.ym_start != 0 || t.ym_end != 0))
+        || (!day_time && (t.dt_start != 0 || t.dt_end != 0))
+    {
         return Err(corrupt("a type parameter on a type that has none"));
     }
     if !data_type.is_nested() && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
     Ok(data_type)
+}
+
+fn interval_year_month(t: &pb::DataType) -> Result<DataType> {
+    DataType::year_month_interval(year_month_field(t.ym_start)?, year_month_field(t.ym_end)?)
+        .map_err(|_| corrupt("an invalid interval type"))
+}
+
+fn interval_day_time(t: &pb::DataType) -> Result<DataType> {
+    DataType::day_time_interval(day_time_field(t.dt_start)?, day_time_field(t.dt_end)?)
+        .map_err(|_| corrupt("an invalid interval type"))
 }
 
 /// A nested type from its Spark JSON (depth-bounded by `from_json`).
@@ -1309,15 +1362,30 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
         Kind::Date(v) => Literal::Date(*v),
         Kind::Timestamp(v) => Literal::Timestamp(*v),
         Kind::TimestampNtz(v) => Literal::TimestampNtz(*v),
-        Kind::YearMonth(v) => Literal::YearMonthInterval {
+        Kind::YearMonth(v) => {
+            let (start, end) = (year_month_field(v.start)?, year_month_field(v.end)?);
+            DataType::year_month_interval(start, end)
+                .map_err(|_| corrupt("an invalid interval literal"))?;
+            Literal::YearMonthInterval {
+                months: v.months,
+                start,
+                end,
+            }
+        }
+        Kind::DayTime(v) => {
+            let (start, end) = (day_time_field(v.start)?, day_time_field(v.end)?);
+            DataType::day_time_interval(start, end)
+                .map_err(|_| corrupt("an invalid interval literal"))?;
+            Literal::DayTimeInterval {
+                micros: v.micros,
+                start,
+                end,
+            }
+        }
+        Kind::Calendar(v) => Literal::CalendarInterval {
             months: v.months,
-            start: year_month_field(v.start)?,
-            end: year_month_field(v.end)?,
-        },
-        Kind::DayTime(v) => Literal::DayTimeInterval {
+            days: v.days,
             micros: v.micros,
-            start: day_time_field(v.start)?,
-            end: day_time_field(v.end)?,
         },
     })
 }

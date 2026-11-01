@@ -1,164 +1,60 @@
 {
   "entries": [
     {
-      "id": "try_add#06d82e68390e/ansi_on",
-      "reason": "SELECT try_add(1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#06d82e68390e/ansi_off",
-      "reason": "SELECT try_add(1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_add#07334485a510/ansi_on",
-      "reason": "SELECT try_add(DATE'0001-01-01', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(DATE'0001-01-01', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#07334485a510/ansi_off",
-      "reason": "SELECT try_add(DATE'0001-01-01', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#0ff872af44be/ansi_on",
-      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', CAST(NULL AS interval day)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#0ff872af44be/ansi_off",
-      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', CAST(NULL AS interval day)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#1071be3465ad/ansi_on",
-      "reason": "SELECT try_add(TIMESTAMP'1969-12-31 23:59:59.999999', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#1071be3465ad/ansi_off",
-      "reason": "SELECT try_add(TIMESTAMP'1969-12-31 23:59:59.999999', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_add(DATE'0001-01-01', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#20d5ec1fdf9e/ansi_off",
       "reason": "SELECT try_add('abc', 2) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "try_add#4525b63c25fb/ansi_on",
-      "reason": "SELECT try_add(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 2) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#4525b63c25fb/ansi_off",
-      "reason": "SELECT try_add(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 2) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#48a77e2311d5/ansi_on",
-      "reason": "SELECT try_add(1, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#48a77e2311d5/ansi_off",
-      "reason": "SELECT try_add(1, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_add#4b8987fb8f88/ansi_on",
-      "reason": "SELECT try_add(CAST(NULL AS date), 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(CAST(NULL AS date), 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#4b8987fb8f88/ansi_off",
-      "reason": "SELECT try_add(CAST(NULL AS date), 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(CAST(NULL AS date), 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#4c51dcaf9a7a/ansi_on",
-      "reason": "SELECT try_add(DATE'9999-12-31', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(DATE'9999-12-31', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#4c51dcaf9a7a/ansi_off",
-      "reason": "SELECT try_add(DATE'9999-12-31', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#573eed61d8bb/ansi_on",
-      "reason": "SELECT try_add(date'2021-01-01', interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#573eed61d8bb/ansi_off",
-      "reason": "SELECT try_add(date'2021-01-01', interval 1 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_add(DATE'9999-12-31', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#57459cc8dfe9/ansi_on",
-      "reason": "SELECT try_add(1, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(1, DATE'2024-02-29') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#57459cc8dfe9/ansi_off",
-      "reason": "SELECT try_add(1, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(1, DATE'2024-02-29') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#5821907e660a/ansi_on",
-      "reason": "SELECT try_add(DATE'2024-02-29', 2) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(DATE'2024-02-29', 2) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#5821907e660a/ansi_off",
-      "reason": "SELECT try_add(DATE'2024-02-29', 2) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#6174d3706f98/ansi_on",
-      "reason": "SELECT try_add(TIMESTAMP'2024-11-03 01:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#6174d3706f98/ansi_off",
-      "reason": "SELECT try_add(TIMESTAMP'2024-11-03 01:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_add(DATE'2024-02-29', 2) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#630ae7c41dd1/ansi_on",
-      "reason": "SELECT try_add(DATE'1582-10-10', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(DATE'1582-10-10', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#630ae7c41dd1/ansi_off",
-      "reason": "SELECT try_add(DATE'1582-10-10', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#7227d469fb93/ansi_on",
-      "reason": "SELECT try_add(CAST(NULL AS timestamp), interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#7227d469fb93/ansi_off",
-      "reason": "SELECT try_add(CAST(NULL AS timestamp), interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#7d65f7b45439/ansi_on",
-      "reason": "SELECT try_add(1, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_add#7d65f7b45439/ansi_off",
-      "reason": "SELECT try_add(1, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_add#80670b49f5fe/ansi_on",
-      "reason": "SELECT try_add(date'2021-01-01', CAST(NULL AS interval year)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#80670b49f5fe/ansi_off",
-      "reason": "SELECT try_add(date'2021-01-01', CAST(NULL AS interval year)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#9e05d939ec33/ansi_on",
-      "reason": "SELECT try_add(TIMESTAMP'2024-03-10 02:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#9e05d939ec33/ansi_off",
-      "reason": "SELECT try_add(TIMESTAMP'2024-03-10 02:30:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_add(DATE'1582-10-10', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#9fe84d8ef2fc/ansi_off",
       "reason": "SELECT try_add('1', 2) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "try_add#a1f70e66ffd8/ansi_on",
-      "reason": "SELECT try_add(TIMESTAMP'2024-02-29 12:34:56.123456', 2) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#a1f70e66ffd8/ansi_off",
-      "reason": "SELECT try_add(TIMESTAMP'2024-02-29 12:34:56.123456', 2) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#ac03293fc8cc/ansi_on",
-      "reason": "SELECT try_add(1, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#ac03293fc8cc/ansi_off",
-      "reason": "SELECT try_add(1, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#b46c99769501/ansi_off",
@@ -169,52 +65,12 @@
       "reason": "SELECT try_add(1, 'abc') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "try_add#c1fd50fed303/ansi_on",
-      "reason": "SELECT try_add(interval 1 year, interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#c1fd50fed303/ansi_off",
-      "reason": "SELECT try_add(interval 1 year, interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "try_add#c4512c6907c0/ansi_on",
-      "reason": "SELECT try_add(date'2021-01-01', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+      "reason": "SELECT try_add(date'2021-01-01', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#c4512c6907c0/ansi_off",
-      "reason": "SELECT try_add(date'2021-01-01', 1) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
-    },
-    {
-      "id": "try_add#cef78fc236ba/ansi_on",
-      "reason": "SELECT try_add(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_add#cef78fc236ba/ansi_off",
-      "reason": "SELECT try_add(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_add#ddadaf94c15e/ansi_on",
-      "reason": "SELECT try_add(CAST(NULL AS interval year), interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#ddadaf94c15e/ansi_off",
-      "reason": "SELECT try_add(CAST(NULL AS interval year), interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#ea909325f05e/ansi_on",
-      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#ea909325f05e/ansi_off",
-      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_add#f593f3f19ebb/ansi_on",
-      "reason": "SELECT try_add(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#f593f3f19ebb/ansi_off",
-      "reason": "SELECT try_add(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT try_add(date'2021-01-01', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     }
   ],
   "format_version": 1,
