@@ -241,6 +241,10 @@ fn describe_checked(
             .collect::<Vec<_>>(),
         inferred.schema().metadata().clone(),
     ));
+    let hint = match super::collation::restore(&hint, meta.file_metadata().key_value_metadata()) {
+        Some(restored) => Arc::new(restored),
+        None => hint,
+    };
     let reader_options = ArrowReaderOptions::new().with_schema(Arc::clone(&hint));
     let reader = ArrowReaderMetadata::try_new(Arc::clone(meta), reader_options.clone())
         .map_err(footer_error)?;

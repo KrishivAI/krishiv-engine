@@ -38,6 +38,7 @@
 //!   stored Bloom filters) once the reader exposes them.
 
 mod calendar;
+mod collation;
 mod decode;
 mod meta;
 mod row_filter;

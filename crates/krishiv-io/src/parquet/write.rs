@@ -16,7 +16,8 @@
 //!   cannot bloat the footer.
 //! - **Footer metadata:** `org.apache.spark.version` (below) and arrow-rs's
 //!   `ARROW:schema`; Spark's own schema JSON
-//!   (`org.apache.spark.sql.parquet.row.metadata`) is not written, Spark
+//!   (`org.apache.spark.sql.parquet.row.metadata`) is written only when a
+//!   column holds a collated string (see `collation.rs`); otherwise Spark
 //!   reads the Parquet types instead (the same Spark types for every type
 //!   the engine has; checked in the interop fixtures).
 //! - **Strings are UTF-8.** A `string` column stored as binary (non-UTF-8
@@ -211,11 +212,12 @@ impl Settings {
     }
 
     /// arrow-rs's properties for these settings.
-    fn properties(&self) -> WriterPropertiesBuilder {
+    fn properties(&self, row_metadata: Option<KeyValue>) -> WriterPropertiesBuilder {
         let mut kv = vec![KeyValue::new(
             "org.apache.spark.version".to_owned(),
             SPARK_FILE_VERSION.to_owned(),
         )];
+        kv.extend(row_metadata);
         if self.rebase == Rebase::Legacy {
             kv.push(KeyValue::new(
                 "org.apache.spark.legacyDateTime".to_owned(),
@@ -388,8 +390,9 @@ impl ParquetEncoder {
         // The footer keeps arrow-rs's Arrow schema next to the Parquet
         // types: other engines read the Parquet types, Krishiv's reader
         // also gets back what Parquet cannot say (extension tags).
-        let options =
-            ArrowWriterOptions::new().with_properties(tweak(settings.properties()).build());
+        let options = ArrowWriterOptions::new().with_properties(
+            tweak(settings.properties(super::collation::row_metadata(&schema))).build(),
+        );
         let writer = ArrowWriter::try_new_with_options(Vec::new(), Arc::clone(&schema), options)
             .map_err(|e| FormatError::WriteFailed(e.to_string()))?;
         Ok(Self {
