@@ -1,19 +1,11 @@
 {
   "cases": {
     "depends-on-command": [
-      42,
       43,
       44,
-      45,
-      46,
       47,
       48,
-      49,
-      50,
-      51
-    ],
-    "sql-commands": [
-      41
+      49
     ]
   },
   "file": "columnresolution",
