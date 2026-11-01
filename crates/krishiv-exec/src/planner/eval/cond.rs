@@ -11,7 +11,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, new_null_array};
-use arrow_buffer::BooleanBuffer;
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::DataType as ArrowType;
 use arrow_select::filter::filter_record_batch;
 use arrow_select::interleave::interleave;
@@ -21,7 +21,7 @@ use krishiv_kernels::compare::CompareKind;
 use krishiv_plan::{Builtin, CastMode, ResolvedFunction};
 
 use super::cast::{CastParts, apply, canonical_carrier, parts};
-use super::logic::{cmp, compare, is_null};
+use super::logic::{cmp, compare, is_null, long_bytes, view_parts};
 use super::{EvalEnv, Input, PhysExpr, Value};
 use crate::error::Result;
 use crate::planner::build::internal;
@@ -63,6 +63,11 @@ pub(super) fn in_list(
         && let Some(set) = InSet::try_new(&v, &items)
     {
         return Ok(Arc::new(set));
+    }
+    if items.iter().all(|e| e.is_constant())
+        && let Some(views) = InViews::try_new(&v, &items)
+    {
+        return Ok(Arc::new(views));
     }
     Ok(Arc::new(InList {
         v,
@@ -323,6 +328,103 @@ impl PhysExpr for InSet {
             BooleanBuffer::from(values),
             Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valid))),
         ));
+        Ok(if v.is_scalar() {
+            Value::Scalar(out)
+        } else {
+            Value::Array(out)
+        })
+    }
+}
+
+/// `v IN (constants)`, at most [`IN_SET_THRESHOLD`] of them, over a string or
+/// binary view column: each row is compared in place against the list, with
+/// no array per element. The same answers as [`InList`].
+#[derive(Debug)]
+struct InViews {
+    v: Arc<dyn PhysExpr>,
+    /// Values of 12 bytes or fewer, as their whole views.
+    inline: Vec<u128>,
+    /// Longer values.
+    long: Vec<Vec<u8>>,
+    /// The list holds a NULL.
+    has_null: bool,
+}
+
+impl InViews {
+    /// `None` unless `v` is on a view type and every element evaluates to one
+    /// value of that type here (as [`InSet::try_new`]).
+    fn try_new(v: &Arc<dyn PhysExpr>, items: &[Arc<dyn PhysExpr>]) -> Option<Self> {
+        let t = v.data_type();
+        if !matches!(t, ArrowType::Utf8View | ArrowType::BinaryView) {
+            return None;
+        }
+        let empty = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
+        let mut out = Self {
+            v: Arc::clone(v),
+            inline: Vec::new(),
+            long: Vec::new(),
+            has_null: false,
+        };
+        for item in items {
+            let a = Arc::clone(item.eval(&empty, 0).ok()?.array());
+            if a.len() != 1 {
+                return None;
+            }
+            if a.is_null(0) || *a.data_type() == ArrowType::Null {
+                out.has_null = true;
+                continue;
+            }
+            if a.data_type() != t {
+                return None;
+            }
+            let (views, buffers) = view_parts(a.as_ref());
+            let view = *views.first()?;
+            if u32::try_from(view & u128::from(u32::MAX)).ok()? <= 12 {
+                out.inline.push(view);
+            } else {
+                out.long.push(long_bytes(view, buffers)?.to_vec());
+            }
+        }
+        out.inline.sort_unstable();
+        out.inline.dedup();
+        Some(out)
+    }
+}
+
+impl PhysExpr for InViews {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Boolean
+    }
+
+    fn nullable(&self) -> bool {
+        self.v.nullable() || self.has_null
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.v.eval(batch, partition)?;
+        let a = v.array();
+        let (views, buffers) = view_parts(a.as_ref());
+        let values = BooleanBuffer::collect_bool(views.len(), |i| {
+            let Some(&view) = views.get(i) else {
+                return false;
+            };
+            self.inline.contains(&view)
+                || (!self.long.is_empty()
+                    && long_bytes(view, buffers).is_some_and(|b| {
+                        u32::try_from(view & u128::from(u32::MAX)).is_ok_and(|n| n > 12)
+                            && self.long.iter().any(|k| k.as_slice() == b)
+                    }))
+        });
+        // A row that found nothing is NULL when the list holds a NULL.
+        let nulls = if self.has_null {
+            NullBuffer::union(
+                a.logical_nulls().as_ref(),
+                Some(&NullBuffer::new(values.clone())),
+            )
+        } else {
+            a.logical_nulls()
+        };
+        let out: ArrayRef = Arc::new(BooleanArray::new(values, nulls));
         Ok(if v.is_scalar() {
             Value::Scalar(out)
         } else {
@@ -1070,6 +1172,63 @@ mod tests {
             // `x IN (NULL, ...)` is NULL for every row.
             assert_eq!(got.as_boolean().null_count(), 3);
         }
+    }
+
+    /// A short constant list over a view column compares views in place, with
+    /// the answers of the per-element `IN`: values on both sides of the 12-byte
+    /// inline limit, NULL rows, a NULL element, and a constant value.
+    #[test]
+    fn a_short_in_list_over_views_has_in_list_answers() {
+        let env = env(false);
+        let long = "a value longer than twelve bytes";
+        let strs: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("MAIL"),
+            Some("SHIP"),
+            None,
+            Some(""),
+            Some(long),
+            Some("a value longer than twelve byteZ"),
+            Some("twelve bytes"),
+        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            ArrowType::Utf8View,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![strs]).unwrap();
+        let text = |t: &str| lit(&Literal::String(t.to_owned()));
+        let null = || lit(&Literal::Null(None));
+        type Items = Vec<Arc<dyn PhysExpr>>;
+        let lists: Vec<Items> = vec![
+            vec![text("MAIL"), text("SHIP")],
+            vec![text(long), text("")],
+            vec![text("twelve bytes"), text("nothing")],
+            vec![text("MAIL"), null()],
+            vec![text(long), null(), text("SHIP")],
+            vec![null()],
+        ];
+        for items in lists {
+            let v = column(0, ArrowType::Utf8View, true);
+            let mut args = vec![Arc::clone(&v)];
+            args.extend(items.iter().map(Arc::clone));
+            let got = in_list(args, &env).unwrap();
+            assert!(format!("{got:?}").starts_with("InViews"), "{got:?}");
+            let list: Arc<dyn PhysExpr> = Arc::new(InList {
+                v,
+                items: items.clone(),
+                kernels: env.kernels,
+            });
+            let (got, want) = (values(&got, &batch), values(&list, &batch));
+            assert_eq!(
+                got.as_boolean().iter().collect::<Vec<_>>(),
+                want.as_boolean().iter().collect::<Vec<_>>(),
+            );
+        }
+        // A constant value stays one value.
+        let args = vec![text("SHIP"), text("MAIL"), text("SHIP")];
+        let got = in_list(args, &env).unwrap().eval(&batch, 0).unwrap();
+        assert!(got.is_scalar());
+        assert!(got.array().as_boolean().value(0));
     }
 
     /// More than ten constant elements make a set lookup with the same
