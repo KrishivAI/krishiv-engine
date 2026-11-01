@@ -178,7 +178,7 @@
     },
     {
       "id": "add/DATE/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS DATE) + CAST(NULL AS STRING)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"DATE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS DATE) + CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "add/DATE/STRUCT<a INT>/ansi_off",
@@ -358,7 +358,7 @@
     },
     {
       "id": "add/STRING/DATE/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) + CAST(NULL AS DATE)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DATE)\\\"\", \"inputType\": \"\\\"DATE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS STRING), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS STRING) + CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_add(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "add/STRING/DECIMAL(10,2)/ansi_off",
@@ -394,11 +394,11 @@
     },
     {
       "id": "add/STRING/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"TIMESTAMP\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "add/STRING/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP_NTZ)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"TIMESTAMP_NTZ\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) + CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "add/STRING/TINYINT/ansi_off",
@@ -522,7 +522,7 @@
     },
     {
       "id": "add/TIMESTAMP/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) + CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"TIMESTAMP\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) + CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) + CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) + CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) + CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "add/TIMESTAMP/STRUCT<a INT>/ansi_off",
@@ -646,7 +646,7 @@
     },
     {
       "id": "add/TIMESTAMP_NTZ/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) + CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"TIMESTAMP_NTZ\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) + CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) + CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) + CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) + CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "add/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",

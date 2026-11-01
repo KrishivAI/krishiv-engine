@@ -793,8 +793,14 @@ fn integral_divide(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Result<Typed, Mismat
 /// What Spark says of `+` between a date or timestamp and a string: a string
 /// operand is read as a number, which a timestamp does not add; a date reads it
 /// as a day count.
-fn datetime_text_sum(a: &Arg<'_>, b: &Arg<'_>) -> Option<Mismatch> {
+///
+/// Only with ANSI on: without it Spark reads the string as DOUBLE first and
+/// reports a different error (`BINARY_OP_DIFF_TYPES`), which stays refused.
+fn datetime_text_sum(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Option<Mismatch> {
     use DataType as T;
+    if !ansi {
+        return None;
+    }
     let text = |t: Option<&DataType>| matches!(t, Some(T::String));
     let other = match (a.ty, b.ty) {
         (t, Some(d)) if text(t) => d,
@@ -859,7 +865,7 @@ fn arithmetic(
     };
     if matches!(op, Builtin::Add | Builtin::Subtract) && (is_datetime(a.ty) || is_datetime(b.ty)) {
         let text = if op == Builtin::Add {
-            datetime_text_sum(a, b)
+            datetime_text_sum(a, b, ansi)
         } else {
             None
         };
@@ -1766,18 +1772,25 @@ mod tests {
     #[test]
     fn datetime_and_string_sums() {
         let text = T::String;
-        let sum = |l: &T, r: &T| datetime_text_sum(&arg(Some(l)), &arg(Some(r)));
+        let sum = |l: &T, r: &T| datetime_text_sum(&arg(Some(l)), &arg(Some(r)), true);
         for ts in [T::Timestamp, T::TimestampNtz] {
             assert_eq!(
                 sum(&text, &ts),
                 Some(Mismatch::WrongType(Some(ts.clone()), ADDITIVE))
             );
-            assert!(sum(&ts, &text).is_some());
+            assert_eq!(
+                sum(&ts, &text),
+                Some(Mismatch::WrongType(Some(ts.clone()), ADDITIVE))
+            );
         }
         assert_eq!(sum(&T::Date, &text), Some(Mismatch::DateAddText));
         assert_eq!(sum(&text, &T::Date), Some(Mismatch::DateAddText));
         assert!(sum(&T::Date, &T::Integer).is_none());
         assert!(sum(&text, &T::Integer).is_none());
+        // Without ANSI, Spark's error differs: it stays refused.
+        let off = |l: &T, r: &T| datetime_text_sum(&arg(Some(l)), &arg(Some(r)), false);
+        assert!(off(&T::Date, &text).is_none());
+        assert!(off(&text, &T::Timestamp).is_none());
     }
 
     /// Struct comparisons are NULL only when a whole struct operand is NULL:

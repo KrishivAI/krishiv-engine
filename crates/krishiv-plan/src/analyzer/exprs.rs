@@ -4751,31 +4751,43 @@ impl Resolver<'_> {
                 }
                 .into()
             }
-            Mismatch::DateDays { sub, date, ty } => DatatypeMismatchUnexpectedInputType {
-                sql_expr: format!(
-                    "\"{}({}, {})\"",
-                    if sub { "date_sub" } else { "date_add" },
-                    pretty(&kids[date].shown(), zone),
-                    pretty(&kids[1 - date].shown(), zone)
-                ),
-                param_index: ordinal(1),
-                required_type: r#"("INT" or "SMALLINT" or "TINYINT")"#.to_owned(),
-                input_sql: format!("\"{}\"", pretty(&kids[1 - date].shown(), zone)),
-                input_type: quoted_type(ty.as_ref()),
+            Mismatch::DateDays { sub, date, ty } => {
+                let shown = |i: usize| {
+                    kids.get(i)
+                        .map(|k| pretty(&k.shown(), zone))
+                        .unwrap_or_default()
+                };
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: format!(
+                        "\"{}({}, {})\"",
+                        if sub { "date_sub" } else { "date_add" },
+                        shown(date),
+                        shown(1 - date)
+                    ),
+                    param_index: ordinal(1),
+                    required_type: r#"("INT" or "SMALLINT" or "TINYINT")"#.to_owned(),
+                    input_sql: format!("\"{}\"", shown(1 - date)),
+                    input_type: quoted_type(ty.as_ref()),
+                }
+                .into()
             }
-            .into(),
-            Mismatch::DateAddText => DatatypeMismatchUnexpectedInputType {
-                sql_expr: format!(
-                    "\"date_add({}, {})\"",
-                    pretty(&kids[0].shown(), zone),
-                    pretty(&kids[1].shown(), zone)
-                ),
-                param_index: ordinal(1),
-                required_type: r#"("INT" or "SMALLINT" or "TINYINT")"#.to_owned(),
-                input_sql: format!("\"{}\"", pretty(&kids[1].shown(), zone)),
-                input_type: r#""DATE""#.to_owned(),
+
+            Mismatch::DateAddText => {
+                let shown = |i: usize| {
+                    kids.get(i)
+                        .map(|k| pretty(&k.shown(), zone))
+                        .unwrap_or_default()
+                };
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: format!("\"date_add({}, {})\"", shown(0), shown(1)),
+                    param_index: ordinal(1),
+                    required_type: r#"("INT" or "SMALLINT" or "TINYINT")"#.to_owned(),
+                    input_sql: format!("\"{}\"", shown(1)),
+                    input_type: r#""DATE""#.to_owned(),
+                }
+                .into()
             }
-            .into(),
+
             Mismatch::DataDiff(types, list) => {
                 let types: Vec<String> = types.iter().map(|t| quoted_type(t.as_ref())).collect();
                 let data_type = if list {
