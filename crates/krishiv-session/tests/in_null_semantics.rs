@@ -43,3 +43,39 @@ fn null_in_a_subquery_depends_on_whether_it_has_rows() -> R {
     );
     Ok(())
 }
+
+#[test]
+fn a_subquery_select_list_reads_the_outer_query() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("create temporary view t(c) as values (8), (12), (null)"))?;
+    let rows = |sql: &str| -> R<Vec<String>> {
+        block_on(async {
+            let b = s.sql(sql).await?.collect().await?;
+            let mut out = Vec::new();
+            for batch in &b {
+                for r in 0..batch.num_rows() {
+                    let v = batch.column(1);
+                    out.push(if v.is_null(r) {
+                        "NULL".to_owned()
+                    } else {
+                        format!(
+                            "{}",
+                            arrow_array::cast::as_primitive_array::<arrow_array::types::Int32Type>(
+                                v
+                            )
+                            .value(r)
+                        )
+                    });
+                }
+            }
+            out.sort();
+            Ok(out)
+        })
+    };
+    assert_eq!(rows("select c, (select c) from t")?, ["12", "8", "NULL"]);
+    assert_eq!(
+        rows("select c, (select c where c = 8) from t")?,
+        ["8", "NULL", "NULL"]
+    );
+    Ok(())
+}

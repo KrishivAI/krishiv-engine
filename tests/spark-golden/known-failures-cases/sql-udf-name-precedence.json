@@ -1,12 +1,7 @@
 {
   "cases": {
     "depends-on-command": [
-      10,
-      16
-    ],
-    "sql-commands": [
-      15,
-      35
+      10
     ]
   },
   "file": "sql-udf-name-precedence",

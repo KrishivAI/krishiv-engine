@@ -984,7 +984,7 @@ impl Rewriter {
     /// A predicate subquery as a semi or anti join of `left` with it.
     fn semi(&mut self, left: Arc<LogicalPlan>, pred: &Pred) -> R<Arc<LogicalPlan>> {
         let keep = !pred.values.is_empty();
-        let (inner, corr) = if on_path(&pred.plan, set_op_or_join) {
+        let (inner, corr) = if on_path(&pred.plan, needs_domain) {
             let (inner, inner_keys, outer_keys) = self.domain(&left, &pred.plan)?;
             let corr = inner_keys
                 .into_iter()
@@ -1509,7 +1509,7 @@ impl Rewriter {
         } else {
             None
         };
-        if on_path(input, set_op_or_join) {
+        if on_path(input, needs_domain) {
             if !keys.is_empty() {
                 return Err(unsupported(
                     "correlated scalar subqueries with GROUP BY",
@@ -1684,7 +1684,7 @@ impl Rewriter {
             ));
         };
         let value = value.clone();
-        let through_domain = on_path(plan, set_op_or_join);
+        let through_domain = on_path(plan, needs_domain);
         if !through_domain && aggregates_below(plan) {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
