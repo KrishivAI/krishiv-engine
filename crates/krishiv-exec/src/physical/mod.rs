@@ -296,6 +296,10 @@ pub struct ExprEnv {
     /// what they cannot map instead of raising. A plan that sets it needs
     /// the `legacy_charset_switches` codec feature.
     pub legacy_coding_error_action: bool,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`: the datetime pattern
+    /// functions use the `SimpleDateFormat` parser. A plan that sets it
+    /// needs the `legacy_time_parser` codec feature.
+    pub legacy_time_parser: bool,
 }
 
 impl ExprEnv {
@@ -795,7 +799,8 @@ plan_data!(struct ExprEnv {
     user,
     map_key_dedup_last_win,
     legacy_java_charsets,
-    legacy_coding_error_action
+    legacy_coding_error_action,
+    legacy_time_parser
 });
 plan_data!(enum PhysNode {
     Scan(scan),

@@ -226,6 +226,7 @@ pub(super) fn compile(
             java_charsets: input.env.legacy_java_charsets,
             replace_malformed: input.env.legacy_coding_error_action,
         })
+        .with_legacy_time_parser(input.env.legacy_time_parser)
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {

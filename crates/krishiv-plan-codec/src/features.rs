@@ -131,6 +131,7 @@ registry! {
     (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
     (legacy_charset_switches, LegacyCharsetSwitches, POST_MIGRATION_READER_VERSION, Semantic, "The session's `encode`/`decode` switches (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`); without them a worker would refuse the charset or raise on malformed input."),
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
+    (legacy_time_parser, LegacyTimeParser, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_time_parser` expression environment flag (`spark.sql.legacy.timeParserPolicy=LEGACY`): the datetime pattern functions use the `SimpleDateFormat` parser and `FastDateFormat` printer."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
@@ -706,6 +707,9 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     }
     if plan.env().legacy_java_charsets || plan.env().legacy_coding_error_action {
         out.insert(Feature::LegacyCharsetSwitches);
+    }
+    if plan.env().legacy_time_parser {
+        out.insert(Feature::LegacyTimeParser);
     }
     if plan.env().zone_name.is_some() {
         out.insert(Feature::SessionZoneName);

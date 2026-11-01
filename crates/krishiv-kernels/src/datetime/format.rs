@@ -21,9 +21,51 @@ use arrow_schema::DataType;
 
 use super::resolve_zone;
 use crate::cast::datetime::{MICROS_PER_DAY, local_to_utc, utc_to_local};
+use crate::datetime_pattern::legacy::LegacyPattern;
 use crate::datetime_pattern::parse::Fail;
-use crate::datetime_pattern::{DateTimePattern, Zone};
+use crate::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use crate::error::{KernelError, with_capacity};
+use krishiv_common::error::KrishivError;
+
+/// A compiled pattern of either time parser: Spark's `DateTimeFormatter`
+/// one (`spark.sql.legacy.timeParserPolicy` `CORRECTED`/`EXCEPTION`) or the
+/// pre-3.0 `SimpleDateFormat` one (`LEGACY`).
+#[derive(Debug, Clone)]
+pub enum TimePattern {
+    /// The `DateTimeFormatter` pattern.
+    Corrected(DateTimePattern),
+    /// The `SimpleDateFormat`/`FastDateFormat` pattern.
+    Legacy(LegacyPattern),
+}
+
+impl TimePattern {
+    /// Compiles `text` for `purpose` under the legacy parser when `legacy`.
+    ///
+    /// # Errors
+    /// Spark's pattern error.
+    pub fn new(text: &str, purpose: Purpose, legacy: bool) -> Result<Self, KrishivError> {
+        if legacy {
+            LegacyPattern::new(text).map(Self::Legacy)
+        } else {
+            DateTimePattern::new(text, purpose).map(Self::Corrected)
+        }
+    }
+
+    /// `micros` shown in `zone`.
+    ///
+    /// # Errors
+    /// As the two pattern kinds.
+    pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
+        match self {
+            Self::Corrected(p) => p.format_timestamp(micros, zone),
+            Self::Legacy(p) => p.format_timestamp(micros, zone),
+        }
+    }
+}
+
+fn unparseable(s: &str) -> ParseFail {
+    ParseFail::Parse(format!("Unparseable date: \"{s}\""))
+}
 
 /// How one call handles a row whose string does not parse.
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +85,7 @@ pub struct ParsePolicy {
 /// cannot supply; `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be
 /// allocated.
 pub fn format_timestamps(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     stamps: &TimestampMicrosecondArray,
     zone: Zone<'_>,
 ) -> Result<StringArray, KernelError> {
@@ -69,7 +111,7 @@ pub fn format_timestamps(
 /// row; `DATETIME_OVERFLOW` past the microsecond range either way;
 /// `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
 pub fn parse_timestamps(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     strings: &StringArray,
     session: &dyn crate::cast::TimeZoneRules,
     policy: ParsePolicy,
@@ -104,7 +146,7 @@ pub fn parse_timestamps(
 /// `CANNOT_PARSE_TIMESTAMP` with `fail_on_error`;
 /// `DATETIME_OVERFLOW` past the microsecond range either way.
 pub fn parse_timestamp_one(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     s: &str,
     session: &dyn crate::cast::TimeZoneRules,
     policy: ParsePolicy,
@@ -129,7 +171,7 @@ pub fn parse_timestamp_one(
 /// # Errors
 /// As [`parse_timestamps`].
 pub fn parse_dates(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     strings: &StringArray,
     session: &dyn crate::cast::TimeZoneRules,
     policy: ParsePolicy,
@@ -163,7 +205,7 @@ pub fn parse_dates(
 /// # Errors
 /// As [`parse_timestamp_one`].
 pub fn parse_date_one(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     s: &str,
     session: &dyn crate::cast::TimeZoneRules,
     policy: ParsePolicy,
@@ -193,7 +235,7 @@ pub fn parse_date_one(
 /// # Errors
 /// As [`parse_timestamps`].
 pub fn parse_ntz(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     strings: &StringArray,
     policy: ParsePolicy,
     operation: &str,
@@ -226,7 +268,7 @@ pub fn parse_ntz(
 /// # Errors
 /// As [`parse_timestamp_one`].
 pub fn parse_ntz_one(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     s: &str,
     policy: ParsePolicy,
     operation: &str,
@@ -254,10 +296,19 @@ pub(crate) enum ParseFail {
 
 /// `s` as an instant: its zone or offset, else `session`.
 pub(crate) fn instant_of(
-    pattern: &DateTimePattern,
+    pattern: &TimePattern,
     s: &str,
     session: &dyn crate::cast::TimeZoneRules,
 ) -> Result<i64, ParseFail> {
+    let pattern = match pattern {
+        TimePattern::Corrected(p) => p,
+        TimePattern::Legacy(p) => {
+            return match p.parse_timestamp(s, session) {
+                Ok(Some(micros)) => Ok(micros),
+                _ => Err(unparseable(s)),
+            };
+        }
+    };
     let parsed = pattern.parse_detailed(s).map_err(|fail| match fail {
         Fail::At(i) => ParseFail::Parse(format!("Text '{s}' could not be parsed at index {i}")),
         Fail::Trailing(i) => ParseFail::Parse(format!(
@@ -291,7 +342,16 @@ pub(crate) fn instant_of(
 
 /// `s` as a local date-time: a zone or offset in the text is validated and
 /// ignored.
-pub(crate) fn local_of(pattern: &DateTimePattern, s: &str) -> Result<i64, ParseFail> {
+pub(crate) fn local_of(pattern: &TimePattern, s: &str) -> Result<i64, ParseFail> {
+    let pattern = match pattern {
+        TimePattern::Corrected(p) => p,
+        TimePattern::Legacy(p) => {
+            return match p.parse_local(s) {
+                Ok(Some(micros)) => Ok(micros),
+                _ => Err(unparseable(s)),
+            };
+        }
+    };
     let parsed = pattern.parse_detailed(s).map_err(|fail| match fail {
         Fail::At(i) => ParseFail::Parse(format!("Text '{s}' could not be parsed at index {i}")),
         Fail::Trailing(i) => ParseFail::Parse(format!(
@@ -468,8 +528,8 @@ mod tests {
         FixedOffset(0)
     }
 
-    fn pattern(p: &str) -> DateTimePattern {
-        DateTimePattern::new(p, Purpose::Parse).unwrap()
+    fn pattern(p: &str) -> TimePattern {
+        TimePattern::new(p, Purpose::Parse, false).unwrap()
     }
 
     /// Batch parsing reports Java's failure text per row and NULLs without
