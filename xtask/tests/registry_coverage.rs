@@ -144,8 +144,9 @@ fn engine_raised_set_of_this_repo_is_a_small_subset_of_the_catalog() {
     // A detector that matched the whole catalog (the bug this guards
     // against) would far exceed this bound; the engine's raised set grows
     // with each function family (193 of the 1,929 classes after the bitwise
-    // and number-format functions), so the bound is a quarter, not a tenth.
-    assert!(in_use.len() < catalog.len() / 4, "{}", in_use.len());
+    // and number-format functions; 482 with recursive CTEs), so the bound is
+    // a third, not a tenth or a quarter.
+    assert!(in_use.len() < catalog.len() / 3, "{}", in_use.len());
     // The comment and test filter removes real references in this repo:
     // the same sources read whole name strictly more classes.
     let mut raw = Vec::new();
