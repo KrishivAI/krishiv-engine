@@ -1090,6 +1090,15 @@ fn describe_as_json_lists_the_keys_in_spark_order() {
     ));
     assert!(json.contains(r#""table_properties":{"password":"*********(redacted)"}"#));
     assert!(!json.contains("partition_columns") && !json.contains("num_buckets"));
+    // `AS JSON` needs `EXTENDED` or `FORMATTED` and takes no column.
+    assert_eq!(
+        class(&s, "DESCRIBE j AS JSON"),
+        "DESCRIBE_JSON_NOT_EXTENDED"
+    );
+    assert_eq!(
+        class(&s, "DESC FORMATTED j a AS JSON"),
+        "UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_JSON"
+    );
     run(&s, "CREATE TABLE n (a ARRAY<INT>) USING parquet");
     assert_eq!(
         class(&s, "DESCRIBE EXTENDED n AS JSON"),

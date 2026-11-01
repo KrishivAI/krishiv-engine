@@ -308,7 +308,11 @@ impl Display for NodeLine<'_> {
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
             PlanNode::Offset { offset, .. } => write!(f, "Offset {}", Text(offset)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
-                write!(f, "SubqueryAlias {}", Name(std::slice::from_ref(alias)))?;
+                let parts: Vec<String> = alias
+                    .split(crate::plan::ALIAS_PART_SEP)
+                    .map(str::to_owned)
+                    .collect();
+                write!(f, "SubqueryAlias {}", Name(&parts))?;
                 if columns.is_empty() {
                     return Ok(());
                 }

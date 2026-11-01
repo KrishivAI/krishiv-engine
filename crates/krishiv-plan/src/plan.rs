@@ -70,6 +70,11 @@ pub struct LogicalPlan {
 /// quoted name with a dot in it stays one part.
 pub const TABLE_FUNCTION_NAME_SEP: char = '\u{1f}';
 
+/// What joins the parts of a multi-part [`PlanNode::SubqueryAlias`] alias (a
+/// global temporary view's `global_temp.v`): a control character no identifier
+/// holds, so a quoted alias with a dot in it stays one part.
+pub const ALIAS_PART_SEP: char = '\u{1e}';
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

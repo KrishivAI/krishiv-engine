@@ -498,7 +498,7 @@ impl Session {
         let env = self.query_env();
         let config = self.state.conf.snapshot();
         let query = if crate::conf::get(&config, "spark.sql.variable.substitute")
-            .is_none_or(|v| v != "false")
+            .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
         {
             crate::variable_substitution::substitute(query, &|k| crate::conf::get(&config, k))
         } else {

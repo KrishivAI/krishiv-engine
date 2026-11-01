@@ -229,3 +229,42 @@ fn a_global_temporary_view_lives_in_global_temp() {
     );
     run(&s, "DROP VIEW IF EXISTS global_temp.gv");
 }
+
+/// A global view is read through `global_temp.v.col` as well as `v.col`, and a view that reads itself
+/// (directly or through another global view) is `RECURSIVE_VIEW` before the catalog changes.
+#[test]
+fn global_views_qualify_columns_and_refuse_cycles() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW v AS SELECT 1 AS x");
+    for q in [
+        "SELECT global_temp.v.x FROM global_temp.v",
+        "SELECT v.x FROM global_temp.v",
+        "SELECT x FROM global_temp.v",
+    ] {
+        assert_eq!(rows(&s, q), vec![vec!["1".to_owned()]], "{q}");
+    }
+    assert_eq!(
+        class(
+            &s,
+            "CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT * FROM global_temp.v"
+        ),
+        "RECURSIVE_VIEW"
+    );
+    // The old definition survived.
+    assert_eq!(
+        rows(&s, "SELECT x FROM global_temp.v"),
+        vec![vec!["1".to_owned()]]
+    );
+    run(
+        &s,
+        "CREATE GLOBAL TEMP VIEW w AS SELECT x FROM global_temp.v",
+    );
+    assert_eq!(
+        class(
+            &s,
+            "CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT x FROM global_temp.w"
+        ),
+        "RECURSIVE_VIEW"
+    );
+}

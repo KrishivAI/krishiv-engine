@@ -285,14 +285,12 @@ impl Session {
             .into());
         }
         let plan = krishiv_sql::lower(&v.query, self.next_source_id()).map_err(|e| e.error)?;
-        if !global {
-            crate::catalog::check_view_cycle(
-                &self.state.catalog,
-                &v.name.value,
-                plan.root(),
-                env.analysis.conf.case_sensitive,
-            )?;
-        }
+        crate::catalog::check_view_cycle(
+            &self.state.catalog,
+            &key,
+            plan.root(),
+            env.analysis.conf.case_sensitive,
+        )?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
         let analysis = df.analyzed_in(env).await?;

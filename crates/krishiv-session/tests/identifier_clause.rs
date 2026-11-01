@@ -250,4 +250,9 @@ fn braces_substitute_configuration_values_before_parsing() {
     assert_eq!(first(&s, "SELECT '${nothing}'"), "${nothing}");
     run(&s, "SET spark.sql.variable.substitute = false");
     assert_eq!(first(&s, "SELECT '${colname}'"), "${colname}");
+    // The switch is a case-insensitive boolean.
+    run(&s, "SET spark.sql.variable.substitute = true");
+    assert_eq!(first(&s, "SELECT ${colname}"), "c");
+    run(&s, "SET spark.sql.variable.substitute = FALSE");
+    assert_eq!(first(&s, "SELECT '${colname}'"), "${colname}");
 }

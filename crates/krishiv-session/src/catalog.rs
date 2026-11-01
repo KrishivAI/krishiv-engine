@@ -38,7 +38,8 @@ use krishiv_plan::analyzer::{
     BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
 use krishiv_plan::{
-    Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan, TableVersion,
+    ALIAS_PART_SEP, Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan,
+    TableVersion,
 };
 
 use crate::cache::{RelationCache, is_cache_name};
@@ -1371,7 +1372,13 @@ impl Expander<'_> {
                 return Ok(Arc::new(
                     LogicalPlan::new(PlanNode::SubqueryAlias {
                         input: input?,
-                        alias: view.to_owned(),
+                        // A global view's qualifier is `global_temp.v`, two parts (see
+                        // `ALIAS_PART_SEP`).
+                        alias: if name.len() == 2 {
+                            format!("{GLOBAL_NAMESPACE}{ALIAS_PART_SEP}{view}")
+                        } else {
+                            view.to_owned()
+                        },
                         columns,
                     })
                     .with_origin(plan.origin),
@@ -1755,18 +1762,27 @@ struct Checker<'a> {
 impl Checker<'_> {
     fn check(&mut self, plan: &Arc<LogicalPlan>) -> Result<(), KrishivError> {
         if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
-            && let [view] = name.as_slice()
             && options.is_empty()
-            && !self
-                .scope
-                .iter()
-                .any(|c| same_name(c, view, self.case_sensitive))
+            && let Some(view) = match name.as_slice() {
+                [view]
+                    if !self
+                        .scope
+                        .iter()
+                        .any(|c| same_name(c, view, self.case_sensitive)) =>
+                {
+                    Some(view.clone())
+                }
+                [namespace, view] if namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE) => {
+                    Some(global_key(view))
+                }
+                _ => None,
+            }
         {
-            if same_name(view, self.target, self.case_sensitive) {
+            if same_name(&view, self.target, self.case_sensitive) {
                 if self.catalog.get(self.target, self.case_sensitive).is_some() {
                     return Err(recursive_view(self.target, &self.stack));
                 }
-            } else if let Some(entry) = self.catalog.get(view, self.case_sensitive)
+            } else if let Some(entry) = self.catalog.get(&view, self.case_sensitive)
                 && let TempTable::View {
                     plan: definition, ..
                 } = &*entry
@@ -1775,7 +1791,7 @@ impl Checker<'_> {
                 if self.stack.iter().any(|v| v.to_lowercase() == key) {
                     return Err(recursive_view(self.target, &self.stack));
                 }
-                self.stack.push(view.clone());
+                self.stack.push(view);
                 // A view's definitions are its own: outer `WITH` names do
                 // not reach into it.
                 let outer = std::mem::take(&mut self.scope);
@@ -1823,12 +1839,20 @@ impl Checker<'_> {
     }
 }
 
+/// A view's catalog key as Spark names it in errors (`` `global_temp`.`v` `` for a global view).
+fn shown_view(key: &str) -> String {
+    match key.strip_prefix(GLOBAL_PREFIX) {
+        Some(view) => format!("{}.{}", quote(GLOBAL_NAMESPACE), quote(view)),
+        None => quote(key),
+    }
+}
+
 /// `RECURSIVE_VIEW` for a cycle through `stack` back to `target`.
 fn recursive_view(target: &str, stack: &[String]) -> KrishivError {
-    let mut path: Vec<String> = stack.iter().map(|v| quote(v)).collect();
-    path.push(quote(target));
+    let mut path: Vec<String> = stack.iter().map(|v| shown_view(v)).collect();
+    path.push(shown_view(target));
     RecursiveView {
-        view_ident: quote(target),
+        view_ident: shown_view(target),
         new_path: path.join(" -> "),
     }
     .into()
