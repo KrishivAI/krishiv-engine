@@ -2183,24 +2183,55 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
-                // `array_of_structs['a']` is Spark's `GetArrayStructFields` (the
-                // field of every element); not built yet, so it is refused
-                // rather than read as a position.
+                // `array_of_structs['a']` is Spark's `GetArrayStructFields`: the
+                // field of every element, a NULL element giving NULL. It is
+                // built as `transform(arr, x -> x.a)` once the field is known.
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "__subscript"
                     && n == 2
-                    && matches!(
-                        &kids[0].ty.data_type,
-                        Some(DataType::Array(a)) if matches!(a.element_type(), DataType::Struct(_))
-                    )
-                    && matches!(&kids[1].expr.node, ExprNode::Literal(Literal::String(_)))
+                    && let Some(DataType::Array(arr)) = &kids[0].ty.data_type
+                    && let DataType::Struct(st) = arr.element_type()
+                    && let ExprNode::Literal(Literal::String(name)) = &kids[1].expr.node
                 {
-                    return Err(AnalysisError::new(
-                        KrishivUnsupportedFeature {
-                            feature: "subscripts of an array of structs by field name".to_owned(),
-                        },
-                        e.origin,
+                    let cs = self.ctx.conf.case_sensitive;
+                    let Some(field) = st.fields().iter().find(|f| same(f.name(), name, cs)) else {
+                        return Err(unresolved_field(
+                            &[
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone),
+                                name.clone(),
+                            ],
+                            st,
+                            e.origin,
+                        ));
+                    };
+                    let element = Expr::new(ExprNode::Column(ColumnRef {
+                        name: vec!["__subscript_element".to_owned()],
+                        plan_id: None,
+                    }))
+                    .with_origin(e.origin);
+                    let body = Expr::new(ExprNode::Field {
+                        base: Arc::new(element),
+                        name: field.name().to_owned(),
+                    })
+                    .with_origin(e.origin);
+                    let call = Expr::function(
+                        "transform",
+                        vec![
+                            Expr::clone(&kids[0].expr),
+                            Expr::lambda(vec!["__subscript_element".to_owned()], body),
+                        ],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            "__subscript",
+                            vec![Expr::clone(&kids[0].shown()), Expr::clone(&kids[1].shown())],
+                        )
+                        .with_origin(e.origin),
                     ));
+                    return Ok(b);
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `arrays_zip(a, b)` names its struct fields after columns,
