@@ -120,6 +120,14 @@ pub enum ExprNode {
         /// The output name.
         name: String,
     },
+    /// An unresolved `expr AS (a, b, ..)`: several output names, valid
+    /// only over a generator (`MULTI_ALIAS_WITHOUT_GENERATOR` otherwise).
+    MultiAlias {
+        /// The aliased expression.
+        expr: Arc<Expr>,
+        /// The output names, in order.
+        names: Vec<String>,
+    },
     /// A subquery used as an expression.
     Subquery {
         /// Scalar, `EXISTS` or `IN`.
@@ -695,6 +703,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
@@ -756,6 +765,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
