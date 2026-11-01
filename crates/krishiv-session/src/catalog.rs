@@ -1010,6 +1010,9 @@ impl Catalog for QueryCatalog {
                 resolve(&self.loaded, &self.session, &id.name, form)
             };
             let Some(table) = found else {
+                if form.temporary_only {
+                    return Ok(None);
+                }
                 return Ok(self.load_stored(id, form));
             };
             let (columns, kind) = match &*table {
@@ -2027,6 +2030,7 @@ mod tests {
         let form = NameForm {
             case_sensitive: false,
             qualified: false,
+            temporary_only: false,
         };
         let t = resolve(&loaded, &session, "people", form).unwrap();
         loaded.lock().unwrap().insert("people".to_owned(), t);

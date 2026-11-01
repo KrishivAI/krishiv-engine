@@ -261,3 +261,22 @@ fn a_stored_function_calls_routines_through_the_path_it_was_created_under() {
     assert_eq!(first(&s, "SELECT pick()"), "2");
     assert_eq!(first(&s, "SELECT default.outer_fn()"), "1");
 }
+
+#[test]
+fn a_session_only_path_reaches_temporary_views_not_stored_tables() {
+    let s = session();
+    for sql in [
+        "CREATE TABLE default.only_stored USING parquet AS SELECT 1 AS id",
+        "CREATE TEMPORARY VIEW only_temp AS SELECT 2 AS id",
+        "SET PATH = system.session, system.builtin",
+    ] {
+        run(&s, sql);
+    }
+    assert_eq!(first(&s, "SELECT id FROM only_temp"), "2");
+    let err =
+        block_on(async { s.sql("SELECT id FROM only_stored").await?.collect().await }).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("TableOrViewNotFound"),
+        "{err:?}"
+    );
+}

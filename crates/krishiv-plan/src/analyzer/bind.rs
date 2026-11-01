@@ -551,10 +551,11 @@ fn locate(ctx: &AnalysisContext, parts: &[String]) -> Option<(Arc<dyn Catalog>, 
 }
 
 /// How the name `parts` was written, for the catalog that loads it.
-fn form(parts: &[String], case_sensitive: bool) -> NameForm {
+fn form(parts: &[String], case_sensitive: bool, temporary_only: bool) -> NameForm {
     NameForm {
         case_sensitive,
         qualified: parts.len() > 1,
+        temporary_only,
     }
 }
 
@@ -690,6 +691,7 @@ async fn load(
                 }
             }
         }
+        let mut temporary_only = false;
         if candidates.is_empty() {
             // A path with no schema of this catalog finds a bare name only
             // among the session's temporary views.
@@ -698,6 +700,7 @@ async fn load(
                     if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"))
             };
             if name.len() > 1 || scan || ctx.catalogs.sql_path().iter().any(session) {
+                temporary_only = name.len() == 1 && !scan;
                 candidates.push(ident.clone());
             }
         }
@@ -724,7 +727,7 @@ async fn load(
             };
             b.epochs.insert(catalog.name().to_owned(), catalog.epoch());
             meta = catalog
-                .load_table(&ident, version, form(name, cs))
+                .load_table(&ident, version, form(name, cs, temporary_only))
                 .await
                 .map_err(failed)?;
             if let Some(m) = &meta
@@ -736,7 +739,7 @@ async fn load(
                 }
                 // Another spelling of a table already pinned: read the pin.
                 meta = catalog
-                    .load_table(&ident, Some(pinned), form(name, cs))
+                    .load_table(&ident, Some(pinned), form(name, cs, temporary_only))
                     .await
                     .map_err(failed)?;
             }
