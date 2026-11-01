@@ -702,7 +702,10 @@ impl Lowerer {
     /// The input column a pipe `GROUP BY` number names.
     fn position(&self, e: &Expr) -> Option<usize> {
         match &e.kind {
-            ExprKind::Literal(Literal::Number { text, .. }) => text.parse().ok(),
+            ExprKind::Literal(Literal::Number {
+                text,
+                kind: NumKind::Int,
+            }) => text.parse().ok(),
             _ => None,
         }
     }
@@ -718,7 +721,9 @@ impl Lowerer {
                     // A number names an input column, unlike `GROUP BY n`
                     // of a query, which names a select item.
                     let key = match &e.kind {
-                        ExprKind::Literal(Literal::Number { .. }) => {
+                        ExprKind::Literal(Literal::Number {
+                            kind: NumKind::Int, ..
+                        }) => {
                             let Some(position) = self.position(e) else {
                                 return Err(unsupported(
                                     "a position in a pipe AGGREGATE GROUP BY",

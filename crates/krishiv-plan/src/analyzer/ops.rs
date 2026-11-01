@@ -534,19 +534,18 @@ impl Resolver<'_> {
         origin: Origin,
     ) -> Result<Vec<Option<Arc<Expr>>>, AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
-        let same = |a: &str, b: &str| {
-            if cs {
-                a == b
-            } else {
-                a.eq_ignore_ascii_case(b)
-            }
-        };
         let mut with: Vec<Option<Arc<Expr>>> = vec![None; out.len()];
         for (name, expr) in &s.replace {
-            let Some(i) = out.iter().position(|a| same(&a.col.name, name)) else {
+            let mut found = false;
+            for (slot, a) in with.iter_mut().zip(out) {
+                if super::bind::same(&a.col.name, name, cs) {
+                    *slot = Some(Arc::clone(expr));
+                    found = true;
+                }
+            }
+            if !found {
                 return Err(unresolved(std::slice::from_ref(name), out, origin));
-            };
-            with[i] = Some(Arc::clone(expr));
+            }
         }
         Ok(with)
     }
