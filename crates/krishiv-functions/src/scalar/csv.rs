@@ -80,7 +80,7 @@ pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
         .fields()
         .iter()
         .map(|f| {
-            let arrow = f.data_type().to_arrow();
+            let arrow = krishiv_types::arrow::client_arrow_type(&f.data_type().to_arrow());
             Field::new(f.name().to_owned(), arrow, f.nullable())
         })
         .collect();

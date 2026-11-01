@@ -4,7 +4,10 @@ use std::sync::Arc;
 use arrow_schema::{DataType as ArrowType, Field, TimeUnit};
 use krishiv_common::error::ErrorClass;
 
-use crate::arrow::{SPARK_METADATA_KEY, SPARK_TYPE_METADATA_KEY, normalize_ingest_type};
+use crate::arrow::{
+    SPARK_METADATA_KEY, SPARK_TYPE_METADATA_KEY, canonical_arrow_type, client_arrow_type,
+    normalize_ingest_type,
+};
 use crate::{
     ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
     StructType, parse_data_type,
@@ -66,7 +69,7 @@ fn canonical_arrow_types() {
         (DataType::Double, ArrowType::Float64),
         (DataType::String, ArrowType::Utf8View),
         (DataType::Binary, ArrowType::BinaryView),
-        (dec(10, 2), ArrowType::Decimal128(10, 2)),
+        (dec(10, 2), ArrowType::Decimal64(10, 2)),
         (dec(38, 38), ArrowType::Decimal128(38, 38)),
         (DataType::Date, ArrowType::Date32),
         (DataType::Timestamp, ts(Some("UTC"))),
@@ -303,25 +306,34 @@ fn decimal_i64_fast_path_up_to_precision_18() {
             panic!("not a decimal");
         };
         assert_eq!(d.storage() == DecimalStorage::I64, p <= 18, "p={p}");
-        // Only Decimal128 crosses an edge, whatever the internal storage.
+        // The carrier follows the precision; every carrier is valid storage.
         let p8 = d.precision().max(1);
-        assert_eq!(
-            DataType::Decimal(d).to_arrow(),
+        let carrier = if p <= 18 {
+            ArrowType::Decimal64(p8, 0)
+        } else {
             ArrowType::Decimal128(p8, 0)
-        );
-        assert!(!DataType::Decimal(d).is_valid_storage(&ArrowType::Decimal64(p8, 0)));
+        };
+        assert_eq!(DataType::Decimal(d).to_arrow(), carrier);
+        assert!(DataType::Decimal(d).is_valid_storage(&ArrowType::Decimal64(p8, 0)));
+        assert!(DataType::Decimal(d).is_valid_storage(&ArrowType::Decimal128(p8, 0)));
     }
     assert!(!dec(10, 2).is_valid_storage(&ArrowType::Decimal128(10, 3)));
-    let e = DataType::from_arrow(&ArrowType::Decimal64(9, 2)).map_err(|e| e.error_class());
-    assert_eq!(e, Err(ErrorClass::KrishivUnsupportedFeature));
+    assert_eq!(
+        DataType::from_arrow(&ArrowType::Decimal64(9, 2)),
+        Ok(dec(9, 2))
+    );
+    assert_eq!(
+        DataType::from_arrow(&ArrowType::Decimal32(9, 2)),
+        Ok(dec(9, 2))
+    );
 }
 
 #[test]
 fn decimal_0_0_is_stored_as_precision_1_with_a_tag() {
-    use arrow_array::{Array, Decimal128Array};
+    use arrow_array::{Array, Decimal64Array, Decimal128Array};
     let t = dec(0, 0);
     let field = t.to_arrow_field("z", true);
-    assert_eq!(field.data_type(), &ArrowType::Decimal128(1, 0));
+    assert_eq!(field.data_type(), &ArrowType::Decimal64(1, 0));
     assert_eq!(
         field
             .metadata()
@@ -331,7 +343,7 @@ fn decimal_0_0_is_stored_as_precision_1_with_a_tag() {
     );
     assert_eq!(DataType::from_arrow_field(&field), Ok(t.clone()));
     // A real array of the field's type (Arrow rejects precision 0).
-    let array = Decimal128Array::from(vec![Some(0), None]).with_precision_and_scale(1, 0);
+    let array = Decimal64Array::from(vec![Some(0), None]).with_precision_and_scale(1, 0);
     let array = array.unwrap_or_else(|e| panic!("{e}"));
     assert!(array.validate_decimal_precision(1).is_ok());
     assert_eq!(array.data_type(), field.data_type());
@@ -392,8 +404,6 @@ fn arrow_storage_alternatives() {
         ArrowType::Date64,
         ArrowType::UInt32,
         ArrowType::Float16,
-        ArrowType::Decimal32(5, 2),
-        ArrowType::Decimal64(5, 2),
         ArrowType::Decimal256(10, 2),
         ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 2),
     ] {
@@ -888,4 +898,43 @@ fn any_srid_spatial_types_nest() {
     }
     let e = parse_data_type("geography(any) int").unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::ParseSyntaxError);
+}
+
+#[test]
+fn decimal_carriers_map_through_nested_types() {
+    let item = |t: ArrowType| Arc::new(Field::new("item", t, true));
+    let list = |t| ArrowType::List(item(t));
+    let row = |t| ArrowType::Struct(vec![Field::new("d", t, true)].into());
+    assert_eq!(
+        canonical_arrow_type(&row(list(ArrowType::Decimal128(18, 2)))),
+        row(list(ArrowType::Decimal64(18, 2)))
+    );
+    assert_eq!(
+        canonical_arrow_type(&ArrowType::Decimal32(5, 2)),
+        ArrowType::Decimal64(5, 2)
+    );
+    assert_eq!(
+        canonical_arrow_type(&ArrowType::Decimal128(19, 2)),
+        ArrowType::Decimal128(19, 2)
+    );
+    assert_eq!(
+        client_arrow_type(&row(list(ArrowType::Decimal64(18, 2)))),
+        row(list(ArrowType::Decimal128(18, 2)))
+    );
+    let map = ArrowType::Map(item(row(ArrowType::Decimal64(3, 0))), false);
+    assert_eq!(
+        client_arrow_type(&map),
+        ArrowType::Map(item(row(ArrowType::Decimal128(3, 0))), false)
+    );
+    let large = ArrowType::LargeList(item(ArrowType::Decimal64(3, 0)));
+    assert_eq!(
+        client_arrow_type(&large),
+        ArrowType::LargeList(item(ArrowType::Decimal128(3, 0)))
+    );
+    let fixed = ArrowType::FixedSizeList(item(ArrowType::Decimal128(3, 0)), 2);
+    assert_eq!(
+        canonical_arrow_type(&fixed),
+        ArrowType::FixedSizeList(item(ArrowType::Decimal64(3, 0)), 2)
+    );
+    assert_eq!(client_arrow_type(&ArrowType::Int32), ArrowType::Int32);
 }

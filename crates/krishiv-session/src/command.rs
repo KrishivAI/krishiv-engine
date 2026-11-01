@@ -1816,7 +1816,7 @@ pub(crate) fn arrow_value(
     row: usize,
 ) -> Result<(DataType, Literal), KrishivError> {
     use arrow_array::types::{
-        Date32Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+        Date32Type, Decimal64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
         TimestampMicrosecondType,
     };
     let data_type = arrow_krishiv_type(array.data_type())?;
@@ -1846,14 +1846,17 @@ pub(crate) fn arrow_value(
                 .as_primitive::<arrow_array::types::Float64Type>()
                 .value(row),
         ),
-        ArrowType::Decimal128(_, _) => {
+        ArrowType::Decimal64(..) | ArrowType::Decimal128(..) => {
             let DataType::Decimal(decimal) = &data_type else {
                 return Err(crate::session::internal(
                     "a variable decimal changed type".to_owned(),
                 ));
             };
             Literal::Decimal {
-                unscaled: array.as_primitive::<Decimal128Type>().value(row),
+                unscaled: match array.as_primitive_opt::<Decimal64Type>() {
+                    Some(a) => i128::from(a.value(row)),
+                    None => array.as_primitive::<Decimal128Type>().value(row),
+                },
                 data_type: *decimal,
             }
         }
@@ -1898,7 +1901,7 @@ pub(crate) fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, Kris
         ArrowType::Int64 => Ok(DataType::Long),
         ArrowType::Float32 => Ok(DataType::Float),
         ArrowType::Float64 => Ok(DataType::Double),
-        ArrowType::Decimal128(precision, scale) => {
+        ArrowType::Decimal64(precision, scale) | ArrowType::Decimal128(precision, scale) => {
             decimal_type(*precision, *scale).map(DataType::Decimal)
         }
         ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => Ok(DataType::String),

@@ -239,6 +239,16 @@ impl InSet {
                 set.extend(values.iter().map(|a| byte_value(a.as_ref(), 0).to_vec()));
                 Keys::Bytes(set)
             }
+            ArrowType::Decimal64(..) => {
+                let mut set = fast_set(values.len());
+                set.extend(values.iter().map(|a| {
+                    i128::from(
+                        a.as_primitive::<arrow_array::types::Decimal64Type>()
+                            .value(0),
+                    )
+                }));
+                Keys::Decimals(set)
+            }
             ArrowType::Decimal128(..) => {
                 let mut set = fast_set(values.len());
                 set.extend(values.iter().map(|a| {
@@ -315,8 +325,13 @@ impl PhysExpr for InSet {
                 }
             }
             Keys::Decimals(set) => {
-                let d = a.as_primitive::<arrow_array::types::Decimal128Type>();
-                d.iter().for_each(|x| decide(x.map(|x| set.contains(&x))));
+                if let Some(d) = a.as_primitive_opt::<arrow_array::types::Decimal64Type>() {
+                    d.iter()
+                        .for_each(|x| decide(x.map(|x| set.contains(&i128::from(x)))));
+                } else {
+                    let d = a.as_primitive::<arrow_array::types::Decimal128Type>();
+                    d.iter().for_each(|x| decide(x.map(|x| set.contains(&x))));
+                }
             }
             Keys::Ints(set) => {
                 if !for_each_int(a.as_ref(), |x| decide(x.map(|x| set.contains(&x)))) {
@@ -1036,9 +1051,9 @@ impl PhysExpr for Nanvl {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type};
+    use arrow_array::types::{Decimal64Type, Float32Type, Float64Type, Int32Type, Int64Type};
     use arrow_array::{
-        Decimal128Array, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
+        Decimal64Array, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
         StringViewArray,
     };
     use arrow_schema::{Field, Schema};
@@ -1313,7 +1328,7 @@ mod tests {
         // Decimal and zoned timestamp columns.
         let dec = DecimalType::try_new(10, 2).unwrap();
         let darr = Arc::new(
-            arrow_array::Decimal128Array::from(vec![Some(150), None, Some(1_234), Some(7)])
+            arrow_array::Decimal64Array::from(vec![Some(150), None, Some(1_234), Some(7)])
                 .with_precision_and_scale(10, 2)
                 .unwrap(),
         ) as ArrayRef;
@@ -1607,13 +1622,13 @@ mod tests {
         let env = env(true);
         let schema = Arc::new(Schema::new(vec![Field::new(
             "a",
-            ArrowType::Decimal128(1, 1),
+            ArrowType::Decimal64(1, 1),
             true,
         )]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(
-                Decimal128Array::from(vec![Some(0)])
+                Decimal64Array::from(vec![Some(0)])
                     .with_precision_and_scale(1, 1)
                     .unwrap(),
             )],
@@ -1627,17 +1642,17 @@ mod tests {
         let e = null_if(
             &f,
             vec![
-                column(0, ArrowType::Decimal128(1, 1), true),
+                column(0, ArrowType::Decimal64(1, 1), true),
                 lit(&Literal::Integer(0)),
             ],
             input(&env, &layout, &schema),
         )
         .unwrap();
         let got = values(&e, &batch);
-        assert_eq!(got.data_type(), &ArrowType::Decimal128(1, 1));
+        assert_eq!(got.data_type(), &ArrowType::Decimal64(1, 1));
         assert_eq!(
-            got.as_primitive::<Decimal128Type>(),
-            &Decimal128Array::from(vec![None as Option<i128>])
+            got.as_primitive::<Decimal64Type>(),
+            &Decimal64Array::from(vec![None as Option<i64>])
                 .with_precision_and_scale(1, 1)
                 .unwrap(),
         );

@@ -577,9 +577,9 @@ impl PhysExpr for Lit {
 /// A literal as a one-row array of its type's Arrow form.
 pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
     use arrow_array::{
-        BinaryViewArray, BooleanArray as B, Date32Array, Decimal128Array, Float32Array,
-        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, MapArray, NullArray,
-        StringArray, StringViewArray, StructArray, TimestampMicrosecondArray,
+        BinaryViewArray, BooleanArray as B, Date32Array, Decimal64Array, Decimal128Array,
+        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, MapArray,
+        NullArray, StringArray, StringViewArray, StructArray, TimestampMicrosecondArray,
     };
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::Field;
@@ -597,16 +597,23 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
         Literal::Decimal {
             unscaled,
             data_type,
-        } => {
-            let ArrowType::Decimal128(p, s) = DataType::Decimal(*data_type).to_arrow() else {
-                return Err(internal("decimal literal type"));
-            };
-            Arc::new(
+        } => match DataType::Decimal(*data_type).to_arrow() {
+            ArrowType::Decimal64(p, s) => {
+                let v = i64::try_from(*unscaled)
+                    .map_err(|_| internal("decimal literal above its precision"))?;
+                Arc::new(
+                    Decimal64Array::from(vec![v])
+                        .with_precision_and_scale(p, s)
+                        .map_err(|e| internal(&e.to_string()))?,
+                ) as ArrayRef
+            }
+            ArrowType::Decimal128(p, s) => Arc::new(
                 Decimal128Array::from(vec![*unscaled])
                     .with_precision_and_scale(p, s)
                     .map_err(|e| internal(&e.to_string()))?,
-            )
-        }
+            ),
+            _ => return Err(internal("decimal literal type")),
+        },
         Literal::String(v) => Arc::new(StringViewArray::from(vec![v.as_str()])),
         Literal::Binary(v) => Arc::new(BinaryViewArray::from(vec![v.as_slice()])),
         Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),

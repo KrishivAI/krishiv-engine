@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
@@ -363,6 +363,7 @@ pub(crate) fn cmp(
         ArrowType::Int64 => prim!(Int64Type),
         ArrowType::Float32 => prim!(Float32Type),
         ArrowType::Float64 => prim!(Float64Type),
+        ArrowType::Decimal64(..) => prim!(Decimal64Type),
         ArrowType::Decimal128(..) => prim!(Decimal128Type),
         ArrowType::Date32 => prim!(Date32Type),
         ArrowType::Timestamp(..) => prim!(TimestampMicrosecondType),
