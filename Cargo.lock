@@ -131,6 +131,7 @@ checksum = "312c1ea69e5fe9966e0029fb95aca8790100b85aff4f0d3b00a9337c74069a9c"
 dependencies = [
  "bigdecimal",
  "bon",
+ "bzip2",
  "crc32fast",
  "digest 0.11.3",
  "log",
@@ -521,6 +522,15 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "bzip2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
+dependencies = [
+ "libbz2-rs-sys",
+]
 
 [[package]]
 name = "cast"
@@ -2018,8 +2028,10 @@ dependencies = [
  "arrow-select",
  "async-trait",
  "bytes",
+ "bzip2",
  "chrono",
  "codspeed-criterion-compat",
+ "flate2",
  "futures",
  "hashbrown",
  "krishiv-common",
@@ -2027,12 +2039,14 @@ dependencies = [
  "krishiv-memory",
  "krishiv-types",
  "loom",
+ "lz4_flex",
  "memchr",
  "object_store",
  "parquet",
  "proptest",
  "rustix",
  "serde_json",
+ "snap",
  "tempfile",
  "tokio",
  "tracing",
@@ -2309,6 +2323,12 @@ name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
+name = "libbz2-rs-sys"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32f454fd6831a29c0e827ed075bca2a15be201bd57f4168f0fd1041124eab17e"
 
 [[package]]
 name = "libc"

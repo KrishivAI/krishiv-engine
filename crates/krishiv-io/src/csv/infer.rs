@@ -324,7 +324,13 @@ async fn for_each_line(
     o: &CsvOptions,
     mut f: impl FnMut(&[u8], u64) -> FormatResult<bool>,
 ) -> FormatResult<()> {
-    let mut r = LineReader::new(file.size, range, true, o.line_sep.clone());
+    let codec = crate::text::codec::Codec::of_path(file.path.as_ref());
+    let range = if codec.is_some() {
+        ByteRange::whole(file.size)
+    } else {
+        range
+    };
+    let mut r = LineReader::new(file.size, range, true, o.line_sep.clone()).compressed(codec);
     loop {
         match r.next_line()? {
             ReadChunk::End => return Ok(()),
@@ -347,7 +353,8 @@ async fn for_each_line(
 
 /// The text of `file`, read whole (`multiLine`).
 async fn whole_text(io: &IoContext, file: &FileRef, o: &CsvOptions) -> FormatResult<String> {
-    let mut r = WholeReader::new(file.size, ByteRange::whole(file.size));
+    let mut r = WholeReader::new(file.size, ByteRange::whole(file.size))
+        .compressed(crate::text::codec::Codec::of_path(file.path.as_ref()));
     loop {
         if let Some(need) = r.need() {
             let got = io.get_ranges(file, std::slice::from_ref(&need)).await?;
@@ -507,7 +514,8 @@ pub(crate) fn infer<'a>(
                 .iter()
                 .map(|f| SplitFile {
                     size: f.size,
-                    splittable: true,
+                    // A compressed file is one split, sampled once.
+                    splittable: crate::text::codec::Codec::of_path(f.path.as_ref()).is_none(),
                 })
                 .collect();
             let parts = plan(&split_config(o)?, &listing);

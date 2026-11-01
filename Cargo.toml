@@ -93,8 +93,8 @@ object_store = { version = "=0.14.2", default-features = false }
 # parsing. Only the pure-Rust codecs are enabled (deflate is built in;
 # snappy needs no OpenSSL). The `zstandard` feature stays off: it pulls
 # zstd 0.13, which carries RUSTSEC-2026-0391, and no apache-avro release
-# allows zstd 0.14; zstandard, bzip2 and xz files are refused.
-apache-avro = { version = "=0.22.0", default-features = false, features = ["snappy"] }
+# allows zstd 0.14; zstandard and xz files are refused.
+apache-avro = { version = "=0.22.0", default-features = false, features = ["bzip", "snappy"] }
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }
@@ -123,6 +123,11 @@ futures = { version = "0.3.34", default-features = false }
 roaring = { version = "0.11", default-features = false }
 smallvec = { version = "1.16", default-features = false }
 lz4_flex = { version = "0.14", default-features = false }
+# Hadoop text codecs of the CSV, JSON and text sources (T081a). flate2 and snap are
+# already built for parquet; bzip2 default feature = pure-Rust libbz2-rs-sys (no C; do not enable bzip2-sys).
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+snap = { version = "1", default-features = false }
+bzip2 = { version = "0.6", default-features = true }
 zstd = { version = "0.14", default-features = false }
 regex = { version = "1.13", default-features = false }
 regex-automata = { version = "0.4", default-features = false }

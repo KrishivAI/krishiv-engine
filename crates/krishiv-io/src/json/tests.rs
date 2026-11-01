@@ -162,6 +162,7 @@ fn read_split(
 ) -> Result<Vec<RecordBatch>, KrishivError> {
     let m: Arc<dyn FileMetadata> = Arc::new(TextMetadata {
         size: bytes.len() as u64,
+        codec: None,
     });
     let units = JsonFormat
         .plan_units(m.as_ref(), &split, req)
@@ -1290,24 +1291,18 @@ fn write_then_read_round_trips() {
     assert!(String::from_utf8_lossy(&bytes).contains("null"));
     let got = read(&bytes, &r, &ScanRequest::all(Arc::clone(&schema))).expect("read back");
     assert_eq!(rows_of(&got), rows_of(std::slice::from_ref(&batch)));
-    // Compression needs codecs this build lacks.
-    for name in ["gzip", "snappy", "zstd", "bzip2", "lz4"] {
-        let w = options(&serde_json::json!({"compression": name}));
-        let e = encode(&batch, &w).expect_err("unsupported codec");
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{name}"
-        );
-    }
-    for name in ["a.json.gz", "a.json.zst"] {
-        let e = infer_named(b"{}\n", name, &options(&serde_json::json!({}))).expect_err(name);
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{name}"
-        );
-    }
+    // Spark has no zstd text codec; the others are covered in `text::format_codec_tests`.
+    let e = encode(
+        &batch,
+        &options(&serde_json::json!({"compression": "zstd"})),
+    )
+    .expect_err("unknown codec");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
+    );
+    let e = infer_named(b"{}\n", "a.json.zst", &options(&serde_json::json!({}))).expect_err("zst");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
 #[test]
@@ -1513,16 +1508,20 @@ fn bad_option_values_are_typed_errors() {
         };
         assert_eq!(e.error_class(), Invalid, "{opts}");
     }
-    for opts in [
-        serde_json::json!({"encoding": "EBCDIC"}),
-        serde_json::json!({"compression": "gzip"}),
-    ] {
-        let o = options(&opts);
-        let Err(e) = super::options::JsonOptions::new(&o, true) else {
-            panic!("want an error for {opts}")
-        };
-        assert_eq!(e.error_class(), Unsupported, "{opts}");
-    }
+    let opts = serde_json::json!({"encoding": "EBCDIC"});
+    let o = options(&opts);
+    let Err(e) = super::options::JsonOptions::new(&o, true) else {
+        panic!("want an error for {opts}")
+    };
+    assert_eq!(e.error_class(), Unsupported, "{opts}");
+    let o = options(&serde_json::json!({"compression": "zstd"}));
+    let Err(e) = super::options::JsonOptions::new(&o, true) else {
+        panic!("want an error for zstd")
+    };
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
+    );
 }
 
 #[test]

@@ -16,6 +16,7 @@
 //! - [`TextMetadata`]: these formats have no footer; their metadata is the
 //!   file size.
 
+pub(crate) mod codec;
 mod datetime;
 pub(crate) mod reader;
 
@@ -38,8 +39,10 @@ pub(crate) const BATCH_ROWS: usize = 4096;
 /// The metadata of a file without a footer: its size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextMetadata {
-    /// The file size.
+    /// The file size (compressed, for a compressed file).
     pub size: u64,
+    /// The file's compression codec, by its suffix.
+    pub(crate) codec: Option<codec::Codec>,
 }
 
 impl FileMetadata for TextMetadata {
@@ -66,7 +69,10 @@ impl TextMetadata {
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a compressed file.
     pub(crate) fn of(file: &crate::io::FileRef) -> crate::error::Result<Self> {
         check_plain(file.path.as_ref())?;
-        Ok(Self { size: file.size })
+        Ok(Self {
+            size: file.size,
+            codec: codec::Codec::of_path(file.path.as_ref()),
+        })
     }
 
     /// The unit a split reads: the split's bytes, if it owns any line.
@@ -77,6 +83,8 @@ impl TextMetadata {
         split: &crate::io::ByteRange,
         whole: bool,
     ) -> crate::format::UnitPlan {
+        // A compressed file is read whole by the split at byte 0.
+        let whole = whole || self.codec.is_some();
         let owns = if whole {
             split.start == 0
         } else {
@@ -235,42 +243,66 @@ pub(crate) fn spark_type_name(dt: &arrow_schema::DataType) -> String {
 }
 
 #[cfg(test)]
+mod codec_tests;
+#[cfg(test)]
+mod format_codec_tests;
+#[cfg(test)]
 mod tests;
 
-/// Hadoop's compression suffixes: compressed files need a codec this build
-/// does not have.
-const COMPRESSED: &[&str] = &[".gz", ".deflate", ".bz2", ".lz4", ".snappy", ".zst"];
+/// Compression suffixes this build cannot read.
+const UNREADABLE: &[&str] = &[".zst", ".zstd"];
 
-/// Checks that the file at `path` is not compressed.
+/// Checks that the file at `path` is not in a codec this build lacks.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a compressed file.
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a zstd file.
 pub(crate) fn check_plain(path: &str) -> crate::error::Result<()> {
-    if COMPRESSED.iter().any(|s| path.ends_with(s)) {
+    if UNREADABLE.iter().any(|s| path.ends_with(s)) {
         return Err(unsupported(format!(
-            "reading compressed files such as {path} (compression codecs are not implemented yet)"
+            "reading zstd-compressed files such as {path} (Spark's text sources have no zstd codec)"
         )));
     }
     Ok(())
 }
 
-/// Checks that the write options ask for no compression.
+/// The codec the write options ask for.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a codec.
-pub(crate) fn check_write_codec(o: &crate::options::FormatOptions) -> crate::error::Result<()> {
+/// `CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION` for an unknown name.
+pub(crate) fn write_codec(
+    o: &crate::options::FormatOptions,
+) -> crate::error::Result<Option<codec::Codec>> {
     match o.str("compression").or_else(|| o.str("codec")) {
-        None => Ok(()),
-        Some(c)
-            if matches!(
-                c.trim().to_ascii_lowercase().as_str(),
-                "none" | "uncompressed"
-            ) =>
-        {
-            Ok(())
-        }
-        Some(c) => Err(unsupported(format!(
-            "the compression codec {c} (writing compressed files is not implemented yet)"
-        ))),
+        None => Ok(None),
+        Some(c) => codec::Codec::parse_write(c).ok_or_else(|| {
+            krishiv_common::error::CodecNotAvailableWithAvailableCodecsSuggestion {
+                codec_name: c.to_ascii_lowercase(),
+                available_codecs: codec::WRITE_NAMES.join(", "),
+            }
+            .into()
+        }),
+    }
+}
+
+/// `encoder`, compressing its output if the write options name a codec.
+///
+/// # Errors
+/// `CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION` for an unknown codec.
+pub(crate) fn compress_output(
+    encoder: Box<dyn crate::format::Encoder>,
+    o: &crate::options::FormatOptions,
+) -> crate::error::FormatResult<Box<dyn crate::format::Encoder>> {
+    Ok(match write_codec(o)? {
+        Some(c) => Box::new(codec::CompressedEncoder::new(encoder, c)),
+        None => encoder,
+    })
+}
+
+/// `base` (`.csv`) with the suffix of the write codec; the base alone for an
+/// unknown codec (the writer reports it).
+pub(crate) fn output_suffix(base: &str, o: &crate::options::FormatOptions) -> String {
+    match write_codec(o) {
+        Ok(Some(c)) => format!("{base}{}", c.suffix()),
+        _ => base.to_owned(),
     }
 }

@@ -18,6 +18,10 @@ arrow-buffer.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
+bzip2.workspace = true
+flate2.workspace = true
+lz4_flex = { workspace = true, features = ["safe-encode", "safe-decode", "std"] }
+snap.workspace = true
 chrono.workspace = true
 # Avro field defaults (`RecordField::default`) are JSON values.
 serde_json = { workspace = true, features = ["std"] }

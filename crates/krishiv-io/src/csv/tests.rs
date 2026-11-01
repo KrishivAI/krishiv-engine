@@ -226,6 +226,7 @@ fn read_split(
 ) -> Result<Vec<RecordBatch>, KrishivError> {
     let m: Arc<dyn FileMetadata> = Arc::new(TextMetadata {
         size: bytes.len() as u64,
+        codec: None,
     });
     let units = CsvFormat
         .plan_units(m.as_ref(), &split, req)
@@ -887,7 +888,7 @@ fn multi_line_files_belong_to_the_first_split() {
 }
 
 #[test]
-fn written_files_read_back_and_codecs_are_refused() {
+fn written_files_read_back_and_unknown_codecs_are_refused() {
     let w = options(&serde_json::json!({"header": "true", "compression": "none"}));
     assert_eq!(CsvFormat.file_suffix(&w), ".csv");
     let bytes = encode(&strings_batch(), &w).expect("encode");
@@ -900,17 +901,21 @@ fn written_files_read_back_and_codecs_are_refused() {
     // A multi-line reader turns every line end inside quotes into `\n`.
     assert_eq!(rows[10][1].as_deref(), Some("a\nb"));
     assert_eq!(rows[1][1].as_deref(), Some("a,b"));
-    // Compression needs codecs this build lacks: a typed error, not a wrong file.
-    let unsupported = krishiv_common::error::ErrorClass::KrishivUnsupportedFeature;
-    for name in ["gzip", "deflate", "snappy", "zstd", "bzip2", "lz4"] {
-        let w = options(&serde_json::json!({"compression": name}));
-        let e = encode(&strings_batch(), &w).expect_err("unsupported codec");
-        assert_eq!(e.error_class(), unsupported, "{name}");
-    }
-    for name in ["a.csv.gz", "a.csv.deflate", "a.csv.bz2", "a.csv.zst"] {
-        let e = infer_named(b"a,b\n", name, &options(&serde_json::json!({}))).expect_err(name);
-        assert_eq!(e.error_class(), unsupported, "{name}");
-    }
+    // Spark has no zstd text codec; the others are covered in `text::format_codec_tests`.
+    let e = encode(
+        &strings_batch(),
+        &options(&serde_json::json!({"compression": "zstd"})),
+    )
+    .expect_err("unknown codec");
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
+    );
+    let e = infer_named(b"a,b\n", "a.csv.zst", &options(&serde_json::json!({}))).expect_err("zst");
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
 }
 
 #[test]
