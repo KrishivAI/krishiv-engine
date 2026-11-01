@@ -1679,6 +1679,37 @@ impl Resolver<'_> {
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
+                // `to_char(datetime, fmt)` and `to_varchar` are `date_format` to
+                // Spark (`ToCharacterBuilder`), which names them so; a number or
+                // a binary keeps `to_char`.
+                if !session_qualified
+                    && n == 2
+                    && (lookup_name.eq_ignore_ascii_case("to_char")
+                        || lookup_name.eq_ignore_ascii_case("to_varchar"))
+                    && matches!(
+                        kids[0].ty.data_type,
+                        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+                    )
+                {
+                    let call = Expr::function(
+                        "date_format",
+                        vec![Expr::clone(&kids[0].expr), Expr::clone(&kids[1].expr)],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            "date_format",
+                            vec![kids[0].shown(), kids[1].shown()]
+                                .into_iter()
+                                .map(|k| Expr::clone(&k))
+                                .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
+                }
                 // `date + int`, `int + date` and `date - int` are `date_add`
                 // and `date_sub` to Spark, which names them so.
                 if !session_qualified
