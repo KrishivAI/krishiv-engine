@@ -107,3 +107,30 @@ fn a_three_part_name_of_an_unknown_catalog_needs_a_single_part_namespace() {
         );
     }
 }
+
+#[test]
+fn a_with_clause_scopes_over_the_rows_of_an_insert() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE cte_tbl (col INT) USING parquet")).unwrap();
+    block_on(s.sql("WITH s AS (SELECT 43 AS col) INSERT INTO cte_tbl SELECT * FROM S")).unwrap();
+    block_on(
+        s.sql("WITH s AS (SELECT 44 AS col) INSERT OVERWRITE TABLE cte_tbl SELECT col + 1 FROM s"),
+    )
+    .unwrap();
+    let df = block_on(s.sql("SELECT col FROM cte_tbl")).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(0),
+        45
+    );
+    assert!(
+        block_on(
+            s.sql("WITH s AS (SELECT 1) INSERT INTO cte_tbl WITH t AS (SELECT 1) SELECT * FROM t")
+        )
+        .is_err()
+    );
+}

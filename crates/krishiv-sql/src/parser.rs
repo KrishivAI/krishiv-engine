@@ -1634,6 +1634,10 @@ impl<'s> Parser<'s> {
             ],
         ) {
             self.command_statement()?
+        } else if self.kw_at(0, "WITH")
+            && let Some(insert) = self.with_insert_command()?
+        {
+            insert
         } else if self.kw_at(0, "FROM") {
             // A multi-table insert, or a `FROM ... SELECT` query. The
             // query runs first; only its syntax failure reads as an
@@ -1685,6 +1689,35 @@ impl<'s> Parser<'s> {
             });
         }
         Ok(statement)
+    }
+
+    /// `WITH ctes INSERT INTO|OVERWRITE ... query`: the common table expressions scope over the
+    /// rows written, so they become the `WITH` of the insert's query. `None` (with nothing
+    /// consumed) when no `INSERT` follows the `WITH` clause, so the statement is a query.
+    fn with_insert_command(&mut self) -> PR<Option<Statement>> {
+        let save = self.checkpoint();
+        let start = self.start();
+        let with = match self.with_clause() {
+            Ok(with) if self.kw_at(0, "INSERT") => with,
+            Ok(_) | Err(Fail::Syntax) => {
+                self.restore(save);
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+        self.commit(save);
+        let Statement::Insert(mut insert) = self.insert_command()? else {
+            return self.fail();
+        };
+        for clause in &mut insert.clauses {
+            // Spark refuses a `WITH` in both places.
+            if clause.query.with.is_some() {
+                return self.fail();
+            }
+            clause.query.with = Some(with.clone());
+        }
+        insert.span = self.span_from(start);
+        Ok(Some(Statement::Insert(insert)))
     }
 
     /// `SET`, `SET -v`, `SET key`, `SET key = value` or `SET TIME ZONE

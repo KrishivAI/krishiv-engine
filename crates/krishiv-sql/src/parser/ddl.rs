@@ -1178,7 +1178,7 @@ impl<'s> Parser<'s> {
     // ---- INSERT ----------------------------------------------------------
 
     /// `INSERT INTO|OVERWRITE ...`.
-    fn insert_command(&mut self) -> PR<Statement> {
+    pub(crate) fn insert_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("INSERT")?;
