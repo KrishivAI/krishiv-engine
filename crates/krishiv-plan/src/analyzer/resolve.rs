@@ -150,6 +150,9 @@ pub(super) struct Resolver<'a> {
     pub(super) fn_path: Vec<String>,
     /// SQL function calls inlined so far in this analysis (a budget).
     pub(super) sql_calls: usize,
+    /// The first aggregate over a nondeterministic argument: Spark checks
+    /// it after the operators' other rules, so any other error wins.
+    pub(super) pending_nondeterministic: Option<AnalysisError>,
 }
 
 type Resolved = (
@@ -182,6 +185,7 @@ pub(super) fn resolve(
         frame: None,
         fn_path: Vec::new(),
         sql_calls: 0,
+        pending_nondeterministic: None,
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -189,6 +193,9 @@ pub(super) fn resolve(
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     let rel = r.rel(plan.root(), &env)?;
+    if let Some(error) = r.pending_nondeterministic.take() {
+        return Err(error);
+    }
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).

@@ -1897,6 +1897,9 @@ impl Resolver<'_> {
                         e.origin,
                     ));
                 }
+                if !window_fn && entry.kind == FunctionKind::Aggregate {
+                    self.nondeterministic_arguments(e, &kids[..n]);
+                }
                 if entry.id.name() == "mode" {
                     return self.mode_call(&entry, e, f, &kids, window_fn);
                 }
@@ -1917,9 +1920,6 @@ impl Resolver<'_> {
                 }
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
-                    if entry.kind == FunctionKind::Aggregate {
-                        self.nondeterministic_arguments(e, &kids[..n])?;
-                    }
                 }
                 // `struct(a, ...)`: children with names keep them (a column
                 // contributes its name, a struct field its field name), so a
@@ -6394,36 +6394,37 @@ impl Resolver<'_> {
     /// `AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION`: an argument
     /// of an aggregate calls a nondeterministic function. A call of a SQL
     /// function is as deterministic as its body, whatever its arguments.
-    fn nondeterministic_arguments(
-        &self,
-        e: &Arc<Expr>,
-        args: &[Bound],
-    ) -> Result<(), AnalysisError> {
+    fn nondeterministic_arguments(&mut self, e: &Arc<Expr>, args: &[Bound]) {
+        if self.pending_nondeterministic.is_some() {
+            return;
+        }
         let Some(bad) = args.iter().find(|k| {
-            !super::sqlfn::is_deterministic(&k.expr) && self.nondeterministic(&k.shown())
+            !super::sqlfn::is_deterministic(&k.expr)
+                && self.nondeterministic(&k.shown(), &mut HashSet::new())
         }) else {
-            return Ok(());
+            return;
         };
         let shown = with_children(e, args.iter().map(Bound::shown).collect());
-        Err(AnalysisError::new(
+        self.pending_nondeterministic = Some(AnalysisError::new(
             AggregateFunctionWithNondeterministicExpression {
                 sql_expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
             },
             bad.expr.origin,
-        ))
+        ));
     }
 
-    /// Whether `e`, as written, calls a nondeterministic function outside
-    /// the arguments of a SQL function.
-    fn nondeterministic(&self, e: &Expr) -> bool {
+    /// Whether `e`, as written, calls a nondeterministic function; a call
+    /// of a SQL function is as deterministic as its body, whatever its
+    /// arguments. `seen` holds the nodes visited (expressions are DAGs).
+    fn nondeterministic(&self, e: &Expr, seen: &mut HashSet<usize>) -> bool {
+        if !seen.insert(addr(e)) {
+            return false;
+        }
         if let ExprNode::Function(f) = &e.node {
             let mut name = f.qualifier.clone();
             name.push(f.name.clone());
-            if matches!(
-                self.ctx.functions.lookup(&name, self.ctx.profile),
-                FunctionLookup::Sql(_)
-            ) {
-                return false;
+            if let FunctionLookup::Sql(def) = self.ctx.functions.lookup(&name, self.ctx.profile) {
+                return self.nondeterministic(&def.body, seen);
             }
             if f.qualifier.is_empty()
                 && self.ctx.functions.spark_deterministic(&f.name) == Some(false)
@@ -6437,7 +6438,7 @@ impl Resolver<'_> {
             return true;
         }
         let mut found = false;
-        e.for_each_child(&mut |c| found = found || self.nondeterministic(c));
+        e.for_each_child(&mut |c| found = found || self.nondeterministic(c, seen));
         found
     }
 }
