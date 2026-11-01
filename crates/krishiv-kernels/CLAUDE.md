@@ -15,7 +15,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 - `Dispatch` (sealed): `KernelCtx` picks the CPU target at run time (three clones of each loop, plus scalar-operand
   loops); `Baseline` runs the build-baseline loop only, a scalar repeated into an array (one loop per kernel), for
   one-row/constant evaluation such as plan-time folding. Dispatching entry points take `ctx: &impl Dispatch`.
-- `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones); `xtask source-guard` rejects `unsafe`
+- `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones; `prefetch_read`, the hash tables' software prefetch); `xtask source-guard` rejects `unsafe`
   in any other file here and `xtask budgets` counts unsafe sites.
 - `version`: the Spark version profile (`KernelCtx::with_spark_version`); error classes/messages differ by version.
 - Kernels: `integer` (tinyint..bigint `+ - * %`, bigint `div`, unary `-`/`abs`), `decimal` (`+ - * / % div`, unary; Spark result types

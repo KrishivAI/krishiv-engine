@@ -69,4 +69,5 @@ pub use dispatch::{Baseline, Dispatch, KernelCtx, Target};
 pub use error::KernelError;
 pub use ops::{Add, ArithOp, Mul, Operand, Sub};
 pub use policy::{AnsiError, JavaWrap, NullOnOverflow, Overflow, OverflowMode, Unchecked};
+pub use unsafe_dispatch::prefetch_read;
 pub use version::SparkVersion;
