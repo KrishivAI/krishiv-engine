@@ -378,3 +378,90 @@ fn a_cte_defined_in_the_term_cannot_hide_a_forbidden_place() {
     ));
     assert_eq!(got, ["1", "2", "3"]);
 }
+
+#[test]
+fn the_other_forbidden_places_are_refused() {
+    let s = Session::new().unwrap();
+    for term in [
+        "SELECT n + 1, row_number() OVER (ORDER BY n) FROM r",
+        "SELECT r.n + 1 FROM r FULL OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
+        "SELECT r.n + 1 FROM r RIGHT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
+        "SELECT r.n + 1 FROM r LEFT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k \
+         WHERE EXISTS (SELECT 1 FROM r)",
+    ] {
+        let sql =
+            format!("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL {term}) SELECT * FROM r LIMIT 3");
+        assert_eq!(
+            class_of(&s, &sql),
+            ErrorClass::InvalidRecursiveReferencePlace,
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn definitions_beside_the_recursive_reference_resolve_through_the_scope() {
+    let s = Session::new().unwrap();
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL (WITH a AS (SELECT 0 AS k), \
+         b AS (SELECT n + 1 AS m FROM r WHERE n < 3) SELECT m FROM b CROSS JOIN a)) \
+         SELECT * FROM r",
+    ));
+    assert_eq!(got, ["1", "2", "3"]);
+}
+
+#[test]
+fn a_recursive_term_that_changes_the_anchors_types_is_refused() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+             SELECT CAST(n AS BIGINT) + 1 FROM r WHERE n < 3) SELECT * FROM r"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}
+
+#[test]
+fn nested_limits_push_the_smaller_one() {
+    let s = Session::new().unwrap();
+    let got = rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) \
+         SELECT count(*) FROM (SELECT * FROM (SELECT n FROM r LIMIT 3) LIMIT 5)",
+    );
+    assert_eq!(got, vec![vec!["3".to_owned()]]);
+}
+
+#[test]
+fn max_recursion_level_belongs_to_recursive_with() {
+    let s = Session::new().unwrap();
+    let e = block_on(s.sql("WITH r MAX RECURSION LEVEL 5 AS (SELECT 1) SELECT * FROM r"));
+    assert!(e.is_err());
+}
+
+#[test]
+fn a_recursive_result_can_be_transformed_and_read_again() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT * FROM r",
+    ))
+    .unwrap();
+    let kept =
+        df.filter(krishiv_session::functions::col("n").gt(krishiv_session::functions::lit(2)));
+    let batches = block_on(kept.collect()).unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        3
+    );
+    block_on(s.sql("CREATE TEMPORARY VIEW rv AS WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 4) SELECT * FROM r")).unwrap();
+    assert_eq!(
+        rows(&s, "SELECT count(*) FROM rv WHERE n > 1"),
+        vec![vec!["3".to_owned()]]
+    );
+}
