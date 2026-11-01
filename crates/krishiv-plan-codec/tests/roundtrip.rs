@@ -490,6 +490,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "exchange_hash_key_group"
             | "window_frames"
             | "window_offset_values"
+            | "window_range_values"
             | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
             n if n.starts_with("generate_") => 6,
             _ => MIN_READER_VERSION,
@@ -523,6 +524,7 @@ fn a_window_plan_survives_the_wire_with_every_field() {
         "window_aggregates",
         "window_frames",
         "window_offset_values",
+        "window_range_values",
     ] {
         let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
         assert_eq!(round_trip(&plan), plan, "{name}");
