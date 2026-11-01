@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Writes tests/fixtures/spark-4.2.0/collations.tsv: `SELECT * FROM collations()` on Spark 4.2.0.
+"""Writes crates/krishiv-types/vendored/collations.tsv: `SELECT * FROM collations()` on Spark 4.2.0.
 
-Run: uvx --from pyspark==4.2.0 python -I tests/scripts/gen_collations.py > tests/fixtures/spark-4.2.0/collations.tsv
+Run: uvx --from pyspark==4.2.0 python -I tests/scripts/gen_collations.py > crates/krishiv-types/vendored/collations.tsv
 """
 
 import sys

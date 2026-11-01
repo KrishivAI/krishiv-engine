@@ -3,7 +3,7 @@
 //! layout, the canonical name, and Spark's name grammar.
 //!
 //! Names are exactly Spark 4.2's: the table is
-//! `tests/fixtures/spark-4.2.0/collations.tsv` (`SELECT * FROM collations()`
+//! `vendored/collations.tsv` (`SELECT * FROM collations()`
 //! from a real run, `tests/scripts/gen_collations.py`). Ids are for use in
 //! one process only: the ICU locale index is the locale's position in that
 //! table, not Spark's, so an id is never written anywhere (names are).
@@ -15,7 +15,7 @@ use krishiv_common::error::{CollationInvalidName, KrishivError};
 
 use crate::error::Result;
 
-const FIXTURE: &str = include_str!("../../../tests/fixtures/spark-4.2.0/collations.tsv");
+const FIXTURE: &str = include_str!("../vendored/collations.tsv");
 
 /// Bit 29 of an id: set for an ICU collation.
 const ICU_BIT: u32 = 1 << 29;

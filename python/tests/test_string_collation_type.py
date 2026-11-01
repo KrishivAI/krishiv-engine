@@ -24,3 +24,31 @@ def test_collated_string_prints_and_compares_like_pyspark() -> None:
 
 def test_ddl_round_trip() -> None:
     assert DataType.fromDDL("string collate UTF8_LCASE") == StringType("UTF8_LCASE")
+
+
+def test_struct_json_with_collations_metadata() -> None:
+    from krishiv.sql.types import ArrayType, MapType, StructType
+
+    field = {
+        "type": "struct",
+        "fields": [
+            {"name": "s", "type": "string", "nullable": True, "metadata": {"__COLLATIONS": {"s": "spark.UTF8_LCASE"}}},
+            {
+                "name": "a",
+                "type": {"type": "array", "elementType": "string", "containsNull": True},
+                "nullable": True,
+                "metadata": {"__COLLATIONS": {"a.element": "icu.UNICODE_CI"}},
+            },
+            {
+                "name": "m",
+                "type": {"type": "map", "keyType": "string", "valueType": "string", "valueContainsNull": True},
+                "nullable": True,
+                "metadata": {"__COLLATIONS": {"m.key": "spark.UTF8_LCASE"}, "k": 1},
+            },
+        ],
+    }
+    t = StructType.fromJson(field)
+    assert t["s"].dataType == StringType("UTF8_LCASE")
+    assert t["a"].dataType == ArrayType(StringType("UNICODE_CI"))
+    assert t["m"].dataType == MapType(StringType("UTF8_LCASE"), StringType())
+    assert t["m"].metadata == {"k": 1}
