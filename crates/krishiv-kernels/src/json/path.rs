@@ -438,52 +438,62 @@ fn capture(lexer: &mut Lexer<'_>, depth: usize) -> Result<Owned, ParseError> {
         Some(Token::Str(raw)) => Ok(Owned::Str(
             lexer.unescape(raw).ok_or(ParseError::Malformed)?,
         )),
-        Some(Token::OpenBracket) => {
-            let mut items = Vec::new();
-            if lexer.eat(Token::CloseBracket)? {
-                return Ok(Owned::Array(items));
-            }
-            loop {
-                items.push(capture(lexer, deeper)?);
-                lexer.skip_trivia()?;
-                if lexer.eat(Token::Comma)? {
-                    continue;
-                }
-                if lexer.eat(Token::CloseBracket)? {
-                    break;
-                }
-                return Err(ParseError::Malformed);
-            }
-            Ok(Owned::Array(items))
-        }
-        Some(Token::OpenBrace) => {
-            let mut fields = Vec::new();
-            if lexer.eat(Token::CloseBrace)? {
-                return Ok(Owned::Object(fields));
-            }
-            loop {
-                let name = match lexer.raw_key()? {
-                    RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(ParseError::Malformed)?,
-                    RawKey::Bare(word) => word.to_owned(),
-                };
-                lexer.skip_trivia()?;
-                if !lexer.eat(Token::Colon)? {
-                    return Err(ParseError::Malformed);
-                }
-                fields.push((name, capture(lexer, deeper)?));
-                lexer.skip_trivia()?;
-                if lexer.eat(Token::Comma)? {
-                    continue;
-                }
-                if lexer.eat(Token::CloseBrace)? {
-                    break;
-                }
-                return Err(ParseError::Malformed);
-            }
-            Ok(Owned::Object(fields))
-        }
+        Some(Token::OpenBracket) => capture_array(lexer, deeper),
+        Some(Token::OpenBrace) => capture_object(lexer, deeper),
         None | Some(_) => Err(ParseError::Malformed),
     }
+}
+
+/// The elements of a JSON array after its `[`, nested `deeper` deep. Its own function so that
+/// [`capture`]'s frame stays small: the walk recurses up to `MAX_JSON_DEPTH` (1000) deep and must
+/// fit the 2 MiB stack of a test or worker thread, also in sanitizer and debug builds.
+#[inline(never)]
+fn capture_array(lexer: &mut Lexer<'_>, deeper: usize) -> Result<Owned, ParseError> {
+    let mut items = Vec::new();
+    if lexer.eat(Token::CloseBracket)? {
+        return Ok(Owned::Array(items));
+    }
+    loop {
+        items.push(capture(lexer, deeper)?);
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            continue;
+        }
+        if lexer.eat(Token::CloseBracket)? {
+            break;
+        }
+        return Err(ParseError::Malformed);
+    }
+    Ok(Owned::Array(items))
+}
+
+/// The fields of a JSON object after its `{`, nested `deeper` deep (see [`capture_array`]).
+#[inline(never)]
+fn capture_object(lexer: &mut Lexer<'_>, deeper: usize) -> Result<Owned, ParseError> {
+    let mut fields = Vec::new();
+    if lexer.eat(Token::CloseBrace)? {
+        return Ok(Owned::Object(fields));
+    }
+    loop {
+        let name = match lexer.raw_key()? {
+            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(ParseError::Malformed)?,
+            RawKey::Bare(word) => word.to_owned(),
+        };
+        lexer.skip_trivia()?;
+        if !lexer.eat(Token::Colon)? {
+            return Err(ParseError::Malformed);
+        }
+        fields.push((name, capture(lexer, deeper)?));
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            continue;
+        }
+        if lexer.eat(Token::CloseBrace)? {
+            break;
+        }
+        return Err(ParseError::Malformed);
+    }
+    Ok(Owned::Object(fields))
 }
 
 /// The length of the top-level array: `Err` for anything else.

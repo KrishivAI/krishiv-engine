@@ -318,63 +318,73 @@ fn infer_value(lexer: &mut Lexer<'_>, depth: usize) -> Result<Inferred, ParseErr
                 Ok(Inferred::Str)
             }
         }
-        Some(Token::OpenBracket) => {
-            let mut merged: Option<Inferred> = None;
-            if lexer.eat(Token::CloseBracket)? {
-                return Ok(Inferred::Array(None));
-            }
-            loop {
-                let element = infer_value(lexer, deeper)?;
-                match merged.as_mut() {
-                    None => merged = Some(element),
-                    Some(slot) => slot.merge(element),
-                }
-                lexer.skip_trivia()?;
-                if lexer.eat(Token::Comma)? {
-                    continue;
-                }
-                if lexer.eat(Token::CloseBracket)? {
-                    break;
-                }
-                return Err(ParseError::Malformed);
-            }
-            Ok(Inferred::Array(merged.map(Box::new)))
-        }
-        Some(Token::OpenBrace) => {
-            let mut fields = Vec::new();
-            if lexer.eat_byte(b'}')? {
-                return Ok(Inferred::Object(fields));
-            }
-            loop {
-                let name = match lexer.raw_key()? {
-                    RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(ParseError::Malformed)?,
-                    RawKey::Bare(word) => word.to_owned(),
-                };
-                lexer.skip_trivia()?;
-                if !lexer.eat(Token::Colon)? {
-                    return Err(ParseError::Malformed);
-                }
-                let ty = infer_value(lexer, deeper)?;
-                match fields.iter_mut().find(|(n, _)| *n == name) {
-                    Some((_, slot)) => slot.merge(ty),
-                    None => fields.push((name, ty)),
-                }
-                lexer.skip_trivia()?;
-                if lexer.eat(Token::Comma)? {
-                    continue;
-                }
-                if lexer.eat(Token::CloseBrace)? {
-                    break;
-                }
-                return Err(ParseError::Malformed);
-            }
-            // Spark sorts the inferred fields by name (`JsonInferSchema`,
-            // `structFieldComparator`); other code relies on the order.
-            // Rust's byte order and Java's UTF-16 code-unit order agree on
-            // every valid string.
-            fields.sort_by(|x, y| x.0.cmp(&y.0));
-            Ok(Inferred::Object(fields))
-        }
+        Some(Token::OpenBracket) => infer_array(lexer, deeper),
+        Some(Token::OpenBrace) => infer_object(lexer, deeper),
         None | Some(_) => Err(ParseError::Malformed),
     }
+}
+
+/// The elements of a JSON array after its `[`, nested `deeper` deep. Its own function so that
+/// [`infer_value`]'s frame stays small: the walk recurses up to `MAX_JSON_DEPTH` (1000) deep and
+/// must fit the 2 MiB stack of a test or worker thread, also in sanitizer and debug builds.
+#[inline(never)]
+fn infer_array(lexer: &mut Lexer<'_>, deeper: usize) -> Result<Inferred, ParseError> {
+    let mut merged: Option<Inferred> = None;
+    if lexer.eat(Token::CloseBracket)? {
+        return Ok(Inferred::Array(None));
+    }
+    loop {
+        let element = infer_value(lexer, deeper)?;
+        match merged.as_mut() {
+            None => merged = Some(element),
+            Some(slot) => slot.merge(element),
+        }
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            continue;
+        }
+        if lexer.eat(Token::CloseBracket)? {
+            break;
+        }
+        return Err(ParseError::Malformed);
+    }
+    Ok(Inferred::Array(merged.map(Box::new)))
+}
+
+/// The fields of a JSON object after its `{`, nested `deeper` deep (see [`infer_array`]).
+#[inline(never)]
+fn infer_object(lexer: &mut Lexer<'_>, deeper: usize) -> Result<Inferred, ParseError> {
+    let mut fields = Vec::new();
+    if lexer.eat_byte(b'}')? {
+        return Ok(Inferred::Object(fields));
+    }
+    loop {
+        let name = match lexer.raw_key()? {
+            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(ParseError::Malformed)?,
+            RawKey::Bare(word) => word.to_owned(),
+        };
+        lexer.skip_trivia()?;
+        if !lexer.eat(Token::Colon)? {
+            return Err(ParseError::Malformed);
+        }
+        let ty = infer_value(lexer, deeper)?;
+        match fields.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, slot)) => slot.merge(ty),
+            None => fields.push((name, ty)),
+        }
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            continue;
+        }
+        if lexer.eat(Token::CloseBrace)? {
+            break;
+        }
+        return Err(ParseError::Malformed);
+    }
+    // Spark sorts the inferred fields by name (`JsonInferSchema`,
+    // `structFieldComparator`); other code relies on the order.
+    // Rust's byte order and Java's UTF-16 code-unit order agree on
+    // every valid string.
+    fields.sort_by(|x, y| x.0.cmp(&y.0));
+    Ok(Inferred::Object(fields))
 }

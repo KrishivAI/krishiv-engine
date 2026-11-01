@@ -651,58 +651,78 @@ fn render_compact_value(
             let s = lexer.unescape(raw).ok_or(Poison)?;
             super::write::push_quoted(&s, text);
         }
-        Some(Token::OpenBracket) => {
-            text.push('[');
-            if lexer.eat(Token::CloseBracket)? {
-                text.push(']');
-                return Ok(());
-            }
-            loop {
-                render_compact_value(lexer, text, deeper)?;
-                lexer.skip_trivia()?;
-                if lexer.eat(Token::Comma)? {
-                    text.push(',');
-                    continue;
-                }
-                if lexer.eat(Token::CloseBracket)? {
-                    break;
-                }
-                return Err(Poison.into());
-            }
-            text.push(']');
-        }
-        Some(Token::OpenBrace) => {
-            text.push('{');
-            if lexer.eat_byte(b'}')? {
-                text.push('}');
-                return Ok(());
-            }
-            loop {
-                let key = match lexer.raw_key()? {
-                    RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(Poison)?,
-                    RawKey::Bare(word) => word.to_owned(),
-                };
-                lexer.skip_trivia()?;
-                if !lexer.eat(Token::Colon)? {
-                    return Err(Poison.into());
-                }
-                super::write::push_quoted(&key, text);
-                text.push(':');
-                render_compact_value(lexer, text, deeper)?;
-                lexer.skip_trivia()?;
-                if lexer.eat(Token::Comma)? {
-                    text.push(',');
-                    continue;
-                }
-                if lexer.eat(Token::CloseBrace)? {
-                    break;
-                }
-                return Err(Poison.into());
-            }
-            text.push('}');
-        }
+        Some(Token::OpenBracket) => render_compact_array(lexer, text, deeper)?,
+        Some(Token::OpenBrace) => render_compact_object(lexer, text, deeper)?,
         None | Some(_) => return Err(Poison.into()),
     }
+    Ok(())
+}
+
+/// The rest of a JSON array after its `[`, rendered compactly into `text`, nested `deeper` deep. Its
+/// own function so that [`render_compact_value`]'s frame stays small: the walk recurses up to
+/// `MAX_JSON_DEPTH` (1000) deep and must fit a 2 MiB thread stack, also in sanitizer and debug builds.
+#[inline(never)]
+fn render_compact_array(
+    lexer: &mut Lexer<'_>,
+    text: &mut String,
+    deeper: usize,
+) -> Result<(), Fault> {
+    text.push('[');
+    if lexer.eat(Token::CloseBracket)? {
+        text.push(']');
+        return Ok(());
+    }
+    loop {
+        render_compact_value(lexer, text, deeper)?;
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            text.push(',');
+            continue;
+        }
+        if lexer.eat(Token::CloseBracket)? {
+            break;
+        }
+        return Err(Poison.into());
+    }
+    text.push(']');
+    Ok(())
+}
+
+/// The rest of a JSON object after its `{` (see [`render_compact_array`]).
+#[inline(never)]
+fn render_compact_object(
+    lexer: &mut Lexer<'_>,
+    text: &mut String,
+    deeper: usize,
+) -> Result<(), Fault> {
+    text.push('{');
+    if lexer.eat_byte(b'}')? {
+        text.push('}');
+        return Ok(());
+    }
+    loop {
+        let key = match lexer.raw_key()? {
+            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(Poison)?,
+            RawKey::Bare(word) => word.to_owned(),
+        };
+        lexer.skip_trivia()?;
+        if !lexer.eat(Token::Colon)? {
+            return Err(Poison.into());
+        }
+        super::write::push_quoted(&key, text);
+        text.push(':');
+        render_compact_value(lexer, text, deeper)?;
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            text.push(',');
+            continue;
+        }
+        if lexer.eat(Token::CloseBrace)? {
+            break;
+        }
+        return Err(Poison.into());
+    }
+    text.push('}');
     Ok(())
 }
 
