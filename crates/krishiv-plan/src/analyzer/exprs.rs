@@ -6389,30 +6389,41 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         names
     }
     let mut names = collect(Node::Plan(plan));
-    // Spark lists each reference of a union's branches, not once per column.
+    // Spark lists each reference of a set operation's branches, not once per
+    // column. `INTERSECT` and `EXCEPT` are a semi or an anti join by now.
     let mut union = None;
     let _ = visit_distinct(Node::Plan(plan), |n| {
-        if let Node::Plan(p) = n
-            && let crate::PlanNode::Union { inputs, .. } = &p.node
-        {
-            union = Some(inputs.clone());
-            return std::ops::ControlFlow::Break(());
+        let Node::Plan(p) = n else {
+            return std::ops::ControlFlow::Continue(());
+        };
+        match &p.node {
+            crate::PlanNode::Union { inputs, .. } => union = Some(inputs.clone()),
+            crate::PlanNode::Join {
+                left,
+                right,
+                kind: crate::JoinKind::LeftSemi | crate::JoinKind::LeftAnti,
+                ..
+            } => union = Some(vec![Arc::clone(left), Arc::clone(right)]),
+            _ => return std::ops::ControlFlow::Continue(()),
         }
-        std::ops::ControlFlow::Continue(())
+        std::ops::ControlFlow::Break(())
     });
-    if let Some(inputs) = union {
-        // Under a union, once per reference of each branch.
+    // Only when a branch reads the outer query: over an uncorrelated set
+    // operation, the references above it are listed as anywhere else.
+    if union.is_some_and(|inputs: Vec<_>| {
+        inputs
+            .iter()
+            .any(|input| !collect(Node::Plan(input)).is_empty())
+    }) {
         names = Vec::new();
-        for input in &inputs {
-            let _ = visit_distinct(Node::Plan(input), |n| {
-                if let Node::Expr(e) = n
-                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-                {
-                    names.push((c.id, c.name.clone()));
-                }
-                std::ops::ControlFlow::Continue(())
-            });
-        }
+        let _ = visit_distinct(Node::Plan(plan), |n| {
+            if let Node::Expr(e) = n
+                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+            {
+                names.push((c.id, c.name.clone()));
+            }
+            std::ops::ControlFlow::Continue(())
+        });
     }
     names
         .into_iter()
