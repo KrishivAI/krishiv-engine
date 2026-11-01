@@ -358,14 +358,6 @@ pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef
     Ok(Arc::new(out))
 }
 
-/// The size of a year-month type's end field, in months.
-const fn month_unit(end: YearMonthField) -> i32 {
-    match end {
-        YearMonthField::Year => 12,
-        YearMonthField::Month => 1,
-    }
-}
-
 /// The microseconds a day-time type with this end field keeps a multiple of;
 /// SECOND keeps its fraction.
 const fn micro_step(end: DayTimeField) -> i64 {
@@ -382,7 +374,8 @@ pub(super) fn truncate_interval(to: &DataType, a: &dyn Array) -> Result<ArrayRef
     use krishiv_kernels::interval::{truncate_day_time, truncate_year_month};
     Ok(match to {
         DataType::YearMonthInterval { end, .. } => {
-            Arc::new(truncate_year_month(a.as_primitive(), month_unit(*end)))
+            let unit = i32::try_from(month_unit(*end)).map_err(|e| internal(&e.to_string()))?;
+            Arc::new(truncate_year_month(a.as_primitive(), unit))
         }
         DataType::DayTimeInterval { end, .. } => {
             Arc::new(truncate_day_time(a.as_primitive(), micro_step(*end)))
@@ -497,15 +490,9 @@ impl IntervalCast {
         };
         let out: ArrayRef =
             match (&self.from, &self.to) {
-                (
-                    Some(DataType::YearMonthInterval { .. }),
-                    DataType::YearMonthInterval { end, .. },
-                ) => Arc::new(k::truncate_year_month(
-                    a.as_primitive(),
-                    i32::try_from(month_unit(*end)).map_err(|e| internal(&e.to_string()))?,
-                )),
-                (Some(DataType::DayTimeInterval { .. }), DataType::DayTimeInterval { end, .. }) => {
-                    Arc::new(k::truncate_day_time(a.as_primitive(), micro_unit(*end)))
+                (Some(DataType::YearMonthInterval { .. }), DataType::YearMonthInterval { .. })
+                | (Some(DataType::DayTimeInterval { .. }), DataType::DayTimeInterval { .. }) => {
+                    truncate_interval(&self.to, a.as_ref())?
                 }
                 (Some(from), to) => {
                     let unit = match from {

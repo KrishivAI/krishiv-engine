@@ -277,9 +277,10 @@ fn a_cast_to_a_coarser_end_field_drops_what_is_below_it() -> R {
              element_at(CAST(array(INTERVAL '13' MONTH) AS ARRAY<INTERVAL YEAR>), 1) \
              = INTERVAL '1' YEAR, \
              CAST(named_struct('a', INTERVAL '13' MONTH, 'b', INTERVAL '1.5' SECOND) \
-             AS STRUCT<a: INTERVAL YEAR, b: INTERVAL SECOND>).b = INTERVAL '1.5' SECOND"
+             AS STRUCT<a: INTERVAL YEAR, b: INTERVAL SECOND>).b = INTERVAL '1.5' SECOND, \
+             CAST(INTERVAL '1.5' SECOND AS INTERVAL SECOND) = INTERVAL '1.5' SECOND"
         )?,
-        ["2025-01-01|true|true|true|true|true|true"]
+        ["2025-01-01|true|true|true|true|true|true|true"]
     );
     block_on(session.sql(
         "CREATE TEMPORARY VIEW n AS SELECT * FROM VALUES \

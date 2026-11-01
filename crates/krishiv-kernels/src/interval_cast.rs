@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Casts between year-month or day-time intervals and numbers, and within an
-//! interval family. Spark 4.2.0 raises `CAST_OVERFLOW` with ANSI on or off;
+//! Casts between year-month or day-time intervals and numbers. Spark 4.2.0 raises `CAST_OVERFLOW` with ANSI on or off;
 //! only `TRY_CAST` gives NULL (`null_on_overflow`).
 //!
 //! A value counts in its type's end field: `unit` is that field's size in the
@@ -283,20 +282,6 @@ pub fn number_to_day_time(
     })
 }
 
-/// A year-month column in a type whose end field is `unit` months: what is
-/// below it is dropped.
-#[must_use]
-pub fn truncate_year_month(a: &IntervalYearMonthArray, unit: i32) -> IntervalYearMonthArray {
-    a.unary(|v| v.checked_div(unit).map_or(v, |q| q.saturating_mul(unit)))
-}
-
-/// A day-time column in a type whose end field is `unit` microseconds: what is
-/// below it is dropped.
-#[must_use]
-pub fn truncate_day_time(a: &DurationMicrosecondArray, unit: i64) -> DurationMicrosecondArray {
-    a.unary(|v| v.checked_div(unit).map_or(v, |q| q.saturating_mul(unit)))
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_array::{Decimal128Array, Int64Array};
@@ -371,14 +356,5 @@ mod tests {
             "5S"
         );
         assert_eq!(number_text(5, &arrow_array::Int32Array::from(vec![1])), "5");
-    }
-
-    #[test]
-    fn a_family_drops_what_is_below_its_end_field() {
-        let m = IntervalYearMonthArray::from(vec![14, -14]);
-        let out = truncate_year_month(&m, 12);
-        assert_eq!((out.value(0), out.value(1)), (12, -12));
-        let d = DurationMicrosecondArray::from(vec![90]);
-        assert_eq!(truncate_day_time(&d, 60).value(0), 60);
     }
 }
