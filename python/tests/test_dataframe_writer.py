@@ -203,13 +203,11 @@ def test_csv_modes(df: DataFrame, tmp_path: Any) -> None:
     assert len(df.sparkSession.read.csv(fresh).collect()) == 3
 
 
-def test_csv_compression_option_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
+def test_csv_gzip_compression_writes_gz_files_and_reads_back(df: DataFrame, tmp_path: Any) -> None:
     path = str(tmp_path / "t")
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.write.option("compression", "gzip").csv(path)
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "compression codec gzip" in str(bad.value)
-    assert not os.path.exists(path)
+    df.write.option("compression", "gzip").csv(path)
+    assert any(name.endswith(".csv.gz") for name in os.listdir(path))
+    assert len(df.sparkSession.read.csv(path).collect()) == len(df.collect())
 
 
 def test_unknown_mode_raises_invalid_save_mode(df: DataFrame, tmp_path: Any) -> None:
