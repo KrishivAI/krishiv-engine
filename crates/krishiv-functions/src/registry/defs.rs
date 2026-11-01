@@ -216,6 +216,28 @@ fn any_time() -> InputType {
     )
 }
 
+/// A `TIME(6)` that is NULL for any row that does not parse.
+fn time6_nullable(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Time { precision: 6 }, true))
+}
+
+fn time6(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Time { precision: 6 }, c)
+}
+
+/// The seconds of `time_from_seconds` and `time_to_seconds`: `DECIMAL(14,6)`.
+fn time_decimal() -> DataType {
+    DataType::Decimal(DecimalType::try_new(14, 6).unwrap_or(DecimalType::USER_DEFAULT))
+}
+
+fn time_seconds_input() -> InputType {
+    exact(time_decimal())
+}
+
+fn time_seconds_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(time_decimal(), c)
+}
+
 /// `time_trunc(unit, time)`: the time's own type.
 fn time_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = c
@@ -881,6 +903,45 @@ fn datetime() -> Vec<Spec> {
         &["time_trunc"],
         &Inputs::Expects(vec![exact(DataType::String), any_time()]),
         time_trunc_result,
+    ));
+    out.extend(scalar(
+        &["make_time"],
+        &Inputs::Expects(vec![
+            exact(DataType::Integer),
+            exact(DataType::Integer),
+            seconds_input(),
+        ]),
+        time6,
+    ));
+    out.extend(scalar(
+        &["time_from_seconds"],
+        &Inputs::Expects(vec![time_seconds_input()]),
+        time6,
+    ));
+    out.extend(scalar(
+        &["time_from_millis", "time_from_micros"],
+        &Inputs::Expects(vec![exact(DataType::Long)]),
+        time6,
+    ));
+    out.extend(scalar(
+        &["time_to_seconds"],
+        &Inputs::Expects(vec![any_time()]),
+        time_seconds_result,
+    ));
+    out.extend(scalar(
+        &["time_to_millis", "time_to_micros"],
+        &Inputs::Expects(vec![any_time()]),
+        long,
+    ));
+    out.extend(scalar(
+        &["to_time"],
+        &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
+        time6,
+    ));
+    out.extend(scalar(
+        &["try_to_time"],
+        &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_diff"],
@@ -1800,5 +1861,6 @@ fn casts() -> Vec<Spec> {
         cast("binary", binary),
         cast("date", date),
         cast("timestamp", timestamp),
+        cast("time", time6),
     ]
 }

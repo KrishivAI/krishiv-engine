@@ -1,0 +1,166 @@
+{
+  "entries": [
+    {
+      "id": "time_to_micros#1806ab14ba35/ansi_on",
+      "reason": "SELECT time_to_micros(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#1806ab14ba35/ansi_off",
+      "reason": "SELECT time_to_micros(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#218c4dac2256/ansi_on",
+      "reason": "SELECT time_to_micros(X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#218c4dac2256/ansi_off",
+      "reason": "SELECT time_to_micros(X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#437db548cd81/ansi_on",
+      "reason": "SELECT time_to_micros(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#437db548cd81/ansi_off",
+      "reason": "SELECT time_to_micros(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#59c72993be8a/ansi_on",
+      "reason": "SELECT time_to_micros(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#59c72993be8a/ansi_off",
+      "reason": "SELECT time_to_micros(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#61720990234e/ansi_on",
+      "reason": "SELECT time_to_micros(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#61720990234e/ansi_off",
+      "reason": "SELECT time_to_micros(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#75972e44d023/ansi_on",
+      "reason": "SELECT time_to_micros(1) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#75972e44d023/ansi_off",
+      "reason": "SELECT time_to_micros(1) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#812f4b0a66c1/ansi_on",
+      "reason": "SELECT time_to_micros(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#812f4b0a66c1/ansi_off",
+      "reason": "SELECT time_to_micros(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#8b068cc89cbe/ansi_on",
+      "reason": "SELECT time_to_micros(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#8b068cc89cbe/ansi_off",
+      "reason": "SELECT time_to_micros(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#ab24a3612406/ansi_on",
+      "reason": "SELECT time_to_micros(1L) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#ab24a3612406/ansi_off",
+      "reason": "SELECT time_to_micros(1L) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#abffff4e69d5/ansi_on",
+      "reason": "SELECT time_to_micros(1.5D) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#abffff4e69d5/ansi_off",
+      "reason": "SELECT time_to_micros(1.5D) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#ad0d80c482f3/ansi_on",
+      "reason": "SELECT time_to_micros(CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#ad0d80c482f3/ansi_off",
+      "reason": "SELECT time_to_micros(CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#c39bd9170c45/ansi_on",
+      "reason": "SELECT time_to_micros(CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#c39bd9170c45/ansi_off",
+      "reason": "SELECT time_to_micros(CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#c49836953f1b/ansi_on",
+      "reason": "SELECT time_to_micros(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#c49836953f1b/ansi_off",
+      "reason": "SELECT time_to_micros(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#c53366682c70/ansi_on",
+      "reason": "SELECT time_to_micros(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#c53366682c70/ansi_off",
+      "reason": "SELECT time_to_micros(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#d254ba5e97e3/ansi_on",
+      "reason": "SELECT time_to_micros(CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#d254ba5e97e3/ansi_off",
+      "reason": "SELECT time_to_micros(CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#d5674a097ed7/ansi_on",
+      "reason": "SELECT time_to_micros('1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#d5674a097ed7/ansi_off",
+      "reason": "SELECT time_to_micros('1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#debb2bc73a48/ansi_on",
+      "reason": "SELECT time_to_micros(CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#debb2bc73a48/ansi_off",
+      "reason": "SELECT time_to_micros(CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#e15ee764bda2/ansi_on",
+      "reason": "SELECT time_to_micros(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#e15ee764bda2/ansi_off",
+      "reason": "SELECT time_to_micros(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#e2d56b509831/ansi_on",
+      "reason": "SELECT time_to_micros('abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#e2d56b509831/ansi_off",
+      "reason": "SELECT time_to_micros('abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#f31449333da6/ansi_on",
+      "reason": "SELECT time_to_micros(map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_to_micros#f31449333da6/ansi_off",
+      "reason": "SELECT time_to_micros(map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "time_to_micros"
+}

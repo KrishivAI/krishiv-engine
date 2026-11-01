@@ -36,7 +36,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchRangeFrameWithoutOrder,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchRangeFrameInvalidType,
+    DatatypeMismatchRangeFrameMultiOrder, DatatypeMismatchRangeFrameWithoutOrder,
     DatatypeMismatchSpecifiedWindowFrameInvalidBound,
     DatatypeMismatchSpecifiedWindowFrameUnacceptedType,
     DatatypeMismatchSpecifiedWindowFrameWrongComparison, DistinctWindowFunctionUnsupported,
@@ -191,6 +192,133 @@ fn offset_type(e: &Expr) -> bool {
 
 fn is_null_literal(e: &Expr) -> bool {
     matches!(e.node, ExprNode::Literal(Literal::Null(_)))
+}
+
+/// Spark's `expectedType` of a `RANGE` frame bound.
+const RANGE_BOUND_TYPES: &str =
+    "(\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\")";
+
+/// A `RANGE` frame bound's value in the units of its ordering key: whole
+/// numbers (integers, dates, and decimals unscaled) or floating point.
+#[derive(Clone, Debug)]
+enum RangeValue {
+    Int(i128),
+    Float(f64),
+}
+
+impl RangeValue {
+    fn above(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a > b,
+            (Self::Float(a), Self::Float(b)) => a > b,
+            _ => false,
+        }
+    }
+
+    /// The literal of the key's type (`None` past that type's range).
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a double bound narrowed to a FLOAT key, as Spark's cast does"
+    )]
+    fn literal(&self, key: &krishiv_types::DataType) -> Option<Literal> {
+        use krishiv_types::DataType as T;
+        Some(match (self, key) {
+            (Self::Int(v), T::Byte) => Literal::Byte(i8::try_from(*v).ok()?),
+            (Self::Int(v), T::Short) => Literal::Short(i16::try_from(*v).ok()?),
+            (Self::Int(v), T::Long) => Literal::Long(i64::try_from(*v).ok()?),
+            (Self::Int(v), T::Decimal(d)) => Literal::Decimal {
+                unscaled: *v,
+                data_type: *d,
+            },
+            (Self::Int(v), _) => Literal::Integer(i32::try_from(*v).ok()?),
+            (Self::Float(v), T::Float) => Literal::Float(*v as f32),
+            (Self::Float(v), _) => Literal::Double(*v),
+        })
+    }
+}
+
+/// The value of the `RANGE` frame bound `x` (a literal, or the negation of
+/// one for `PRECEDING`) cast to the type of the ordering key; `None` for
+/// anything but a literal, or a value the key's type cannot hold.
+fn range_value(x: &Arc<Expr>, key: &krishiv_types::DataType) -> Option<RangeValue> {
+    range_value_signed(x, key, false)
+}
+
+/// `range_value` with the sign applied to the literal before the cast, as
+/// Spark casts `UnaryMinus(n)` (so `128 PRECEDING` fits a TINYINT key).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a bound is cast to its key's type as Spark's cast does: doubles truncate to whole numbers"
+)]
+fn range_value_signed(
+    x: &Arc<Expr>,
+    key: &krishiv_types::DataType,
+    negate: bool,
+) -> Option<RangeValue> {
+    use krishiv_types::DataType as T;
+    if let Some(inner) = crate::expr::negated(x) {
+        return range_value_signed(inner, key, !negate);
+    }
+    let ExprNode::Literal(l) = &x.node else {
+        return None;
+    };
+    // The literal as an exact decimal `(unscaled, scale)` or a double.
+    enum Lit {
+        Exact(i128, u8),
+        Double(f64),
+    }
+    let lit = match l {
+        Literal::Byte(v) => Lit::Exact(i128::from(*v), 0),
+        Literal::Short(v) => Lit::Exact(i128::from(*v), 0),
+        Literal::Integer(v) => Lit::Exact(i128::from(*v), 0),
+        Literal::Long(v) => Lit::Exact(i128::from(*v), 0),
+        Literal::Decimal {
+            unscaled,
+            data_type,
+        } => Lit::Exact(*unscaled, data_type.scale()),
+        Literal::Float(v) => Lit::Double(f64::from(*v)),
+        Literal::Double(v) => Lit::Double(*v),
+        _ => return None,
+    };
+    let lit = match (lit, negate) {
+        (lit, false) => lit,
+        (Lit::Exact(v, s), true) => Lit::Exact(v.checked_neg()?, s),
+        (Lit::Double(d), true) => Lit::Double(-d),
+    };
+    let fits =
+        |v: i128, min: i128, max: i128| (min..=max).contains(&v).then_some(RangeValue::Int(v));
+    let truncated = |lit: &Lit| match lit {
+        Lit::Exact(v, s) => Some(v / 10_i128.checked_pow(u32::from(*s))?),
+        Lit::Double(d) if d.is_finite() && d.abs() < 1e30 => Some(d.trunc() as i128),
+        Lit::Double(_) => None,
+    };
+    match key {
+        T::Byte => fits(truncated(&lit)?, i8::MIN.into(), i8::MAX.into()),
+        T::Short => fits(truncated(&lit)?, i16::MIN.into(), i16::MAX.into()),
+        T::Integer | T::Date => fits(truncated(&lit)?, i32::MIN.into(), i32::MAX.into()),
+        T::Long => fits(truncated(&lit)?, i64::MIN.into(), i64::MAX.into()),
+        T::Float | T::Double => Some(match lit {
+            // Parsed from decimal text so the result is correctly rounded, as
+            // BigDecimal.doubleValue is (no double rounding for wide unscaled values).
+            Lit::Exact(v, s) => RangeValue::Float(format!("{v}e-{s}").parse::<f64>().ok()?),
+            Lit::Double(d) => RangeValue::Float(d),
+        })
+        // A FLOAT key's bounds are single precision before they are ordered.
+        .map(|v| match (key, v) {
+            (T::Float, RangeValue::Float(d)) => RangeValue::Float(f64::from(d as f32)),
+            (_, v) => v,
+        }),
+        T::Decimal(d) => match lit {
+            Lit::Exact(v, s) if s <= d.scale() => {
+                let v = v.checked_mul(10_i128.checked_pow(u32::from(d.scale() - s))?)?;
+                // The bound is cast to the key's DECIMAL(p, s) and must fit it.
+                let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
+                (-max..=max).contains(&v).then_some(RangeValue::Int(v))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The value of a frame offset: a constant, or the negation of one (`n
@@ -583,7 +711,14 @@ impl Resolver<'_> {
             ));
         }
         if !matches!(name, "lag" | "lead") {
-            self.frame_bounds(&mut bound, &shown, rest, spec, &function_shown, e.origin)?;
+            self.frame_bounds(
+                &mut bound,
+                &mut shown,
+                rest,
+                spec,
+                &function_shown,
+                e.origin,
+            )?;
         }
         let unbounded = matches!(
             (&frame.lower, &frame.upper),
@@ -817,7 +952,7 @@ impl Resolver<'_> {
     fn frame_bounds(
         &self,
         bound: &mut WindowSpec,
-        shown: &WindowSpec,
+        shown: &mut WindowSpec,
         rest: &[Bound],
         spec: &WindowSpec,
         function: &Arc<Expr>,
@@ -831,7 +966,7 @@ impl Resolver<'_> {
             return Ok(());
         }
         if frame.units == FrameUnits::Range {
-            return Err(unsupported("window frames with value bounds", origin));
+            return self.range_frame_bounds(frame, shown, rest, spec, function, origin);
         }
         let shown_frame = shown.frame.clone().unwrap_or_else(|| frame.clone());
         let text = window_text(
@@ -911,6 +1046,203 @@ impl Resolver<'_> {
         for (b, v) in [(&mut frame.lower, ints[0]), (&mut frame.upper, ints[1])] {
             if let Some(v) = v.and_then(|v| i32::try_from(v).ok()) {
                 *b = FrameBound::Offset(Arc::new(Expr::literal(Literal::Integer(v))));
+            }
+        }
+        Ok(())
+    }
+
+    /// The value bounds of a `RANGE` frame, checked as Spark does
+    /// (`WindowSpecDefinition`, then `SpecifiedWindowFrame`): one ordering
+    /// key (`RANGE_FRAME_MULTI_ORDER`) of a type the bounds are taken over
+    /// (`RANGE_FRAME_INVALID_TYPE`; a bound is first cast to a numeric,
+    /// string or boolean key's type), numeric bounds
+    /// (`SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE`), the lower not above the
+    /// upper. The bounds become signed literals of the key's type (an `int`
+    /// for a date). Interval bounds (`DATE`, `TIMESTAMP` keys) are not
+    /// supported yet.
+    fn range_frame_bounds(
+        &self,
+        frame: &mut WindowFrame,
+        shown: &mut WindowSpec,
+        rest: &[Bound],
+        spec: &WindowSpec,
+        function: &Arc<Expr>,
+        origin: Origin,
+    ) -> Result<(), AnalysisError> {
+        use krishiv_types::DataType as T;
+        // A frame without an ordering is `RANGE_FRAME_WITHOUT_ORDER`,
+        // raised by the caller.
+        if spec.order_by.is_empty() {
+            return Ok(());
+        }
+        let quoted = |t: &T| format!("\"{}\"", t.sql());
+        let spec_sql = |shown: &WindowSpec| {
+            format!(
+                "\"{}\"",
+                window_text(function, shown)
+                    .split_once(" OVER ")
+                    .map_or(String::new(), |(_, s)| s.to_owned())
+            )
+        };
+        let frame_sql = |shown: &WindowSpec| {
+            let text = window_text(
+                function,
+                &WindowSpec {
+                    partition_by: Vec::new(),
+                    order_by: Vec::new(),
+                    frame: Some(shown.frame.clone().unwrap_or_else(|| frame.clone())),
+                },
+            );
+            format!(
+                "\"{}\"",
+                text.split_once(" OVER (")
+                    .map_or(String::new(), |(_, f)| f.trim_end_matches(')').to_owned())
+            )
+        };
+        let keys = &rest[spec.partition_by.len().min(rest.len())..];
+        if spec.order_by.len() > 1 {
+            let order_spec = spec
+                .order_by
+                .iter()
+                .zip(keys)
+                .map(|(o, k)| {
+                    let name = match &k.expr.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                            format!("{}#{}", c.name, c.id.0)
+                        }
+                        _ => pretty(&k.expr, self.ctx.conf.session_zone),
+                    };
+                    format!("{name}{}", crate::display::order_suffix(o))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            return Err(AnalysisError::new(
+                DatatypeMismatchRangeFrameMultiOrder {
+                    sql_expr: spec_sql(shown),
+                    order_spec,
+                },
+                origin,
+            ));
+        }
+        let Some(key) = keys.first().and_then(|k| k.ty.data_type.clone()) else {
+            return Err(unsupported("a RANGE frame over an untyped key", origin));
+        };
+        let mut kids = keys.iter().skip(spec.order_by.len());
+        let mut values: [Option<RangeValue>; 2] = [None, None];
+        for (k, (b, location)) in [(&frame.lower, "lower"), (&frame.upper, "upper")]
+            .into_iter()
+            .enumerate()
+        {
+            let FrameBound::Offset(x) = b else { continue };
+            let bt = kids.next().and_then(|kid| kid.ty.data_type.clone());
+            let Some(bt) = bt else {
+                return Err(unsupported("a NULL window frame bound", origin));
+            };
+            let numeric = |t: &T| {
+                matches!(
+                    t,
+                    T::Byte
+                        | T::Short
+                        | T::Integer
+                        | T::Long
+                        | T::Float
+                        | T::Double
+                        | T::Decimal(_)
+                )
+            };
+            match &key {
+                t if numeric(t) => {
+                    if !numeric(&bt) {
+                        return Err(unsupported(
+                            "a non-numeric RANGE window frame bound",
+                            origin,
+                        ));
+                    }
+                }
+                T::String | T::Boolean => {
+                    // The bound is cast to the key's type, which is not a
+                    // numeric one.
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchSpecifiedWindowFrameUnacceptedType {
+                            sql_expr: frame_sql(shown),
+                            location: location.to_owned(),
+                            expr_type: quoted(&key),
+                            expected_type: RANGE_BOUND_TYPES.to_owned(),
+                        },
+                        origin,
+                    ));
+                }
+                T::Date | T::Timestamp | T::TimestampNtz
+                    if !matches!(bt, T::Integer) || key != T::Date =>
+                {
+                    if !numeric(&bt) {
+                        return Err(unsupported("interval RANGE window frame bounds", origin));
+                    }
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchRangeFrameInvalidType {
+                            sql_expr: spec_sql(shown),
+                            order_spec_type: quoted(&key),
+                            value_boundary_type: quoted(&bt),
+                        },
+                        origin,
+                    ));
+                }
+                T::Date => {}
+                _ => {
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchRangeFrameInvalidType {
+                            sql_expr: spec_sql(shown),
+                            order_spec_type: quoted(&key),
+                            value_boundary_type: quoted(&bt),
+                        },
+                        origin,
+                    ));
+                }
+            }
+            values[k] = Some(range_value(x, &key).ok_or_else(|| {
+                unsupported("RANGE window frame bounds other than literals", origin)
+            })?);
+        }
+        // A bound cast to the key's type loses its `PRECEDING` in Spark's
+        // text: `(- n) FOLLOWING`.
+        if let Some(sf) = shown.frame.as_mut() {
+            let mut kids = keys.iter().skip(spec.order_by.len());
+            for b in [&mut sf.lower, &mut sf.upper] {
+                let FrameBound::Offset(x) = b else { continue };
+                let cast = kids
+                    .next()
+                    .is_some_and(|kid| kid.ty.data_type.as_ref() != Some(&key));
+                if cast && let Some(n) = crate::expr::negated(x) {
+                    *x = Arc::new(Expr::function("-", vec![(**n).clone()]));
+                }
+            }
+        }
+        let at = |b: &FrameBound, v: &Option<RangeValue>| match (b, v) {
+            (FrameBound::CurrentRow, _) => Some(RangeValue::Int(0)),
+            (_, v) => v.clone(),
+        };
+        if matches!(frame.lower, FrameBound::Offset(_))
+            && matches!(frame.upper, FrameBound::Offset(_))
+            && let (Some(l), Some(u)) = (at(&frame.lower, &values[0]), at(&frame.upper, &values[1]))
+            && l.above(&u)
+        {
+            return Err(AnalysisError::new(
+                DatatypeMismatchSpecifiedWindowFrameWrongComparison {
+                    sql_expr: frame_sql(shown),
+                    comparison: "less than or equal".to_owned(),
+                },
+                origin,
+            ));
+        }
+        for (b, v) in [
+            (&mut frame.lower, &values[0]),
+            (&mut frame.upper, &values[1]),
+        ] {
+            if let Some(v) = v {
+                let literal = v.literal(&key).ok_or_else(|| {
+                    unsupported("RANGE window frame bounds past the key's type", origin)
+                })?;
+                *b = FrameBound::Offset(Arc::new(Expr::literal(literal)));
             }
         }
         Ok(())
