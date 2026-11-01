@@ -150,6 +150,8 @@ message Node {
     SharedReadNode shared_read = 19;
     // feature: generate
     GenerateNode generate = 20;
+    // feature: sort_merge_join
+    SortMergeJoinNode sort_merge_join = 21;
   }
 }
 
@@ -588,6 +590,19 @@ message HashJoinNode {
   // existence join without a residual.
   // ignorable: a reader without it builds every row, with the same result.
   bool distinct_build = 11;
+}
+
+// feature: sort_merge_join
+// A join of its inputs sorted on the keys; the sorts are the join's own.
+message SortMergeJoinNode {
+  uint32 probe = 1;
+  uint32 build = 2;
+  JoinType join_type = 3;
+  repeated uint64 probe_keys = 4;
+  repeated uint64 build_keys = 5;
+  repeated bool null_safe = 6;
+  optional Residual residual = 7;
+  bool single_match = 8;
 }
 
 enum JoinDistribution {

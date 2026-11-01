@@ -154,6 +154,7 @@
 mod build;
 mod grace;
 mod keys;
+mod merge;
 mod nested;
 mod probe;
 mod table;
@@ -170,6 +171,8 @@ use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_memory::SpillScope;
 use krishiv_types::batch::{Batch, Weights};
 
+pub(crate) use merge::MergeEnv;
+pub use merge::{SortMergeJoin, SortMergeJoinNode, merge_join_supported};
 pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
 
 use crate::error::{Result, internal};

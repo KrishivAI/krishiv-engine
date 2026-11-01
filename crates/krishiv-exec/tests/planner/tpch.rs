@@ -511,6 +511,33 @@ fn tpch_sf0_01_matches_spark_with_columnar_aggregates() {
 /// per table) against Spark 4.2.0's answers over the same files
 /// (`tests/fixtures/tpch-sf1-spark-answers.json`). Run with
 /// `cargo test --release -p krishiv-exec --test planner tpch_sf1 -- --ignored`.
+/// Spark's answers with every equi-join but `NOT IN` a sort-merge join
+/// (`krishiv.exec.join.strategy=sortMerge`, P2-T056).
+#[test]
+fn tpch_sf0_01_matches_spark_with_sort_merge_joins() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut tpch = parquet_tables(&dir, &rt);
+    let mut config = (*tpch.config).clone();
+    config
+        .set("krishiv.exec.join.strategy", "sortMerge")
+        .unwrap();
+    tpch.config = Arc::new(config);
+    let answers = answers(&dir.join("spark-answers.json"));
+    let mut merges = 0;
+    for q in 1..=22 {
+        let plan = tpch.plan(q);
+        merges += plan.to_string().matches("SortMergeJoin").count();
+        let got = rows(&super::run(&plan).unwrap_or_else(|e| panic!("q{q:02}: {e}\n{plan}")));
+        let want = expected_rows(&answers, &format!("q{q:02}"));
+        assert_eq!(got, want, "q{q:02}\n{plan}");
+    }
+    assert!(merges >= 22, "{merges} sort-merge joins");
+}
+
 #[test]
 #[ignore = "needs the TPC-H SF1 data set"]
 fn tpch_sf1_matches_spark() {

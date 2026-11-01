@@ -8,6 +8,7 @@
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
 mod existence;
+mod merge;
 mod payload_rows;
 mod runtime_filter;
 mod skew;
