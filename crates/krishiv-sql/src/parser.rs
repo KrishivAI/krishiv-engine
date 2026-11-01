@@ -18,6 +18,7 @@
 mod ddl;
 mod expr;
 mod function;
+pub(crate) use function::check_temporary_function_name;
 mod script;
 mod types;
 

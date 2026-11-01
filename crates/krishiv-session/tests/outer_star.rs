@@ -31,3 +31,18 @@ fn an_outer_star_reads_the_enclosing_relation() -> R {
     );
     Ok(())
 }
+
+#[test]
+fn a_temporary_function_named_by_identifier_takes_no_database() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "CREATE TEMPORARY FUNCTION IDENTIFIER('default.my' || 'Avg') AS 'test.org.MyAvg'",
+        "DROP TEMPORARY FUNCTION IDENTIFIER('default.my' || 'Avg')",
+    ] {
+        let e = block_on(s.sql(sql))
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(e.contains("INVALID_TEMP_OBJ_QUALIFIER"), "{sql}: {e}");
+    }
+}

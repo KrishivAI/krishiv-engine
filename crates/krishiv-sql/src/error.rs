@@ -21,9 +21,9 @@ use krishiv_common::error::{
     InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
-    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, LegacyErrorTemp0035,
-    LegacyErrorTemp0045, LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError,
-    SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
+    LegacyErrorTemp0035, LegacyErrorTemp0045, LegacyErrorTemp0053, ParseEmptyStatement,
+    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -235,6 +235,17 @@ pub(crate) fn invalid_temp_obj_qualifier(
             object_type: object_type.to_owned(),
             object_name,
             qualifier,
+        },
+        span,
+    )
+}
+
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a function implemented by a JVM class.
+pub(crate) fn unsupported_function_class(span: Span) -> ParseError {
+    at(
+        KrishivUnsupportedFeature {
+            feature: "CREATE FUNCTION ... AS 'class' (a function implemented by a JVM class)"
+                .to_owned(),
         },
         span,
     )
