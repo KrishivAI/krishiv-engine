@@ -660,10 +660,34 @@ impl FileReads {
             .into());
         }
         let base = at.path.parts().count();
+        // A directory with a commit log shows only the files committed there.
+        let log = krishiv_io::commit_log::CommitLog::new(
+            &self.io,
+            at.store.clone(),
+            at.path.clone(),
+            at.display.clone(),
+        );
+        let committed = if log.exists().await? {
+            Some(log.snapshot().await?.files)
+        } else {
+            None
+        };
+        let mut seen = 0;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
                 continue;
+            }
+            if let Some(files) = &committed {
+                let rel = below
+                    .iter()
+                    .map(AsRef::as_ref)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if !files.contains_key(&rel) {
+                    continue;
+                }
+                seen += 1;
             }
             let dirs = below.len().saturating_sub(1);
             let names: Vec<String> = below[..dirs]
@@ -672,6 +696,16 @@ impl FileReads {
                 .collect();
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
+        }
+        if let Some(files) = &committed
+            && seen < files.len()
+        {
+            // A committed file is gone (a concurrent overwrite deleted it).
+            return Err(krishiv_common::error::KrishivConcurrentCommit {
+                root: at.display.clone(),
+                version: "the version this read started at".to_owned(),
+            }
+            .into());
         }
         Ok(())
     }

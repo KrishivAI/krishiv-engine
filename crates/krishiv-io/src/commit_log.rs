@@ -97,6 +97,27 @@ impl<'a> CommitLog<'a> {
         }
     }
 
+    /// Whether the store of this root creates objects only if absent: two
+    /// creates of one probe object, of which the second must fail with
+    /// "exists" (a service that ignores `If-None-Match` overwrites instead).
+    /// The probe object is deleted.
+    ///
+    /// # Errors
+    /// Storage failures.
+    pub async fn supports_put_if_absent(&self, probe_id: &str) -> Result<bool> {
+        let path = self.dir().join(format!("_probe-{probe_id}"));
+        let first = self
+            .io
+            .put_if_absent(&self.store, &path, Bytes::from_static(b"probe"))
+            .await?;
+        let second = self
+            .io
+            .put_if_absent(&self.store, &path, Bytes::from_static(b"probe"))
+            .await?;
+        self.io.delete(&self.store, &path).await?;
+        Ok(first == PutIfAbsent::Created && second == PutIfAbsent::Exists)
+    }
+
     fn dir(&self) -> Path {
         self.root.clone().join(LOG_DIR)
     }
@@ -117,12 +138,14 @@ impl<'a> CommitLog<'a> {
         .into()
     }
 
-    /// Whether the root has a log (any object under `_krishiv_log/`).
+    /// Whether the root has a log (an entry or a checkpoint under `_krishiv_log/`).
     ///
     /// # Errors
     /// Storage failures.
     pub async fn exists(&self) -> Result<bool> {
-        Ok(!self.io.list(&self.store, &self.dir()).await?.is_empty())
+        // Probe leftovers and strays are not versions.
+        let (entries, checkpoint) = self.versions().await?;
+        Ok(!entries.is_empty() || checkpoint.is_some())
     }
 
     /// The files visible at the newest version.

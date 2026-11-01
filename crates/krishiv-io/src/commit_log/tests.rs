@@ -220,3 +220,12 @@ fn entries_round_trip() {
     let e = entry("w", CommitMode::Overwrite, &["a/b.parquet"], &["old"]);
     assert_eq!(decode_entry(&encode_entry(&e)).unwrap(), e);
 }
+
+#[tokio::test]
+async fn the_probe_passes_on_a_store_with_put_if_absent_and_leaves_no_log() {
+    let s = setup();
+    let l = log(&s);
+    assert!(l.supports_put_if_absent("p1").await.unwrap());
+    assert!(!l.exists().await.unwrap());
+    assert_eq!(l.snapshot().await.unwrap(), Snapshot::default());
+}

@@ -1888,6 +1888,11 @@ impl Session {
                 // `ignore` found the path: nothing is written.
                 return Ok(Vec::new());
             };
+            let write = if uses_commit_log(&env.config, &io, &store, &at, &job).await? {
+                write.logged(&io).await?
+            } else {
+                write
+            };
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
                 options: options.clone(),
@@ -2032,6 +2037,53 @@ fn partition_overwrite_is_dynamic(
         .get(&PARTITION_OVERWRITE_MODE)
         .and_then(ConfigValue::as_str)
         == Some("DYNAMIC"))
+}
+
+/// Whether this write goes through the commit log:
+/// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
+/// creates objects only if absent (probed once per write; a store that
+/// fails the probe falls back to the plain commit with a warning).
+async fn uses_commit_log(
+    config: &Config,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+    job: &str,
+) -> Result<bool, KrishivError> {
+    let protocol = config
+        .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
+        .and_then(ConfigValue::as_str)
+        .map(str::to_ascii_uppercase);
+    if protocol.as_deref() == Some("NONE") {
+        return Ok(false);
+    }
+    let log = krishiv_io::commit_log::CommitLog::new(
+        io,
+        store.clone(),
+        at.path.clone(),
+        at.display.clone(),
+    );
+    if log.exists().await? {
+        // A directory that already has a log stays logged.
+        return Ok(true);
+    }
+    let supported = log.supports_put_if_absent(job).await?;
+    if !supported {
+        if protocol.as_deref() == Some("LOG") {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!(
+                    "the commit log on a store without put-if-absent ({})",
+                    at.display
+                ),
+            }
+            .into());
+        }
+        tracing::warn!(
+            path = %at.display,
+            "the store does not create objects only if absent: writing without the commit log"
+        );
+    }
+    Ok(supported)
 }
 
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case

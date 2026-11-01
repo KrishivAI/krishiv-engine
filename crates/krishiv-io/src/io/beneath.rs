@@ -43,7 +43,8 @@ use object_store::{
     Result as StoreResult, UploadPart,
 };
 use rustix::fs::{
-    AtFlags, CWD, Dir, FileType, Mode, OFlags, Stat, mkdirat, openat, renameat, statat, unlinkat,
+    AtFlags, CWD, Dir, FileType, Mode, OFlags, Stat, linkat, mkdirat, openat, renameat, statat,
+    unlinkat,
 };
 use rustix::io::Errno;
 
@@ -578,9 +579,11 @@ impl ObjectStore for BeneathStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> StoreResult<PutResult> {
-        if !matches!(opts.mode, PutMode::Overwrite) {
+        // `Create` publishes with a hard link, which fails if the name exists.
+        let create = matches!(opts.mode, PutMode::Create);
+        if !create && !matches!(opts.mode, PutMode::Overwrite) {
             return Err(object_store::Error::NotImplemented {
-                operation: "put with a mode other than overwrite".to_owned(),
+                operation: "put with a mode other than overwrite or create".to_owned(),
                 implementer: STORE.to_owned(),
             });
         }
@@ -598,10 +601,21 @@ impl ObjectStore for BeneathStore {
                 })
                 .map_err(io_err);
             let published = written.and_then(|_| {
-                renameat(&parent, staging.as_str(), &parent, name.as_str())
+                if create {
+                    linkat(
+                        &parent,
+                        staging.as_str(),
+                        &parent,
+                        name.as_str(),
+                        AtFlags::empty(),
+                    )
                     .map_err(|e| errno(&location, e))
+                } else {
+                    renameat(&parent, staging.as_str(), &parent, name.as_str())
+                        .map_err(|e| errno(&location, e))
+                }
             });
-            if published.is_err() {
+            if published.is_err() || create {
                 let _ = unlinkat(&parent, staging.as_str(), AtFlags::empty());
             }
             published.map(|()| PutResult {
@@ -640,12 +654,8 @@ impl ObjectStore for BeneathStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
-        if !options.head {
-            return Err(object_store::Error::NotImplemented {
-                operation: "reading an object body".to_owned(),
-                implementer: STORE.to_owned(),
-            });
-        }
+        let head = options.head;
+        let range = options.range;
         let store = self.clone();
         let location = location.clone();
         blocking(move || {
@@ -659,10 +669,46 @@ impl ObjectStore for BeneathStore {
                     source: Box::new(std::io::Error::other("is a directory")),
                 });
             }
-            let meta = meta_of(location, &st);
+            let meta = meta_of(location.clone(), &st);
+            if head {
+                return Ok(GetResult {
+                    payload: GetResultPayload::Stream(futures::stream::empty().boxed()),
+                    range: 0..meta.size,
+                    meta,
+                    attributes: object_store::Attributes::default(),
+                    extensions: Default::default(),
+                });
+            }
+            // A body is read whole (the objects read through this store are
+            // small log entries), without following a link.
+            let fd = openat(
+                &parent,
+                name.as_str(),
+                OFlags::RDONLY
+                    .union(OFlags::NOFOLLOW)
+                    .union(OFlags::CLOEXEC),
+                Mode::empty(),
+            )
+            .map_err(|e| errno(&location, e))?;
+            let mut body = Vec::new();
+            std::io::Read::read_to_end(&mut File::from(fd), &mut body).map_err(io_err)?;
+            let size = body.len() as u64;
+            let span = match range {
+                None => 0..size,
+                Some(r) => r.as_range(size).map_err(|e| object_store::Error::Generic {
+                    store: STORE,
+                    source: Box::new(e),
+                })?,
+            };
+            let bytes = bytes::Bytes::from(body).slice(
+                usize::try_from(span.start).unwrap_or(usize::MAX)
+                    ..usize::try_from(span.end).unwrap_or(usize::MAX),
+            );
             Ok(GetResult {
-                payload: GetResultPayload::Stream(futures::stream::empty().boxed()),
-                range: 0..meta.size,
+                payload: GetResultPayload::Stream(
+                    futures::stream::once(std::future::ready(Ok(bytes))).boxed(),
+                ),
+                range: span,
                 meta,
                 attributes: object_store::Attributes::default(),
                 extensions: Default::default(),

@@ -32,6 +32,7 @@ use futures::{StreamExt, TryStreamExt};
 use krishiv_common::error::{InvalidSaveMode, PathAlreadyExists};
 use object_store::path::Path;
 
+use crate::commit_log::{AddedFile, CommitLog, CommitMode, LOG_DIR, LogEntry};
 use crate::error::Result;
 use crate::format::FileFormat;
 use crate::io::{IoContext, StoreId};
@@ -94,6 +95,21 @@ pub struct DirectoryWrite {
     /// file (Spark writes only `_SUCCESS`), since a file at the root next
     /// to the partition directories breaks partition discovery.
     partitioned: bool,
+    /// Whether the mode replaces what is there.
+    overwrite: bool,
+    /// The commit log state, when the write goes through the log.
+    log: Option<LogState>,
+}
+
+/// What a logged write read before it started.
+#[derive(Debug)]
+struct LogState {
+    /// The log version the write is based on (`None`: no log yet).
+    base: Option<u64>,
+    /// Files visible in the log at that version, relative to the root.
+    visible: Vec<String>,
+    /// Files already in the directory that the first log entry adopts.
+    adopted: Vec<AddedFile>,
 }
 
 impl DirectoryWrite {
@@ -160,7 +176,82 @@ impl DirectoryWrite {
             replaced,
             max_attempt: AtomicU32::new(0),
             partitioned: false,
+            overwrite: matches!(mode, SaveMode::Overwrite),
+            log: None,
         }))
+    }
+
+    /// This write through the commit log of the directory (design §2.3):
+    /// the commit records the files in `_krishiv_log/` before it deletes
+    /// the objects an overwrite replaces, and readers of the log see only
+    /// committed files. The first logged write into a directory that has
+    /// files but no log adopts them (an append keeps its data visible).
+    ///
+    /// # Errors
+    /// Store failures; `KRISHIV_COMMIT_LOG_CORRUPT`.
+    pub async fn logged(mut self, io: &IoContext) -> Result<Self> {
+        let log = self.commit_log(io);
+        let snap = log.snapshot().await?;
+        let adopted = if snap.version.is_none() && !self.overwrite {
+            let mut out = Vec::new();
+            for meta in io.list(&self.store, &self.dir).await? {
+                let rel = self.relative(&meta.location);
+                if rel.is_empty() || rel.split('/').any(is_hidden) {
+                    continue;
+                }
+                out.push(AddedFile {
+                    partition: partition_of(&rel),
+                    path: rel,
+                    size: meta.size,
+                    rows: 0,
+                });
+            }
+            out
+        } else {
+            Vec::new()
+        };
+        // The log's own objects are never data to replace.
+        let log_dir = self.dir.clone().join(LOG_DIR);
+        self.replaced
+            .retain(|p| !p.prefix_matches(&log_dir) && *p != log_dir);
+        self.log = Some(LogState {
+            base: snap.version,
+            visible: snap.files.into_keys().collect(),
+            adopted,
+        });
+        Ok(self)
+    }
+
+    fn commit_log<'a>(&self, io: &'a IoContext) -> CommitLog<'a> {
+        CommitLog::new(
+            io,
+            self.store.clone(),
+            self.dir.clone(),
+            format!("{}/{}", self.store, self.dir),
+        )
+    }
+
+    /// The relative path of a file this write made: its `Path` holds the
+    /// escaped directory names (`%2F`) as text, which a listing returns as
+    /// the file-system names, so each part is decoded once to match.
+    fn relative_written(&self, path: &Path) -> String {
+        self.relative(path)
+            .split('/')
+            .map(crate::partition::discover::unescape_partition_value)
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// `path` relative to the root, `/`-separated.
+    fn relative(&self, path: &Path) -> String {
+        path.prefix_match(&self.dir)
+            .map(|parts| {
+                parts
+                    .map(|p| p.as_ref().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .unwrap_or_default()
     }
 
     /// Records that a task attempt ran: the commit lists for orphans only
@@ -252,6 +343,46 @@ impl DirectoryWrite {
         } else {
             self.replaced.clone()
         };
+        if let Some(state) = &self.log {
+            // The entry exists before any old object is deleted: a reader
+            // of the log never sees a file that is gone.
+            let remove: Vec<String> = if self.overwrite {
+                let mut r: std::collections::BTreeSet<String> =
+                    state.visible.iter().cloned().collect();
+                r.extend(
+                    replaced
+                        .iter()
+                        .filter(|p| !new.contains(p))
+                        .map(|p| self.relative(p)),
+                );
+                r.into_iter().collect()
+            } else {
+                Vec::new()
+            };
+            let mut add: Vec<AddedFile> = state.adopted.clone();
+            add.extend(files.iter().map(|f| {
+                let rel = self.relative_written(&f.path);
+                AddedFile {
+                    partition: partition_of(&rel),
+                    path: rel,
+                    size: f.size,
+                    rows: f.rows,
+                }
+            }));
+            let entry = LogEntry {
+                query_id: self.job_uuid.clone(),
+                write_id: self.job_uuid.clone(),
+                job_uuid: self.job_uuid.clone(),
+                mode: if self.overwrite {
+                    CommitMode::Overwrite
+                } else {
+                    CommitMode::Append
+                },
+                add,
+                remove,
+            };
+            self.commit_log(io).commit(state.base, &entry).await?;
+        }
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
@@ -376,6 +507,18 @@ impl DirectoryWrite {
             statistics: done.statistics,
         })
     }
+}
+
+/// Spark's hidden-name rule for one path component.
+fn is_hidden(name: &str) -> bool {
+    name.starts_with('.') || (name.starts_with('_') && !name.contains('='))
+}
+
+/// The `name=value` directories of the relative file path `rel`.
+fn partition_of(rel: &str) -> Vec<(String, Option<String>)> {
+    let mut parts: Vec<&str> = rel.split('/').collect();
+    parts.pop();
+    parts.into_iter().filter_map(crate::parse_segment).collect()
 }
 
 /// Whether `name` is a data file of the write with job id `job`: anchored
