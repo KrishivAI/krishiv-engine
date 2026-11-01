@@ -276,19 +276,40 @@ fn datepart_reads_the_time_precision_like_date_part() {
     assert_eq!(a, b);
 }
 
-#[test]
-fn literal_encryption_draws_a_fresh_iv_for_every_row() {
+fn distinct_ciphertexts(from: &str, arg: &str) -> i64 {
     let s = Session::new().unwrap();
     let df = block_on(s.sql(&format!(
-        "SELECT count(DISTINCT hex(aes_encrypt('Spark', {K}))) FROM range(10)"
+        "SELECT count(DISTINCT hex(aes_encrypt({arg}, {K}))) FROM {from}"
     )))
     .unwrap();
     let b = block_on(df.collect()).unwrap();
-    let n = b[0]
-        .column(0)
+    b[0].column(0)
         .as_primitive::<arrow_array::types::Int64Type>()
-        .value(0);
-    assert_eq!(n, 10);
+        .value(0)
+}
+
+/// Spark 4.2.0: constant folding computes a literal call once, so every row
+/// carries the same IV (and `count(DISTINCT ...)` over it is accepted).
+#[test]
+fn a_literal_call_is_folded_to_one_iv() {
+    assert_eq!(distinct_ciphertexts("range(10)", "'Spark'"), 1);
+    assert_eq!(
+        distinct_ciphertexts("(SELECT id FROM range(1000))", "'Spark'"),
+        1
+    );
+}
+
+/// Spark 4.2.0: a column input draws an IV for every row (4 distinct
+/// ciphertexts of 4 identical values). Must never be weakened.
+#[test]
+fn a_column_input_draws_a_fresh_iv_for_every_row() {
+    assert_eq!(
+        distinct_ciphertexts(
+            "VALUES ('Spark'), ('Spark'), ('Spark'), ('Spark') AS t(x)",
+            "x"
+        ),
+        4
+    );
 }
 
 #[test]

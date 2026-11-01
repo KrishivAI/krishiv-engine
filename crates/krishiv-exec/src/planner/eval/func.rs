@@ -2,7 +2,7 @@
 //! Registry functions, bound to their kernels by the built-in function
 //! registry's execution binding (`krishiv_functions::scalar`, P2-T153).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
@@ -67,6 +67,7 @@ pub(super) fn compile_udf(
         view,
         relabel: false,
         nullable: f.nullable,
+        folded: None,
     }))
 }
 
@@ -168,6 +169,7 @@ pub(super) fn compile(
         })
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
+    let args_constant = args.iter().all(|a| a.is_constant());
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
             unsupported_expr(e)
@@ -200,6 +202,10 @@ pub(super) fn compile(
         view,
         relabel,
         nullable: f.nullable,
+        // `aes_encrypt` of constants is folded once for the query, as
+        // Spark's constant folding does: one IV for every row and batch
+        // (a column argument draws an IV per row).
+        folded: (name == "aes_encrypt" && args_constant).then(OnceLock::new),
     }))
 }
 
@@ -214,6 +220,8 @@ struct Call {
     /// Give the result the analyzer's nested field flags.
     relabel: bool,
     nullable: bool,
+    /// The one-row result of a call over constants that Spark folds once.
+    folded: Option<OnceLock<ArrayRef>>,
 }
 
 impl PhysExpr for Call {
@@ -226,6 +234,26 @@ impl PhysExpr for Call {
     }
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        if let Some(cell) = &self.folded {
+            if let Some(row) = cell.get() {
+                return Ok(Value::Scalar(Arc::clone(row)));
+            }
+            // Evaluated for one row; a failure is not remembered.
+            let one = self.call(batch, partition, 1)?;
+            let row = cell.get_or_init(|| one);
+            return Ok(Value::Scalar(Arc::clone(row)));
+        }
+        Ok(Value::Array(self.call(
+            batch,
+            partition,
+            batch.num_rows(),
+        )?))
+    }
+}
+
+impl Call {
+    /// The function's values for `rows` rows, in the result's carrier.
+    fn call(&self, batch: &RecordBatch, partition: u32, rows: usize) -> Result<ArrayRef> {
         let args = self
             .args
             .iter()
@@ -236,14 +264,12 @@ impl PhysExpr for Call {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let out = self
-            .function
-            .invoke_in(&args, batch.num_rows(), partition)?;
+        let out = self.function.invoke_in(&args, rows, partition)?;
         let out = if self.relabel {
             relabeled(&out, &self.out)?
         } else {
             out
         };
-        Ok(Value::Array(if self.view { to_view(&out)? } else { out }))
+        if self.view { to_view(&out) } else { Ok(out) }
     }
 }
