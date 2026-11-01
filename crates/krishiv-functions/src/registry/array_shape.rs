@@ -99,18 +99,29 @@ fn rank(t: &DataType) -> Option<u8> {
     }
 }
 
-/// The widest integral type among the typed arguments (`INT` when all are
-/// untyped `NULL`), or `None` when an argument is not integral.
+/// The widest integral type among the typed arguments, or `None` when an
+/// argument is not integral (Spark: start and stop both strings, or no typed
+/// argument at all, is `SEQUENCE_WRONG_INPUT_TYPES`). A string beside an
+/// integral argument is cast to `BIGINT`, as Spark's implicit cast does.
 fn sequence_type(c: &CallTypes<'_>) -> Option<DataType> {
+    let is_string = |i: usize| matches!(c.data_type(i), Some(DataType::String));
+    if is_string(0) && is_string(1) {
+        return None;
+    }
     let mut widest: Option<DataType> = None;
     for i in 0..c.args().len() {
         let Some(t) = c.data_type(i) else { continue };
+        let t = if matches!(t, DataType::String) {
+            &DataType::Long
+        } else {
+            t
+        };
         let r = rank(t)?;
         if widest.as_ref().is_none_or(|w| rank(w) < Some(r)) {
             widest = Some(t.clone());
         }
     }
-    Some(widest.unwrap_or(DataType::Integer))
+    widest
 }
 
 /// `sequence`'s inputs: every argument is cast to the widest integral type.
@@ -146,13 +157,9 @@ fn sequence(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
         )
     };
-    if temporal(c.data_type(0))
-        || temporal(c.data_type(1))
-        || matches!(c.data_type(0), Some(DataType::String))
-        || matches!(c.data_type(1), Some(DataType::String))
-    {
+    if temporal(c.data_type(0)) || temporal(c.data_type(1)) {
         return Err(KrishivUnsupportedFeature {
-            feature: "sequence over dates, timestamps or strings".to_owned(),
+            feature: "sequence over dates or timestamps".to_owned(),
         }
         .into());
     }
