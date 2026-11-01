@@ -729,3 +729,13 @@ fn builtins_rank_before_session_functions() {
     let r = call(vec![f("abs", vec![int(-5)])], vec![abs]).unwrap();
     assert!(calls(&r).iter().any(|n| n == "abs"));
 }
+
+#[test]
+fn an_aggregate_over_a_nondeterministic_argument_is_refused() {
+    let r = call(vec![sum(add(c("a"), f("rand", vec![int(0)])))], Vec::new());
+    let (class, params) = err(&r);
+    assert_eq!(class, "AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION");
+    assert_eq!(params["sqlExpr"], "\"sum((a + SQRT(0)))\"");
+    // A deterministic argument is fine.
+    assert!(call(vec![sum(add(c("a"), int(1)))], Vec::new()).is_ok());
+}

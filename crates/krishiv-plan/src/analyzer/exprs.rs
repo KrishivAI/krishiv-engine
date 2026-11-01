@@ -8,17 +8,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    AmbiguousColumnReference, AmbiguousLateralColumnAlias, AmbiguousReference,
-    CannotResolveDataframeColumn, CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes,
-    DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCannotDropAllFields,
-    DatatypeMismatchCastWithConfSuggestion, DatatypeMismatchCastWithFuncSuggestion,
-    DatatypeMismatchCastWithoutSuggestion, DatatypeMismatchCreateMapKeyDiffTypes,
-    DatatypeMismatchCreateMapValueDiffTypes, DatatypeMismatchDataDiffTypes,
-    DatatypeMismatchInSubqueryDataTypeMismatch, DatatypeMismatchInSubqueryLengthMismatch,
-    DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidOrderingType,
-    DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
-    DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    AggregateFunctionWithNondeterministicExpression, AmbiguousColumnReference,
+    AmbiguousLateralColumnAlias, AmbiguousReference, CannotResolveDataframeColumn,
+    CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes, DatatypeMismatchBinaryOpWrongType,
+    DatatypeMismatchCannotDropAllFields, DatatypeMismatchCastWithConfSuggestion,
+    DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
+    DatatypeMismatchCreateMapKeyDiffTypes, DatatypeMismatchCreateMapValueDiffTypes,
+    DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
+    DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchInputSizeNotOne,
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapConcatDiffTypes,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
+    DatatypeMismatchUnexpectedNull, DatatypeMismatchValueOutOfRange,
+    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
     GroupByPosOutOfRange, InternalError, InvalidAggregateFilterNotBoolean,
@@ -6379,6 +6380,18 @@ fn call_checks(
         }
         if kids[..n].iter().any(|k| k.win.is_some()) {
             return Err(super::windows::window_in_aggregate(e.origin));
+        }
+        if let Some(bad) = kids[..n]
+            .iter()
+            .find(|k| !super::sqlfn::is_deterministic(&k.expr))
+        {
+            let shown = with_children(e, kids.iter().map(Bound::shown).collect());
+            return Err(AnalysisError::new(
+                AggregateFunctionWithNondeterministicExpression {
+                    sql_expr: format!("\"{}\"", pretty(&shown, None)),
+                },
+                bad.expr.origin,
+            ));
         }
     }
     Ok(())
