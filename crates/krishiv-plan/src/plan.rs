@@ -666,6 +666,10 @@ pub enum JoinKind {
     /// `ExistenceJoin(exists)`: how an `EXISTS` or `IN` subquery that is
     /// not a whole filter conjunct is evaluated.
     Existence(AttrId),
+    /// `LEFT OUTER` that fails with `SCALAR_SUBQUERY_TOO_MANY_ROWS` when a
+    /// left row matches more than one right row: how a correlated scalar
+    /// subquery without an aggregate is evaluated (Spark's single join).
+    Single,
 }
 
 impl JoinKind {
@@ -1207,8 +1211,13 @@ impl LogicalPlan {
                     if let JoinKind::Existence(id) = kind {
                         out.push(JoinKind::existence_column(*id));
                     } else if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
-                        let r =
-                            nullable(r, matches!(kind, JoinKind::LeftOuter | JoinKind::FullOuter));
+                        let r = nullable(
+                            r,
+                            matches!(
+                                kind,
+                                JoinKind::LeftOuter | JoinKind::FullOuter | JoinKind::Single
+                            ),
+                        );
                         out.extend(r);
                     }
                     return Some(out);
