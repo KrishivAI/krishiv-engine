@@ -129,3 +129,29 @@ fn errors_and_lowered_plans_never_hold_the_canary() {
         }
     }
 }
+
+/// The key argument of the AES functions is a secret in query text, however
+/// the call is written; the other arguments stay.
+#[test]
+fn an_aes_key_argument_is_redacted_in_query_text() {
+    for sql in [
+        "SELECT aes_encrypt(1, 'Canary7f3a9c')",
+        "SELECT AES_DECRYPT(unhex('00'), 'Canary7f3a9c', 'GCM')",
+        "SELECT try_aes_decrypt(f(a, b), 'Canary7f3a9c' || x, 'GCM')",
+        "SELECT builtin.aes_encrypt(1, Canary7f3a9c)",
+        "SELECT `aes_encrypt`(1, 'Canary7f3a9c'",
+        "SELECT aes_encrypt(DISTINCT 1, 'Canary7f3a9c')",
+    ] {
+        let r = redact_sql(sql);
+        for at in 0..sql.len() {
+            assert!(!leaks(r.fragment(at..sql.len())), "{sql} @ {at}");
+        }
+        assert!(!leaks(r.as_str()), "{sql} -> {}", r.as_str());
+    }
+    assert_eq!(
+        redact_sql("SELECT aes_encrypt(f(1, 2), 'k', 'GCM')").as_str(),
+        "SELECT aes_encrypt(f(1, 2), *********(redacted), 'GCM')"
+    );
+    let plain = "SELECT aes_encrypt(1) , other(1, 'Canary7f3a9c')";
+    assert_eq!(redact_sql(plain).as_str(), plain);
+}
