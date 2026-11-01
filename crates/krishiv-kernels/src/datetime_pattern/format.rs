@@ -363,6 +363,9 @@ fn zone_name(
     })
 }
 
+/// 1994-09-04T01:00Z, Namibia's first daylight transition in Java's tables.
+const WINDHOEK_JAVA_DST_FROM: i64 = 778_640_400;
+
 /// The name of a region zone at the instant `utc_seconds`: daylight names
 /// while the zone is on daylight time there.
 fn region_zone_name(id: &str, utc_seconds: i64, full: bool) -> Result<String, KrishivError> {
@@ -378,7 +381,17 @@ fn region_zone_name(id: &str, utc_seconds: i64, full: bool) -> Result<String, Kr
         ZoneRef::Named(zone) => {
             // Past Jiff's range the recurring rules repeat, as `offset_at_utc` folds them.
             jiff::Timestamp::from_second(crate::datetime::zone::fold_seconds(utc_seconds))
-                .is_ok_and(|t| zone.to_offset_info(t).dst().is_dst())
+                .is_ok_and(|t| {
+                    let info = zone.to_offset_info(t);
+                    if id == "Africa/Windhoek" && utc_seconds >= WINDHOEK_JAVA_DST_FROM {
+                        // Java's data keeps +01:00 as Namibia's standard time and calls +02:00 daylight
+                        // time from 1994 on (also since 2017, when the winter shift stopped); the tz
+                        // database's main form says the reverse before 2017 and has no daylight time after.
+                        info.offset().seconds() == 7200
+                    } else {
+                        info.dst().is_dst()
+                    }
+                })
         }
         ZoneRef::Fixed(_) => false,
     };
