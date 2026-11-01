@@ -242,7 +242,7 @@ fn every_expression_form_prints() {
                 end: DayTimeField::Second,
             }
             .into(),
-            "INTERVAL '1:01' MINUTE TO SECOND",
+            "INTERVAL '01:01' MINUTE TO SECOND",
         ),
         (
             Literal::Decimal {

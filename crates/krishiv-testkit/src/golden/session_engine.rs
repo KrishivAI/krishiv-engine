@@ -442,6 +442,24 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
         }
+        (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
+            col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
+                .value(row),
+        ),
+        (DataType::DayTimeInterval { .. }, ArrowType::Duration(_)) => Cell::DayTime(
+            col.as_primitive::<arrow_array::types::DurationMicrosecondType>()
+                .value(row),
+        ),
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            let v = col
+                .as_primitive::<arrow_array::types::IntervalMonthDayNanoType>()
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.nanoseconds / 1000,
+            }
+        }
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
             Cell::Str(krishiv_kernels::cast::format_time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()
@@ -618,6 +636,24 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         }
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
+            col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
+                .value(row),
+        ),
+        (DataType::DayTimeInterval { .. }, ArrowType::Duration(_)) => Cell::DayTime(
+            col.as_primitive::<arrow_array::types::DurationMicrosecondType>()
+                .value(row),
+        ),
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            let v = col
+                .as_primitive::<arrow_array::types::IntervalMonthDayNanoType>()
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.nanoseconds / 1000,
+            }
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
             Cell::Array(list_cells(col, row, element)?)

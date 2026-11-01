@@ -26,11 +26,11 @@
     },
     {
       "id": "date_part#4e04c424a4c6/ansi_on",
-      "reason": "SELECT date_part('MINUTE', CAST(NULL AS interval day to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('MINUTE', CAST(NULL AS interval day to second)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#4e04c424a4c6/ansi_off",
-      "reason": "SELECT date_part('MINUTE', CAST(NULL AS interval day to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('MINUTE', CAST(NULL AS interval day to second)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#636c907f859b/ansi_on",
@@ -98,19 +98,19 @@
     },
     {
       "id": "date_part#c6e0e94f093c/ansi_on",
-      "reason": "SELECT date_part('days', CAST(NULL AS interval day to minute)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('days', CAST(NULL AS interval day to minute)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#c6e0e94f093c/ansi_off",
-      "reason": "SELECT date_part('days', CAST(NULL AS interval day to minute)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('days', CAST(NULL AS interval day to minute)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#eb381059e762/ansi_on",
-      "reason": "SELECT date_part('seconds', CAST(NULL AS interval hour to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('seconds', CAST(NULL AS interval hour to second)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#eb381059e762/ansi_off",
-      "reason": "SELECT date_part('seconds', CAST(NULL AS interval hour to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('seconds', CAST(NULL AS interval hour to second)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#f146583c811a/ansi_on",
@@ -122,11 +122,11 @@
     },
     {
       "id": "date_part#f774384fcc53/ansi_on",
-      "reason": "SELECT date_part('MONTH', CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('MONTH', CAST(NULL AS interval year to month)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#f774384fcc53/ansi_off",
-      "reason": "SELECT date_part('MONTH', CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT date_part('MONTH', CAST(NULL AS interval year to month)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

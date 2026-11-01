@@ -10,11 +10,11 @@
     },
     {
       "id": "try_avg#ec98c24806fe/ansi_on",
-      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_avg#ec98c24806fe/ansi_off",
-      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

@@ -178,6 +178,9 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
     if let Some(t) = atomic.into_iter().find(|t| t.type_name() == name) {
         return Some(Ok(t));
     }
+    if let Some(t) = interval_from_name(name) {
+        return Some(Ok(t));
+    }
     if name == "decimal" {
         return Some(Ok(DataType::Decimal(DecimalType::USER_DEFAULT)));
     }
@@ -389,4 +392,33 @@ pub fn parse_metadata(text: &str) -> Result<Metadata, KrishivError> {
         Ok(Value::Object(map)) => Ok(Metadata::from_map(map)),
         _ => Err(error::invalid_json_type(text)),
     }
+}
+
+/// The interval type whose JSON name is `name`, spelled exactly as Spark's
+/// `typeName` spells it.
+fn interval_from_name(name: &str) -> Option<DataType> {
+    use crate::{DayTimeField as D, YearMonthField as Y};
+    if name == "interval" {
+        return Some(DataType::CalendarInterval);
+    }
+    let ym = [
+        (Y::Year, Y::Year),
+        (Y::Month, Y::Month),
+        (Y::Year, Y::Month),
+    ]
+    .map(|(start, end)| DataType::YearMonthInterval { start, end });
+    let dt = [
+        (D::Day, D::Day),
+        (D::Day, D::Hour),
+        (D::Day, D::Minute),
+        (D::Day, D::Second),
+        (D::Hour, D::Hour),
+        (D::Hour, D::Minute),
+        (D::Hour, D::Second),
+        (D::Minute, D::Minute),
+        (D::Minute, D::Second),
+        (D::Second, D::Second),
+    ]
+    .map(|(start, end)| DataType::DayTimeInterval { start, end });
+    ym.into_iter().chain(dt).find(|t| t.type_name() == name)
 }

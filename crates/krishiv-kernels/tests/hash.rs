@@ -315,3 +315,25 @@ fn list_of_strings_chain_into_the_row_hash() {
     assert_eq!(h(&[&list]), h(&[&a, &b]));
     assert_eq!(list.value(0).as_string::<i32>().len(), 2);
 }
+
+/// Year-month intervals hash as `int` and day-time as `long`, with Spark
+/// 4.2.0's values (ADR 0010). Fields play no part: only the count does.
+#[test]
+fn intervals_hash_as_spark() {
+    use arrow_array::{DurationMicrosecondArray, IntervalYearMonthArray};
+    const DAY: i64 = 86_400_000_000;
+    let months = IntervalYearMonthArray::from(vec![1, 13]);
+    assert_eq!(h(&[&months]), [-559_580_957, -1_057_351_352]);
+    assert_eq!(
+        x(&[&IntervalYearMonthArray::from(vec![1])]),
+        [-6_698_625_589_789_238_999]
+    );
+    let micros = DurationMicrosecondArray::from(vec![DAY, -(DAY + 2 * 3_600_000_000)]);
+    assert_eq!(h(&[&micros]), [892_267_096, -438_904_433]);
+    assert_eq!(
+        x(&[&DurationMicrosecondArray::from(vec![DAY])]),
+        [5_650_310_968_337_874_586]
+    );
+    let null = DurationMicrosecondArray::from(vec![None::<i64>]);
+    assert_eq!(h(&[&null]), [42]);
+}

@@ -2,6 +2,7 @@
 //! Literal values.
 
 use krishiv_types::{DataType, DecimalType};
+pub use krishiv_types::{DayTimeField, YearMonthField};
 
 /// A literal value, in Spark's physical representation for its type.
 ///
@@ -112,28 +113,6 @@ impl std::fmt::Debug for Literal {
                 .finish(),
         }
     }
-}
-
-/// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum YearMonthField {
-    /// `YEAR`.
-    Year,
-    /// `MONTH`.
-    Month,
-}
-
-/// A field of a day-time interval type (Spark's `DayTimeIntervalType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DayTimeField {
-    /// `DAY`.
-    Day,
-    /// `HOUR`.
-    Hour,
-    /// `MINUTE`.
-    Minute,
-    /// `SECOND`.
-    Second,
 }
 
 /// The value of a [`Literal`] with floats as bits, so it derives `Eq`.
