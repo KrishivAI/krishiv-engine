@@ -44,6 +44,11 @@ fn rows(s: &Session, sql: &str) -> Vec<Vec<String>> {
                         } else {
                             match c.data_type() {
                                 ArrowType::Utf8View => c.as_string_view().value(i).to_owned(),
+                                ArrowType::Boolean => c.as_boolean().value(i).to_string(),
+                                ArrowType::Int32 => c
+                                    .as_primitive::<arrow_array::types::Int32Type>()
+                                    .value(i)
+                                    .to_string(),
                                 _ => c.as_string::<i32>().value(i).to_owned(),
                             }
                         }
@@ -174,4 +179,49 @@ fn drop_cascade_never_deletes_outside_the_warehouse() {
     assert!(dir.path().join("d.db").join("a").is_dir());
     assert!(outside.path().join("keep.txt").is_file());
     run(&s, "INSERT INTO d.a VALUES (1)");
+}
+
+#[test]
+fn a_global_temporary_view_lives_in_global_temp() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW gv(a, b) AS SELECT 1, 'x'");
+    assert_eq!(
+        rows(&s, "SELECT b, a FROM global_temp.gv"),
+        vec![vec!["x".to_owned(), "1".to_owned()]]
+    );
+    // Not a temporary view, and not listed with them.
+    assert_eq!(class(&s, "SELECT * FROM gv"), "TABLE_OR_VIEW_NOT_FOUND");
+    assert!(rows(&s, "SHOW TABLES").is_empty());
+    assert_eq!(
+        rows(&s, "SHOW VIEWS IN global_temp"),
+        vec![vec![
+            "global_temp".to_owned(),
+            "gv".to_owned(),
+            "true".to_owned()
+        ]]
+    );
+    assert_eq!(
+        rows(&s, "SHOW COLUMNS IN gv FROM global_temp"),
+        vec![vec!["a".to_owned()], vec!["b".to_owned()]]
+    );
+    assert_eq!(
+        class(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 2"),
+        "TEMP_TABLE_OR_VIEW_ALREADY_EXISTS"
+    );
+    run(&s, "CREATE OR REPLACE GLOBAL TEMP VIEW gv AS SELECT 2 AS c");
+    assert_eq!(
+        rows(&s, "SELECT c FROM global_temp.gv"),
+        vec![vec!["2".to_owned()]]
+    );
+    run(&s, "DROP VIEW global_temp.gv");
+    assert_eq!(
+        class(&s, "SELECT * FROM global_temp.gv"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, "DROP VIEW global_temp.gv"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    run(&s, "DROP VIEW IF EXISTS global_temp.gv");
 }

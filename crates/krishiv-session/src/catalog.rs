@@ -47,6 +47,15 @@ use crate::cache::{RelationCache, is_cache_name};
 pub(crate) const CATALOG: &str = "spark_catalog";
 /// The namespace temporary tables live in.
 pub(crate) const NAMESPACE: &str = "default";
+/// The namespace global temporary views live in.
+pub(crate) const GLOBAL_NAMESPACE: &str = "global_temp";
+
+/// The key a global temporary view `name` is stored under in [`SessionCatalog`]: a prefix no SQL
+/// identifier spells (it starts with a control character), so it never collides with a temporary
+/// view and [`SessionCatalog::names`] can leave it out.
+pub(crate) fn global_key(name: &str) -> String {
+    format!("{GLOBAL_PREFIX}{name}")
+}
 
 /// A temporary table or view.
 #[derive(Debug)]
@@ -95,6 +104,9 @@ pub(crate) fn is_hidden_name(name: &str) -> bool {
     name.get(..HIDDEN_PREFIX.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(HIDDEN_PREFIX))
 }
+
+/// What every [`global_key`] starts with.
+const GLOBAL_PREFIX: &str = "\u{1}global_temp\u{1}";
 
 /// The temporary tables and views of a session, by lower-case name.
 #[derive(Debug, Default)]
@@ -202,7 +214,17 @@ impl SessionCatalog {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .map(|(n, _)| n.clone())
-            .filter(|n| !n.starts_with(HIDDEN_PREFIX))
+            .filter(|n| !n.starts_with(HIDDEN_PREFIX) && !n.starts_with(GLOBAL_PREFIX))
+            .collect()
+    }
+
+    /// The names of the global temporary views, as registered, in order.
+    pub(crate) fn global_names(&self) -> Vec<String> {
+        self.tables
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter_map(|(n, _)| n.strip_prefix(GLOBAL_PREFIX).map(str::to_owned))
             .collect()
     }
 
@@ -1281,21 +1303,39 @@ impl Expander<'_> {
             return self.expand_stored(plan, scope);
         }
         if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
-            && let [view] = name.as_slice()
             && options.is_empty()
-            && !scope
-                .iter()
-                .any(|c| same_name(c, view, self.case_sensitive))
         {
-            // (Hidden names are rejected above, before this view lookup.)
-            if let Some(entry) = self.catalog.get(view, self.case_sensitive)
+            // A bare name (not shadowed by a `WITH` definition) is a temporary view; `global_temp.name`
+            // is a global one.
+            let found = match name.as_slice() {
+                [view]
+                    if !scope
+                        .iter()
+                        .any(|c| same_name(c, view, self.case_sensitive)) =>
+                {
+                    // (Hidden names are rejected above, before this view lookup.)
+                    Some((view.as_str(), self.catalog.get(view, self.case_sensitive)))
+                }
+                [namespace, view] if namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE) => Some((
+                    view.as_str(),
+                    self.catalog
+                        .get(&global_key(view), self.case_sensitive)
+                        .filter(|_| !is_hidden_name(view) && !is_cache_name(view)),
+                )),
+                _ => None,
+            };
+            if let Some((view, Some(entry))) = found
                 && let TempTable::View {
                     plan: definition,
                     columns,
                     ..
                 } = &*entry
             {
-                let key = view.to_lowercase();
+                let key = name
+                    .iter()
+                    .map(|p| p.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(".");
                 if self.path.contains(&key) {
                     return Err(InternalError {
                         message: format!("temporary view `{key}` reads itself"),
@@ -1311,7 +1351,7 @@ impl Expander<'_> {
                 return Ok(Arc::new(
                     LogicalPlan::new(PlanNode::SubqueryAlias {
                         input: input?,
-                        alias: view.clone(),
+                        alias: view.to_owned(),
                         columns,
                     })
                     .with_origin(plan.origin),

@@ -135,7 +135,28 @@ fn sql_literal(v: &str) -> String {
     format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
+/// Whether `ns` is the namespace of global temporary views.
+fn is_global_namespace(ns: &str) -> bool {
+    ns.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+}
+
 impl Session {
+    /// `SHOW TABLES | VIEWS IN global_temp`: the global temporary views.
+    async fn global_views_frame(
+        &self,
+        columns: &[&str],
+        pattern: Option<&ShowPattern>,
+    ) -> Result<DataFrame, KrishivError> {
+        let mut names = self.state.catalog.global_names();
+        names.retain(|n| keep(pattern, n));
+        names.sort();
+        let rows = names
+            .into_iter()
+            .map(|n| vec![s(crate::catalog::GLOBAL_NAMESPACE), s(n), s("true")])
+            .collect();
+        self.ordered_frame(columns, &["isTemporary"], rows).await
+    }
+
     /// A frame of `columns` (string columns, except the names in `booleans`) with `rows`, in row order.
     pub(crate) async fn ordered_frame(
         &self,
@@ -214,7 +235,9 @@ impl Session {
             Some(n) => self.namespace_name(n, &env)?,
             None => self.state.catalog.current_namespace(),
         };
-        self.require_namespace(&ns)?;
+        if !is_global_namespace(&ns) {
+            self.require_namespace(&ns)?;
+        }
         Ok(ns)
     }
 
@@ -230,6 +253,14 @@ impl Session {
                 namespace, pattern, ..
             } => {
                 let ns = self.show_namespace(namespace.as_ref())?;
+                if is_global_namespace(&ns) {
+                    return self
+                        .global_views_frame(
+                            &["namespace", "tableName", "isTemporary"],
+                            pattern.as_ref(),
+                        )
+                        .await;
+                }
                 let mut rows: Vec<Vec<Cell>> = store
                     .tables_in(&ns)
                     .iter()
@@ -252,6 +283,14 @@ impl Session {
                 namespace, pattern, ..
             } => {
                 let ns = self.show_namespace(namespace.as_ref())?;
+                if is_global_namespace(&ns) {
+                    return self
+                        .global_views_frame(
+                            &["namespace", "viewName", "isTemporary"],
+                            pattern.as_ref(),
+                        )
+                        .await;
+                }
                 let mut rows: Vec<Vec<Cell>> = store
                     .tables_in(&ns)
                     .iter()
@@ -409,6 +448,21 @@ impl Session {
         name: &TableName,
     ) -> Result<Vec<(String, DataType, Option<String>)>, KrishivError> {
         let env = self.query_env();
+        if !name.bare
+            && name
+                .namespace
+                .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+            && let Some(entry) = self.state.catalog.get(
+                &crate::catalog::global_key(&name.name),
+                env.analysis.conf.case_sensitive,
+            )
+            && let crate::catalog::TempTable::View { columns, .. } = &*entry
+        {
+            return Ok(columns
+                .iter()
+                .map(|c| (c.name.clone(), c.data_type.clone(), None))
+                .collect());
+        }
         if self.temp_entry_of(name, &env) {
             let df = self.table(&name.name);
             let analysis = df.analyzed_in(env).await?;

@@ -40,8 +40,9 @@ use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
     AlterColumnAction, AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze,
     AnalyzeColumns, ChangeColumnAction, ColumnName, CreateNamespace, CreatePermanentView,
-    CreateTable, CreateTableLike, DdlName, DropBehavior, DropNamespace, DropPermanentView,
-    DropTable, Insert, InsertClause, Query, TableElement, TableOption, Truncate, Use,
+    CreateTable, CreateTableLike, CreateView, DdlName, DropBehavior, DropNamespace,
+    DropPermanentView, DropTable, Ident, Insert, InsertClause, Query, TableElement, TableOption,
+    Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -349,8 +350,11 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        if v.global && v.using.is_none() {
+            return self.create_global_temp_view(v, &env).await;
+        }
         if v.temporary || v.global {
-            return Err(unsupported("global and qualified temporary views"));
+            return Err(unsupported("qualified and datasource temporary views"));
         }
         let (None, Some(query)) = (&v.using, &v.query) else {
             return Err(unsupported("datasource views"));
@@ -519,9 +523,83 @@ impl Session {
         d: &DropPermanentView,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        if let Some(done) =
+            self.drop_global_temp_view(&crate::access::ddl_parts(&d.name, &env)?, d.if_exists)
+        {
+            done?;
+            return self.empty_frame().await;
+        }
         let name = self.table_name(&d.name, &env)?;
         self.drop_stored_view(&name, d.if_exists)?;
         self.empty_frame().await
+    }
+
+    /// `CREATE [OR REPLACE] GLOBAL TEMPORARY VIEW name [(columns)] AS query`, kept in `global_temp`.
+    async fn create_global_temp_view(
+        &self,
+        v: &CreatePermanentView,
+        env: &QueryEnv,
+    ) -> Result<DataFrame, KrishivError> {
+        let parts = crate::access::ddl_parts(&v.name, env)?;
+        let (Some(query), [name]) = (&v.query, parts.as_slice()) else {
+            return Err(unsupported("qualified global temporary views"));
+        };
+        let columns = v
+            .columns
+            .iter()
+            .map(|c| match &c.name {
+                ColumnName::Ident(name) => Ok(ViewColumn {
+                    name: name.clone(),
+                    comment: c.comment.clone(),
+                    span: c.span,
+                }),
+                _ => Err(unsupported("IDENTIFIER() column names in views")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let view = CreateView {
+            or_replace: v.or_replace,
+            if_not_exists: v.if_not_exists,
+            name: Ident {
+                value: name.clone(),
+                quoted: false,
+                span: v.span,
+            },
+            columns,
+            collation: None,
+            query: query.clone(),
+            span: v.span,
+        };
+        self.create_temp_view(&view, true).await
+    }
+
+    /// `DROP VIEW global_temp.name`: the global temporary view, when the name is one.
+    fn drop_global_temp_view(
+        &self,
+        parts: &[String],
+        if_exists: bool,
+    ) -> Option<Result<(), KrishivError>> {
+        let [namespace, name] = parts else {
+            return None;
+        };
+        if !namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+            return None;
+        }
+        let key = crate::catalog::global_key(name);
+        let cs = self.query_env().analysis.conf.case_sensitive;
+        if self.state.catalog.exists(&key, cs) {
+            self.state.catalog.drop_table(&key);
+            self.state.cache.invalidate_table(&key);
+            return Some(Ok(()));
+        }
+        Some(if if_exists {
+            Ok(())
+        } else {
+            Err(TableOrViewNotFound {
+                relation_name: format!("`{}`.`{name}`", crate::catalog::GLOBAL_NAMESPACE),
+                search_path: crate::catalog::search_path(),
+            }
+            .into())
+        })
     }
 
     /// `DROP VIEW name` after no temporary view of that bare name was found: the stored view in the current

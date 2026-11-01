@@ -240,6 +240,29 @@ impl Session {
     /// prefix `` `__krishiv_cache_` `` (in any letter case), which queries
     /// cannot spell either.
     pub(crate) async fn exec_create_view(&self, v: &CreateView) -> Result<DataFrame, KrishivError> {
+        self.create_temp_view(v, false).await
+    }
+
+    /// `CREATE [OR REPLACE] [GLOBAL] TEMPORARY VIEW`: a global view lives in `global_temp`.
+    pub(crate) async fn create_temp_view(
+        &self,
+        v: &CreateView,
+        global: bool,
+    ) -> Result<DataFrame, KrishivError> {
+        let key = if global {
+            crate::catalog::global_key(&v.name.value)
+        } else {
+            v.name.value.clone()
+        };
+        let shown = if global {
+            format!(
+                "{}.{}",
+                quote(crate::catalog::GLOBAL_NAMESPACE),
+                quote(&v.name.value)
+            )
+        } else {
+            quote(&v.name.value)
+        };
         if is_hidden_name(&v.name.value) || is_cache_name(&v.name.value) {
             return Err(reserved_temp_view_name(&v.name.value));
         }
@@ -254,20 +277,22 @@ impl Session {
             && self
                 .state
                 .catalog
-                .exists(&v.name.value, env.analysis.conf.case_sensitive)
+                .exists(&key, env.analysis.conf.case_sensitive)
         {
             return Err(TempTableOrViewAlreadyExists {
-                relation_name: quote(&v.name.value),
+                relation_name: shown,
             }
             .into());
         }
         let plan = krishiv_sql::lower(&v.query, self.next_source_id()).map_err(|e| e.error)?;
-        crate::catalog::check_view_cycle(
-            &self.state.catalog,
-            &v.name.value,
-            plan.root(),
-            env.analysis.conf.case_sensitive,
-        )?;
+        if !global {
+            crate::catalog::check_view_cycle(
+                &self.state.catalog,
+                &v.name.value,
+                plan.root(),
+                env.analysis.conf.case_sensitive,
+            )?;
+        }
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
         let analysis = df.analyzed_in(env).await?;
@@ -322,14 +347,14 @@ impl Session {
         // for writes).
         unique_view_columns(&columns, case_sensitive)?;
         self.state.catalog.put(
-            &v.name.value,
+            &key,
             TempTable::View {
                 plan: Arc::clone(&df.plan),
                 columns,
                 pins: Vec::new(),
             },
         );
-        self.state.cache.invalidate_table(&v.name.value);
+        self.state.cache.invalidate_table(&key);
         self.empty_frame().await
     }
 

@@ -2,12 +2,8 @@
   "cases": {
     "sql-commands": [
       4,
-      5,
       13,
-      17,
-      18,
-      21,
-      22
+      21
     ]
   },
   "file": "show_columns",
