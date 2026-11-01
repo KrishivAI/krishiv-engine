@@ -216,35 +216,21 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
             if u.kind == TokenKind::Word {
                 prev_word = u.span.text(sql).to_owned();
             }
-            // A `<` opens a type only after a type word and before a type
-            // (a word that is a type name, or a `field:` of a struct), so
-            // `map < 1` and `array < col` stay comparisons.
+            // A `<` opens a complex type after `map`, `array` or `struct`
+            // when a name or type follows and a `>` closes it before the
+            // call ends; `map < 1` and `array < col` stay comparisons. No
+            // list of type names: any type the grammar accepts is covered,
+            // and a stray `>` only masks more of the call (fail-safe).
             let opens_type = ["map", "array", "struct"]
                 .iter()
                 .any(|w| word.eq_ignore_ascii_case(w))
                 && code[i + 2..].get(j + 1).is_some_and(|n| {
-                    let after = code[i + 2..].get(j + 2);
-                    match n.kind {
-                        TokenKind::Word => {
-                            is_type_word(n.span.text(sql))
-                                || after.is_some_and(|m| {
-                                    m.kind == TokenKind::Sym(Sym::Colon)
-                                        // `field TYPE`: the colon may be omitted.
-                                        || (m.kind == TokenKind::Word
-                                            && is_type_word(m.span.text(sql)))
-                                })
-                        }
-                        // A quoted struct field: `STRUCT<`a`: INT>` or
-                        // `STRUCT<`a` INT>`.
-                        TokenKind::QuotedIdent | TokenKind::DoubleQuoted => {
-                            after.is_some_and(|m| {
-                                m.kind == TokenKind::Sym(Sym::Colon)
-                                    || (m.kind == TokenKind::Word && is_type_word(m.span.text(sql)))
-                            })
-                        }
-                        _ => false,
-                    }
-                });
+                    matches!(
+                        n.kind,
+                        TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted
+                    )
+                })
+                && closes_ahead(&code[i + 2 + j + 1..]);
             match u.kind {
                 TokenKind::Sym(Sym::Lt) if angle > 0 || opens_type => {
                     angle += 1;
@@ -274,42 +260,20 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
     }
 }
 
-/// Whether `w` names a SQL data type (the start of `MAP<STRING, INT>`).
-fn is_type_word(w: &str) -> bool {
-    [
-        "map",
-        "array",
-        "struct",
-        "string",
-        "varchar",
-        "char",
-        "int",
-        "integer",
-        "bigint",
-        "smallint",
-        "tinyint",
-        "long",
-        "short",
-        "byte",
-        "float",
-        "double",
-        "real",
-        "decimal",
-        "dec",
-        "numeric",
-        "boolean",
-        "binary",
-        "date",
-        "timestamp",
-        "timestamp_ntz",
-        "timestamp_ltz",
-        "interval",
-        "variant",
-        "time",
-        "void",
-    ]
-    .iter()
-    .any(|t| w.eq_ignore_ascii_case(t))
+/// Whether a `>` follows before the enclosing call's `)`: the `<` before
+/// `rest` can then open a complex type.
+fn closes_ahead(rest: &[&Token]) -> bool {
+    let mut depth = 0_usize;
+    for t in rest {
+        match t.kind {
+            TokenKind::Sym(Sym::LParen) => depth += 1,
+            TokenKind::Sym(Sym::RParen) if depth == 0 => return false,
+            TokenKind::Sym(Sym::RParen) => depth -= 1,
+            TokenKind::Sym(Sym::Gt) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `SET key = value` with a sensitive key: the value (raw text to the end
