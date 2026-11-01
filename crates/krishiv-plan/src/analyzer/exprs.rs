@@ -1075,9 +1075,11 @@ impl Resolver<'_> {
         if !f.args.iter().any(|a| matches!(a.node, ExprNode::Star(_))) {
             return Ok(None);
         }
-        let count_star = f
-            .unqualified()
-            .is_some_and(|n| n.eq_ignore_ascii_case("count"))
+        // `count(DISTINCT *)` is not `count(1)`: Spark expands the star to
+        // the input columns, so only the plain form counts rows.
+        let count_star = !f.distinct
+            && f.unqualified()
+                .is_some_and(|n| n.eq_ignore_ascii_case("count"))
             && matches!(&f.args[..], [a] if matches!(&a.node, ExprNode::Star(s) if s.qualifier.is_empty() && s.plan_id.is_none()));
         let struct_star =
             f.name.eq_ignore_ascii_case("struct") || f.name.eq_ignore_ascii_case("named_struct");
