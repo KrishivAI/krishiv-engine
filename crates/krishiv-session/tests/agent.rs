@@ -774,3 +774,13 @@ fn the_estimate_escapes_plan_text_that_could_forge_lines() {
     );
     assert!(lines[2].starts_with("\\--"), "{out}");
 }
+
+#[test]
+fn register_batches_refuses_collated_columns() {
+    use krishiv_types::{Collation, DataType};
+    let session = Session::new().unwrap();
+    let ty = DataType::collated_string(Collation::parse("UTF8_LCASE").unwrap());
+    let schema = Arc::new(Schema::new(vec![ty.to_arrow_field("a", true)]));
+    let err = session.register_batches("t", schema, vec![]).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}

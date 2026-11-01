@@ -114,7 +114,7 @@ impl DataType {
             Self::Long => ArrowType::Int64,
             Self::Float => ArrowType::Float32,
             Self::Double => ArrowType::Float64,
-            Self::String => ArrowType::Utf8View,
+            Self::String | Self::CollatedString(_) => ArrowType::Utf8View,
             Self::Binary => ArrowType::BinaryView,
             Self::Decimal(d) => ArrowType::Decimal128(d.precision().max(1), arrow_scale(*d)),
             Self::Date => ArrowType::Date32,
@@ -221,9 +221,11 @@ impl DataType {
     /// (the canonical type or one of the alternatives in the module docs).
     pub(crate) fn is_valid_storage(&self, arrow: &ArrowType) -> bool {
         match (self, arrow) {
-            (Self::String, ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary) => {
-                true
-            }
+            (Self::String, ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary)
+            | (
+                Self::CollatedString(_),
+                ArrowType::Utf8View | ArrowType::Utf8 | ArrowType::LargeUtf8,
+            ) => true,
             (Self::Decimal(_), ArrowType::Decimal128(..))
             | (Self::Timestamp, ArrowType::Timestamp(..))
             | (
