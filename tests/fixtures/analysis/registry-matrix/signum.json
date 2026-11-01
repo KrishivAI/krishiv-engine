@@ -26,11 +26,11 @@
     },
     {
       "id": "signum#854c4eb019e8/ansi_on",
-      "reason": "SELECT signum(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT signum(CAST(NULL AS interval year)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "signum#854c4eb019e8/ansi_off",
-      "reason": "SELECT signum(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT signum(CAST(NULL AS interval year)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

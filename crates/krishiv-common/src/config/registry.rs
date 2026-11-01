@@ -72,6 +72,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &CTE_RECURSION_LEVEL_LIMIT,
+    &CTE_RECURSION_ROW_LIMIT,
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
     &LEGACY_STATISTICAL_AGGREGATE,
@@ -135,6 +137,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,
@@ -152,7 +155,12 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
+    ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
+    (
+        "spark.sql.cteRecursionLevelLimit",
+        &CTE_RECURSION_LEVEL_LIMIT,
+    ),
     ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
     (
         "krishiv.memory.reservationQuantum",
@@ -189,6 +197,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
+    ),
+    (
+        "krishiv.sql.cteRecursionLevelLimit",
+        &CTE_RECURSION_LEVEL_LIMIT,
     ),
     (
         "krishiv.sql.shuffle.partitionsHint",
@@ -1101,6 +1113,31 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `spark.sql.cteRecursionLevelLimit`.
+pub static CTE_RECURSION_LEVEL_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.cteRecursionLevelLimit",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(100)),
+    doc: "Most rounds a recursive common table expression may run before the query fails with \
+          RECURSION_LEVEL_LIMIT_EXCEEDED; -1 removes the limit. A MAX RECURSION LEVEL clause on \
+          the expression overrides it.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.cteRecursionLevelLimit"),
+};
+
+/// `spark.sql.cteRecursionRowLimit`.
+pub static CTE_RECURSION_ROW_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.cteRecursionRowLimit",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(1_000_000)),
+    doc: "Most rows a recursive common table expression may produce in all rounds before the \
+          query fails with RECURSION_ROW_LIMIT_EXCEEDED; -1 removes the limit.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.cteRecursionRowLimit"),
 };
 
 /// `spark.sql.legacy.codingErrorAction`.

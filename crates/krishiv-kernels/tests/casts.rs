@@ -930,3 +930,21 @@ fn integrals_to_binary_are_big_endian_at_their_width() {
         .unwrap();
     assert_eq!(max.value(0), [0x7F, 0xFF, 0xFF, 0xFF]);
 }
+
+/// A zone offset may carry `Long.MIN_VALUE` micros past the `i64` range; the
+/// text is still the local date-time (America/Los_Angeles LMT is -7:52:58).
+#[test]
+fn timestamp_text_past_the_micros_range_in_a_zone() {
+    let t: ArrayRef =
+        Arc::new(TimestampMicrosecondArray::from(vec![i64::MIN]).with_timezone("UTC"));
+    let opts = CastOptions {
+        mode: Ansi,
+        time_zone: &FixedOffset(-28_378),
+    };
+    let out = cast(&t, &DataType::Utf8, &opts).unwrap();
+    let s = out
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    assert_eq!(s.value(0), "-290308-12-21 12:06:07.224192");
+}

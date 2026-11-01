@@ -1186,8 +1186,35 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32],
         ) if is_string(f) => {
             // A third argument is the declared precision of a `time(p)`
-            // below 6, which cuts the seconds' fraction.
-            let precise = args.len() == 3;
+            // below 6, a literal the analyzer appends; it cuts the seconds'
+            // fraction.
+            let precision = match args.get(2) {
+                None => None,
+                Some(BindArg::Literal(a)) => {
+                    match a
+                        .as_primitive_opt::<Int32Type>()
+                        .filter(|p| p.len() == 1 && p.is_valid(0))
+                    {
+                        Some(p) => Some(p.value(0).clamp(0, 6).unsigned_abs()),
+                        None => {
+                            return Some((
+                                listed,
+                                Err(internal(
+                                    "extract: a NULL or malformed precision".to_owned(),
+                                )),
+                            ));
+                        }
+                    }
+                }
+                Some(_) => {
+                    return Some((
+                        listed,
+                        Err(internal(
+                            "extract: a precision that is not a literal".to_owned(),
+                        )),
+                    ));
+                }
+            };
             match field(&args[0]) {
                 Err(e) => return Some((listed, Err(e))),
                 Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {
@@ -1197,14 +1224,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     Binding::new(part.result_type(), move |x: &Inputs<'_>| {
                         let times = x.array::<Time64NanosecondType>(1)?;
                         let mut v = time_field(&times, part);
-                        if precise && part == DatePart::Second {
-                            let p = x.array::<Int32Type>(2)?;
-                            if !p.is_empty() {
-                                let unit = 10_i64.pow(
-                                    6_u32.saturating_sub(p.value(0).clamp(0, 6).unsigned_abs()),
-                                );
-                                v = v.unary(|micros| micros - micros % unit);
-                            }
+                        if let (Some(p), DatePart::Second) = (precision, part) {
+                            let unit = 10_i64.pow(6_u32.saturating_sub(p));
+                            v = v.unary(|micros| micros - micros % unit);
                         }
                         Ok(if part == DatePart::Second {
                             Arc::new(

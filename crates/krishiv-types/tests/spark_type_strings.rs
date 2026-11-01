@@ -17,18 +17,16 @@ use serde_json::Value;
 const OUT_OF_SCOPE: &[&str] = &[
     "char(5)",
     "varchar(10)",
-    "interval year to month",
-    "interval day to second",
     "variant",
-    "string collate utf8_lcase",
-    // Spark treats this as plain `string` but prints the collation; all
-    // collations are out of scope for now.
-    "string collate utf8_binary",
-    "array<string collate utf8_lcase>",
-    "array<interval year>",
     "array<char(3)>",
     "struct<a:variant>",
 ];
+
+/// An explicit `UTF8_BINARY` is Spark's `StringType` with an explicit
+/// collation: it prints `string collate UTF8_BINARY`. Krishiv's type is the
+/// plain `STRING` (design/P2-collations.md section 3.1); the analyzer keeps
+/// the explicit strength, so only this rendering differs.
+const EXPLICIT_UTF8_BINARY: &str = "string collate utf8_binary";
 
 /// Inputs Spark parses that nest deeper than `DataType::MAX_NESTING_DEPTH`;
 /// Krishiv refuses them with `FAILED_TO_PARSE_TOO_COMPLEX`.
@@ -144,6 +142,9 @@ fn ddl_strings_match_spark() {
         let ours = parse_data_type(input);
         let spark_class = case.get("error_class").and_then(Value::as_str);
         match (spark_class, &ours) {
+            (None, Ok(t)) if input == EXPLICIT_UTF8_BINARY => {
+                assert_eq!(t, &DataType::String);
+            }
             (None, Ok(t)) => {
                 assert_renders(t, case);
                 in_scope.insert(t.simple_string());
@@ -186,6 +187,20 @@ fn ddl_strings_match_spark() {
         "time(0)",
         "time(3)",
         "time(6)",
+        "interval",
+        "interval year",
+        "interval month",
+        "interval year to month",
+        "interval day",
+        "interval hour",
+        "interval minute",
+        "interval second",
+        "interval day to hour",
+        "interval day to minute",
+        "interval day to second",
+        "interval hour to minute",
+        "interval hour to second",
+        "interval minute to second",
         "geometry(0)",
         "geometry(3857)",
         "geometry(4326)",

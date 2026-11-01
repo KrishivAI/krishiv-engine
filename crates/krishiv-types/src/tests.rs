@@ -889,3 +889,82 @@ fn any_srid_spatial_types_nest() {
     let e = parse_data_type("geography(any) int").unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::ParseSyntaxError);
 }
+
+#[test]
+fn interval_arrow_mapping_keeps_fields_in_the_tag() {
+    use crate::arrow::SPARK_TYPE_METADATA_KEY;
+    use crate::{DayTimeField as D, YearMonthField as Y};
+    use arrow_schema::{IntervalUnit, TimeUnit};
+    let month = DataType::YearMonthInterval {
+        start: Y::Month,
+        end: Y::Month,
+    };
+    let hour_to_second = DataType::day_time_interval(D::Hour, D::Second).unwrap();
+    for (t, carrier, tagged) in [
+        (
+            DataType::DEFAULT_YEAR_MONTH_INTERVAL,
+            ArrowType::Interval(IntervalUnit::YearMonth),
+            false,
+        ),
+        (
+            month.clone(),
+            ArrowType::Interval(IntervalUnit::YearMonth),
+            true,
+        ),
+        (
+            DataType::DEFAULT_DAY_TIME_INTERVAL,
+            ArrowType::Duration(TimeUnit::Microsecond),
+            false,
+        ),
+        (
+            hour_to_second,
+            ArrowType::Duration(TimeUnit::Microsecond),
+            true,
+        ),
+        (
+            DataType::CalendarInterval,
+            ArrowType::Interval(IntervalUnit::MonthDayNano),
+            false,
+        ),
+    ] {
+        assert_eq!(t.to_arrow(), carrier, "{t}");
+        let field = t.to_arrow_field("i", true);
+        assert_eq!(
+            field.metadata().contains_key(SPARK_TYPE_METADATA_KEY),
+            tagged,
+            "{t}"
+        );
+        assert_eq!(DataType::from_arrow_field(&field).unwrap(), t);
+    }
+    // Arrow alone gives the default fields, as Spark's `fromArrowType` does.
+    assert_eq!(
+        DataType::from_arrow(&month.to_arrow()).unwrap(),
+        DataType::DEFAULT_YEAR_MONTH_INTERVAL
+    );
+}
+
+#[test]
+fn interval_constructors_refuse_fields_that_decrease() {
+    use crate::{DayTimeField as D, YearMonthField as Y};
+    use krishiv_common::error::ErrorClass;
+    let class = ErrorClass::InvalidIntervalFormatUnsupportedFromToExpression;
+    assert_eq!(
+        DataType::year_month_interval(Y::Month, Y::Year)
+            .unwrap_err()
+            .error_class(),
+        class
+    );
+    assert_eq!(
+        DataType::day_time_interval(D::Second, D::Hour)
+            .unwrap_err()
+            .error_class(),
+        class
+    );
+    assert_eq!(
+        DataType::year_month_interval(Y::Year, Y::Year).unwrap(),
+        DataType::YearMonthInterval {
+            start: Y::Year,
+            end: Y::Year
+        }
+    );
+}

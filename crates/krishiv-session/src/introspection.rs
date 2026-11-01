@@ -95,6 +95,28 @@ fn created_time(ms: i64) -> String {
     )
 }
 
+/// `Created Time` as the JSON command writes it: `yyyy-MM-dd'T'HH:mm:ss'Z'` in UTC.
+fn created_time_iso(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60,
+    )
+}
+
 /// Spark's `spark.redaction.regex` default, `(?i)secret|password|token|access[.]key`, applied to the key.
 fn redact<'a>(key: &str, value: &'a str) -> &'a str {
     let k = key.to_lowercase();
@@ -135,7 +157,34 @@ fn sql_literal(v: &str) -> String {
     format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
+/// Whether `ns` is the namespace of global temporary views.
+fn is_global_namespace(ns: &str) -> bool {
+    ns.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+}
+
 impl Session {
+    /// `SHOW TABLES | VIEWS IN global_temp`: the global temporary views.
+    async fn global_views_frame(
+        &self,
+        columns: &[&str],
+        pattern: Option<&ShowPattern>,
+    ) -> Result<DataFrame, KrishivError> {
+        let mut names = self.state.catalog.global_names();
+        names.retain(|n| keep(pattern, n));
+        names.sort();
+        let mut rows: Vec<Vec<Cell>> = names
+            .into_iter()
+            .map(|n| vec![s(crate::catalog::GLOBAL_NAMESPACE), s(n), s("true")])
+            .collect();
+        // Spark lists the session's local temporary views after the global ones.
+        rows.extend(
+            self.temp_view_names(pattern)
+                .into_iter()
+                .map(|n| vec![s(""), s(n), s("true")]),
+        );
+        self.ordered_frame(columns, &["isTemporary"], rows).await
+    }
+
     /// A frame of `columns` (string columns, except the names in `booleans`) with `rows`, in row order.
     pub(crate) async fn ordered_frame(
         &self,
@@ -214,7 +263,9 @@ impl Session {
             Some(n) => self.namespace_name(n, &env)?,
             None => self.state.catalog.current_namespace(),
         };
-        self.require_namespace(&ns)?;
+        if !is_global_namespace(&ns) {
+            self.require_namespace(&ns)?;
+        }
         Ok(ns)
     }
 
@@ -230,6 +281,14 @@ impl Session {
                 namespace, pattern, ..
             } => {
                 let ns = self.show_namespace(namespace.as_ref())?;
+                if is_global_namespace(&ns) {
+                    return self
+                        .global_views_frame(
+                            &["namespace", "tableName", "isTemporary"],
+                            pattern.as_ref(),
+                        )
+                        .await;
+                }
                 let mut rows: Vec<Vec<Cell>> = store
                     .tables_in(&ns)
                     .iter()
@@ -252,6 +311,14 @@ impl Session {
                 namespace, pattern, ..
             } => {
                 let ns = self.show_namespace(namespace.as_ref())?;
+                if is_global_namespace(&ns) {
+                    return self
+                        .global_views_frame(
+                            &["namespace", "viewName", "isTemporary"],
+                            pattern.as_ref(),
+                        )
+                        .await;
+                }
                 let mut rows: Vec<Vec<Cell>> = store
                     .tables_in(&ns)
                     .iter()
@@ -409,6 +476,29 @@ impl Session {
         name: &TableName,
     ) -> Result<Vec<(String, DataType, Option<String>)>, KrishivError> {
         let env = self.query_env();
+        if !name.bare
+            && name
+                .namespace
+                .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+            && self.state.catalog.exists(
+                &crate::catalog::global_key(&name.name),
+                env.analysis.conf.case_sensitive,
+            )
+        {
+            // The view's dependencies may have changed since it was created: ask the analyzer.
+            let plan = Arc::new(krishiv_plan::LogicalPlan::table([
+                crate::catalog::GLOBAL_NAMESPACE,
+                name.name.as_str(),
+            ]));
+            let df = DataFrame::new(self.clone(), plan);
+            let analysis = df.analyzed_in(env).await?;
+            return Ok(analysis
+                .analyzed
+                .output
+                .iter()
+                .map(|c| (c.name.clone(), c.data_type.clone(), None))
+                .collect());
+        }
         if self.temp_entry_of(name, &env) {
             let df = self.table(&name.name);
             let analysis = df.analyzed_in(env).await?;
@@ -447,12 +537,17 @@ impl Session {
                 as_json,
                 ..
             } => {
-                if *as_json {
-                    return Err(unsupported("DESCRIBE ... AS JSON"));
-                }
                 let name = self.table_name(table, &env)?;
                 let columns = self.columns_of_relation(&name).await?;
-                let temp = self.temp_entry_of(&name, &env);
+                let temp = self.temp_entry_of(&name, &env)
+                    || (!name.bare
+                        && name
+                            .namespace
+                            .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+                        && self.state.catalog.exists(
+                            &crate::catalog::global_key(&name.name),
+                            env.analysis.conf.case_sensitive,
+                        ));
                 let described = match partition {
                     Some(spec) => Some(
                         self.described_partition(&name, temp, spec, original)
@@ -460,6 +555,17 @@ impl Session {
                     ),
                     None => None,
                 };
+                if *as_json {
+                    if temp {
+                        return Err(unsupported("DESCRIBE ... AS JSON of a temporary view"));
+                    }
+                    self.require_current_profile("DESCRIBE EXTENDED")?;
+                    let t = self.stored_relation(&name)?;
+                    let json = describe_json(&t, described.as_ref())?;
+                    return self
+                        .ordered_frame(&["json_metadata"], &[], vec![vec![s(json)]])
+                        .await;
+                }
                 if !column.is_empty() {
                     if mode.is_some() {
                         // Spark adds statistics rows; the engine keeps none.
@@ -700,6 +806,191 @@ impl Session {
         }
         Ok(rows)
     }
+}
+
+/// A JSON string literal.
+fn json_str(v: &str) -> String {
+    serde_json::Value::String(v.to_owned()).to_string()
+}
+
+/// A JSON array of strings.
+fn json_list<'a>(items: impl IntoIterator<Item = &'a str>) -> String {
+    format!(
+        "[{}]",
+        items
+            .into_iter()
+            .map(json_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+/// A JSON object of string values, keys in the order given, values redacted as `DESCRIBE` redacts them.
+fn json_map<'a>(items: impl IntoIterator<Item = (&'a String, &'a String)>) -> String {
+    format!(
+        "{{{}}}",
+        items
+            .into_iter()
+            .map(|(k, v)| format!("{}:{}", json_str(k), json_str(redact(k, v))))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+/// A column type as `DESCRIBE ... AS JSON` writes it (`DescribeTableJsonCommand`'s type objects).
+fn json_type(t: &DataType) -> Result<String, KrishivError> {
+    let name = match t {
+        DataType::Boolean => "boolean",
+        DataType::Byte => "byte",
+        DataType::Short => "short",
+        DataType::Integer => "int",
+        DataType::Long => "long",
+        DataType::Float => "float",
+        DataType::Double => "double",
+        DataType::Binary => "binary",
+        DataType::Date => "date",
+        DataType::Timestamp => "timestamp_ltz",
+        DataType::TimestampNtz => "timestamp_ntz",
+        DataType::String => return Ok(r#"{"name":"string","collation":"UTF8_BINARY"}"#.to_owned()),
+        DataType::Decimal(d) => {
+            return Ok(format!(
+                r#"{{"name":"decimal","precision":{},"scale":{}}}"#,
+                d.precision(),
+                d.scale()
+            ));
+        }
+        DataType::Array(_) | DataType::Map(_) | DataType::Struct(_) => {
+            return Err(unsupported("DESCRIBE ... AS JSON of a nested column type"));
+        }
+        other => {
+            return Ok(format!(
+                r#"{{"name":{}}}"#,
+                json_str(&other.catalog_string())
+            ));
+        }
+    };
+    Ok(format!(r#"{{"name":"{name}"}}"#))
+}
+
+/// `DESCRIBE EXTENDED [... PARTITION] ... AS JSON` of a stored table: one JSON object whose keys come in
+/// the order Spark's `DescribeTableJsonCommand` writes them (a partition's differ: its values and location
+/// come first, its statistics follow `last_access`, and the bucket keys sit after `provider`, before the comment).
+fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<String, KrishivError> {
+    if t.view.is_some() {
+        return Err(unsupported("DESCRIBE ... AS JSON of a view"));
+    }
+    let columns = t
+        .columns
+        .iter()
+        .map(|c| {
+            let mut col = format!(
+                r#"{{"name":{},"type":{},"nullable":{}"#,
+                json_str(&c.name),
+                json_type(&c.data_type)?,
+                c.nullable
+            );
+            if let Some(comment) = &c.comment {
+                col.push_str(&format!(r#","comment":{}"#, json_str(comment)));
+            }
+            if let Some(default) = &c.default {
+                col.push_str(&format!(r#","default":{}"#, json_str(default)));
+            }
+            col.push('}');
+            Ok(col)
+        })
+        .collect::<Result<Vec<_>, KrishivError>>()?;
+    let mut f: Vec<String> = vec![
+        format!(r#""table_name":{}"#, json_str(&t.name)),
+        format!(r#""catalog_name":{}"#, json_str(crate::catalog::CATALOG)),
+        format!(r#""namespace":{}"#, json_list([t.namespace.as_str()])),
+        format!(r#""schema_name":{}"#, json_str(&t.namespace)),
+        format!(r#""columns":[{}]"#, columns.join(",")),
+    ];
+    let buckets = t.layout.bucket.as_ref().map(|b| {
+        [
+            format!(r#""num_buckets":{}"#, b.num_buckets),
+            format!(
+                r#""bucket_columns":{}"#,
+                json_list(b.columns.iter().map(String::as_str))
+            ),
+            format!(
+                r#""sort_columns":{}"#,
+                json_list(b.sort_columns.iter().map(String::as_str))
+            ),
+        ]
+    });
+    let location = match p {
+        Some(p) => {
+            let values = p
+                .spec
+                .iter()
+                .map(|(k, v)| format!("{}:{}", json_str(k), json_str(v)))
+                .collect::<Vec<_>>()
+                .join(",");
+            f.push(format!(r#""partition_values":{{{values}}}"#));
+            &p.location
+        }
+        None => {
+            f.extend(buckets.iter().flatten().cloned());
+            &t.location
+        }
+    };
+    f.push(format!(
+        r#""location":{}"#,
+        json_str(&format!("file:{}", location.display()))
+    ));
+    let options = storage_options(t);
+    if !options.is_empty() {
+        f.push(format!(
+            r#""storage_properties":{}"#,
+            json_map(options.iter())
+        ));
+    }
+    if let Some(p) = p.filter(|p| !p.parameters.is_empty()) {
+        f.push(format!(
+            r#""partition_parameters":{}"#,
+            json_map(p.parameters.iter())
+        ));
+    }
+    let created = p.map_or(t.created_ms, |p| p.created_ms);
+    f.push(format!(
+        r#""created_time":{}"#,
+        json_str(&created_time_iso(created))
+    ));
+    f.push(r#""last_access":"UNKNOWN""#.to_owned());
+    if let Some(stats) = p.and_then(|p| p.stats) {
+        f.push(format!(
+            r#""partition_statistics":{}"#,
+            json_str(&crate::partitions::stats_text(stats))
+        ));
+    }
+    f.push(format!(r#""created_by":{}"#, json_str("Spark 4.2.0")));
+    f.push(format!(
+        r#""type":"{}""#,
+        if t.managed { "MANAGED" } else { "EXTERNAL" }
+    ));
+    f.push(format!(r#""provider":{}"#, json_str(&t.provider)));
+    if p.is_some() {
+        f.extend(buckets.iter().flatten().cloned());
+    }
+    if let Some(c) = &t.comment {
+        f.push(format!(r#""comment":{}"#, json_str(c)));
+    }
+    if !t.properties.is_empty() {
+        f.push(format!(
+            r#""table_properties":{}"#,
+            json_map(t.properties.iter())
+        ));
+    }
+    if t.is_partitioned() {
+        f.push(r#""partition_provider":"Catalog""#.to_owned());
+        f.push(format!(
+            r#""partition_columns":{}"#,
+            json_list(t.layout.partition_columns.iter().map(String::as_str))
+        ));
+    }
+    f.push(r#""collation":"UTF8_BINARY""#.to_owned());
+    Ok(format!("{{{}}}", f.join(",")))
 }
 
 /// `Num Buckets`, `Bucket Columns` and `Sort Columns` of a bucketed table (`BucketSpec.toLinkedHashMap`).

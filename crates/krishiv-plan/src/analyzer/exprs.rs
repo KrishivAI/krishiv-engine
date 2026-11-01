@@ -8,17 +8,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    AmbiguousColumnReference, AmbiguousLateralColumnAlias, AmbiguousReference,
-    CannotResolveDataframeColumn, CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes,
-    DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCannotDropAllFields,
-    DatatypeMismatchCastWithConfSuggestion, DatatypeMismatchCastWithFuncSuggestion,
-    DatatypeMismatchCastWithoutSuggestion, DatatypeMismatchCreateMapKeyDiffTypes,
-    DatatypeMismatchCreateMapValueDiffTypes, DatatypeMismatchDataDiffTypes,
-    DatatypeMismatchInSubqueryDataTypeMismatch, DatatypeMismatchInSubqueryLengthMismatch,
-    DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidOrderingType,
-    DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
-    DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    AggregateFunctionWithNondeterministicExpression, AmbiguousColumnReference,
+    AmbiguousLateralColumnAlias, AmbiguousReference, CannotResolveDataframeColumn,
+    CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes, DatatypeMismatchBinaryOpWrongType,
+    DatatypeMismatchCannotDropAllFields, DatatypeMismatchCastWithConfSuggestion,
+    DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
+    DatatypeMismatchCreateMapKeyDiffTypes, DatatypeMismatchCreateMapValueDiffTypes,
+    DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
+    DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchInputSizeNotOne,
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapConcatDiffTypes,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
+    DatatypeMismatchUnexpectedNull, DatatypeMismatchValueOutOfRange,
+    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
     GroupByPosOutOfRange, InternalError, InvalidAggregateFilterNotBoolean,
@@ -964,6 +965,7 @@ impl Resolver<'_> {
                         );
                         continue;
                     }
+                    self.unknown_routine_first(&x)?;
                     stack.push(Step::Exit(Arc::clone(&x), ctx));
                     let kids = self.child_ctx(&x, ctx);
                     stack.extend(kids.into_iter().rev().map(|(c, k)| Step::Enter(c, k)));
@@ -1608,7 +1610,7 @@ impl Resolver<'_> {
                     if let FunctionLookup::Sql(def) =
                         self.ctx.functions.lookup(&named, self.ctx.profile)
                     {
-                        return self.sql_call(&def, e, f, kids);
+                        return self.sql_call(&def, e, f, kids, cx.op);
                     }
                 }
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
@@ -1626,7 +1628,7 @@ impl Resolver<'_> {
                         .functions
                         .lookup(std::slice::from_ref(&f.name), self.ctx.profile)
                 {
-                    return self.sql_call(&def, e, f, kids);
+                    return self.sql_call(&def, e, f, kids, cx.op);
                 }
                 // `session.f` / `system.session.f` reach a temporary SQL
                 // function as well as a session UDF.
@@ -1634,7 +1636,7 @@ impl Resolver<'_> {
                     && let FunctionLookup::Sql(def) =
                         self.ctx.functions.lookup(&parts, self.ctx.profile)
                 {
-                    return self.sql_call(&def, e, f, kids);
+                    return self.sql_call(&def, e, f, kids, cx.op);
                 }
                 // A call of a function with a named-parameter signature is
                 // rearranged into positional order (Spark's
@@ -1894,6 +1896,9 @@ impl Resolver<'_> {
                         },
                         e.origin,
                     ));
+                }
+                if !window_fn && entry.kind == FunctionKind::Aggregate {
+                    self.nondeterministic_arguments(e, &kids[..n]);
                 }
                 if entry.id.name() == "mode" {
                     return self.mode_call(&entry, e, f, &kids, window_fn);
@@ -4756,6 +4761,43 @@ impl Resolver<'_> {
                 }
                 .into()
             }
+            Mismatch::DateDays { sub, date, ty } => {
+                let shown = |i: usize| {
+                    kids.get(i)
+                        .map(|k| pretty(&k.shown(), zone))
+                        .unwrap_or_default()
+                };
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: format!(
+                        "\"{}({}, {})\"",
+                        if sub { "date_sub" } else { "date_add" },
+                        shown(date),
+                        shown(1 - date)
+                    ),
+                    param_index: ordinal(1),
+                    required_type: r#"("INT" or "SMALLINT" or "TINYINT")"#.to_owned(),
+                    input_sql: format!("\"{}\"", shown(1 - date)),
+                    input_type: quoted_type(ty.as_ref()),
+                }
+                .into()
+            }
+
+            Mismatch::DateAddText => {
+                let shown = |i: usize| {
+                    kids.get(i)
+                        .map(|k| pretty(&k.shown(), zone))
+                        .unwrap_or_default()
+                };
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr: format!("\"date_add({}, {})\"", shown(0), shown(1)),
+                    param_index: ordinal(1),
+                    required_type: r#"("INT" or "SMALLINT" or "TINYINT")"#.to_owned(),
+                    input_sql: format!("\"{}\"", shown(1)),
+                    input_type: r#""DATE""#.to_owned(),
+                }
+                .into()
+            }
+
             Mismatch::DataDiff(types, list) => {
                 let types: Vec<String> = types.iter().map(|t| quoted_type(t.as_ref())).collect();
                 let data_type = if list {
@@ -6375,6 +6417,89 @@ fn scala_set_order(strings: &[&str]) -> Vec<usize> {
 /// The longest generated name, in bytes.
 const MAX_NAME: usize = 64 << 10;
 
+impl Resolver<'_> {
+    /// A call of a function that does not exist is reported before the
+    /// errors of its arguments (Spark's `CheckAnalysis` reports the
+    /// outermost unresolved node first).
+    fn unknown_routine_first(&self, x: &Expr) -> Result<(), AnalysisError> {
+        let ExprNode::Function(f) = &x.node else {
+            return Ok(());
+        };
+        let n = f.args.len();
+        if !f.qualifier.is_empty()
+            || GroupingFn::from_name(&f.name).is_some()
+            || builtin_op(&f.name, n).is_some()
+            || !matches!(
+                self.ctx
+                    .functions
+                    .lookup(std::slice::from_ref(&f.name), self.ctx.profile),
+                FunctionLookup::NotFound
+            )
+        {
+            return Ok(());
+        }
+        let (parts, _) = qualified_parts(f, &self.b.search_path, x.origin)?;
+        Err(AnalysisError::new(
+            UnresolvedRoutine {
+                routine_name: quoted(&parts),
+                search_path: self.b.search_path.clone(),
+            },
+            x.origin,
+        ))
+    }
+
+    /// `AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION`: an argument
+    /// of an aggregate calls a nondeterministic function. A call of a SQL
+    /// function is as deterministic as its body, whatever its arguments.
+    fn nondeterministic_arguments(&mut self, e: &Arc<Expr>, args: &[Bound]) {
+        if self.pending_nondeterministic.is_some() {
+            return;
+        }
+        let Some(bad) = args.iter().find(|k| {
+            !super::sqlfn::is_deterministic(&k.expr)
+                && self.nondeterministic(&k.shown(), &mut HashSet::new())
+        }) else {
+            return;
+        };
+        let shown = with_children(e, args.iter().map(Bound::shown).collect());
+        self.pending_nondeterministic = Some(AnalysisError::new(
+            AggregateFunctionWithNondeterministicExpression {
+                sql_expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
+            },
+            bad.expr.origin,
+        ));
+    }
+
+    /// Whether `e`, as written, calls a nondeterministic function; a call
+    /// of a SQL function is as deterministic as its body, whatever its
+    /// arguments. `seen` holds the nodes visited (expressions are DAGs).
+    fn nondeterministic(&self, e: &Expr, seen: &mut HashSet<usize>) -> bool {
+        if !seen.insert(addr(e)) {
+            return false;
+        }
+        if let ExprNode::Function(f) = &e.node {
+            let mut name = f.qualifier.clone();
+            name.push(f.name.clone());
+            if let FunctionLookup::Sql(def) = self.ctx.functions.lookup(&name, self.ctx.profile) {
+                return self.nondeterministic(&def.body, seen);
+            }
+            if f.qualifier.is_empty()
+                && self.ctx.functions.spark_deterministic(&f.name) == Some(false)
+            {
+                return true;
+            }
+        }
+        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+            && !f.deterministic
+        {
+            return true;
+        }
+        let mut found = false;
+        e.for_each_child(&mut |c| found = found || self.nondeterministic(c, seen));
+        found
+    }
+}
+
 /// The checks of a call that is not a window's function, out of line (the
 /// binding frame stays small): a window function needs `OVER`; an
 /// aggregate holds no aggregate and no window. A window aggregate
@@ -6943,7 +7068,9 @@ fn call(
             format!("(IF({}, {}, {}))", k[0], k[1], k[2])
         }
         _ if name.eq_ignore_ascii_case("positive") && k.len() == 1 => format!("(+ {})", k[0]),
-        _ if name.eq_ignore_ascii_case("extract") && k.len() == 2 => {
+        // A third argument is the precision the analyzer appends for a
+        // `time(p)`: not part of the call as written.
+        _ if name.eq_ignore_ascii_case("extract") && (2..=3).contains(&k.len()) => {
             format!("extract({} FROM {})", k[0], k[1])
         }
         // `trim` family: one argument is `trim(src)` / `ltrim(src)` /

@@ -14,7 +14,7 @@ use arrow_array::builder::{
     BinaryBuilder, BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     Float32Builder, Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
-    TimestampMicrosecondBuilder,
+    Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
 use arrow_schema::{DataType, Fields, TimeUnit};
@@ -25,6 +25,9 @@ use crate::text::{
     java_decimal_string, java_double_string, java_float_string32, java_parse_decimal,
     java_parse_double, java_parse_float, java_parse_integral,
 };
+
+/// Microseconds in a day.
+const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 // ---------------------------------------------------------------------------
 // Syntax and tokenizer (shared with the CSV file format).
@@ -644,6 +647,8 @@ pub enum FieldKind {
     Bin,
     /// `DATE`.
     Date,
+    /// `TIME`.
+    Time,
     /// `TIMESTAMP`.
     Timestamp,
     /// `TIMESTAMP_NTZ`.
@@ -688,6 +693,7 @@ impl FieldKind {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Self::Str,
             DataType::Binary | DataType::BinaryView | DataType::LargeBinary => Self::Bin,
             DataType::Date32 => Self::Date,
+            DataType::Time64(TimeUnit::Nanosecond) => Self::Time,
             DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             DataType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
             DataType::Null => Self::Null,
@@ -749,6 +755,8 @@ pub struct Converter<'a> {
     pub neg_inf: &'a str,
     /// Strict date pattern.
     pub date: Option<&'a DateTimePattern>,
+    /// Strict time pattern.
+    pub time: Option<&'a DateTimePattern>,
     /// Whether to fall back to the lenient grammar.
     pub fallback: bool,
 }
@@ -818,6 +826,22 @@ impl Converter<'_> {
                             Some(d) => Val::I64(i64::from(d)),
                             None => return Err(bad()),
                         }
+                    }
+                    None => return Err(bad()),
+                }
+            }
+            FieldKind::Time => {
+                let parsed = match self.time {
+                    Some(p) => p
+                        .parse_local(s, false)
+                        .map_err(|e| ConvError::Fatal(KernelError::with_row(None, e)))?
+                        .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(1_000)),
+                    None => crate::cast::time::parse_time(s),
+                };
+                match parsed {
+                    Some(n) => Val::I64(n),
+                    None if self.fallback && self.time.is_some() => {
+                        Val::I64(crate::cast::time::parse_time(s).ok_or_else(bad)?)
                     }
                     None => return Err(bad()),
                 }
@@ -945,6 +969,8 @@ enum Column {
     Bin(BinBuilder),
     /// Date.
     Date(Date32Builder),
+    /// Time.
+    Time(Time64NanosecondBuilder),
     /// Timestamp.
     Timestamp(TimestampMicrosecondBuilder),
     /// Null.
@@ -972,6 +998,7 @@ impl Column {
                     .map_err(|e| KernelError::internal(e.to_string()))?,
             ),
             DataType::Date32 => Self::Date(Date32Builder::new()),
+            DataType::Time64(TimeUnit::Nanosecond) => Self::Time(Time64NanosecondBuilder::new()),
             DataType::Timestamp(_, tz) => {
                 let b = TimestampMicrosecondBuilder::new();
                 Self::Timestamp(match tz {
@@ -1008,6 +1035,7 @@ impl Column {
             (Self::Str(b), Val::Text(x)) => b.append(Some(x)),
             (Self::Bin(b), Val::Bytes(x)) => b.append(Some(x)),
             (Self::Date(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
+            (Self::Time(b), Val::I64(x)) => b.append_value(*x),
             (Self::Timestamp(b), Val::I64(x)) => b.append_value(*x),
             (Self::Null(n, _), _) => *n = n.saturating_add(1),
             (c, _) => c.append_null(),
@@ -1028,6 +1056,7 @@ impl Column {
             Self::Str(b) => b.append(None),
             Self::Bin(b) => b.append(None),
             Self::Date(b) => b.append_null(),
+            Self::Time(b) => b.append_null(),
             Self::Timestamp(b) => b.append_null(),
             Self::Null(n, _) => *n = n.saturating_add(1),
         }
@@ -1047,6 +1076,7 @@ impl Column {
             Self::Str(b) => b.finish(),
             Self::Bin(b) => b.finish(),
             Self::Date(b) => Arc::new(b.finish()),
+            Self::Time(b) => Arc::new(b.finish()),
             Self::Timestamp(b) => Arc::new(b.finish()),
             Self::Null(n, dt) => {
                 let rows = std::mem::take(n);
@@ -1077,6 +1107,8 @@ pub struct FromCsvOptions {
     pub neg_inf: String,
     /// Strict date pattern.
     pub date_pattern: Option<DateTimePattern>,
+    /// Strict time pattern.
+    pub time_pattern: Option<DateTimePattern>,
     /// Strict timestamp pattern.
     pub timestamp_pattern: Option<DateTimePattern>,
     /// Strict timestamp_ntz pattern.
@@ -1142,6 +1174,7 @@ pub fn from_csv(
         pos_inf: &o.pos_inf,
         neg_inf: &o.neg_inf,
         date: o.date_pattern.as_ref(),
+        time: o.time_pattern.as_ref(),
         fallback: o.fallback,
     };
     let mut cols: Vec<Column> = fields
@@ -1312,6 +1345,8 @@ pub struct ToCsvOptions {
     pub null_value: String,
     /// Date pattern.
     pub date_pattern: Option<DateTimePattern>,
+    /// Time pattern (`None`: the default `HH:mm:ss[.fraction]`).
+    pub time_pattern: Option<DateTimePattern>,
     /// Timestamp pattern.
     pub timestamp_pattern: Option<DateTimePattern>,
     /// Timestamp_ntz pattern.
@@ -1451,6 +1486,10 @@ fn nested_text(
         DataType::Utf8 => out.push_str(a.as_string::<i32>().value(row)),
         DataType::LargeUtf8 => out.push_str(a.as_string::<i64>().value(row)),
         DataType::Date32 => out.push_str(&format_date(a.as_primitive::<Date32Type>().value(row))?),
+        DataType::Time64(TimeUnit::Nanosecond) => out.push_str(&crate::cast::time::format_time(
+            a.as_primitive::<arrow_array::types::Time64NanosecondType>()
+                .value(row),
+        )),
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => out.push_str(&format_timestamp(
             a.as_primitive::<TimestampMicrosecondType>().value(row),
         )?),
@@ -1632,6 +1671,19 @@ pub fn struct_to_csv(
                         cell.push_str(&format_date(a.as_primitive::<Date32Type>().value(row))?);
                         true
                     }
+                    (FieldKind::Time, _) => {
+                        let nanos = a
+                            .as_primitive::<arrow_array::types::Time64NanosecondType>()
+                            .value(row);
+                        match &o.time_pattern {
+                            Some(p) => cell.push_str(
+                                &p.format_local(nanos.div_euclid(1_000))
+                                    .map_err(|e| KernelError::with_row(Some(row), e))?,
+                            ),
+                            None => cell.push_str(&crate::cast::time::format_time(nanos)),
+                        }
+                        true
+                    }
                     (FieldKind::Timestamp, _) => {
                         cell.push_str(&format_timestamp(
                             a.as_primitive::<TimestampMicrosecondType>().value(row),
@@ -1732,6 +1784,7 @@ mod tests {
             pos_inf: "Inf".to_owned(),
             neg_inf: "-Inf".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,
@@ -1775,6 +1828,7 @@ mod tests {
             line_sep: None,
             null_value: String::new(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
         };
@@ -1894,6 +1948,7 @@ mod tests {
             line_sep: None,
             null_value: "NULL".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
         };
@@ -1933,6 +1988,7 @@ mod tests {
             line_sep: None,
             null_value: String::new(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
         };
@@ -1988,6 +2044,7 @@ mod tests {
             pos_inf: "Inf".to_owned(),
             neg_inf: "-Inf".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,

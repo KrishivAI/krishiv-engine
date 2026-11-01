@@ -230,3 +230,30 @@ fn debug_prints_shared_nodes_once() {
     assert!(text.starts_with("LogicalPlan { node: Filter { input: LogicalPlan { node: Read"));
     assert!(!text.contains('#'));
 }
+
+/// Two lowerings of one recursive query differ only in the raw loop
+/// identifiers (a process-wide counter): the normalized hash must not.
+#[test]
+fn loop_identifiers_do_not_change_the_normalized_hash() {
+    use crate::{LogicalPlan, Plan, PlanNode, normalized_plan_hash};
+
+    fn looped(id: u32) -> Plan {
+        let one = || Arc::new(LogicalPlan::new(PlanNode::OneRowRelation));
+        let reference = Arc::new(LogicalPlan::new(PlanNode::UnionLoopRef {
+            id,
+            output: Vec::new(),
+        }));
+        let node = PlanNode::UnionLoop {
+            id,
+            anchor: one(),
+            recursive: reference,
+            max_level: None,
+            output: Vec::new(),
+        };
+        Plan::try_new(LogicalPlan::new(node)).unwrap()
+    }
+    assert_eq!(
+        normalized_plan_hash(&looped(3)),
+        normalized_plan_hash(&looped(11))
+    );
+}
