@@ -1955,6 +1955,100 @@ impl Resolver<'_> {
                     b.shown = Some(with_children(e, shown_kids));
                     return Ok(b);
                 }
+                // `max_by(x, y, k)` / `min_by(x, y, k)`: the `k` values of `x`
+                // with the largest (smallest) non-NULL `y`, best first, as
+                // `slice(sort_array(collect_list(named_struct('k', y, 'v', x))
+                // FILTER (WHERE y IS NOT NULL), asc), 1, k).v`. The group's
+                // pairs are held (Spark keeps a heap of `k`); ties order by `x`.
+                if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "max_by" | "min_by")
+                    && n == 3
+                    && !window_fn
+                    && !f.distinct
+                {
+                    if let Some(Constant::Integral(k)) =
+                        self.fold(&kids[2].expr, self.ctx.conf.ansi)
+                        && !(1..=100_000).contains(&k)
+                    {
+                        let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchValueOutOfRange {
+                                expr_name: "`k`".to_owned(),
+                                value_range: "[1, 100000]".to_owned(),
+                                current_value: k.to_string(),
+                                sql_expr: format!(
+                                    "\"{}\"",
+                                    pretty(&shown, self.ctx.conf.session_zone)
+                                ),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    let origin = e.origin;
+                    let lit =
+                        |l: Literal| Arc::new(Expr::new(ExprNode::Literal(l)).with_origin(origin));
+                    let mk = |name: &str, args: Vec<Arc<Expr>>, filter: Option<Arc<Expr>>| {
+                        Arc::new(
+                            Expr::new(ExprNode::Function(FunctionCall {
+                                name: name.to_owned(),
+                                qualifier: Vec::new(),
+                                args,
+                                arg_names: Vec::new(),
+                                distinct: false,
+                                filter,
+                                within_group: Vec::new(),
+                            }))
+                            .with_origin(origin),
+                        )
+                    };
+                    let (x, y, k) = (&kids[0].expr, &kids[1].expr, &kids[2].expr);
+                    let pair = mk(
+                        "named_struct",
+                        vec![
+                            lit(Literal::String("k".to_owned())),
+                            Arc::clone(y),
+                            lit(Literal::String("v".to_owned())),
+                            Arc::clone(x),
+                        ],
+                        None,
+                    );
+                    let keep = f
+                        .filter
+                        .is_some()
+                        .then(|| kids.get(n).map(|b| Arc::clone(&b.expr)))
+                        .flatten();
+                    let present = mk("isnotnull", vec![Arc::clone(y)], None);
+                    let filter = match keep {
+                        Some(k) => mk("and", vec![present, k], None),
+                        None => present,
+                    };
+                    let collected = mk("collect_list", vec![pair], Some(filter));
+                    let sorted = mk(
+                        "sort_array",
+                        vec![
+                            collected,
+                            lit(Literal::Boolean(entry.id.name() == "min_by")),
+                        ],
+                        None,
+                    );
+                    let top = mk(
+                        "slice",
+                        vec![sorted, lit(Literal::Integer(1)), Arc::clone(k)],
+                        None,
+                    );
+                    let rewritten = mk(
+                        "__subscript",
+                        vec![top, lit(Literal::String("v".to_owned()))],
+                        None,
+                    );
+                    let mut b = self.expr(&rewritten, cx)?;
+                    b.carry_markers(&kids[..n]);
+                    b.shown = Some(with_children(
+                        e,
+                        kids[..n].iter().map(Bound::shown).collect(),
+                    ));
+                    return Ok(b);
+                }
                 if entry.id.name() == "count" && n == 0 {
                     return self.parameterless_count(e, &entry, &kids, agg, window_fn);
                 }
