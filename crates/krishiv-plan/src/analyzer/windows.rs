@@ -296,9 +296,12 @@ fn range_value(x: &Arc<Expr>, key: &krishiv_types::DataType) -> Option<RangeValu
             (_, v) => v,
         }),
         T::Decimal(d) => match lit {
-            Lit::Exact(v, s) if s <= d.scale() => v
-                .checked_mul(10_i128.checked_pow(u32::from(d.scale() - s))?)
-                .map(RangeValue::Int),
+            Lit::Exact(v, s) if s <= d.scale() => {
+                let v = v.checked_mul(10_i128.checked_pow(u32::from(d.scale() - s))?)?;
+                // The bound is cast to the key's DECIMAL(p, s) and must fit it.
+                let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
+                (-max..=max).contains(&v).then_some(RangeValue::Int(v))
+            }
             _ => None,
         },
         _ => None,

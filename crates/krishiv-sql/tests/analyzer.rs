@@ -866,8 +866,8 @@ fn window_goldens_resolve_to_a_fixed_point() {
             failures.push(format!("{sql}: not a fixed point\n{}", again.plan.root()));
         }
     }
-    assert_eq!(pending, ["range_offset"]);
-    assert_eq!(resolved, 97);
+    assert!(pending.is_empty(), "{pending:?}");
+    assert_eq!(resolved, 98);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
