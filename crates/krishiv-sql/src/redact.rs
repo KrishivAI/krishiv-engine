@@ -178,11 +178,20 @@ fn marks(sql: &str) -> Vec<Mark> {
 /// marked to the end (fail-safe).
 fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
     for (i, t) in code.iter().enumerate() {
-        if !matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent) {
+        if !matches!(
+            t.kind,
+            TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted
+        ) {
             continue;
         }
         let name = if t.kind == TokenKind::QuotedIdent {
             unquote_ident(t.span.text(sql))
+        } else if t.kind == TokenKind::DoubleQuoted {
+            // `"aes_encrypt"(...)` under doubleQuotedIdentifiers.
+            let raw = t.span.text(sql);
+            raw.get(1..raw.len().saturating_sub(1))
+                .unwrap_or_default()
+                .replace("\"\"", "\"")
         } else {
             t.span.text(sql).to_owned()
         };

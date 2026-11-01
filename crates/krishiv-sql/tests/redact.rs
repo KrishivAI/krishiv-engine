@@ -140,6 +140,8 @@ fn an_aes_key_argument_is_redacted_in_query_text() {
         "SELECT try_aes_decrypt(f(a, b), 'Canary7f3a9c' || x, 'GCM')",
         "SELECT builtin.aes_encrypt(1, Canary7f3a9c)",
         "SELECT `aes_encrypt`(1, 'Canary7f3a9c'",
+        "SELECT \"aes_encrypt\"(1, 'Canary7f3a9c')",
+        "SELECT \"try_aes_decrypt\"(1, 'Canary7f3a9c')",
         "SELECT aes_encrypt(DISTINCT 1, 'Canary7f3a9c')",
         "SELECT aes_encrypt(map('a', 'S')::MAP<STRING,STRING>['a'], 'Canary7f3a9c', 'XYZ')",
         "SELECT aes_encrypt(x::STRUCT<a: ARRAY<INT>, b: INT>.b, 'Canary7f3a9c')",
