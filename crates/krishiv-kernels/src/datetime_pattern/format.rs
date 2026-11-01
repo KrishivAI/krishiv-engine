@@ -375,8 +375,11 @@ fn region_zone_name(id: &str, utc_seconds: i64, full: bool) -> Result<String, Kr
         .ok_or_else(unknown)?;
     // A fixed-offset spelling (`Etc/GMT+0`) never has daylight time.
     let daylight = match crate::datetime::zone::resolve_zone(id).map_err(|_| unknown())? {
-        ZoneRef::Named(zone) => jiff::Timestamp::from_second(utc_seconds)
-            .is_ok_and(|t| zone.to_offset_info(t).dst().is_dst()),
+        ZoneRef::Named(zone) => {
+            // Past Jiff's range the recurring rules repeat, as `offset_at_utc` folds them.
+            jiff::Timestamp::from_second(crate::datetime::zone::fold_seconds(utc_seconds))
+                .is_ok_and(|t| zone.to_offset_info(t).dst().is_dst())
+        }
         ZoneRef::Fixed(_) => false,
     };
     let at = usize::from(daylight) * 2 + usize::from(full);

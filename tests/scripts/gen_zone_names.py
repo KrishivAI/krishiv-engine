@@ -3,8 +3,9 @@
 
 Runs a REAL Spark (never from memory) in a throw-away container. For every region id the JVM knows it sets
 `spark.sql.session.timeZone` to the id and formats one standard-time and one daylight-time instant of 2024
-(chosen by `ZoneRules.isDaylightSavings`, as `java.time` chooses the name); a zone without daylight time in
-2024 repeats the standard names. Usage (from repo root):
+(chosen by `ZoneRules.isDaylightSavings`, as `java.time` chooses the name). A zone with no daylight time in
+2024 takes its daylight instant from its historical transitions; only a zone that never had daylight time
+repeats the standard names. Usage (from repo root):
 
     docker run --rm -v "$PWD/tests/scripts:/work:ro" apache/spark:4.2.0 \
         /opt/spark/bin/spark-submit --master 'local[2]' /work/gen_zone_names.py \
@@ -37,6 +38,14 @@ def main() -> None:
                 dst = dst or t
             else:
                 std = std or t
+        if dst is None:
+            # No daylight time in 2024: look through the zone's historical transitions. (A zone that is
+            # "daylight" all of 2024, as Namibia is in Java's rearguard data, keeps 2024 for both slots.)
+            for tr in rules.getTransitions():
+                inst = tr.getInstant()
+                for t in (inst.getEpochSecond() - 1, inst.getEpochSecond()):
+                    if rules.isDaylightSavings(jvm.java.time.Instant.ofEpochSecond(t)):
+                        dst = dst or t
         std = std or dst
         dst = dst or std
         spark.conf.set("spark.sql.session.timeZone", zid)
