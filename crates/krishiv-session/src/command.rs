@@ -44,9 +44,8 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::{DataType, DecimalType};
 
-use crate::cache::is_cache_name;
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
-use crate::catalog::{is_hidden_name, reserved_temp_view_name};
+use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
 use crate::functions::{col, lit, lit_null};
@@ -263,7 +262,7 @@ impl Session {
         } else {
             quote(&v.name.value)
         };
-        if is_hidden_name(&v.name.value) || is_cache_name(&v.name.value) {
+        if is_reserved_view_name(&v.name.value) {
             return Err(reserved_temp_view_name(&v.name.value));
         }
         if v.or_replace && v.if_not_exists {
@@ -360,10 +359,11 @@ impl Session {
     /// returning an empty frame as in Spark.
     pub(crate) async fn exec_drop_view(&self, v: &DropView) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        if self
-            .state
-            .catalog
-            .exists(&v.name.value, env.analysis.conf.case_sensitive)
+        if !is_global_key(&v.name.value)
+            && self
+                .state
+                .catalog
+                .exists(&v.name.value, env.analysis.conf.case_sensitive)
         {
             self.state.catalog.drop_table(&v.name.value);
             self.state.cache.invalidate_table(&v.name.value);

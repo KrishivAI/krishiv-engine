@@ -109,6 +109,17 @@ pub(crate) fn is_hidden_name(name: &str) -> bool {
 /// What every [`global_key`] starts with.
 const GLOBAL_PREFIX: &str = "\u{1}global_temp\u{1}";
 
+/// Whether `name` is spelled like a [`global_key`]: no user-written name may be, or a local view
+/// could overwrite, read or drop a global one without the global view's checks.
+pub(crate) fn is_global_key(name: &str) -> bool {
+    name.starts_with(GLOBAL_PREFIX)
+}
+
+/// Whether a user may not name a local view `name`: a snapshot pin, a cache entry or a global key.
+pub(crate) fn is_reserved_view_name(name: &str) -> bool {
+    is_hidden_name(name) || is_cache_name(name) || is_global_key(name)
+}
+
 /// The temporary tables and views of a session, by lower-case name.
 #[derive(Debug, Default)]
 pub(crate) struct SessionCatalog {
@@ -1283,7 +1294,7 @@ impl Expander<'_> {
             && !scope
                 .iter()
                 .any(|c| same_name(c, view, self.case_sensitive))
-            && (is_hidden_name(view) || is_cache_name(view))
+            && is_reserved_view_name(view)
         {
             return Err(TableOrViewNotFound {
                 relation_name: quote(view),
@@ -1341,7 +1352,7 @@ impl Expander<'_> {
                     view.as_str(),
                     self.catalog
                         .get(&global_key(view), self.case_sensitive)
-                        .filter(|_| !is_hidden_name(view) && !is_cache_name(view)),
+                        .filter(|_| !is_reserved_view_name(view)),
                 )),
                 _ => None,
             };
@@ -1352,14 +1363,14 @@ impl Expander<'_> {
                     ..
                 } = &*entry
             {
-                let key = name
-                    .iter()
-                    .map(|p| p.to_lowercase())
-                    .collect::<Vec<_>>()
-                    .join(".");
+                // Debug-quoted parts keep the part boundaries: `a.b` (one part) and `a`.`b` differ.
+                let key = format!(
+                    "{:?}",
+                    name.iter().map(|p| p.to_lowercase()).collect::<Vec<_>>()
+                );
                 if self.path.contains(&key) {
                     return Err(InternalError {
-                        message: format!("temporary view `{key}` reads itself"),
+                        message: format!("temporary view `{}` reads itself", name.join(".")),
                     }
                     .into());
                 }

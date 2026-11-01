@@ -480,13 +480,21 @@ impl Session {
             && name
                 .namespace
                 .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
-            && let Some(entry) = self.state.catalog.get(
+            && self.state.catalog.exists(
                 &crate::catalog::global_key(&name.name),
                 env.analysis.conf.case_sensitive,
             )
-            && let crate::catalog::TempTable::View { columns, .. } = &*entry
         {
-            return Ok(columns
+            // The view's dependencies may have changed since it was created: ask the analyzer.
+            let plan = Arc::new(krishiv_plan::LogicalPlan::table([
+                crate::catalog::GLOBAL_NAMESPACE,
+                name.name.as_str(),
+            ]));
+            let df = DataFrame::new(self.clone(), plan);
+            let analysis = df.analyzed_in(env).await?;
+            return Ok(analysis
+                .analyzed
+                .output
                 .iter()
                 .map(|c| (c.name.clone(), c.data_type.clone(), None))
                 .collect());

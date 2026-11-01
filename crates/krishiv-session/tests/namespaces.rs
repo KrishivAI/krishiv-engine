@@ -331,3 +331,63 @@ fn a_cached_global_view_can_be_uncached_refreshed_and_hinted() {
         );
     }
 }
+
+#[test]
+fn a_local_view_cannot_be_spelled_like_a_global_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW v AS SELECT 1 AS x");
+    let internal = "`\u{1}global_temp\u{1}v`";
+    assert_eq!(
+        class(
+            &s,
+            &format!("CREATE OR REPLACE TEMP VIEW {internal} AS SELECT 2 AS x")
+        ),
+        "KRISHIV_RESERVED_TEMP_VIEW_NAME"
+    );
+    // DROP VIEW and a read by that name find nothing; the global view survives.
+    assert_eq!(
+        class(&s, &format!("DROP VIEW {internal}")),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        class(&s, &format!("SELECT * FROM {internal}")),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    assert_eq!(
+        rows(&s, "SELECT x FROM global_temp.v"),
+        vec![vec!["1".to_owned()]]
+    );
+}
+
+#[test]
+fn a_dotted_local_view_name_is_not_a_global_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW v AS SELECT 1 AS x");
+    run(
+        &s,
+        "CREATE TEMP VIEW `global_temp.v` AS SELECT * FROM global_temp.v",
+    );
+    assert_eq!(
+        rows(&s, "SELECT x FROM `global_temp.v`"),
+        vec![vec!["1".to_owned()]]
+    );
+}
+
+#[test]
+fn describing_a_global_view_reports_current_dependency_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW base AS SELECT 1 AS x");
+    run(
+        &s,
+        "CREATE GLOBAL TEMP VIEW v AS SELECT x FROM global_temp.base",
+    );
+    run(
+        &s,
+        "CREATE OR REPLACE GLOBAL TEMP VIEW base AS SELECT 's' AS x",
+    );
+    let d = rows(&s, "DESCRIBE global_temp.v");
+    assert_eq!(d[0][1], "string");
+}

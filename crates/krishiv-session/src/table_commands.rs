@@ -211,6 +211,7 @@ impl Session {
     /// resolves to before any permanent table.
     pub(crate) fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
         name.bare
+            && !crate::catalog::is_global_key(&name.name)
             && self
                 .state
                 .catalog
