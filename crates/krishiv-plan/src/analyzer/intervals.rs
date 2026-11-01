@@ -101,6 +101,15 @@ fn call(
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(origin))
 }
 
+/// `e`, a call from [`call`], marked nondeterministic.
+fn nondeterministic(e: &Arc<Expr>) -> Arc<Expr> {
+    let mut e = Expr::clone(e);
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &mut e.node {
+        f.deterministic = false;
+    }
+    Arc::new(e)
+}
+
 /// The shown form of `id(kids)`, over the operands as written.
 fn shown(id: Builtin, kids: [&Bound; 2], origin: Origin) -> Arc<Expr> {
     call(
@@ -160,7 +169,8 @@ impl Resolver<'_> {
                 _ => None,
             });
         }
-        if let ("positive", [e]) = (name, kids)
+        if let [e] = kids
+            && name.eq_ignore_ascii_case("positive")
             && ansi(kind(e))
         {
             let mut b = e.clone();
@@ -173,7 +183,7 @@ impl Resolver<'_> {
             return Ok(None);
         };
         let (lk, rk) = (kind(l), kind(r));
-        if let Some(op) = try_operator(name) {
+        if let Some((function, op)) = try_operator(name) {
             let datetimes = op == "-"
                 && matches!(lk, Kind::Date | Kind::Timestamp)
                 && matches!(rk, Kind::Date | Kind::Timestamp);
@@ -184,16 +194,22 @@ impl Resolver<'_> {
                 return Ok(None);
             };
             let t = inner.ty.data_type.clone().unwrap_or(DataType::Null);
-            let expr = call(
+            let mut expr = call(
                 Builtin::TryEval,
                 vec![Arc::clone(&inner.expr)],
                 t.clone(),
                 true,
                 origin,
             );
+            if !super::sqlfn::is_deterministic(&inner.expr) {
+                expr = nondeterministic(&expr);
+            }
             let shown = Arc::new(
-                Expr::function(name, vec![Expr::clone(&l.shown()), Expr::clone(&r.shown())])
-                    .with_origin(origin),
+                Expr::function(
+                    function,
+                    vec![Expr::clone(&l.shown()), Expr::clone(&r.shown())],
+                )
+                .with_origin(origin),
             );
             let mut b = bound(expr, t, shown, kids);
             b.ty.nullable = true;
@@ -482,7 +498,6 @@ impl Resolver<'_> {
         i: &Bound,
         negate: bool,
     ) -> Result<Bound, AnalysisError> {
-        let nullable = l.ty.nullable || i.ty.nullable;
         let id = if negate {
             Builtin::DatetimeSub
         } else {
@@ -519,7 +534,9 @@ impl Resolver<'_> {
             Kind::String => DataType::Timestamp,
             _ => l.ty.data_type.clone().unwrap_or(DataType::Timestamp),
         };
+        // A string that doesn't read as a timestamp is NULL.
         let start = self.implicit_cast(l, Some(ts_type.clone()));
+        let nullable = start.ty.nullable || i.ty.nullable;
         let interval = if negate {
             negative(i, origin)
         } else {
@@ -533,12 +550,15 @@ impl Resolver<'_> {
             origin,
         );
         if kind(l) == Kind::String {
-            let bounded = bound(add, ts_type, Arc::clone(&name), &kids);
+            let mut bounded = bound(add, ts_type, Arc::clone(&name), &kids);
+            bounded.ty.nullable = nullable;
             let mut back = self.implicit_cast(&bounded, Some(DataType::String));
             back.shown = Some(name);
             return Ok(back);
         }
-        Ok(bound(add, ts_type, name, &kids))
+        let mut out = bound(add, ts_type, name, &kids);
+        out.ty.nullable = nullable;
+        Ok(out)
     }
 
     /// `l - r` of timestamps (`SubtractTimestamps`); a date or a string reads
@@ -681,26 +701,31 @@ impl Resolver<'_> {
             };
             return Err(self.mismatch(m, &name, &kids, id.name(), origin));
         };
+        // A string that doesn't read as a number is NULL.
+        let nullable = interval.ty.nullable || number.ty.nullable;
         let expr = call(
             id,
             vec![Arc::clone(&interval.expr), Arc::clone(&number.expr)],
             out.clone(),
-            interval.ty.nullable || number.ty.nullable,
+            nullable,
             origin,
         );
-        Ok(bound(expr, out, name, &kids))
+        let mut scaled = bound(expr, out, name, &kids);
+        scaled.ty.nullable = nullable;
+        Ok(scaled)
     }
 }
 
-/// The operator a `try_*` function evaluates.
-fn try_operator(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "try_add" => "+",
-        "try_subtract" => "-",
-        "try_multiply" => "*",
-        "try_divide" => "/",
-        _ => return None,
-    })
+/// A `try_*` function, in any case: its name and the operator it evaluates.
+fn try_operator(name: &str) -> Option<(&'static str, &'static str)> {
+    [
+        ("try_add", "+"),
+        ("try_subtract", "-"),
+        ("try_multiply", "*"),
+        ("try_divide", "/"),
+    ]
+    .into_iter()
+    .find(|(function, _)| name.eq_ignore_ascii_case(function))
 }
 
 fn calendar(origin: Origin) -> AnalysisError {

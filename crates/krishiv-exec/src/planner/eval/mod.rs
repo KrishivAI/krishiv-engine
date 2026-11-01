@@ -398,7 +398,10 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 {
                     child = nested_cast::interval_leaves(child, from);
                 }
-                cast::compile(child, to, *mode, input)
+                Ok(nested_cast::narrowed(
+                    cast::compile(child, to, *mode, input)?,
+                    to,
+                ))
             }
         },
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
@@ -519,7 +522,7 @@ fn builtin(
             interval::binary(b, l, r, out, f.nullable, env)?
         }
         (Builtin::ExtractAnsiIntervalDays, 1) => interval::unary(b, args.pop().ok_or_else(arity)?),
-        (Builtin::TryEval, 1) => interval::try_eval(args.pop().ok_or_else(arity)?),
+        (Builtin::TryEval, 1) => interval::try_eval(args.pop().ok_or_else(arity)?, f.deterministic),
         (Builtin::IntegralDivide, 2) => {
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
@@ -683,9 +686,12 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
             arrow_buffer::IntervalMonthDayNano::new(
                 *months,
                 *days,
-                micros
-                    .checked_mul(1000)
-                    .ok_or_else(|| internal("a calendar interval's microseconds"))?,
+                micros.checked_mul(1000).ok_or_else(|| {
+                    unsupported(
+                        "a calendar interval whose microseconds overflow the nanosecond \
+                             field of its Arrow type",
+                    )
+                })?,
             ),
         ])),
         // A one-row string map, as the JSON options bind.
@@ -1030,5 +1036,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn a_calendar_literal_past_the_nanosecond_field_is_refused_by_name() {
+        let literal = |micros| Literal::CalendarInterval {
+            months: 0,
+            days: 0,
+            micros,
+        };
+        assert!(super::literal_array(&literal(i64::MAX / 1000)).is_ok());
+        let e = super::literal_array(&literal(i64::MAX / 1000 + 1)).err();
+        assert_eq!(
+            e.map(|e| e.error_class().name().to_owned()).as_deref(),
+            Some("KRISHIV_UNSUPPORTED_FEATURE")
+        );
     }
 }

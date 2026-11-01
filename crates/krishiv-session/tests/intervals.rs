@@ -241,6 +241,118 @@ fn interval_columns_behave_as_values() -> R {
 /// A session whose zone is not UTC: `TIMESTAMP_NTZ` and `TIMESTAMP` convert
 /// through it, in both directions.
 #[test]
+fn a_cast_to_a_coarser_end_field_drops_what_is_below_it() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT DATE '2024-01-01' + CAST(INTERVAL '13' MONTH AS INTERVAL YEAR), \
+             CAST(INTERVAL '-13' MONTH AS INTERVAL YEAR) = INTERVAL '-1' YEAR, \
+             CAST(INTERVAL '1 02:03' DAY TO MINUTE AS INTERVAL DAY) = INTERVAL '1' DAY, \
+             CAST(INTERVAL '-90' SECOND AS INTERVAL MINUTE) = INTERVAL '-1' MINUTE, \
+             CAST(INTERVAL '1' YEAR AS INTERVAL MONTH) = INTERVAL '12' MONTH, \
+             element_at(CAST(array(INTERVAL '13' MONTH) AS ARRAY<INTERVAL YEAR>), 1) \
+             = INTERVAL '1' YEAR, \
+             CAST(named_struct('a', INTERVAL '13' MONTH, 'b', INTERVAL '1.5' SECOND) \
+             AS STRUCT<a: INTERVAL YEAR, b: INTERVAL SECOND>).b = INTERVAL '1.5' SECOND"
+        )?,
+        ["2025-01-01|true|true|true|true|true|true"]
+    );
+    block_on(session.sql(
+        "CREATE TEMPORARY VIEW n AS SELECT * FROM VALUES \
+         (INTERVAL '13' MONTH), (CAST(NULL AS INTERVAL MONTH)) AS t(i)",
+    ))?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT CAST(i AS INTERVAL YEAR) = INTERVAL '1' YEAR, \
+             TRY_CAST(i AS INTERVAL YEAR) = INTERVAL '1' YEAR FROM n"
+        )?,
+        ["true|true", "NULL|NULL"]
+    );
+    Ok(())
+}
+
+#[test]
+fn interval_function_names_read_in_any_case() -> R {
+    let session = Session::new()?;
+    for (expr, name, value) in [
+        (
+            "TRY_ADD(INTERVAL '1' DAY, INTERVAL '2' DAY)",
+            "try_add(INTERVAL '1' DAY, INTERVAL '2' DAY)",
+            "INTERVAL '3' DAY",
+        ),
+        (
+            "Try_Divide(INTERVAL '4' MONTH, 2)",
+            "try_divide(INTERVAL '4' MONTH, 2)",
+            "INTERVAL '0-2' YEAR TO MONTH",
+        ),
+        (
+            "TRY_SUBTRACT(DATE '2024-01-02', DATE '2024-01-01')",
+            "try_subtract(DATE '2024-01-02', DATE '2024-01-01')",
+            "INTERVAL '1' DAY",
+        ),
+        (
+            "POSITIVE(INTERVAL '1' DAY)",
+            "(+ INTERVAL '1' DAY)",
+            "INTERVAL '1' DAY",
+        ),
+    ] {
+        let got = answer(&session, expr);
+        assert_eq!(got.error_class, None, "{expr}");
+        assert_eq!(got.name.as_deref(), Some(name), "{expr}");
+        assert_eq!(got.value.as_deref(), Some(value), "{expr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_try_function_evaluates_a_nondeterministic_operand_once_per_row() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT try_divide(INTERVAL '12' MONTH, monotonically_increasing_id()) FROM range(3)"
+        )?,
+        [
+            "NULL",
+            "INTERVAL '1-0' YEAR TO MONTH",
+            "INTERVAL '0-6' YEAR TO MONTH",
+        ]
+    );
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT try_divide(INTERVAL '1000' DAY, rand(42)) = INTERVAL '1000' DAY / rand(42) \
+             FROM range(3)"
+        )?,
+        ["true", "true", "true"]
+    );
+    Ok(())
+}
+
+#[test]
+fn an_operand_read_as_another_type_can_make_the_result_null() -> R {
+    let session = Session::new()?;
+    block_on(session.sql("SET spark.sql.ansi.enabled = false"))?;
+    for expr in [
+        "INTERVAL '1' DAY * s",
+        "s + INTERVAL '1' DAY",
+        "s - INTERVAL '1' DAY",
+    ] {
+        assert_eq!(
+            rows(
+                &session,
+                &format!("SELECT i IS NULL FROM (SELECT {expr} AS i FROM VALUES ('bad') t(s))")
+            )?,
+            ["true"],
+            "{expr}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn wall_clock_casts_read_the_session_zone() -> R {
     let session = Session::new()?;
     block_on(session.sql("SET spark.sql.session.timeZone = America/Los_Angeles"))?;

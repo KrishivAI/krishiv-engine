@@ -250,14 +250,17 @@ impl PhysExpr for Unary {
 }
 
 /// Spark's `TryEval`: the child's values, NULL in a row where it fails. The
-/// batch runs whole first; only a failure pays for going row by row.
+/// batch runs whole first; only a failure pays for going row by row. A
+/// nondeterministic child goes row by row at once, since running it a second
+/// time would read different values.
 #[derive(Debug)]
 struct TryEval {
     e: Arc<dyn PhysExpr>,
+    deterministic: bool,
 }
 
-pub(super) fn try_eval(e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
-    Arc::new(TryEval { e })
+pub(super) fn try_eval(e: Arc<dyn PhysExpr>, deterministic: bool) -> Arc<dyn PhysExpr> {
+    Arc::new(TryEval { e, deterministic })
 }
 
 impl PhysExpr for TryEval {
@@ -274,15 +277,20 @@ impl PhysExpr for TryEval {
     }
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
-        match self.e.eval(batch, partition) {
-            Ok(v) => return Ok(v),
-            Err(e) if !is_row_failure(&e) => return Err(e),
-            Err(_) => {}
+        if self.deterministic {
+            match self.e.eval(batch, partition) {
+                Ok(v) => return Ok(v),
+                Err(e) if !is_row_failure(&e) => return Err(e),
+                Err(_) => {}
+            }
+            if self.e.is_constant() {
+                return Ok(Value::Scalar(new_null_array(self.e.data_type(), 1)));
+            }
+        }
+        if batch.num_rows() == 0 {
+            return Ok(Value::Array(new_null_array(self.e.data_type(), 0)));
         }
         let null = || new_null_array(self.e.data_type(), 1);
-        if self.e.is_constant() {
-            return Ok(Value::Scalar(null()));
-        }
         let mut rows: Vec<ArrayRef> = Vec::with_capacity(batch.num_rows());
         for row in 0..batch.num_rows() {
             rows.push(match self.e.eval(&batch.slice(row, 1), partition) {
@@ -342,7 +350,7 @@ mod tests {
         let column: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let batch = RecordBatch::try_new(Arc::new(schema), vec![column])
             .map_err(|e| internal(&e.to_string()))?;
-        try_eval(Arc::new(Fails(fail))).eval(&batch, 0)
+        try_eval(Arc::new(Fails(fail)), true).eval(&batch, 0)
     }
 
     #[test]
@@ -361,6 +369,17 @@ mod tests {
         assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
         let e = run(|| internal("a bug")).err().ok_or("raised nothing")?;
         assert_eq!(e.error_class().name(), "INTERNAL_ERROR");
+        Ok(())
+    }
+
+    #[test]
+    fn a_nondeterministic_child_runs_once_per_row()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        let e = try_eval(Arc::new(Fails(|| IntervalDividedByZero {}.into())), false);
+        assert_eq!(e.eval(&batch, 0)?.array().null_count(), 2);
+        assert_eq!(e.eval(&batch.slice(0, 0), 0)?.array().len(), 0);
         Ok(())
     }
 }

@@ -8,7 +8,7 @@ use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_plan::CastMode;
-use krishiv_types::DataType;
+use krishiv_types::{DataType, DayTimeField, YearMonthField};
 
 use super::nested_cast;
 use super::strings::{from_view, to_view};
@@ -356,6 +356,39 @@ pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef
         }
     };
     Ok(Arc::new(out))
+}
+
+/// The size of a year-month type's end field, in months.
+const fn month_unit(end: YearMonthField) -> i32 {
+    match end {
+        YearMonthField::Year => 12,
+        YearMonthField::Month => 1,
+    }
+}
+
+/// The microseconds a day-time type with this end field keeps a multiple of;
+/// SECOND keeps its fraction.
+const fn micro_step(end: DayTimeField) -> i64 {
+    match end {
+        DayTimeField::Day => 86_400_000_000,
+        DayTimeField::Hour => 3_600_000_000,
+        DayTimeField::Minute => 60_000_000,
+        DayTimeField::Second => 1,
+    }
+}
+
+/// An interval column of type `to`, without what is below `to`'s end field.
+pub(super) fn truncate_interval(to: &DataType, a: &dyn Array) -> Result<ArrayRef> {
+    use krishiv_kernels::interval::{truncate_day_time, truncate_year_month};
+    Ok(match to {
+        DataType::YearMonthInterval { end, .. } => {
+            Arc::new(truncate_year_month(a.as_primitive(), month_unit(*end)))
+        }
+        DataType::DayTimeInterval { end, .. } => {
+            Arc::new(truncate_day_time(a.as_primitive(), micro_step(*end)))
+        }
+        other => return Err(internal(&format!("truncating a {other} as an interval"))),
+    })
 }
 
 impl PhysExpr for IntervalToString {
