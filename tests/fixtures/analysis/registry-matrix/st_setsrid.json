@@ -9,14 +9,6 @@
       "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), 1L)) | ST_INVALID_SRID_VALUE"
     },
     {
-      "id": "st_setsrid#3e0e314f9dc7/ansi_on",
-      "reason": "SELECT st_srid(st_setsrid(INTERVAL '1-2' YEAR TO MONTH, 4326)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_setsrid#3e0e314f9dc7/ansi_off",
-      "reason": "SELECT st_srid(st_setsrid(INTERVAL '1-2' YEAR TO MONTH, 4326)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "st_setsrid#4da95088a0b5/ansi_on",
       "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), CAST(-2147483648 AS INT))) | ST_INVALID_SRID_VALUE"
     },
@@ -47,14 +39,6 @@
     {
       "id": "st_setsrid#575effaa71d5/ansi_off",
       "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), 'abc')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "st_setsrid#5be14e1c055b/ansi_on",
-      "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), INTERVAL '1-2' YEAR TO MONTH)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_setsrid#5be14e1c055b/ansi_off",
-      "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), INTERVAL '1-2' YEAR TO MONTH)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "st_setsrid#5c9e72f1d72e/ansi_on",
@@ -103,22 +87,6 @@
     {
       "id": "st_setsrid#a1771c38f81b/ansi_off",
       "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), CAST(1 AS TINYINT))) | ST_INVALID_SRID_VALUE"
-    },
-    {
-      "id": "st_setsrid#aeacad01024a/ansi_on",
-      "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), INTERVAL '1 02:03:04' DAY TO SECOND)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_setsrid#aeacad01024a/ansi_off",
-      "reason": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), INTERVAL '1 02:03:04' DAY TO SECOND)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_setsrid#ba99e61ed570/ansi_on",
-      "reason": "SELECT st_srid(st_setsrid(INTERVAL '1 02:03:04' DAY TO SECOND, 4326)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_setsrid#ba99e61ed570/ansi_off",
-      "reason": "SELECT st_srid(st_setsrid(INTERVAL '1 02:03:04' DAY TO SECOND, 4326)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "st_setsrid#bba6b9944b29/ansi_on",

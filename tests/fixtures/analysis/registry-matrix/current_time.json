@@ -90,19 +90,19 @@
     },
     {
       "id": "current_time#5f3dbfc08322/ansi_on",
-      "reason": "SELECT current_time(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+      "reason": "SELECT current_time(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
       "id": "current_time#5f3dbfc08322/ansi_off",
-      "reason": "SELECT current_time(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+      "reason": "SELECT current_time(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
       "id": "current_time#6087fbe30a9a/ansi_on",
-      "reason": "SELECT current_time(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+      "reason": "SELECT current_time(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
       "id": "current_time#6087fbe30a9a/ansi_off",
-      "reason": "SELECT current_time(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+      "reason": "SELECT current_time(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
       "id": "current_time#64bcbd36181c/ansi_on",

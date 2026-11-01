@@ -9,28 +9,12 @@
       "reason": "SELECT hex(st_asbinary(st_geogfromwkb('abc'))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "st_geogfromwkb#3b2874536049/ansi_on",
-      "reason": "SELECT hex(st_asbinary(st_geogfromwkb(INTERVAL '1 02:03:04' DAY TO SECOND))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_geogfromwkb#3b2874536049/ansi_off",
-      "reason": "SELECT hex(st_asbinary(st_geogfromwkb(INTERVAL '1 02:03:04' DAY TO SECOND))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "st_geogfromwkb#524af6fa907a/ansi_on",
       "reason": "SELECT hex(st_asbinary(st_geogfromwkb('1'))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "st_geogfromwkb#524af6fa907a/ansi_off",
       "reason": "SELECT hex(st_asbinary(st_geogfromwkb('1'))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_geogfromwkb#709b75f36aa7/ansi_on",
-      "reason": "SELECT hex(st_asbinary(st_geogfromwkb(INTERVAL '1-2' YEAR TO MONTH))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_geogfromwkb#709b75f36aa7/ansi_off",
-      "reason": "SELECT hex(st_asbinary(st_geogfromwkb(INTERVAL '1-2' YEAR TO MONTH))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,
