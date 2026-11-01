@@ -268,6 +268,7 @@ __all__ = [
     "schema_of_json",
     "sec",
     "second",
+    "sequence",
     "session_user",
     "sha",
     "sha1",
@@ -1649,6 +1650,11 @@ def sec(col: ColumnOrName) -> Column:
 def second(col: ColumnOrName) -> Column:
     """Calls the registry function ``second``."""
     return _call("second", _named(col, "col"))
+
+
+def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``sequence``."""
+    return _call("sequence", _named(start, "start"), _named(stop, "stop"), *_opt(_named, step, "step"))
 
 
 def session_user() -> Column:

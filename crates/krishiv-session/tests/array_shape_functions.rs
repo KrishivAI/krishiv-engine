@@ -6,7 +6,7 @@
 #![cfg(test)]
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float32Type, Float64Type, Int32Type, Int64Type};
+use arrow_array::types::{Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type};
 use arrow_array::{Array, Decimal128Array};
 use arrow_schema::DataType;
 use futures::executor::block_on;
@@ -28,6 +28,8 @@ fn render(c: &dyn Array, row: usize) -> String {
     };
     match c.data_type() {
         DataType::Boolean => c.as_boolean().value(row).to_string(),
+        DataType::Int8 => c.as_primitive::<Int8Type>().value(row).to_string(),
+        DataType::Int16 => c.as_primitive::<Int16Type>().value(row).to_string(),
         DataType::Int32 => c.as_primitive::<Int32Type>().value(row).to_string(),
         DataType::Int64 => c.as_primitive::<Int64Type>().value(row).to_string(),
         DataType::Float32 => float(f64::from(c.as_primitive::<Float32Type>().value(row))),
@@ -90,6 +92,23 @@ const ROWS: &[(&str, &str)] = &[
     ("slice(array(1,2), NULL, 1)", "NULL"),
     ("slice(array(1,2), cast(1 as bigint), 1)", "[1]"),
     ("slice(array(1,2), '1', 1)", "[1]"),
+    ("sequence(1, 5)", "[1, 2, 3, 4, 5]"),
+    ("sequence(5, 1)", "[5, 4, 3, 2, 1]"),
+    ("sequence(1, 10, 3)", "[1, 4, 7, 10]"),
+    ("sequence(10, 1, -3)", "[10, 7, 4, 1]"),
+    ("sequence(1, 1)", "[1]"),
+    ("sequence(1, 1, 0)", "[1]"),
+    ("sequence(NULL, 5)", "NULL"),
+    ("sequence(1, NULL)", "NULL"),
+    ("sequence(1, 5, NULL)", "NULL"),
+    ("sequence(cast(1 as tinyint), 3, 1L)", "[1, 2, 3]"),
+    ("sequence(1, 3, cast(1 as tinyint))", "[1, 2, 3]"),
+    ("typeof(sequence(1, 5L))", "array<bigint>"),
+    ("typeof(sequence(NULL, 5))", "array<int>"),
+    (
+        "typeof(sequence(cast(1 as tinyint), cast(3 as tinyint)))",
+        "array<tinyint>",
+    ),
 ];
 
 #[test]
@@ -109,6 +128,22 @@ const ERRORS: &[(&str, &str)] = &[
     ("flatten(NULL)", "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"),
     ("slice(array(1,2), 0, 1)", "INVALID_PARAMETER_VALUE.START"),
     ("slice(array(1,2), 1, -1)", "INVALID_PARAMETER_VALUE.LENGTH"),
+    ("sequence(1, 5, 0)", "_LEGACY_ERROR_TEMP_3243"),
+    ("sequence(1, 5, -1)", "_LEGACY_ERROR_TEMP_3243"),
+    (
+        "sequence(1, 2147483647)",
+        "COLLECTION_SIZE_LIMIT_EXCEEDED.PARAMETER",
+    ),
+    (
+        "sequence(1.5, 3)",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    (
+        "sequence(true, false)",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    ("sequence(1)", "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"),
+    ("sequence(1, 2, 3, 4)", "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"),
     (
         "array_join(array(array('a')), ',')",
         "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
@@ -137,4 +172,17 @@ fn rows_over_columns() {
     )
     .unwrap();
     assert_eq!(got, ["[2, 3]", "[6]", "NULL"]);
+}
+
+#[test]
+fn sequence_over_columns() {
+    let s = Session::new().unwrap();
+    let got = run(
+        &s,
+        "SELECT sequence(x, 3) FROM VALUES (1), (5), (NULL) AS t(x)",
+    )
+    .unwrap();
+    assert_eq!(got, ["[1, 2, 3]", "[5, 4, 3]", "NULL"]);
+    let err = run(&s, "SELECT sequence(1, 3, x) FROM VALUES (1), (0) AS t(x)").unwrap_err();
+    assert_eq!(err.error_class().name(), "_LEGACY_ERROR_TEMP_3243");
 }

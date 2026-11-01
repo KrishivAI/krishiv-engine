@@ -280,6 +280,7 @@ PYSPARK_SIGNATURES = {
     "size": "col",
     "skewness": "col",
     "flatten": "col",
+    "sequence": "start, stop, step=None",
     "slice": "x, start, length",
     "sort_array": "col, asc=True",
     "soundex": "col",

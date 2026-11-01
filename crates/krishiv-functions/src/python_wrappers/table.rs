@@ -595,6 +595,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("array_repeat", "col: ColumnOrName, count: ColumnOrName | int"),
         Row::new("cardinality", "col: ColumnOrName"),
         Row::new("flatten", "col: ColumnOrName"),
+        Row::new("sequence", "start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName = None"),
         Row::new("slice", "x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int"),
         Row::new("sort_array", "col: ColumnOrName, asc: bool = True"),
         Row::new("arrays_zip", "*cols: ColumnOrName"),
