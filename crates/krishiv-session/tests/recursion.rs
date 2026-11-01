@@ -169,3 +169,17 @@ fn a_recursive_term_reads_an_earlier_cte() {
     ));
     assert_eq!(got, ["1", "2", "3"]);
 }
+
+#[test]
+fn the_row_limit_applies() {
+    let s = Session::new().unwrap();
+    // 100,000 rows per round pass the million in eleven rounds.
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH RECURSIVE r(n) AS (SELECT id FROM range(100000) UNION ALL SELECT n FROM r) \
+             SELECT count(*) FROM r"
+        ),
+        ErrorClass::RecursionRowLimitExceeded
+    );
+}
