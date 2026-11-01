@@ -12,6 +12,7 @@
 //! `MAX RECURSION LEVEL n` overrides the first.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -287,6 +288,17 @@ fn pushed_limits(root: &Arc<LogicalPlan>) -> HashMap<u32, usize> {
     /// has none.
     type Reads = HashMap<u32, Option<usize>>;
 
+    /// The definitions in scope, innermost first.
+    struct Def {
+        name: String,
+        /// The loop id when the definition is a loop (through projections).
+        id: Option<u32>,
+        plan: Arc<LogicalPlan>,
+        outer: Defs,
+    }
+    type Defs = Option<Rc<Def>>;
+    type Seen = HashSet<(usize, Option<usize>)>;
+
     fn through(p: &Arc<LogicalPlan>) -> &Arc<LogicalPlan> {
         let mut d = p;
         while let PlanNode::SubqueryAlias { input, .. } | PlanNode::Project { input, .. } = &d.node
@@ -299,38 +311,54 @@ fn pushed_limits(root: &Arc<LogicalPlan>) -> HashMap<u32, usize> {
     fn plan(
         p: &Arc<LogicalPlan>,
         limit: Option<usize>,
-        defs: &mut Vec<(String, Option<u32>)>,
+        defs: &Defs,
         reads: &mut Reads,
-        seen: &mut HashSet<(usize, Option<usize>)>,
+        seen: &mut Seen,
     ) {
         if !seen.insert((Arc::as_ptr(p) as usize, limit)) {
             return;
         }
         match &p.node {
             PlanNode::CteRef(r) => {
-                let def = defs
-                    .iter()
-                    .rev()
-                    .find(|(n, _)| n.eq_ignore_ascii_case(&r.name));
-                if let Some((_, Some(id))) = def {
-                    reads
-                        .entry(*id)
-                        .and_modify(|m| *m = m.zip(limit).map(|(a, b)| a.max(b)))
-                        .or_insert(limit);
+                let mut cur = defs.as_ref();
+                while let Some(d) = cur {
+                    if d.name.eq_ignore_ascii_case(&r.name) {
+                        match d.id {
+                            Some(id) => {
+                                reads
+                                    .entry(id)
+                                    .and_modify(|m| *m = m.zip(limit).map(|(a, b)| a.max(b)))
+                                    .or_insert(limit);
+                            }
+                            // A plain CTE passes its reader's limit on to
+                            // what it reads.
+                            None => plan(&d.plan, limit, &d.outer, reads, seen),
+                        }
+                        break;
+                    }
+                    cur = d.outer.as_ref();
                 }
             }
             PlanNode::WithCte { input, ctes } => {
-                let before = defs.len();
+                let mut scope = defs.clone();
                 for c in ctes {
-                    plan(&c.plan, None, defs, reads, seen);
                     let id = match &through(&c.plan).node {
                         PlanNode::UnionLoop { id, .. } => Some(*id),
                         _ => None,
                     };
-                    defs.push((c.name.clone(), id));
+                    // A loop's own terms are read once, without a limit; a
+                    // plain definition is read at each of its references.
+                    if id.is_some() {
+                        plan(&c.plan, None, &scope, reads, seen);
+                    }
+                    scope = Some(Rc::new(Def {
+                        name: c.name.clone(),
+                        id,
+                        plan: Arc::clone(&c.plan),
+                        outer: scope,
+                    }));
                 }
-                plan(input, limit, defs, reads, seen);
-                defs.truncate(before);
+                plan(input, limit, &scope, reads, seen);
             }
             PlanNode::Limit { input, limit: l } => {
                 let n = match &l.node {
@@ -358,12 +386,7 @@ fn pushed_limits(root: &Arc<LogicalPlan>) -> HashMap<u32, usize> {
         }
     }
 
-    fn expr(
-        e: &Arc<krishiv_plan::Expr>,
-        defs: &mut Vec<(String, Option<u32>)>,
-        reads: &mut Reads,
-        seen: &mut HashSet<(usize, Option<usize>)>,
-    ) {
+    fn expr(e: &Arc<krishiv_plan::Expr>, defs: &Defs, reads: &mut Reads, seen: &mut Seen) {
         if let krishiv_plan::ExprNode::Subquery { plan: p, .. } = &e.node {
             plan(p, None, defs, reads, seen);
         }
@@ -371,7 +394,7 @@ fn pushed_limits(root: &Arc<LogicalPlan>) -> HashMap<u32, usize> {
     }
 
     let mut reads = Reads::new();
-    plan(root, None, &mut Vec::new(), &mut reads, &mut HashSet::new());
+    plan(root, None, &None, &mut reads, &mut HashSet::new());
     reads
         .into_iter()
         .filter_map(|(id, n)| n.map(|n| (id, n)))

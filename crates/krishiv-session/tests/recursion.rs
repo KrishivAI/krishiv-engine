@@ -499,3 +499,23 @@ fn current_timestamp_is_one_instant_across_rounds() {
     );
     assert_eq!(got, vec![vec!["1".to_owned()]]);
 }
+
+#[test]
+fn an_outer_limit_reaches_a_loop_through_a_plain_cte() {
+    let s = Session::new().unwrap();
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r), \
+         s AS (SELECT * FROM r) SELECT * FROM s LIMIT 3",
+    ));
+    assert_eq!(got, ["1", "2", "3"]);
+    // A reader without a limit still keeps the level limit.
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r), \
+             s AS (SELECT * FROM r) SELECT * FROM s"
+        ),
+        ErrorClass::RecursionLevelLimitExceeded
+    );
+}
