@@ -99,6 +99,15 @@ const ROWS: &[(&str, &str)] = &[
     ("sequence(1, 1)", "[1]"),
     ("sequence(1, 1, 0)", "[1]"),
     ("sequence(NULL, 5)", "NULL"),
+    ("sequence('1', 3)", "[1, 2, 3]"),
+    ("sequence(1, '3')", "[1, 2, 3]"),
+    ("sequence(1, 3, '1')", "[1, 2, 3]"),
+    ("sequence(NULL, NULL, 1)", "NULL"),
+    ("sequence('1', '3', 1)", "[1, 2, 3]"),
+    ("sequence('1', 3, '1')", "[1, 2, 3]"),
+    ("sequence(NULL, '3', 1)", "NULL"),
+    ("sequence(1, NULL, '1')", "NULL"),
+    ("typeof(sequence(1, '3'))", "array<bigint>"),
     ("sequence(1, NULL)", "NULL"),
     ("sequence(1, 5, NULL)", "NULL"),
     ("sequence(cast(1 as tinyint), 3, 1L)", "[1, 2, 3]"),
@@ -140,6 +149,27 @@ const ERRORS: &[(&str, &str)] = &[
     ),
     (
         "sequence(true, false)",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    (
+        "sequence('1', '3')",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    (
+        "sequence(NULL, NULL)",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    ("sequence('a', 3)", "CAST_INVALID_INPUT"),
+    (
+        "sequence('1', '3', '1')",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    (
+        "sequence(NULL, '3')",
+        "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+    ),
+    (
+        "sequence(NULL, NULL, '1')",
         "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
     ),
     ("sequence(1)", "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"),
@@ -193,4 +223,18 @@ fn sequence_over_columns() {
     assert_eq!(got, ["[1, 2, 3]", "[5, 4, 3]", "NULL"]);
     let err = run(&s, "SELECT sequence(1, 3, x) FROM VALUES (1), (0) AS t(x)").unwrap_err();
     assert_eq!(err.error_class().name(), "_LEGACY_ERROR_TEMP_3243");
+}
+
+#[test]
+fn sequence_strings_need_ansi() {
+    let s = Session::new().unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    for sql in ["sequence('1', 5)", "sequence(1, 'abc')", "sequence(1, '1')"] {
+        let err = run(&s, &format!("SELECT {sql}")).unwrap_err();
+        assert_eq!(
+            err.error_class().name(),
+            "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+            "{sql}"
+        );
+    }
 }

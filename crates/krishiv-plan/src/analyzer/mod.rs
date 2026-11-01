@@ -75,6 +75,16 @@ mod builtins;
 mod catalog;
 mod coerce;
 mod exprs;
+
+/// Whether `name` is an AES function, in any letter case: the key is the
+/// second argument and must not reach a name, a plan or an error (ADR 0042).
+pub(crate) fn is_aes_function(name: &str) -> bool {
+    // A qualified call (`builtin.aes_encrypt`) is judged by its last segment.
+    let name = name.rsplit('.').next().unwrap_or(name);
+    ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+        .iter()
+        .any(|f| name.eq_ignore_ascii_case(f))
+}
 mod fold;
 mod fold_ops;
 mod generate;

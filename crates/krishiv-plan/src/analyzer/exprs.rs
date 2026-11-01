@@ -153,7 +153,7 @@ impl Bound {
 /// to, when `field` is a literal naming one.
 fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
     use krishiv_kernels::datetime::DatePart as P;
-    if !matches!(function, "extract" | "date_part") {
+    if !matches!(function, "extract" | "date_part" | "datepart") {
         return None;
     }
     let ExprNode::Function(f) = &call.node else {
@@ -917,12 +917,27 @@ impl Resolver<'_> {
         // Rewritten calls stay alive for the pass: `done` is keyed by
         // address.
         let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
+        // The key argument of an AES call and everything under it: an
+        // error raised there never shows the key (ADR 0042), so its
+        // message parameters are masked.
+        let mut secret: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut stack = vec![Step::Enter(Arc::clone(e), top)];
         while let Some(step) = stack.pop() {
             match step {
                 Step::Enter(x, ctx) => {
                     if done.contains_key(&(addr(&*x), ctx)) {
                         continue;
+                    }
+                    if let ExprNode::Function(f) = &x.node
+                        && super::is_aes_function(&f.name)
+                        && let Some(key) = f.args.get(1)
+                    {
+                        secret.insert(addr(&**key));
+                    }
+                    if secret.contains(&addr(&*x)) {
+                        x.for_each_child(&mut |c| {
+                            secret.insert(addr(&**c));
+                        });
                     }
                     if let Some(rewritten) = self.star_args(&x, cx)? {
                         rewritten_calls.push(Arc::clone(&rewritten));
@@ -989,7 +1004,14 @@ impl Resolver<'_> {
                         .iter()
                         .filter_map(|(c, k)| done.get(&(addr(&**c), *k)).cloned())
                         .collect();
-                    let b = self.expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx)?;
+                    let b = self
+                        .expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx)
+                        .map_err(|mut err| {
+                            if secret.contains(&addr(&*x)) {
+                                err.error = err.error.with_redacted_parameters();
+                            }
+                            err
+                        })?;
                     done.insert((addr(&*x), ctx), b);
                 }
             }
@@ -2294,7 +2316,7 @@ impl Resolver<'_> {
                 // of them, and Arrow's `Time64` does not carry `p`): the
                 // precision follows as a trailing literal.
                 if is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "extract" | "date_part")
+                    && matches!(entry.id.name(), "extract" | "date_part" | "datepart")
                     && n == 2
                     && let Some(DataType::Time { precision }) = &call_kids[1].ty.data_type
                     && *precision < 6
@@ -4765,12 +4787,17 @@ impl Resolver<'_> {
                     sql_expr,
                     param_index: ordinal(param),
                     required_type: required,
-                    input_sql: format!(
-                        "\"{}\"",
-                        kids.get(arg)
-                            .map(|k| pretty(&k.shown(), zone))
-                            .unwrap_or_default()
-                    ),
+                    input_sql: if arg == 1 && super::is_aes_function(function) {
+                        // The key never reaches an error message (ADR 0042).
+                        "\"***\"".to_owned()
+                    } else {
+                        format!(
+                            "\"{}\"",
+                            kids.get(arg)
+                                .map(|k| pretty(&k.shown(), zone))
+                                .unwrap_or_default()
+                        )
+                    },
                     input_type: quoted_type(ty.as_ref()),
                 }
                 .into()
@@ -7026,6 +7053,13 @@ fn call(
     arg_names: Option<&[Option<String>]>,
     data_type: Option<&DataType>,
 ) -> String {
+    // The key of `aes_encrypt`/`aes_decrypt` never reaches a name, an error
+    // message or a log (ADR 0042).
+    if super::is_aes_function(name) && k.len() >= 2 {
+        let mut shown: Vec<&str> = k.to_vec();
+        shown[1] = "***";
+        return format!("{name}({})", shown.join(", "));
+    }
     let infix = |sym: &str| format!("({} {sym} {})", k[0], k[1]);
     // `[NOT] LIKE|ILIKE ANY|SOME|ALL` with literal patterns: Spark's
     // `LikeAny`-family name, `likeany(child)` (the child is `lower(child)`

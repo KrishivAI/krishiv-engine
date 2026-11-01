@@ -113,6 +113,11 @@ fn bin(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::String, c)
 }
 
+/// `factorial(n)` is a nullable bigint (NULL outside 0..=20).
+fn factorial(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, true))
+}
+
 /// `conv(n, from, to)` is a string, always nullable (bad bases are NULL).
 fn conv(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::String, true))
@@ -546,6 +551,11 @@ pub(super) fn specs() -> Vec<Spec> {
         &["bin"],
         &Inputs::Expects(vec![exact(DataType::Long)]),
         bin,
+    ));
+    out.extend(scalar(
+        &["factorial"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        factorial,
     ));
     out.extend(scalar(
         &["conv"],

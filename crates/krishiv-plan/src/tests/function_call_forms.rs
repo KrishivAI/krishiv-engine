@@ -458,3 +458,17 @@ fn quantified_chains_are_three_valued() {
     };
     assert_eq!(id, &crate::FunctionId::Builtin(Builtin::Or));
 }
+
+#[test]
+fn a_literal_factorial_folds_where_a_constant_is_required() {
+    let scale = Expr::new(crate::ExprNode::Cast {
+        expr: Arc::new(named("factorial", &[(None, int(2))])),
+        to: DataType::Integer,
+        mode: crate::CastMode::Default,
+    });
+    let r = analyze(vec![named(
+        "round",
+        &[(None, super::dsl::dec("1.2345")), (None, scale)],
+    )]);
+    assert_eq!(class_and_params(&r).0, "OK");
+}

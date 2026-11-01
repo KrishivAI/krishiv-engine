@@ -301,6 +301,7 @@ pub(super) fn rows() -> Vec<Row> {
         "degrees",
         "exp",
         "expm1",
+        "factorial",
         "hex",
         "hour",
         "initcap",
@@ -438,7 +439,7 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["date_diff", "datediff"] {
         rows.push(Row::new(name, "end: ColumnOrName, start: ColumnOrName"));
     }
-    for name in ["date_part", "extract"] {
+    for name in ["date_part", "datepart", "extract"] {
         rows.push(Row::new(name, "field: Column, source: ColumnOrName"));
     }
     for name in ["date_add", "date_sub", "dateadd"] {
@@ -504,6 +505,23 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["shiftleft", "shiftright", "shiftrightunsigned"] {
         rows.push(Row::new(name, "col: ColumnOrName, numBits: int"));
     }
+    rows.extend([
+        Row::new(
+            "aes_encrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, iv: ColumnOrName = None, aad: ColumnOrName = None",
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT"), ("iv", "")]),
+        Row::new(
+            "aes_decrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT")]),
+        Row::new(
+            "try_aes_decrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT")]),
+    ]);
     rows.extend([
         Row::new(
             "assert_true",
@@ -644,6 +662,8 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("sha2", "col: ColumnOrName, numBits: int")
             .one_of("numBits", &[0, 224, 256, 384, 512]),
         Row::new("startswith", "str: ColumnOrName, prefix: ColumnOrName"),
+    ]);
+    rows.extend([
         Row::new(
             "schema_of_json",
             "json: Column | str, options: dict[str, str] = None",

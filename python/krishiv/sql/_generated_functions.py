@@ -30,6 +30,8 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "aes_decrypt",
+    "aes_encrypt",
     "approx_count_distinct",
     "approx_percentile",
     "array",
@@ -115,6 +117,7 @@ __all__ = [
     "date_trunc",
     "dateadd",
     "datediff",
+    "datepart",
     "day",
     "dayname",
     "dayofmonth",
@@ -132,6 +135,7 @@ __all__ = [
     "exp",
     "expm1",
     "extract",
+    "factorial",
     "find_in_set",
     "first",
     "first_value",
@@ -325,6 +329,7 @@ __all__ = [
     "trim",
     "trunc",
     "try_add",
+    "try_aes_decrypt",
     "try_avg",
     "try_divide",
     "try_element_at",
@@ -388,6 +393,52 @@ def acosh(col: ColumnOrName) -> Column:
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     """Calls the registry function ``add_months``."""
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
+
+
+def aes_decrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``aes_decrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),) if padding is None and (aad is not None) else _opt(_named, padding, "padding")
+    )
+    return _call(
+        "aes_decrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_opt(_named, aad, "aad")
+    )
+
+
+def aes_encrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    iv: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``aes_encrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or iv is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),)
+        if padding is None and (iv is not None or aad is not None)
+        else _opt(_named, padding, "padding")
+    )
+    _iv = (_lit("", "iv"),) if iv is None and (aad is not None) else _opt(_named, iv, "iv")
+    return _call(
+        "aes_encrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_iv, *_opt(_named, aad, "aad")
+    )
 
 
 def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None = None) -> Column:
@@ -821,6 +872,11 @@ def datediff(end: ColumnOrName, start: ColumnOrName) -> Column:
     return _call("datediff", _named(end, "end"), _named(start, "start"))
 
 
+def datepart(field: Column, source: ColumnOrName) -> Column:
+    """Calls the registry function ``datepart``."""
+    return _call("datepart", _named(field, "field"), _named(source, "source"))
+
+
 def day(col: ColumnOrName) -> Column:
     """Calls the registry function ``day``."""
     return _call("day", _named(col, "col"))
@@ -904,6 +960,11 @@ def expm1(col: ColumnOrName) -> Column:
 def extract(field: Column, source: ColumnOrName) -> Column:
     """Calls the registry function ``extract``."""
     return _call("extract", _named(field, "field"), _named(source, "source"))
+
+
+def factorial(col: ColumnOrName) -> Column:
+    """Calls the registry function ``factorial``."""
+    return _call("factorial", _named(col, "col"))
 
 
 def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column:
@@ -1950,6 +2011,27 @@ def trunc(date: ColumnOrName, format: str) -> Column:
 def try_add(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_add``."""
     return _call("try_add", _named(left, "left"), _named(right, "right"))
+
+
+def try_aes_decrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``try_aes_decrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),) if padding is None and (aad is not None) else _opt(_named, padding, "padding")
+    )
+    return _call(
+        "try_aes_decrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_opt(_named, aad, "aad")
+    )
 
 
 def try_avg(col: ColumnOrName) -> Column:

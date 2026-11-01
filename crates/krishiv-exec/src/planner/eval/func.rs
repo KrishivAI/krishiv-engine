@@ -2,7 +2,7 @@
 //! Registry functions, bound to their kernels by the built-in function
 //! registry's execution binding (`krishiv_functions::scalar`, P2-T153).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
@@ -72,6 +72,9 @@ pub(super) fn compile_udf(
             view,
             relabel: false,
             nullable: f.nullable,
+            folded: None,
+            constant: false,
+            secret_arg: None,
         }),
         canonical,
     ))
@@ -228,6 +231,7 @@ pub(super) fn compile(
         })
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
+    let args_constant = args.iter().all(|a| a.is_constant());
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
             unsupported_expr(e)
@@ -261,6 +265,19 @@ pub(super) fn compile(
             view,
             relabel,
             nullable: f.nullable,
+            // `aes_encrypt` of constants is folded once for the query, as
+            // Spark's constant folding does: one IV for every row and batch
+            // (a column argument draws an IV per row).
+            folded: (name == "aes_encrypt" && args_constant).then(OnceLock::new),
+            // A pure function of constants (`unhex('..')`) is one value for
+            // every row, so an enclosing call over it folds too.
+            constant: args_constant
+                && (name == "aes_encrypt"
+                    || krishiv_functions::scalar::is_constant_of_constants(name)),
+            secret_arg: ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+                .iter()
+                .any(|f| name.eq_ignore_ascii_case(f))
+                .then_some(1),
         }),
         canonical,
     ))
@@ -277,6 +294,13 @@ struct Call {
     /// Give the result the analyzer's nested field flags.
     relabel: bool,
     nullable: bool,
+    /// The one-row result of a call over constants that Spark folds once.
+    folded: Option<OnceLock<ArrayRef>>,
+    /// Whether the value is the same for every row (see `is_constant`).
+    constant: bool,
+    /// The argument whose evaluation errors must not show their values (an
+    /// AES key, ADR 0042).
+    secret_arg: Option<usize>,
 }
 
 impl PhysExpr for Call {
@@ -284,29 +308,65 @@ impl PhysExpr for Call {
         &self.out
     }
 
+    fn is_constant(&self) -> bool {
+        self.constant
+    }
+
     fn nullable(&self) -> bool {
         self.nullable
     }
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        if let Some(cell) = &self.folded {
+            if let Some(row) = cell.get() {
+                return Ok(Value::Scalar(Arc::clone(row)));
+            }
+            // Evaluated for one row; a failure is not remembered.
+            let one = self.call(batch, partition, 1)?;
+            let row = cell.get_or_init(|| one);
+            return Ok(Value::Scalar(Arc::clone(row)));
+        }
+        if self.constant {
+            // A pure call over constants is one value: a one-row scalar, so
+            // an enclosing call sees every argument at the same length.
+            return Ok(Value::Scalar(self.call(batch, partition, 1)?));
+        }
+        Ok(Value::Array(self.call(
+            batch,
+            partition,
+            batch.num_rows(),
+        )?))
+    }
+}
+
+impl Call {
+    /// The function's values for `rows` rows, in the result's carrier.
+    fn call(&self, batch: &RecordBatch, partition: u32, rows: usize) -> Result<ArrayRef> {
         let args = self
             .args
             .iter()
-            .map(|a| {
-                Ok(match a.eval(batch, partition)? {
+            .enumerate()
+            .map(|(i, a)| {
+                let v = a.eval(batch, partition).map_err(|e| {
+                    // A failure while evaluating the key shows no value of it.
+                    if self.secret_arg == Some(i) {
+                        e.with_redacted_parameters()
+                    } else {
+                        e
+                    }
+                })?;
+                Ok(match v {
                     Value::Array(v) => Arg::Array(v),
                     Value::Scalar(v) => Arg::Scalar(v),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let out = self
-            .function
-            .invoke_in(&args, batch.num_rows(), partition)?;
+        let out = self.function.invoke_in(&args, rows, partition)?;
         let out = if self.relabel {
             relabeled(&out, &self.out)?
         } else {
             out
         };
-        Ok(Value::Array(if self.view { to_view(&out)? } else { out }))
+        if self.view { to_view(&out) } else { Ok(out) }
     }
 }

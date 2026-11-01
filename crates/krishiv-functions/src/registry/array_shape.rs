@@ -99,18 +99,33 @@ fn rank(t: &DataType) -> Option<u8> {
     }
 }
 
-/// The widest integral type among the typed arguments (`INT` when all are
-/// untyped `NULL`), or `None` when an argument is not integral.
+/// The widest integral type among the typed arguments, or `None` when an
+/// argument is not integral or no argument is an integral anchor (Spark:
+/// `SEQUENCE_WRONG_INPUT_TYPES`; `sequence('1', '3')` and `sequence(NULL,
+/// NULL, '1')` have none, `sequence('1', '3', 1)` has the step). A string
+/// beside an integral anchor is cast to `BIGINT` under ANSI, as Spark's
+/// implicit cast does; with `spark.sql.ansi.enabled=false` it is a type
+/// error.
 fn sequence_type(c: &CallTypes<'_>) -> Option<DataType> {
+    let is_string = |i: usize| matches!(c.data_type(i), Some(DataType::String));
+    let strings = (0..c.args().len()).any(is_string);
+    if strings && !c.ansi() {
+        return None;
+    }
     let mut widest: Option<DataType> = None;
-    for i in 0..c.args().len() {
+    for i in (0..c.args().len()).filter(|i| !is_string(*i)) {
         let Some(t) = c.data_type(i) else { continue };
         let r = rank(t)?;
         if widest.as_ref().is_none_or(|w| rank(w) < Some(r)) {
             widest = Some(t.clone());
         }
     }
-    Some(widest.unwrap_or(DataType::Integer))
+    let widest = widest?;
+    Some(if strings && rank(&widest) < Some(3) {
+        DataType::Long
+    } else {
+        widest
+    })
 }
 
 /// `sequence`'s inputs: every argument is cast to the widest integral type.
@@ -146,13 +161,9 @@ fn sequence(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
         )
     };
-    if temporal(c.data_type(0))
-        || temporal(c.data_type(1))
-        || matches!(c.data_type(0), Some(DataType::String))
-        || matches!(c.data_type(1), Some(DataType::String))
-    {
+    if temporal(c.data_type(0)) || temporal(c.data_type(1)) {
         return Err(KrishivUnsupportedFeature {
-            feature: "sequence over dates, timestamps or strings".to_owned(),
+            feature: "sequence over dates or timestamps".to_owned(),
         }
         .into());
     }

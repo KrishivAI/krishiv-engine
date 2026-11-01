@@ -73,6 +73,7 @@ fn marks(sql: &str) -> Vec<Mark> {
         url_marks(sql, t, &mut marks);
     }
     set_value(sql, &code, &mut marks);
+    aes_key_marks(sql, &code, &mut marks);
     let mut depth = 0_usize;
     // The depth of the option list being read, and what it is reading.
     let mut list: Option<usize> = None;
@@ -169,6 +170,110 @@ fn marks(sql: &str) -> Vec<Mark> {
     // An unterminated list: its last value runs to the end.
     finish(&state, &mut marks);
     marks
+}
+
+/// The key argument (the second) of `aes_encrypt`, `aes_decrypt` and
+/// `try_aes_decrypt` calls, wherever they stand: a key is a secret in the
+/// error context as much as in the error message. An unterminated call is
+/// marked to the end (fail-safe).
+fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
+    for (i, t) in code.iter().enumerate() {
+        if !matches!(
+            t.kind,
+            TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted
+        ) {
+            continue;
+        }
+        let name = if t.kind == TokenKind::QuotedIdent {
+            unquote_ident(t.span.text(sql))
+        } else if t.kind == TokenKind::DoubleQuoted {
+            // `"aes_encrypt"(...)` under doubleQuotedIdentifiers.
+            let raw = t.span.text(sql);
+            raw.get(1..raw.len().saturating_sub(1))
+                .unwrap_or_default()
+                .replace("\"\"", "\"")
+        } else {
+            t.span.text(sql).to_owned()
+        };
+        let aes = ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+            .iter()
+            .any(|f| name.eq_ignore_ascii_case(f));
+        if !aes
+            || code
+                .get(i + 1)
+                .is_none_or(|n| n.kind != TokenKind::Sym(Sym::LParen))
+        {
+            continue;
+        }
+        let (mut depth, mut arg) = (0_usize, 0_usize);
+        // Angle brackets of a complex type (`MAP<STRING,STRING>`) open only
+        // after a type word, so a comparison `a < b` never hides a comma.
+        let mut angle = 0_usize;
+        let mut prev_word = String::new();
+        let mut range: Option<(usize, usize)> = None;
+        for (j, u) in code[i + 2..].iter().enumerate() {
+            let word = std::mem::take(&mut prev_word);
+            if u.kind == TokenKind::Word {
+                prev_word = u.span.text(sql).to_owned();
+            }
+            // A `<` opens a complex type after `map`, `array` or `struct`
+            // when a name or type follows and a `>` closes it before the
+            // call ends; `map < 1` and `array < col` stay comparisons. No
+            // list of type names: any type the grammar accepts is covered,
+            // and a stray `>` only masks more of the call (fail-safe).
+            let opens_type = ["map", "array", "struct"]
+                .iter()
+                .any(|w| word.eq_ignore_ascii_case(w))
+                && code[i + 2..].get(j + 1).is_some_and(|n| {
+                    matches!(
+                        n.kind,
+                        TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted
+                    )
+                })
+                && closes_ahead(&code[i + 2 + j + 1..]);
+            match u.kind {
+                TokenKind::Sym(Sym::Lt) if angle > 0 || opens_type => {
+                    angle += 1;
+                }
+                TokenKind::Sym(Sym::Gt) if angle > 0 => angle -= 1,
+                TokenKind::Sym(Sym::Comma) if angle > 0 => {}
+                TokenKind::Sym(Sym::LParen) => depth += 1,
+                TokenKind::Sym(Sym::RParen) if depth == 0 => break,
+                TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
+                TokenKind::Sym(Sym::Comma) if depth == 0 => {
+                    arg += 1;
+                    if arg > 1 {
+                        break;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            if arg == 1 {
+                let r = range.get_or_insert((u.span.start, u.span.end));
+                r.1 = u.span.end;
+            }
+        }
+        if let Some((a, b)) = range {
+            marks.push(Mark::Secret(a..b));
+        }
+    }
+}
+
+/// Whether a `>` follows before the enclosing call's `)`: the `<` before
+/// `rest` can then open a complex type.
+fn closes_ahead(rest: &[&Token]) -> bool {
+    let mut depth = 0_usize;
+    for t in rest {
+        match t.kind {
+            TokenKind::Sym(Sym::LParen) => depth += 1,
+            TokenKind::Sym(Sym::RParen) if depth == 0 => return false,
+            TokenKind::Sym(Sym::RParen) => depth -= 1,
+            TokenKind::Sym(Sym::Gt) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `SET key = value` with a sensitive key: the value (raw text to the end

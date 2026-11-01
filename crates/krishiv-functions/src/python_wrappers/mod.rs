@@ -75,6 +75,10 @@ pub(crate) struct Row {
     /// of being left out of the call: `lag`/`lead`'s `default`, which the parser fills with NULL,
     /// so the wrapper builds the same call the SQL form builds.
     always: Option<&'static str>,
+    /// Optional parameters with a SQL default, in order: one left out while a later optional
+    /// parameter is given sends its default, so every argument keeps its position
+    /// (`aes_encrypt(c, k, aad=a)` sends `GCM`, `DEFAULT` and an empty IV before the AAD).
+    fill: &'static [(&'static str, &'static str)],
 }
 
 impl Row {
@@ -88,7 +92,14 @@ impl Row {
             reversed: false,
             deprecated: None,
             always: None,
+            fill: &[],
         }
+    }
+
+    /// Sends the default of each `(param, default)` when a later optional parameter is given.
+    pub(crate) const fn filled(mut self, fill: &'static [(&'static str, &'static str)]) -> Self {
+        self.fill = fill;
+        self
     }
 
     /// Calls this registry function instead.
@@ -322,6 +333,39 @@ fn render_function(row: &Row, params: &[Param]) -> (String, String) {
         .iter()
         .map(|p| p.argument(row.always == Some(p.name.as_str())))
         .collect();
+    let mut prelude = String::new();
+    for (name, default) in row.fill {
+        let Some(at) = params.iter().position(|p| p.name == *name) else {
+            continue;
+        };
+        let later: Vec<String> = params[at + 1..]
+            .iter()
+            .filter(|p| p.default.as_deref() == Some("None"))
+            .map(|p| format!("{} is not None", p.name))
+            .collect();
+        if later.is_empty() {
+            continue;
+        }
+        let helper = params[at].conv.helper();
+        let (given, cond) = (
+            format!("(_lit(\"{default}\", \"{name}\"),)"),
+            format!("{name} is None and ({})", later.join(" or ")),
+        );
+        let rest = format!("_opt({helper}, {name}, \"{name}\")");
+        let line = format!("    _{name} = {given} if {cond} else {rest}\n");
+        if line.len() <= 121 {
+            prelude.push_str(&line);
+        } else if 8 + given.len() + cond.len() + rest.len() + 11 <= 120 {
+            prelude.push_str(&format!(
+                "    _{name} = (\n        {given} if {cond} else {rest}\n    )\n"
+            ));
+        } else {
+            prelude.push_str(&format!(
+                "    _{name} = (\n        {given}\n        if {cond}\n        else {rest}\n    )\n"
+            ));
+        }
+        args[at] = format!("*_{name}");
+    }
     if row.reversed {
         args.reverse();
     }
@@ -366,6 +410,7 @@ fn render_function(row: &Row, params: &[Param]) -> (String, String) {
         body.push_str(&wrap("        return _call(", &defaulted, ")", 8));
         body.push('\n');
     }
+    body.push_str(&prelude);
     body.push_str(&wrap("    return _call(", &args, ")", 4));
     body.push('\n');
     let def = format!("{}\n{body}", wrap(&head, &declarations, ") -> Column:", 0));
