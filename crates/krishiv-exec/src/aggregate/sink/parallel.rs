@@ -75,7 +75,7 @@ impl Task {
     /// (`Some(missing bytes)`). Each input partition is freed once merged.
     fn run(&mut self, query: &QueryContext) -> Result<Option<usize>> {
         if self.presize > 0 {
-            self.table.presize(std::mem::take(&mut self.presize));
+            self.table.presize(std::mem::take(&mut self.presize))?;
         }
         let Self {
             parts,
@@ -109,7 +109,12 @@ impl Task {
             if let Err(missing) = reserve_to(reservation, want) {
                 return Ok(Some(missing));
             }
+            let buckets = table.buckets();
             table.apply_merge(input, &chunk)?;
+            if table.buckets() != buckets {
+                // The peak of a growth was reserved: the old index is gone.
+                shrink_to(reservation, table.memory_size());
+            }
             *at = (t, p, end);
         }
     }

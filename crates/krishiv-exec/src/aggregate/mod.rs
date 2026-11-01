@@ -66,6 +66,7 @@ mod accumulator;
 mod collect;
 mod hll;
 mod listagg;
+mod merge_index;
 mod mode;
 mod moments;
 mod node;

@@ -3,9 +3,8 @@
 //! `depends-on-command` in the golden baseline, since the file creates the
 //! view first): the same data registered through the Rust API, asserting
 //! the golden's rows and error class for each statement this change
-//! covers. Window and interval statements are not covered (the
-//! engine refuses window percentile aggregates, and has no
-//! interval type).
+//! covers. Interval statements are not covered (the engine has no
+//! interval type); the window tests are below.
 #![forbid(unsafe_code)]
 
 use std::path::Path;
@@ -226,6 +225,52 @@ fn quantile_failures_carry_sparks_classes() -> R {
     Ok(())
 }
 
+/// `median` and the percentiles run over a whole partition; an ordered or
+/// framed window is refused with Spark's class and the aggregate's text.
+#[test]
+fn percentile_windows_take_only_the_whole_partition() -> R {
+    let s = Session::new()?;
+    let data = "(VALUES ('a', 10), ('a', 20), ('a', 40), ('b', 5)) AS t(k, v)";
+    let whole = shown(
+        &s,
+        &format!(
+            "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) OVER (PARTITION BY k) \
+             FROM {data} ORDER BY k, v"
+        ),
+    )?;
+    assert_eq!(whole, ["20", "20", "20", "5"]);
+    let median = shown(
+        &s,
+        &format!("SELECT median(v) OVER (PARTITION BY k) FROM {data} ORDER BY k, v"),
+    )?;
+    assert_eq!(median, ["20", "20", "20", "5"]);
+    for (over, text) in [
+        (
+            "percentile_disc(0.25) WITHIN GROUP (ORDER BY v DESC) OVER (PARTITION BY k ORDER BY v)",
+            "\"percentile_disc(v, 0.25)\"",
+        ),
+        (
+            "median(v) OVER (PARTITION BY k ORDER BY v)",
+            "\"median(v)\"",
+        ),
+        (
+            "percentile_cont(0.5) WITHIN GROUP (ORDER BY v) OVER (PARTITION BY k ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING)",
+            "\"percentile_cont(v, 0.5)\"",
+        ),
+    ] {
+        let sql = format!("SELECT {over} FROM {data}");
+        let err = block_on(s.sql(&sql)).expect_err(&sql);
+        assert_eq!(
+            err.error_class().name(),
+            "INVALID_WINDOW_SPEC_FOR_AGGREGATION_FUNC",
+            "{sql}"
+        );
+        let params = err.message_parameters();
+        assert_eq!(params.first().map(|(_, v)| v.as_str()), Some(text), "{sql}");
+    }
+    Ok(())
+}
+
 /// Column 0 of every row of `sql`, rendered: `NULL`, a number, `[a, b]` for a
 /// list of doubles, or the decimal text.
 fn shown(s: &Session, sql: &str) -> R<Vec<String>> {
@@ -345,5 +390,35 @@ fn quantile_error_parameters_follow_spark() -> R {
         param(&err, "funcName").as_deref(),
         Some("`approx_count_distinct`")
     );
+    Ok(())
+}
+
+/// `percentile` (unlike `median` and the `percentile_cont/disc` forms)
+/// accepts an ordered or framed window, as Spark does: each row sees the
+/// percentile of its frame. A running frame freezes its answer per row
+/// instead of copying the value map.
+#[test]
+fn percentile_over_running_and_sliding_frames() -> R {
+    let s = Session::new()?;
+    let data = "FROM VALUES (1, 1.0), (2, 5.0), (3, 9.0), (4, CAST(NULL AS DOUBLE)) t(id, v)";
+    assert_eq!(
+        shown(
+            &s,
+            &format!("SELECT percentile(v, 0.5) OVER (ORDER BY id) {data} ORDER BY id")
+        )?,
+        vec!["1", "3", "5", "5"]
+    );
+    // A sliding frame would hold every row's value map outside the memory
+    // reservation: refused, not computed.
+    for frame in [
+        "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW",
+        "ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING",
+    ] {
+        let sql = format!("SELECT percentile(v, 0.5) OVER (ORDER BY id {frame}) {data}");
+        let err = block_on(s.sql(&sql))
+            .and_then(|df| block_on(df.collect()))
+            .unwrap_err();
+        assert!(err.to_string().contains("sliding frame"), "{frame}: {err}");
+    }
     Ok(())
 }

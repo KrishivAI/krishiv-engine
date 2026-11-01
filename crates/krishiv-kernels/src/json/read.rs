@@ -205,8 +205,8 @@ fn read_value(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result
 
 /// A struct: an object fills its fields by name (missing is `NULL`, a
 /// failing value is `NULL` in `PERMISSIVE` mode and poisons the row in
-/// `FAILFAST` mode, the last duplicate wins); anything else, including
-/// JSON `null`, is a struct of `NULL`s.
+/// `FAILFAST` mode, the last duplicate wins); JSON `null` is a `NULL`
+/// struct, anything else a struct of `NULL`s.
 fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
     let Builder::Struct {
         fields,
@@ -216,6 +216,13 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
     else {
         return Err(internal("a struct value for a struct builder".to_owned()));
     };
+    if matches!(lexer.peek()?, Some(Token::Null)) {
+        // A JSON `null` is a `NULL` struct, as an array element or a field
+        // (Spark's `JacksonParser` returns `null` for a `VALUE_NULL` token
+        // before any converter looks at it).
+        lexer.skip_value()?;
+        return out.append_null();
+    }
     if !matches!(lexer.peek()?, Some(Token::OpenBrace)) {
         // Not an object: skip the value and leave a struct of NULLs (the
         // goldens pin `'1'` and `'abc'` to `{null, null}`) in PERMISSIVE

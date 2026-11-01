@@ -4,20 +4,21 @@
 //!
 //! - **flat**: `hashbrown::HashTable<u32>` of row ids (SIMD group probing,
 //!   about 5 bytes per bucket at up to 7/8 load) while the index is small
-//!   enough to stay in the core-private caches, where its lower
-//!   instruction count wins;
+//!   enough to stay in a core's own cache, where its lower instruction count
+//!   wins;
 //! - **salted**: a power-of-two directory of `u64` slots, each a 16-bit
 //!   salt plus `row id + 1`, probed linearly at load ≤ 1/2 (DuckDB's
 //!   `ht_entry_t`, with row ids instead of pointers), above that size,
 //!   where a probe costs one directory miss and reads a row only when its
-//!   salt matches.
+//!   salt matches. Its lookups prefetch each chunk's slots, then its first
+//!   salt-matching rows, so the misses overlap; `hashbrown` has no way to
+//!   prefetch its buckets.
 //!
-//! Measured over the same rows, the salted directory probes faster once the
-//! index outgrows the last-level cache and slower while it fits; the size
-//! rule keeps each regime's winner.
+//! The size rule looks at one table, but a probe batch visits every radix
+//! partition of a join, so what competes for the cache is all the tables
+//! together, and their rows.
 //! The kind is chosen once per table from its row count, the upper bound
-//! of its distinct keys ([`FLAT_MAX_BYTES`] was set from the
-//! `join_index_matrix` sweep).
+//! of its distinct keys ([`FLAT_MAX_BYTES`]).
 //!
 //! Both kinds are driven by the same table-local hash `g = fin(h ^ seed)`
 //! of each row's stored hash `h` ([`finalize`]): the salted
@@ -32,6 +33,7 @@
 
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
+use krishiv_kernels::prefetch_read;
 
 use super::layout::{EncodedKeys, RowLayout, finalize};
 use crate::error::{Result, internal};
@@ -49,20 +51,12 @@ const SALT_MASK: u64 = 0xFFFF << 48;
 /// The `row id + 1` part of a slot (0 = empty).
 const ID_MASK: u64 = u32::MAX as u64;
 
-/// Largest flat index, in bytes, before a table takes the salted
-/// directory. On the `join_index_matrix` sweep (`Int64` keys, 2N probes,
-/// interleaved ABBA, n = 5, one thread, 12 MiB L3) the flat index probed
-/// 1.0-1.4x faster up to 768 Ki keys (2^20 buckets, 5 MiB); from 1.2 Mi
-/// keys (2^21 buckets, 10.5 MiB) the touched salted directory was 1.25-1.8x
-/// faster on hits and even or faster on half misses. A size between the
-/// two bucket counts splits them. The best value depends on the cache
-/// sizes; `join_index_matrix` re-measures it.
-pub const FLAT_MAX_BYTES: usize = 8 << 20;
-/// Smallest salted directory, in bytes, whose lookups first touch a
-/// chunk's slots and rows: the same sweep measured the touch pass at
-/// 0.6-1.0x (a loss) up to 8 MiB directories and 1.03-1.28x from 16 MiB.
-/// Every directory the size rule picks is at least this large.
-pub const TOUCH_MIN_BYTES: usize = 16 << 20;
+/// Largest flat index of one table, in bytes, before it takes the salted
+/// directory: 512 KiB over the default 8 radix partitions. TPC-H SF10 probe CPU
+/// from flat to salted with prefetch: q13 6.23 to 3.58 s, q09 6.47 to 5.43 s,
+/// q03 0.72 to 0.53 s. At 256 KiB q09 kept 0.5 s of that loss, its 100,000 rows
+/// staying flat (gap ledger, "Note 2026-11-01").
+pub const FLAT_MAX_BYTES: usize = 64 << 10;
 
 /// Where an index finds its rows.
 pub trait RowSource {
@@ -75,6 +69,11 @@ pub trait RowSource {
     fn indexed(&self, id: u32) -> bool {
         let _ = id;
         true
+    }
+    /// Asks the CPU to load the start of row `id`: a hint, with no effect on
+    /// results.
+    fn prefetch(&self, id: u32) {
+        let _ = id;
     }
 }
 
@@ -307,8 +306,7 @@ impl JoinIndex {
 
     /// For each probe row `which[j]` of `keys` (encoded with the same
     /// layout, with seedless hashes), the newest row of `src` with an equal
-    /// key, or [`NO_MATCH`], appended to `out`. A salted directory of at
-    /// least [`TOUCH_MIN_BYTES`] touches each chunk first.
+    /// key, or [`NO_MATCH`], appended to `out`.
     pub fn find(
         &self,
         layout: &RowLayout,
@@ -317,16 +315,13 @@ impl JoinIndex {
         src: &impl RowSource,
         out: &mut Vec<u32>,
     ) {
-        let touch =
-            matches!(&self.kind, Kind::Salted(s) if s.len() * size_of::<u64>() >= TOUCH_MIN_BYTES);
-        self.find_with(layout, keys, which, src, out, touch);
+        self.find_with(layout, keys, which, src, out, true);
     }
 
-    /// [`find`](Self::find), choosing whether a salted lookup first touches
-    /// each chunk's slots and first salt-matching rows (software
-    /// prefetching with demand loads: P2-T157 §8 enables it only where an
-    /// interleaved benchmark shows a win, which [`find`](Self::find)
-    /// follows). The flat index ignores `touch`.
+    /// [`find`](Self::find), choosing whether a salted lookup first prefetches
+    /// each chunk's slots and first salt-matching rows (P2-T157 §8 enables it
+    /// only where an interleaved benchmark shows a win; `join_index_matrix`
+    /// re-measures it). The flat index ignores `prefetch`.
     pub fn find_with(
         &self,
         layout: &RowLayout,
@@ -334,7 +329,7 @@ impl JoinIndex {
         which: &[u32],
         src: &impl RowSource,
         out: &mut Vec<u32>,
-        touch: bool,
+        prefetch: bool,
     ) {
         self.lookup::<false>(
             layout,
@@ -342,7 +337,7 @@ impl JoinIndex {
             which,
             src,
             out,
-            touch,
+            prefetch,
             &mut ProbeCount::default(),
         );
     }
@@ -358,9 +353,7 @@ impl JoinIndex {
         out: &mut Vec<u32>,
         count: &mut ProbeCount,
     ) {
-        let touch =
-            matches!(&self.kind, Kind::Salted(s) if s.len() * size_of::<u64>() >= TOUCH_MIN_BYTES);
-        self.lookup::<true>(layout, keys, which, src, out, touch, count);
+        self.lookup::<true>(layout, keys, which, src, out, true, count);
     }
 
     /// The lookups of [`find_with`](Self::find_with); `COUNT` adds each
@@ -376,7 +369,7 @@ impl JoinIndex {
         which: &[u32],
         src: &impl RowSource,
         out: &mut Vec<u32>,
-        touch: bool,
+        prefetch: bool,
         count: &mut ProbeCount,
     ) {
         let hashes = keys.hashes();
@@ -409,8 +402,8 @@ impl JoinIndex {
                         *dst = g(k);
                     }
                     let gs = &gs[..chunk.len()];
-                    if touch {
-                        touch_chunk(slots, gs, src);
+                    if prefetch {
+                        prefetch_chunk(slots, gs, src);
                     }
                     out.extend(chunk.iter().zip(gs).map(|(&k, &g)| {
                         let key = keys.row(k as usize);
@@ -485,26 +478,21 @@ fn grow_salted(old: &[u64], g: impl Fn(u32) -> u64) -> Result<Vec<u64>> {
     Ok(slots)
 }
 
-/// Loads every slot of a chunk, then the first salt-matching row of each,
-/// so their cache misses overlap before the chunk is resolved in order.
-fn touch_chunk(slots: &[u64], gs: &[u64], src: &impl RowSource) {
+/// Prefetches every slot of a chunk, then the row of each whose first slot has
+/// its salt, so their cache misses overlap before the chunk is resolved in
+/// order. It reads only the first slot: on a probe that mostly misses the salt
+/// test is well predicted, where walking the run takes the `s == 0` branch a
+/// second time, about even at load 1/2 (TPC-DS q72). An empty slot of salt 0
+/// prefetches row 0, a harmless hint.
+fn prefetch_chunk(slots: &[u64], gs: &[u64], src: &impl RowSource) {
     let mask = slots.len() - 1;
     for &g in gs {
-        std::hint::black_box(slots[low(g, mask)]);
+        prefetch_read(slots, low(g, mask));
     }
     for &g in gs {
-        let salt = g & SALT_MASK;
-        let mut i = low(g, mask);
-        loop {
-            let s = slots[i];
-            if s == 0 {
-                break;
-            }
-            if s & SALT_MASK == salt {
-                std::hint::black_box(src.row(slot_id(s)).0.first());
-                break;
-            }
-            i = (i + 1) & mask;
+        let s = slots[low(g, mask)];
+        if s & SALT_MASK == g & SALT_MASK {
+            src.prefetch(slot_id(s));
         }
     }
 }
