@@ -802,6 +802,24 @@ impl Resolver<'_> {
         r.widen = Some(Arc::new(Widen::Through { child: c }));
         Ok(r)
     }
+
+    /// The boundary between pipe operators (Spark's `PipeOperator`): the
+    /// input as it is, but with nothing below it to add back, so a
+    /// `WHERE` or `ORDER BY` after it reads only the columns the operator
+    /// before it output (or an enclosing query's). The node itself is not
+    /// kept in the resolved plan.
+    pub(super) fn pipe_operator(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let mut c = self.child(input, env)?;
+        // An aggregate below is no aggregate to a filter above: its `WHERE
+        // sum(..)` is not a `HAVING`.
+        c.widen = None;
+        c.agg = None;
+        Ok(c)
+    }
 }
 
 impl Resolver<'_> {

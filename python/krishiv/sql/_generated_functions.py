@@ -91,6 +91,7 @@ __all__ = [
     "current_catalog",
     "current_database",
     "current_date",
+    "current_path",
     "current_schema",
     "current_timestamp",
     "current_timezone",
@@ -349,6 +350,7 @@ __all__ = [
     "version",
     "weekday",
     "weekofyear",
+    "width_bucket",
     "xxhash64",
     "year",
     "zeroifnull",
@@ -679,6 +681,11 @@ def current_database() -> Column:
 def current_date() -> Column:
     """Calls the registry function ``current_date``."""
     return _call("current_date")
+
+
+def current_path() -> Column:
+    """Calls the registry function ``current_path``."""
+    return _call("current_path")
 
 
 def current_schema() -> Column:
@@ -2099,6 +2106,13 @@ def weekday(col: ColumnOrName) -> Column:
 def weekofyear(col: ColumnOrName) -> Column:
     """Calls the registry function ``weekofyear``."""
     return _call("weekofyear", _named(col, "col"))
+
+
+def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column:
+    """Calls the registry function ``width_bucket``."""
+    return _call(
+        "width_bucket", _named(v, "v"), _named(min, "min"), _named(max, "max"), _int_or_col(numBucket, "numBucket")
+    )
 
 
 def xxhash64(*cols: ColumnOrName) -> Column:

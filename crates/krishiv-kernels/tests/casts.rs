@@ -61,6 +61,14 @@ fn s(v: &str) -> ArrayRef {
     Arc::new(StringArray::from(vec![v]))
 }
 
+fn i32s(v: i32) -> ArrayRef {
+    Arc::new(Int32Array::from(vec![v]))
+}
+
+fn f64s(v: f64) -> ArrayRef {
+    Arc::new(Float64Array::from(vec![v]))
+}
+
 fn dec(v: i128, p: u8, sc: i8) -> ArrayRef {
     Arc::new(
         Decimal128Array::from(vec![v])
@@ -220,6 +228,57 @@ fn strings_to_dates_match_spark() {
             "2024-01-02"
         );
     }
+}
+
+#[test]
+fn strings_to_booleans_match_spark() {
+    let b = DataType::Boolean;
+    for t in ["t", "TRUE", " Yes\u{7f}", "y", "1"] {
+        assert_eq!(one(s(t), b.clone(), Ansi), "true", "{t:?}");
+    }
+    for f in ["F", "false", "\tNo ", "n", "0"] {
+        assert_eq!(one(s(f), b.clone(), Ansi), "false", "{f:?}");
+    }
+    assert_eq!(
+        one(s("maybe"), b.clone(), Ansi),
+        invalid("'maybe'", "BOOLEAN")
+    );
+    assert_eq!(one(s("2"), b.clone(), Ansi), invalid("'2'", "BOOLEAN"));
+    assert_eq!(one(s(""), b.clone(), Ansi), invalid("''", "BOOLEAN"));
+    for mode in [Legacy, Try] {
+        assert_eq!(one(s("maybe"), b.clone(), mode), "NULL");
+    }
+    let out = run(
+        &StringArray::from(vec![Some("t"), None, Some("x")]),
+        &b,
+        Legacy,
+    )
+    .unwrap();
+    assert_eq!(
+        out.as_ref(),
+        &BooleanArray::from(vec![Some(true), None, None]) as &dyn Array
+    );
+}
+
+#[test]
+fn numbers_to_booleans_are_nonzero() {
+    let b = DataType::Boolean;
+    for mode in [Ansi, Legacy, Try] {
+        assert_eq!(one(i32s(0), b.clone(), mode), "false");
+        assert_eq!(one(i32s(-3), b.clone(), mode), "true");
+        assert_eq!(one(dec(0, 5, 2), b.clone(), mode), "false");
+        assert_eq!(one(dec(1, 5, 2), b.clone(), mode), "true");
+        assert_eq!(one(f64s(0.0), b.clone(), mode), "false");
+        assert_eq!(one(f64s(-0.0), b.clone(), mode), "false");
+        assert_eq!(one(f64s(f64::NAN), b.clone(), mode), "true");
+        assert_eq!(one(f64s(0.5), b.clone(), mode), "true");
+    }
+    let nulls = Int32Array::from(vec![Some(2), None, Some(0)]);
+    let out = run(&nulls, &b, Ansi).unwrap();
+    assert_eq!(
+        out.as_ref(),
+        &BooleanArray::from(vec![Some(true), None, Some(false)]) as &dyn Array
+    );
 }
 
 /// Documented divergence: Spark 4.0-4.2 ANSI/try casts of a decimal with
@@ -603,7 +662,7 @@ fn unsupported_and_identity() {
             &arrow_array::BinaryArray::from(vec![Some(&b"x"[..]), None]) as &dyn Array
         );
     }
-    assert!(run(&s("1"), &DataType::Boolean, Ansi).is_err());
+    assert!(run(&s("x"), &DataType::Boolean, Ansi).is_err());
     let d: ArrayRef = Arc::new(Date32Array::from(vec![1]));
     assert!(run(&d, &DataType::Int32, Ansi).is_err());
     let same = run(&d, &DataType::Date32, Ansi).unwrap();

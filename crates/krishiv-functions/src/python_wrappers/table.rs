@@ -20,6 +20,12 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    ("time_diff", "TIME has no Python mapping yet (P2-T181)"),
+    ("time_trunc", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "__subscript",
+        "the lowering of `base[index]`; PySpark: `Column.getItem`",
+    ),
     (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",
@@ -211,6 +217,7 @@ pub(super) fn rows() -> Vec<Row> {
         "curdate",
         "current_catalog",
         "current_database",
+        "current_path",
         "current_date",
         "current_schema",
         "current_timestamp",
@@ -424,6 +431,10 @@ pub(super) fn rows() -> Vec<Row> {
             "col1: ColumnOrName | float, col2: ColumnOrName | float",
         ));
     }
+    rows.push(Row::new(
+        "width_bucket",
+        "v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int",
+    ));
     for name in ["bround", "ceil", "ceiling", "floor", "round"] {
         rows.push(Row::new(
             name,

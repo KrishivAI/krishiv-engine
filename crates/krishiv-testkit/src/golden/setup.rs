@@ -87,7 +87,10 @@ impl TestKind {
             )],
             Self::Regular | Self::Udf | Self::Udaf | Self::Udtf => vec![ansi("true")],
         };
-        std::iter::once(zone).chain(own).collect()
+        // The suite runs with the `TIME` type enabled (Spark's test session
+        // turns it on; its default is off).
+        let time = ("spark.sql.timeType.enabled".to_owned(), "true".to_owned());
+        [zone, time].into_iter().chain(own).collect()
     }
 
     /// Test functions Spark registers in the session: the identity-cast `udf` (`udaf` for
@@ -275,20 +278,23 @@ mod tests {
             "spark.sql.session.timeZone".to_owned(),
             "America/Los_Angeles".to_owned(),
         );
+        let time = ("spark.sql.timeType.enabled".to_owned(), "true".to_owned());
         let off = SessionSetup::plain(TestKind::NonAnsi);
         assert_eq!(
             off.configs,
             vec![
                 zone.clone(),
+                time.clone(),
                 ("spark.sql.ansi.enabled".into(), "false".into())
             ]
         );
-        assert_eq!(SessionSetup::plain(TestKind::Regular).configs[1].1, "true");
+        assert_eq!(SessionSetup::plain(TestKind::Regular).configs[2].1, "true");
         let ntz = SessionSetup::plain(TestKind::TimestampNtz).configs;
         assert_eq!(
             ntz,
             vec![
                 zone,
+                time,
                 ("spark.sql.timestampType".into(), "TIMESTAMP_NTZ".into())
             ]
         );
@@ -310,10 +316,10 @@ mod tests {
         let sessions = setup.sessions();
         assert_eq!(sessions.len(), 4);
         let last = &sessions[3].configs;
-        assert_eq!(last[2], ("spark.a".into(), "1".into()));
-        assert_eq!(last[3], ("spark.b".into(), "2".into()));
+        assert_eq!(last[3], ("spark.a".into(), "1".into()));
+        assert_eq!(last[4], ("spark.b".into(), "2".into()));
         assert_eq!(
-            &last[4..],
+            &last[5..],
             &[
                 ("spark.x".into(), "false".into()),
                 ("spark.y".into(), "z".into()),

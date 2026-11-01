@@ -124,7 +124,8 @@ pub(crate) struct QueryFunctions {
     /// The functions stored in the catalog's namespaces, as of the start of
     /// the query, and the namespace a bare name resolves in.
     stored: Arc<StoredFunctions>,
-    namespace: String,
+    /// The SQL path (`SET PATH`) a bare name resolves through.
+    path: Vec<Vec<String>>,
     /// What reading a permanent view in a body needs; `None` for a registry
     /// that inlines temporary views only.
     views: Option<ViewSource>,
@@ -152,18 +153,24 @@ impl QueryFunctions {
         views: Option<ViewSource>,
     ) -> Self {
         let stored = catalog.store.functions();
-        let namespace = fold(&catalog.current_namespace(), case_sensitive);
+        let path = catalog.sql_path("");
         Self {
+            path,
             base,
             map,
             catalog,
             case_sensitive,
             stored,
-            namespace,
             views,
             expanded: Mutex::new(HashMap::new()),
             reads: Mutex::new((Vec::new(), None)),
         }
+    }
+
+    /// This registry resolving bare names through `path`.
+    pub(crate) fn with_path(mut self, path: Vec<Vec<String>>) -> Self {
+        self.path = path;
+        self
     }
 
     /// This registry over `stored` instead (the candidate functions a new
@@ -185,6 +192,7 @@ impl QueryFunctions {
             self.case_sensitive,
             self.views.clone(),
         )
+        .with_path(self.path.clone())
     }
 
     /// The catalog-store lookups the bodies expanded so far made, in order,
@@ -234,6 +242,7 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
+                    path: self.path.clone(),
                     next_source: &|| next_source(views),
                     namespace: stored_in
                         .clone()
@@ -359,7 +368,15 @@ impl FunctionRegistry for QueryFunctions {
                 .map(|stored| FunctionLookup::Sql(self.expanded(&stored.entry.def, profile)))
         };
         let found = match lower.as_slice() {
-            [f] => temporary(f).or_else(|| stored(&self.namespace, f)),
+            [f] => self.path.iter().find_map(|entry| match entry.as_slice() {
+                [s, q] if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session") => {
+                    temporary(f)
+                }
+                [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                    stored(&fold(n, self.case_sensitive), f)
+                }
+                _ => None,
+            }),
             [q, f] if q == "session" => temporary(f),
             [s, q, f] if s == "system" && q == "session" => temporary(f),
             [_, f] => stored(&ns(0), f),

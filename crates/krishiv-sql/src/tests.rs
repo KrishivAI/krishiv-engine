@@ -1226,7 +1226,7 @@ fn expression_strings_lower_like_select_items() {
     };
     assert_eq!(name, "c");
     // Constructs the IR lacks fail while lowering.
-    let e = parse_and_lower_named_expression("a[0]", &d, SourceId(0)).unwrap_err();
+    let e = parse_and_lower_named_expression("a:b", &d, SourceId(0)).unwrap_err();
     assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 

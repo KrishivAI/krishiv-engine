@@ -109,6 +109,8 @@ pub(crate) struct SessionCatalog {
     pub(crate) warehouse: Warehouse,
     /// The namespace bare table names resolve in (`USE`).
     current_namespace: RwLock<String>,
+    /// The entries `SET PATH` stored; `None` is the default path.
+    path: RwLock<Option<Vec<crate::sql_path::Entry>>>,
 }
 
 impl SessionCatalog {
@@ -217,6 +219,30 @@ impl SessionCatalog {
         }
     }
 
+    /// The stored path entries, `None` for the default.
+    pub(crate) fn stored_path(&self) -> Option<Vec<crate::sql_path::Entry>> {
+        self.path
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// `SET PATH`: stores the expanded entries.
+    pub(crate) fn set_path(&self, entries: Vec<crate::sql_path::Entry>) {
+        *self.path.write().unwrap_or_else(PoisonError::into_inner) = Some(entries);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The SQL path as parts, `CURRENT_SCHEMA` resolved; `default_conf` is
+    /// `krishiv.sql.defaultPath`, read when no `SET PATH` ran.
+    pub(crate) fn sql_path(&self, default_conf: &str) -> Vec<Vec<String>> {
+        let entries = self
+            .stored_path()
+            .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
+        let namespace = self.current_namespace();
+        entries.iter().map(|e| e.parts(&namespace)).collect()
+    }
+
     /// `USE namespace`.
     pub(crate) fn use_namespace(&self, namespace: &str) {
         namespace.clone_into(
@@ -312,9 +338,16 @@ pub(crate) struct QueryCatalog {
     epoch: u64,
     /// The current namespace (`USE`) as this query sees it.
     namespace: Vec<String>,
+    /// The SQL path (`SET PATH`) as this query sees it.
+    path: Vec<Vec<String>>,
 }
 
 impl QueryCatalog {
+    /// The query's SQL path snapshot.
+    pub(crate) fn sql_path_snapshot(&self) -> Vec<Vec<String>> {
+        self.path.clone()
+    }
+
     /// The query's namespace snapshot.
     pub(crate) fn namespace(&self) -> &[String] {
         &self.namespace
@@ -335,9 +368,11 @@ impl QueryCatalog {
         cache: Arc<RelationCache>,
         files: Arc<FileReads>,
         scans: FileScans,
+        default_path: &str,
     ) -> Self {
         let epoch = session.epoch();
         let namespace = vec![session.current_namespace()];
+        let path = session.sql_path(default_path);
         Self {
             session,
             cache,
@@ -348,6 +383,7 @@ impl QueryCatalog {
             opened: Mutex::new(Vec::new()),
             epoch,
             namespace,
+            path,
         }
     }
 
@@ -420,7 +456,8 @@ impl QueryCatalog {
                 listing.files.to_vec(),
                 listing.options.clone(),
             )
-            .await?;
+            .await?
+            .with_partition_columns(listing.partition_columns.to_vec());
             self.opened
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -1013,6 +1050,10 @@ impl CatalogResolver for QueryCatalogs {
         &self.0.namespace
     }
 
+    fn sql_path(&self) -> Vec<Vec<String>> {
+        self.0.path.clone()
+    }
+
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
@@ -1107,6 +1148,8 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) next_source: &'a dyn Fn() -> krishiv_plan::SourceId,
     /// The current namespace as the query snapshot saw it: bare names resolve here, whatever `USE` does later.
     pub(crate) namespace: String,
+    /// The SQL path as the query snapshot saw it: a bare name belongs to the first of its schemas that has it.
+    pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
 }
@@ -1310,7 +1353,33 @@ impl Expander<'_> {
             return Ok(plan);
         }
         let (namespace, table) = match name.as_slice() {
-            [table] => (stored.namespace.clone(), table),
+            [table] => {
+                // Outside a stored view, the first schema of the path holding the name; inside one,
+                // the view's own namespace.
+                let from_path = self
+                    .view_namespace
+                    .is_none()
+                    .then(|| {
+                        stored.path.iter().find_map(|entry| match entry.as_slice() {
+                            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
+                                let key = if self.case_sensitive {
+                                    (n.clone(), table.clone())
+                                } else {
+                                    (n.to_lowercase(), table.to_lowercase())
+                                };
+                                self.catalog.store.table(&key.0, &key.1).map(|_| n.clone())
+                            }
+                            _ => None,
+                        })
+                    })
+                    .flatten();
+                match (from_path, &self.view_namespace) {
+                    (Some(namespace), _) => (namespace, table),
+                    (None, Some(_)) => (stored.namespace.clone(), table),
+                    // No schema of the path holds the name: no view to inline.
+                    (None, None) => return Ok(plan),
+                }
+            }
             [namespace, table] => (namespace.clone(), table),
             [catalog, namespace, table] if catalog.eq_ignore_ascii_case(CATALOG) => {
                 (namespace.clone(), table)

@@ -22,7 +22,7 @@ use krishiv_common::error::{
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
     InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
-    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    InvalidExtractFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
     InvalidWithinGroupExpressionDistinctUnsupported,
@@ -607,6 +607,8 @@ fn typed_literal(
         TypedLiteralKind::Timestamp => "TIMESTAMP",
         TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
         TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+        // A time literal is resolved by the caller, as a cast.
+        TypedLiteralKind::Time => return Err(unsupported("a TIME literal here")),
     };
     // Clock-dependent spellings evaluate with the query clock, which the
     // analyzer has not got.
@@ -669,6 +671,7 @@ fn typed_literal(
         }
     };
     match kind {
+        TypedLiteralKind::Time => Err(unsupported("a TIME literal here")),
         TypedLiteralKind::Date => {
             use arrow_array::cast::AsArray as _;
             use arrow_array::types::Date32Type;
@@ -1453,6 +1456,45 @@ impl Resolver<'_> {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
             }),
+            ExprNode::TypedLiteral {
+                kind: TypedLiteralKind::Time,
+                value,
+            } => {
+                if !self.ctx.conf.time_type {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::UnsupportedTimeType {},
+                        e.origin,
+                    ));
+                }
+                // A time is a string cast to `TIME(6)` (design P2-T181): the
+                // value is checked again here, in case the plan came from a
+                // front end other than the SQL parser.
+                let Some(nanos) = krishiv_kernels::cast::parse_time(value) else {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::InvalidTypedLiteral {
+                            value: format!("'{value}'"),
+                            value_type: "\"TIME\"".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                };
+                let text = krishiv_kernels::cast::format_time(nanos);
+                let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
+                let cast = Expr::new(ExprNode::Cast {
+                    expr: text,
+                    to: DataType::Time { precision: 6 },
+                    mode: CastMode::Ansi,
+                })
+                .with_origin(e.origin);
+                Bound {
+                    expr: Arc::new(cast),
+                    shown: Some(Arc::clone(e)),
+                    ..keep(ArgType {
+                        nullable: false,
+                        data_type: Some(DataType::Time { precision: 6 }),
+                    })
+                }
+            }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
                 let ty = ArgType {
@@ -1501,47 +1543,7 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Field { base: _, name } => {
-                let b = &kids[0];
-                let st = match &b.ty.data_type {
-                    Some(DataType::Struct(st)) => st.clone(),
-                    _ => {
-                        let other =
-                            b.ty.data_type
-                                .as_ref()
-                                .map_or_else(|| "VOID".to_owned(), DataType::sql);
-                        return Err(AnalysisError::new(
-                            InvalidExtractBaseFieldType {
-                                base: format!(
-                                    "\"{}\"",
-                                    pretty(&b.shown(), self.ctx.conf.session_zone)
-                                ),
-                                other: format!("\"{other}\""),
-                            },
-                            e.origin,
-                        ));
-                    }
-                };
-                let cs = self.ctx.conf.case_sensitive;
-                let Some((ordinal, field)) = st
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .find(|(_, f)| same(f.name(), name, cs))
-                else {
-                    return Err(unresolved_field(
-                        &[pretty(&b.shown(), self.ctx.conf.session_zone), name.clone()],
-                        &st,
-                        e.origin,
-                    ));
-                };
-                let ty = arg_type(field.data_type().clone(), field.nullable() || b.ty.nullable);
-                let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Field {
-                    base: Arc::clone(&b.expr),
-                    ordinal,
-                    name: name.clone(),
-                    data_type: ty.data_type.clone().unwrap_or(DataType::Null),
-                    nullable: ty.nullable,
-                }));
+                let (expr, ty) = self.struct_field(e, &kids[0], name)?;
                 Bound {
                     expr,
                     ty: ty.clone(),
@@ -2104,6 +2106,50 @@ impl Resolver<'_> {
                     }
                     return self.cast_named_call(&entry, e, f, kids, to);
                 }
+                // `s['a']` on a struct is the field `a` (Spark's
+                // `ExtractValue`): the extraction is a non-null string.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && matches!(kids[0].ty.data_type, Some(DataType::Struct(_)))
+                {
+                    let ExprNode::Literal(Literal::String(name)) = &kids[1].expr.node else {
+                        return Err(AnalysisError::new(
+                            InvalidExtractFieldType {
+                                extraction: format!(
+                                    "\"{}\"",
+                                    pretty(&kids[1].shown(), self.ctx.conf.session_zone)
+                                ),
+                            },
+                            e.origin,
+                        ));
+                    };
+                    let (expr, ty) = self.struct_field(e, &kids[0], name)?;
+                    return Ok(Bound {
+                        expr,
+                        ty: ty.clone(),
+                        ..keep(ty)
+                    });
+                }
+                // `array_of_structs['a']` is Spark's `GetArrayStructFields` (the
+                // field of every element); not built yet, so it is refused
+                // rather than read as a position.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "__subscript"
+                    && n == 2
+                    && matches!(
+                        &kids[0].ty.data_type,
+                        Some(DataType::Array(a)) if matches!(a.element_type(), DataType::Struct(_))
+                    )
+                    && matches!(&kids[1].expr.node, ExprNode::Literal(Literal::String(_)))
+                {
+                    return Err(AnalysisError::new(
+                        KrishivUnsupportedFeature {
+                            feature: "subscripts of an array of structs by field name".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `arrays_zip(a, b)` names its struct fields after columns,
                 // struct fields and aliases (`0`, `1`, ... otherwise): the
@@ -2191,6 +2237,17 @@ impl Resolver<'_> {
                 // built-in: a qualified session UDF named `typeof` runs
                 // the UDF.
                 let is_typeof = is_builtin_entry(&entry) && entry.id.name() == "typeof";
+                let session_value_early = if is_builtin_entry(&entry) {
+                    match entry.id.name() {
+                        "current_schema" | "current_database" => {
+                            Some(self.ctx.catalogs.current_namespace().join("."))
+                        }
+                        "current_path" => Some(super::current_path(&*self.ctx.catalogs)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 let plain_args: Vec<Arc<Expr>> =
                     call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
                 let zipped = !zip_names.is_empty();
@@ -2225,7 +2282,16 @@ impl Resolver<'_> {
                 // `typeof(x)` is Spark's `RuntimeReplaceable`: the analyzer
                 // replaces it with the type name literal, keeping the call
                 // as the shown form (the executor gets no type logic).
-                let (expr, shown) = if is_typeof {
+                // `current_schema()`, `current_database()` and `current_path()`
+                // read the session: the analyzer replaces them with the
+                // value, as the query sees it.
+                let session_value = session_value_early;
+                let (expr, shown) = if let Some(value) = session_value {
+                    (
+                        rebuilt(ExprNode::Literal(Literal::String(value))),
+                        Some(expr),
+                    )
+                } else if is_typeof {
                     let name = call_kids
                         .first()
                         .and_then(|k| k.ty.data_type.clone())
@@ -2277,7 +2343,8 @@ impl Resolver<'_> {
                 // Spark's parser rejects the `TIME` type before any cast
                 // is checked (`spark.sql.timeType.enabled` is false by
                 // default; TIME cannot be evaluated here either way).
-                if to.any_type(&|t| matches!(t, DataType::Time { .. })) {
+                if !self.ctx.conf.time_type && to.any_type(&|t| matches!(t, DataType::Time { .. }))
+                {
                     return Err(AnalysisError::new(
                         krishiv_common::error::UnsupportedTimeType {},
                         e.origin,
@@ -2901,6 +2968,7 @@ impl Resolver<'_> {
                 | DataType::Long
                 | DataType::Decimal(_)
                 | DataType::Date
+                | DataType::Time { .. }
                 | DataType::TimestampNtz
                 | DataType::Boolean
                 | DataType::Binary
@@ -3955,6 +4023,59 @@ impl Resolver<'_> {
         b.carry_markers(kids);
         b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
         Ok(b)
+    }
+
+    /// The field `name` of the struct `b`, as `b.name` or `b['name']`.
+    fn struct_field(
+        &self,
+        e: &Expr,
+        b: &Bound,
+        name: &str,
+    ) -> Result<(Arc<Expr>, ArgType), AnalysisError> {
+        let st = match &b.ty.data_type {
+            Some(DataType::Struct(st)) => st.clone(),
+            _ => {
+                let other =
+                    b.ty.data_type
+                        .as_ref()
+                        .map_or_else(|| "VOID".to_owned(), DataType::sql);
+                return Err(AnalysisError::new(
+                    InvalidExtractBaseFieldType {
+                        base: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
+                        other: format!("\"{other}\""),
+                    },
+                    e.origin,
+                ));
+            }
+        };
+        let cs = self.ctx.conf.case_sensitive;
+        let Some((ordinal, field)) = st
+            .fields()
+            .iter()
+            .enumerate()
+            .find(|(_, f)| same(f.name(), name, cs))
+        else {
+            return Err(unresolved_field(
+                &[
+                    pretty(&b.shown(), self.ctx.conf.session_zone),
+                    name.to_owned(),
+                ],
+                &st,
+                e.origin,
+            ));
+        };
+        let ty = arg_type(field.data_type().clone(), field.nullable() || b.ty.nullable);
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                base: Arc::clone(&b.expr),
+                ordinal,
+                name: name.to_owned(),
+                data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                nullable: ty.nullable,
+            }))
+            .with_origin(e.origin),
+        );
+        Ok((expr, ty))
     }
 
     /// A conditional function rewritten during analysis (Spark's
@@ -6259,7 +6380,14 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
                 TypedLiteralKind::Timestamp => "TIMESTAMP",
                 TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
                 TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+                TypedLiteralKind::Time => "TIME",
             };
+            // Spark names a time by its value, not by the text written.
+            if *kind == TypedLiteralKind::Time
+                && let Some(n) = krishiv_kernels::cast::parse_time(value)
+            {
+                return format!("{keyword} '{}'", krishiv_kernels::cast::format_time(n));
+            }
             format!("{keyword} '{value}'")
         }
         // Spark's pretty SQL shows a cast to an array, map or struct type as
@@ -6344,6 +6472,11 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
         ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => "namedlambdavariable()".to_owned(),
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall {
+            name, qualifier, ..
+        }) if name == "__subscript" && qualifier.is_empty() && k.len() == 2 => {
+            format!("{}[{}]", k[0], k[1])
+        }
+        ExprNode::Function(FunctionCall {
             name,
             qualifier,
             arg_names,
@@ -6423,6 +6556,12 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
             } else {
                 text
             }
+        }
+        // Spark's `ExtractValue` shows `child[ordinal]`.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id.name() == "__subscript" && k.len() == 2 && f.filter.is_none() =>
+        {
+            format!("{}[{}]", k[0], k[1])
         }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import os
+import time
 
 # An unset session time zone is the machine's zone, so tests run in one zone on
-# every machine (as `.cargo/config.toml` does for the Rust tests).
-os.environ.setdefault("TZ", "UTC")
+# every machine (as `.cargo/config.toml` does for the Rust tests). `tzset` moves
+# this interpreter's own conversions too; the engine reads the variable.
+os.environ["TZ"] = "UTC"
+time.tzset()

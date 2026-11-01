@@ -32,7 +32,7 @@ SESSION	SET PATH = spark_catalog.DEFAULT, spark_catalog.default
 SESSION	SET PATH = DEFAULT_PATH, system.builtin
 SESSION	SET PATH = SYSTEM_PATH, SYSTEM_PATH
 SESSION	SET PATH = current_database, current_schema
-SESSION	SET PATH = my_schema_no_catalog
+PARSE_ERROR	SET PATH = my_schema_no_catalog
 DDL	CREATE SCHEMA sql_path_routines
 DDL	CREATE FUNCTION sql_path_routines.pick() RETURNS INT RETURN 7
 SESSION	SET PATH = spark_catalog.sql_path_routines, spark_catalog.default, system.builtin

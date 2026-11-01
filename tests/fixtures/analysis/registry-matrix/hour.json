@@ -9,14 +9,6 @@
       "reason": "SELECT hour(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "hour#87a038cb355d/ansi_on",
-      "reason": "SELECT hour(TIME'13:59:59.999999') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "hour#87a038cb355d/ansi_off",
-      "reason": "SELECT hour(TIME'13:59:59.999999') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
       "id": "hour#bf6d37dda10b/ansi_on",
       "reason": "SELECT hour(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

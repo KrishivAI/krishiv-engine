@@ -27,6 +27,7 @@ Set::Verbose	SESSION	SET -v
 Set::Show	SESSION	SET spark.sql.ansi.enabled
 Set::Assign	SESSION	SET spark.sql.ansi.enabled = false
 Set::TimeZone	SESSION	SET TIME ZONE 'UTC'
+Set::Path	SESSION	SET PATH = spark_catalog.default, system.builtin
 Reset	SESSION	RESET
 Reset	SESSION	RESET spark.sql.ansi.enabled
 CreateView	SESSION	CREATE TEMPORARY VIEW v AS SELECT * FROM t

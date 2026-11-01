@@ -22,7 +22,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `result_type` incl. allowPrecisionLoss; exact `+ - *` on 128/64-bit lanes, the rest exact in 128 then 256 bits, HALF_UP),
   `float` (`+ - * / %`, unary), `compare` (`= != < <= > >=` for primitives incl. date/timestamp/decimal with Spark
   float order, strings/binary in byte order (a column against a literal or another column runs on arrow-ord; same order), booleans; `null_safe` builds `<=>` from `=`), `cast` (Spark CAST on Arrow
-  carriers: integral/float/decimal, string -> integral/decimal/float/date, date/timestamp/timestamp_ntz, all -> string;
+  carriers: integral/float/decimal, string and number -> boolean (a date or timestamp to boolean is still `KRISHIV_UNSUPPORTED_FEATURE`; Spark's legacy mode gives non-zero / NULL), string -> integral/decimal/float/date, date/timestamp/timestamp_ntz, all -> string;
   `CastMode` Ansi/Legacy/Try; session zone via `TimeZoneRules`, `FixedOffset` only here; parsers in `cast/text.rs`). Dividing lanes keep a per-row flag word so NULL slots with a zero divisor never take
   the slow path (measured: `div` with 10% NULLs 302 -> 262 µs, = the no-NULL time; decimal `/` with 10% NULLs is
   1.08x of the 90%-rows bound, so no kernel takes the `by_nulls` axis: below the 1.2x bar).
