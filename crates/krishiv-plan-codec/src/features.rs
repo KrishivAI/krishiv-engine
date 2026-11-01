@@ -123,6 +123,7 @@ registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
+    (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (join_full_outer, JoinFullOuter, POST_MIGRATION_READER_VERSION, Semantic, "The `FULL_OUTER` hash join: both sides preserved, with no equivalent plan without it."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
@@ -215,6 +216,9 @@ fn type_feature(t: &DataType) -> Option<Feature> {
     match t {
         DataType::Time { .. } => Some(Feature::TimeType),
         DataType::Geometry { .. } | DataType::Geography { .. } => Some(Feature::GeoTypes),
+        DataType::YearMonthInterval { .. }
+        | DataType::DayTimeInterval { .. }
+        | DataType::CalendarInterval => Some(Feature::IntervalTypes),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
 }
@@ -257,6 +261,22 @@ fn arrow_time(t: &arrow_schema::DataType) -> bool {
     matches!(
         t,
         arrow_schema::DataType::Time32(_) | arrow_schema::DataType::Time64(_)
+    )
+}
+
+/// Whether `e` is a year-month or day-time literal.
+fn interval_literal(e: &Expr) -> bool {
+    matches!(
+        e.node,
+        ExprNode::Literal(Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. })
+    )
+}
+
+/// Whether an Arrow type is an interval's carrier.
+fn arrow_interval(t: &arrow_schema::DataType) -> bool {
+    matches!(
+        t,
+        arrow_schema::DataType::Interval(_) | arrow_schema::DataType::Duration(_)
     )
 }
 
@@ -374,12 +394,25 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::ArrowType(t) => {
             if arrow_time(t) {
                 Some(Feature::TimeType)
+            } else if arrow_interval(t) {
+                Some(Feature::IntervalTypes)
             } else {
                 arrow_nested(t).then_some(Feature::NestedTypes)
             }
         }
         Construct::Expr(e) => match &e.node {
             ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
+            ExprNode::Literal(Literal::CalendarInterval { .. }) => Some(Feature::IntervalTypes),
+            // The year-month and day-time literal kinds predate the feature,
+            // so a bare one stays baseline: whatever reads its column names
+            // the interval type. As an argument nothing else may name it, and
+            // an older reader would reach a value it has no type for.
+            ExprNode::Cast { expr, .. } if interval_literal(expr) => Some(Feature::IntervalTypes),
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.args.iter().any(|a| interval_literal(a)) =>
+            {
+                Some(Feature::IntervalTypes)
+            }
             _ => None,
         },
         // The `Window` node's format carries every frame between unbounded
@@ -456,6 +489,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // session UDF (by name and version) needs a reader with it.
         Construct::Function(id) => match id {
             FunctionId::Udf { .. } => Some(Feature::RustUdf),
+            FunctionId::Builtin(b) if b.is_analyzer_internal() => Some(Feature::IntervalTypes),
             FunctionId::Builtin(_) => None,
             // A future identity is baseline until it is classified
             // (encoding refuses it first).
