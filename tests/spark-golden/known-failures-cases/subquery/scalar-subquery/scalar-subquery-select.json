@@ -1,12 +1,10 @@
 {
   "cases": {
     "depends-on-command": [
-      10,
       12,
       13,
       14,
-      15,
-      16
+      15
     ],
     "fn-aggregate": [
       11
