@@ -210,6 +210,28 @@ fn timeouts_are_retried_then_fail() {
 }
 
 #[test]
+fn a_store_that_lists_whole_has_no_listing_timeout() {
+    rt().block_on(async {
+        let config = IoConfig {
+            request_timeout: Duration::from_millis(10),
+            max_retries: 0,
+            ..IoConfig::default()
+        };
+        let s = setup(config);
+        put(&s, "d/a", 1).await;
+        s.fault.set_list_latency(Duration::from_millis(50));
+        let dir = Path::from("d");
+        let e = s.io.list(&s.id, &dir).await.unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
+        s.sched.register_whole_listing_store(
+            s.id.clone(),
+            Arc::clone(&s.fault) as Arc<dyn ObjectStore>,
+        );
+        assert_eq!(s.io.list(&s.id, &dir).await.unwrap().len(), 1);
+    });
+}
+
+#[test]
 fn versions_are_checked_on_every_read() {
     rt().block_on(async {
         let s = setup(IoConfig::default());

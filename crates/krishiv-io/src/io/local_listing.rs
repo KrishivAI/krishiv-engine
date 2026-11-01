@@ -8,9 +8,16 @@
 //! the old files, and whose questions came after the overwrite finished, lists
 //! nothing: an overwritten table reads as empty, with no error. Here a pass in
 //! which an entry vanished is repeated, as in [`super::beneath`]: the pass that
-//! follows a vanished old file lists the new files too. So is a pass that found
-//! a directory with nothing in it, which is what a partition looks like once an
-//! overwrite has emptied it, until two passes agree.
+//! follows a vanished old file lists the new files too.
+//!
+//! An entry can also go before its directory is read, as when an overwrite adds
+//! a partition after the root was read and then empties an old one, and then no
+//! question fails. So a pass also compares each directory's modification time
+//! from before its names were read with the one after the walk, and is repeated
+//! if one moved. Before Linux 6.13 that time moves with the timer tick, so a
+//! change in the tick of the first stat can pass unseen. A directory that only
+//! ever gains files can keep moving: after the last pass it is answered, where a
+//! vanished entry is an error.
 //!
 //! A listing is known only when its last pass ends, so it answers all at once:
 //! register this store with [`super::IoScheduler::register_whole_listing_store`].
@@ -34,6 +41,8 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result as StoreResult,
 };
+
+use rustix::io::Errno;
 
 use super::beneath::{SETTLE_PASSES, is_staging};
 
@@ -93,8 +102,19 @@ fn meta_of(location: Path, m: &Metadata) -> ObjectMeta {
 struct Pass {
     /// An entry vanished between the read of the names and its question.
     vanished: bool,
-    /// A directory below the root held no file or directory.
-    hollow: bool,
+    /// A directory is not as it was before its names were read.
+    moved: bool,
+}
+
+/// What tells that a directory changed.
+fn version_of(m: &Metadata) -> (u64, i64, i64) {
+    (m.ino(), m.mtime(), m.mtime_nsec())
+}
+
+/// An entry that was there is not: the file or a directory on its path went.
+fn gone(e: &std::io::Error) -> bool {
+    matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory)
+        || e.raw_os_error() == Some(Errno::STALE.raw_os_error())
 }
 
 /// The files below `root`, following links, with no staging file. `between`
@@ -102,34 +122,31 @@ struct Pass {
 /// about them (a test replaces files there).
 ///
 /// # Errors
-/// No pass could be trusted: what the last one found may be short of every
-/// file, even empty, so it is not an answer. The error is one the scheduler
-/// retries after a wait. `cancelled` ends the walk with an error too.
+/// An entry still vanished in the last pass: what it found may be short of
+/// every file, even empty, so it is not an answer. The error is one the
+/// scheduler retries after a wait. `cancelled` ends the walk with an error too.
 fn walk_with(
     root: &FsPath,
     cancelled: &AtomicBool,
     mut between: impl FnMut(),
 ) -> StoreResult<Vec<ObjectMeta>> {
-    let mut hollow_pass: Option<Vec<ObjectMeta>> = None;
+    let mut out = Vec::new();
+    let mut vanished = false;
     for _ in 0..SETTLE_PASSES {
-        let mut out = Vec::new();
+        out.clear();
         let pass = walk_once(root, cancelled, &mut between, &mut out)?;
-        if pass.vanished {
-            hollow_pass = None;
-        } else if !pass.hollow {
+        if !pass.vanished && !pass.moved {
             return Ok(out);
-        } else {
-            out.sort_by(|a, b| a.location.cmp(&b.location));
-            if hollow_pass.as_ref() == Some(&out) {
-                return Ok(out);
-            }
-            hollow_pass = Some(out);
         }
+        vanished = pass.vanished;
+    }
+    if !vanished {
+        return Ok(out);
     }
     Err(io_err(std::io::Error::new(
         ErrorKind::Interrupted,
         format!(
-            "files under {} kept changing during {SETTLE_PASSES} listings",
+            "files under {} kept vanishing during {SETTLE_PASSES} listings",
             root.display()
         ),
     )))
@@ -144,8 +161,6 @@ fn walk_once(
     between: &mut impl FnMut(),
     out: &mut Vec<ObjectMeta>,
 ) -> StoreResult<Pass> {
-    let gone =
-        |e: &std::io::Error| matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory);
     let mut pass = Pass::default();
     let root_meta = match std::fs::metadata(root) {
         Ok(m) => m,
@@ -156,10 +171,15 @@ fn walk_once(
     if !root_meta.is_dir() {
         return Ok(pass);
     }
-    // A directory still to read, with the directories above it and itself.
-    let mut pending: Vec<(PathBuf, Vec<(u64, u64)>)> =
-        vec![(root.to_owned(), vec![id_of(&root_meta)])];
-    while let Some((dir, above)) = pending.pop() {
+    let mut read = Vec::new();
+    // A directory still to read, its version, and the directories above it
+    // and itself.
+    let mut pending = vec![(
+        root.to_owned(),
+        version_of(&root_meta),
+        vec![id_of(&root_meta)],
+    )];
+    while let Some((dir, version, above)) = pending.pop() {
         let reader = match std::fs::read_dir(&dir) {
             Ok(reader) => reader,
             Err(e) if gone(&e) => {
@@ -176,8 +196,8 @@ fn walk_once(
                 Err(e) => return Err(io_err(e)),
             }
         }
+        read.push((dir, version));
         between();
-        let mut holds_any = false;
         for (path, file_type) in names {
             if cancelled.load(Ordering::Relaxed) {
                 return Err(io_err(std::io::Error::other("the listing was dropped")));
@@ -193,19 +213,22 @@ fn walk_once(
             let m = match std::fs::metadata(&path) {
                 Ok(m) => m,
                 Err(e) if file_type.is_symlink() => {
-                    if e.kind() == ErrorKind::NotFound {
-                        continue;
+                    if e.kind() != ErrorKind::NotFound {
+                        return Err(io_err(e));
                     }
-                    return Err(io_err(e));
+                    // A link to nothing was never a file; a removed link was.
+                    pass.vanished |= std::fs::symlink_metadata(&path).is_err();
+                    continue;
                 }
                 Err(e) if gone(&e) => {
                     pass.vanished = true;
                     continue;
                 }
+                Err(e) if file_type.is_dir() => return Err(io_err(e)),
                 Err(_) => continue,
             };
             if m.is_dir() {
-                if above.contains(&id_of(&m)) {
+                if file_type.is_symlink() && above.contains(&id_of(&m)) {
                     return Err(io_err(std::io::Error::other(format!(
                         "a link back to a directory above it at {}",
                         path.display()
@@ -213,17 +236,17 @@ fn walk_once(
                 }
                 let mut below = above.clone();
                 below.push(id_of(&m));
-                pending.push((path, below));
-                holds_any = true;
+                pending.push((path, version_of(&m), below));
             } else if m.is_file() && !staging {
                 let location = Path::from_absolute_path(&path)
                     .map_err(|source| object_store::Error::InvalidPath { source })?;
                 out.push(meta_of(location, &m));
-                holds_any = true;
             }
         }
-        pass.hollow |= !holds_any && dir != root;
     }
+    pass.moved = read
+        .iter()
+        .any(|(dir, version)| std::fs::metadata(dir).map_or(true, |m| version_of(&m) != *version));
     Ok(pass)
 }
 
@@ -383,6 +406,12 @@ mod tests {
         assert_eq!(calls, 1);
     }
 
+    /// Lets a writer's change show in a directory's time: in the timer tick of
+    /// the stat before it, a kernel before 6.13 would not move it.
+    fn after_a_tick() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
     #[test]
     fn a_partition_emptied_for_a_new_one_is_listed_again() {
         // An overwrite creates `a=2/new` and deletes `a=1/old` after the names
@@ -392,6 +421,7 @@ mod tests {
         std::fs::write(tmp.path().join("a=1/old"), b"1").unwrap();
         let listed = names(tmp.path(), || {
             if tmp.path().join("a=1/old").exists() {
+                after_a_tick();
                 std::fs::create_dir(tmp.path().join("a=2")).unwrap();
                 std::fs::write(tmp.path().join("a=2/new"), b"2").unwrap();
                 std::fs::remove_file(tmp.path().join("a=1/old")).unwrap();
@@ -401,21 +431,75 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_directory_that_stays_empty_is_a_listing() {
+    fn an_old_file_gone_before_its_partition_is_read_is_not_a_short_listing() {
+        // `a=1` is read after `old1` went, so no question fails: the time of
+        // the root, which gained `a=3`, tells.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("a=1")).unwrap();
-        std::fs::write(tmp.path().join("f"), b"1").unwrap();
-        assert_eq!(names(tmp.path(), || {}), ["f"]);
+        std::fs::create_dir(tmp.path().join("a=2")).unwrap();
+        std::fs::write(tmp.path().join("a=1/old1"), b"1").unwrap();
+        std::fs::write(tmp.path().join("a=1/old2"), b"1").unwrap();
+        std::fs::write(tmp.path().join("a=2/old3"), b"1").unwrap();
+        let listed = names(tmp.path(), || {
+            if tmp.path().join("a=1/old1").exists() {
+                after_a_tick();
+                std::fs::create_dir(tmp.path().join("a=3")).unwrap();
+                std::fs::write(tmp.path().join("a=3/new"), b"2").unwrap();
+                std::fs::remove_file(tmp.path().join("a=1/old1")).unwrap();
+            }
+        });
+        assert_eq!(listed, ["new", "old2", "old3"]);
     }
 
     #[test]
-    fn a_staging_file_renamed_during_a_listing_is_no_reason_to_list_again() {
-        // A writer publishes a file and starts the next: no data file went,
-        // so the first pass is the answer.
+    fn a_link_removed_during_a_listing_is_replaced_in_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(target.path().join("t"), b"1").unwrap();
+        let old = tmp.path().join("old");
+        std::os::unix::fs::symlink(target.path().join("t"), &old).unwrap();
+        let listed = names(tmp.path(), || {
+            if old.symlink_metadata().is_ok() {
+                std::fs::write(tmp.path().join("new"), b"2").unwrap();
+                std::fs::remove_file(&old).unwrap();
+            }
+        });
+        assert_eq!(listed, ["new"]);
+    }
+
+    #[test]
+    fn an_empty_directory_is_no_reason_to_list_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("a=1")).unwrap();
+        std::fs::write(tmp.path().join("f"), b"1").unwrap();
+        let mut calls = 0;
+        assert_eq!(names(tmp.path(), || calls += 1), ["f"]);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn a_file_growing_during_a_listing_is_no_reason_to_list_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("f"), b"1").unwrap();
+        let mut calls = 0;
+        let listed = names(tmp.path(), || {
+            calls += 1;
+            after_a_tick();
+            std::fs::write(tmp.path().join("f"), b"12").unwrap();
+        });
+        assert_eq!(listed, ["f"]);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn a_directory_that_keeps_gaining_files_is_answered() {
+        // A writer publishes a file and starts the next on every pass: no
+        // data file went, and a staging file is not asked about.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("part-0#1"), b"1").unwrap();
         let mut n = 0;
         let listed = names(tmp.path(), || {
+            after_a_tick();
             std::fs::rename(
                 tmp.path().join(format!("part-{n}#1")),
                 tmp.path().join(format!("part-{n}")),
@@ -424,12 +508,12 @@ mod tests {
             n += 1;
             std::fs::write(tmp.path().join(format!("part-{n}#1")), b"1").unwrap();
         });
-        assert_eq!(n, 1);
-        assert!(listed.is_empty(), "{listed:?}");
+        assert_eq!(n, SETTLE_PASSES);
+        assert_eq!(listed.len(), SETTLE_PASSES - 1, "{listed:?}");
     }
 
     #[test]
-    fn a_directory_that_keeps_changing_is_an_error_the_scheduler_retries() {
+    fn files_that_keep_vanishing_are_an_error_the_scheduler_retries() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("f0"), b"1").unwrap();
         let mut n = 0;
@@ -440,7 +524,7 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(n, SETTLE_PASSES);
-        assert!(e.to_string().contains("kept changing"), "{e}");
+        assert!(e.to_string().contains("kept vanishing"), "{e}");
         assert!(super::super::transient(&e).is_some(), "{e}");
     }
 
@@ -463,17 +547,32 @@ mod tests {
     }
 
     #[test]
-    fn a_file_that_cannot_be_asked_about_is_left_out_as_there() {
+    fn an_entry_that_cannot_be_asked_about_is_as_there() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let shut = tmp.path().join("shut");
         std::fs::create_dir(&shut).unwrap();
         std::fs::write(shut.join("f"), b"1").unwrap();
         std::fs::write(tmp.path().join("a"), b"1").unwrap();
-        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let mode = |mode| {
+            std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        mode(0o444);
+        // Permissions don't stop root, which runs some containers.
+        if std::fs::metadata(shut.join("f")).is_ok() {
+            mode(0o755);
+            return;
+        }
+        // A file is left out.
         let listed = names(tmp.path(), || {});
-        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+        mode(0o755);
         assert_eq!(listed, ["a"]);
+        // A directory is an error.
+        std::fs::create_dir(shut.join("sub")).unwrap();
+        mode(0o444);
+        let walked = walk_with(tmp.path(), &AtomicBool::new(false), || {});
+        mode(0o755);
+        walked.unwrap_err();
     }
 
     #[tokio::test]
