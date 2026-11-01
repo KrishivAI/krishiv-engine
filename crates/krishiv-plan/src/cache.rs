@@ -801,6 +801,34 @@ impl Encoder {
                 }
                 self.plan(input, bias);
             }
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                output,
+            } => {
+                self.tag("UnionLoop");
+                self.num(u64::from(*id));
+                self.flag(max_level.is_some());
+                if let Some(n) = max_level {
+                    self.num(u64::from(*n));
+                }
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
+                self.plan(anchor, bias);
+                self.plan(recursive, bias);
+            }
+            PlanNode::UnionLoopRef { id, output } => {
+                self.tag("UnionLoopRef");
+                self.num(u64::from(*id));
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
+            }
             PlanNode::Expand {
                 input,
                 projections,

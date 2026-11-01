@@ -57,6 +57,7 @@ mod introspection;
 mod locals;
 mod partitions;
 mod profile;
+mod recursion;
 mod scripting;
 mod session;
 mod sql_functions;

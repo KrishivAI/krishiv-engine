@@ -358,6 +358,21 @@ impl Display for NodeLine<'_> {
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
             }
+            // Spark's `UnionLoop 0, [n#1]`.
+            PlanNode::UnionLoop { id, output, .. } => {
+                write!(f, "UnionLoop {id}, [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
+            PlanNode::UnionLoopRef { id, output } => {
+                write!(f, "UnionLoopRef {id}, [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
             // Spark's `Generate explode(a), false, [col#3]`.
             PlanNode::Generate {
                 kind,

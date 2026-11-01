@@ -910,6 +910,30 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 self.u8(u8::from(*include_nulls));
             }
+            PlanNode::UnionLoop {
+                id,
+                max_level,
+                output,
+                ..
+            } => {
+                self.u8(31);
+                self.put(&id.to_le_bytes());
+                match max_level {
+                    None => self.u8(0),
+                    Some(n) => {
+                        self.u8(1);
+                        self.put(&n.to_le_bytes());
+                    }
+                }
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+            }
+            PlanNode::UnionLoopRef { id, output } => {
+                self.u8(32);
+                self.put(&id.to_le_bytes());
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+            }
             PlanNode::Generate {
                 kind,
                 outer,

@@ -1283,6 +1283,13 @@ impl Session {
         // Planning makes no spill directory: a query gets its scope when
         // its plan is instantiated (`Self::worker`), so a plan that is only
         // inspected (EXPLAIN, warnings) makes none.
+        let expanded;
+        let analyzed = if crate::recursion::has_loop(analyzed.plan.root()) {
+            expanded = self.expand_loops(analyzed, env).await?;
+            &expanded
+        } else {
+            analyzed
+        };
         env.catalog.open_files(analyzed.plan.root()).await?;
         let tables =
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;

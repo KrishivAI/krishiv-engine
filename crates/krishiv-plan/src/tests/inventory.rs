@@ -52,6 +52,8 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Window { .. } => "PlanNode::Window",
         PlanNode::TableFunction { .. } => "PlanNode::TableFunction",
         PlanNode::Range { .. } => "PlanNode::Range",
+        PlanNode::UnionLoop { .. } => "PlanNode::UnionLoop",
+        PlanNode::UnionLoopRef { .. } => "PlanNode::UnionLoopRef",
     });
     plan.for_each_expr(&mut |e| expr_kinds(e, out));
     plan.for_each_child(&mut |c| kinds(c, out));

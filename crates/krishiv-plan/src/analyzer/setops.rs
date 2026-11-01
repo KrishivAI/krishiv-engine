@@ -357,7 +357,7 @@ impl Resolver<'_> {
 
     /// The inputs of a union, cast to the wider type of each column.
     /// `operator` names the operation in errors.
-    fn widen_inputs(
+    pub(super) fn widen_inputs(
         &mut self,
         kids: &[Rel],
         operator: &str,

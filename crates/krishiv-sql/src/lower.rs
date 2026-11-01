@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature, MissingWindowSpecification,
-    WrongNumArgsWithoutSuggestion,
+    FailedToParseTooComplex, InvalidRecursiveCte, KrishivError, KrishivUnsupportedFeature,
+    MissingWindowSpecification, UnionNotSupportedInRecursiveCte, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
@@ -76,6 +76,7 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
         depth: 0,
         root: query.span,
         windows: Vec::new(),
+        loops: 0,
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -95,6 +96,7 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
         depth: 0,
         root: expr.span,
         windows: Vec::new(),
+        loops: 0,
     };
     l.expr(expr)
 }
@@ -110,6 +112,7 @@ pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> 
         depth: 0,
         root: item.span,
         windows: Vec::new(),
+        loops: 0,
     };
     l.select_item(item)
 }
@@ -169,6 +172,44 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
     )
 }
 
+/// Whether `plan` (subquery plans included) reads the table `name`, the
+/// way an unresolved CTE reference is spelled.
+fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
+    enum Step<'a> {
+        Plan(&'a LogicalPlan),
+        Expr(&'a IrExpr),
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![Step::Plan(plan)];
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Plan(p) => {
+                if !seen.insert(std::ptr::from_ref(p) as usize) {
+                    continue;
+                }
+                if let PlanNode::Read(ReadSource::Table { name: n, .. }) = &p.node
+                    && let [n] = n.as_slice()
+                    && n.eq_ignore_ascii_case(name)
+                {
+                    return true;
+                }
+                p.for_each_child(&mut |c| stack.push(Step::Plan(c)));
+                p.for_each_expr(&mut |e| stack.push(Step::Expr(e)));
+            }
+            Step::Expr(e) => {
+                if !seen.insert(std::ptr::from_ref(e) as usize) {
+                    continue;
+                }
+                if let ExprNode::Subquery { plan, .. } = &e.node {
+                    stack.push(Step::Plan(plan));
+                }
+                e.for_each_child(&mut |c| stack.push(Step::Expr(c)));
+            }
+        }
+    }
+    false
+}
+
 struct Lowerer {
     source: SourceId,
     depth: usize,
@@ -178,6 +219,8 @@ struct Lowerer {
     /// last; `None` stands for a subquery expression's boundary (Spark's
     /// `WindowsSubstitution` does not enter subquery plans).
     windows: Vec<Option<Arc<WindowDefs>>>,
+    /// Recursive CTEs lowered so far: the next one's loop id.
+    loops: u32,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -372,21 +415,27 @@ impl Lowerer {
             l.organize(plan, q)
         })?;
         if let Some(with) = &q.with {
-            if with.recursive {
-                return Err(unsupported("recursive CTEs", with.span));
-            }
             let mut ctes = Vec::new();
             for c in &with.ctes {
-                if c.max_recursion_level.is_some() {
-                    return Err(unsupported("MAX RECURSION LEVEL", c.span));
-                }
+                let max_level = match &c.max_recursion_level {
+                    None => None,
+                    Some(n) if with.recursive => Some(
+                        n.parse::<u32>()
+                            .map_err(|_| unsupported("MAX RECURSION LEVEL", c.span))?,
+                    ),
+                    Some(_) => return Err(unsupported("MAX RECURSION LEVEL", c.span)),
+                };
                 let mut body = self.query(&c.query)?;
-                if !c.columns.is_empty() {
+                let columns: Vec<String> = c.columns.iter().map(|i| i.value.clone()).collect();
+                if with.recursive && reads_table(&body, &c.name.value) {
+                    body = self.recursive_cte(&body, c, &columns, max_level)?;
+                }
+                if !columns.is_empty() {
                     body = self.node(
                         PlanNode::SubqueryAlias {
                             input: arc(body),
                             alias: c.name.value.clone(),
-                            columns: c.columns.iter().map(|i| i.value.clone()).collect(),
+                            columns,
                         },
                         c.span,
                     );
@@ -405,6 +454,82 @@ impl Lowerer {
             );
         }
         Ok(plan)
+    }
+
+    /// `WITH RECURSIVE name AS (anchor UNION ALL recursive)`, `body` being
+    /// the lowered query: Spark's `UnionLoop`. The recursive term is
+    /// wrapped in a `WithCte` that defines `name` as the loop's reference,
+    /// so the name resolves there as any CTE does. A definition that reads
+    /// its own name in any other shape is `INVALID_RECURSIVE_CTE`; `UNION`
+    /// without `ALL` is `UNION_NOT_SUPPORTED_IN_RECURSIVE_CTE`.
+    fn recursive_cte(
+        &mut self,
+        body: &LogicalPlan,
+        c: &crate::ast::Cte,
+        columns: &[String],
+        max_level: Option<u32>,
+    ) -> R<LogicalPlan> {
+        let name = &c.name.value;
+        let (anchor, recursive) = match &body.node {
+            PlanNode::Union {
+                inputs,
+                by_name: false,
+                ..
+            } if inputs.len() == 2
+                && !reads_table(&inputs[0], name)
+                && reads_table(&inputs[1], name) =>
+            {
+                (Arc::clone(&inputs[0]), Arc::clone(&inputs[1]))
+            }
+            PlanNode::Distinct { input }
+                if matches!(&input.node, PlanNode::Union { inputs, .. }
+                    if inputs.len() == 2
+                        && !reads_table(&inputs[0], name)
+                        && reads_table(&inputs[1], name)) =>
+            {
+                return Err(err(UnionNotSupportedInRecursiveCte {}, c.span));
+            }
+            _ => return Err(err(InvalidRecursiveCte {}, c.span)),
+        };
+        let id = self.loops;
+        self.loops += 1;
+        let mut reference = self.node(
+            PlanNode::UnionLoopRef {
+                id,
+                output: Vec::new(),
+            },
+            c.span,
+        );
+        if !columns.is_empty() {
+            reference = self.node(
+                PlanNode::SubqueryAlias {
+                    input: arc(reference),
+                    alias: name.clone(),
+                    columns: columns.to_vec(),
+                },
+                c.span,
+            );
+        }
+        let recursive = self.node(
+            PlanNode::WithCte {
+                input: recursive,
+                ctes: vec![Cte {
+                    name: name.clone(),
+                    plan: arc(reference),
+                }],
+            },
+            c.span,
+        );
+        Ok(self.node(
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive: arc(recursive),
+                max_level,
+                output: Vec::new(),
+            },
+            c.span,
+        ))
     }
 
     /// `FROM ... SELECT ... [SELECT ...]`: the shared `FROM` lowered
