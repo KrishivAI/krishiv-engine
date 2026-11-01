@@ -396,6 +396,16 @@ impl Session {
                     .table(&namespace, &fold(only))
                     .map(|_| format!("{namespace}.{}", fold(only)))
             }
+            [namespace, name]
+                if namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+                    && self
+                        .state
+                        .catalog
+                        .exists(&crate::catalog::global_key(name), case_sensitive) =>
+            {
+                // The cache records a view by the last part of the name it was read by.
+                Some(name.clone())
+            }
             [namespace, name] => store
                 .table(&fold(namespace), &fold(name))
                 .map(|_| format!("{}.{}", fold(namespace), fold(name))),

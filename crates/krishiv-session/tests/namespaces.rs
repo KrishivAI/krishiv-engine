@@ -303,3 +303,31 @@ fn statement_info_substitutes_variables() {
     let info = block_on(s.statement_info("SELECT ${value}"));
     assert!(info.is_ok(), "{info:?}");
 }
+
+#[test]
+fn a_cached_global_view_can_be_uncached_refreshed_and_hinted() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 1 AS a");
+    run(&s, "CACHE TABLE global_temp.gv");
+    run(&s, "REFRESH TABLE global_temp.gv");
+    run(&s, "UNCACHE TABLE global_temp.gv");
+    run(&s, "UNCACHE TABLE IF EXISTS global_temp.nope");
+    assert_eq!(
+        class(&s, "UNCACHE TABLE global_temp.nope"),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    // A hint names the view as written, with or without its namespace.
+    for hint in ["BROADCAST(gv)", "MERGE(global_temp.gv)"] {
+        assert_eq!(
+            rows(
+                &s,
+                &format!(
+                    "SELECT /*+ {hint} */ x.a FROM global_temp.gv x JOIN global_temp.gv y ON x.a = y.a"
+                )
+            ),
+            vec![vec!["1".to_owned()]],
+            "{hint}"
+        );
+    }
+}
