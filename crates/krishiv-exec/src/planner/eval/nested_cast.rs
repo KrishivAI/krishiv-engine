@@ -13,13 +13,17 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, ArrayRef, ListArray, MapArray, OffsetSizeTrait, StringViewArray, StructArray,
-    UInt64Array,
+    Array, ArrayRef, GenericListArray, ListArray, MapArray, OffsetSizeTrait, RecordBatch,
+    StringViewArray, StructArray, UInt64Array,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow_schema::{DataType as ArrowType, FieldRef};
+use arrow_schema::{DataType as ArrowType, Field, FieldRef, Fields};
+use krishiv_types::{
+    ArrayType, DataType, DayTimeField, MapType, StructField, StructType, YearMonthField,
+};
 
 use super::cast::{CastParts, Precision, apply};
+use super::{PhysExpr, Value};
 use crate::error::Result;
 use crate::planner::build::{internal, unsupported};
 
@@ -73,6 +77,283 @@ pub(super) fn cast(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         }
         _ => Err(refused()),
     }
+}
+
+/// `e`, of the nested type `from`, with every interval inside replaced by the
+/// string `CAST(.. AS STRING)` writes for it. The Arrow carriers have no
+/// fields, so this has to read them from the plan's type.
+pub(super) fn interval_leaves(e: Arc<dyn PhysExpr>, from: DataType) -> Arc<dyn PhysExpr> {
+    let to = leaves_type(&from, e.data_type());
+    Arc::new(IntervalLeaves { e, from, to })
+}
+
+#[derive(Debug)]
+struct IntervalLeaves {
+    e: Arc<dyn PhysExpr>,
+    from: DataType,
+    to: ArrowType,
+}
+
+impl PhysExpr for IntervalLeaves {
+    fn data_type(&self) -> &ArrowType {
+        &self.to
+    }
+
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
+    fn nullable(&self) -> bool {
+        self.e.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
+        let out = leaves(&self.from, v.array())?;
+        Ok(match v {
+            Value::Scalar(_) => Value::Scalar(out),
+            Value::Array(_) => Value::Array(out),
+        })
+    }
+}
+
+/// `from` as far as casting it to `to` takes its intervals to strings, for
+/// [`interval_leaves`]: an interval the cast keeps, or a part holding no such
+/// interval, reads `NULL` here, and those leaves pass through unchanged.
+/// `None` when no interval becomes a string.
+pub(super) fn rendered_part(from: &DataType, to: &DataType) -> Option<DataType> {
+    match from {
+        DataType::YearMonthInterval { .. }
+        | DataType::DayTimeInterval { .. }
+        | DataType::CalendarInterval => (*to == DataType::String).then(|| from.clone()),
+        DataType::Array(a) => {
+            let to = match to {
+                DataType::Array(b) => b.element_type(),
+                DataType::String => to,
+                _ => return None,
+            };
+            let element = rendered_part(a.element_type(), to)?;
+            Some(ArrayType::new(element, a.contains_null()).into())
+        }
+        DataType::Map(a) => {
+            let (key, value) = match to {
+                DataType::Map(b) => (b.key_type(), b.value_type()),
+                DataType::String => (to, to),
+                _ => return None,
+            };
+            let key = rendered_part(a.key_type(), key);
+            let value = rendered_part(a.value_type(), value);
+            (key.is_some() || value.is_some()).then(|| {
+                MapType::new(
+                    key.unwrap_or(DataType::Null),
+                    value.unwrap_or(DataType::Null),
+                    a.value_contains_null(),
+                )
+                .into()
+            })
+        }
+        DataType::Struct(a) => {
+            let targets: Vec<&DataType> = match to {
+                DataType::Struct(b) if b.fields().len() == a.fields().len() => {
+                    b.fields().iter().map(StructField::data_type).collect()
+                }
+                DataType::String => vec![to; a.fields().len()],
+                _ => return None,
+            };
+            let parts: Vec<Option<DataType>> = a
+                .fields()
+                .iter()
+                .zip(targets)
+                .map(|(f, t)| rendered_part(f.data_type(), t))
+                .collect();
+            parts.iter().any(Option::is_some).then(|| {
+                StructType::new(a.fields().iter().zip(parts).map(|(f, part)| {
+                    StructField::new(f.name(), part.unwrap_or(DataType::Null), f.nullable())
+                }))
+                .into()
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `e`, already cast to `to`, with each interval cut to its end field. Both
+/// families keep one carrier whatever their fields, so the cast itself leaves
+/// the value as it was.
+pub(super) fn narrowed(e: Arc<dyn PhysExpr>, to: &DataType) -> Arc<dyn PhysExpr> {
+    if has_coarse_interval(to) {
+        Arc::new(Narrowed { e, to: to.clone() })
+    } else {
+        e
+    }
+}
+
+/// Whether `t` holds an interval that ends above its family's finest field.
+fn has_coarse_interval(t: &DataType) -> bool {
+    match t {
+        DataType::YearMonthInterval { end, .. } => *end != YearMonthField::Month,
+        DataType::DayTimeInterval { end, .. } => *end != DayTimeField::Second,
+        DataType::Array(a) => has_coarse_interval(a.element_type()),
+        DataType::Map(m) => {
+            has_coarse_interval(m.key_type()) || has_coarse_interval(m.value_type())
+        }
+        DataType::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| has_coarse_interval(f.data_type())),
+        _ => false,
+    }
+}
+
+#[derive(Debug)]
+struct Narrowed {
+    e: Arc<dyn PhysExpr>,
+    to: DataType,
+}
+
+impl PhysExpr for Narrowed {
+    fn data_type(&self) -> &ArrowType {
+        self.e.data_type()
+    }
+
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
+    fn nullable(&self) -> bool {
+        self.e.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
+        let out = map_leaves(&self.to, v.array(), &super::cast::truncate_interval)?;
+        Ok(match v {
+            Value::Scalar(_) => Value::Scalar(out),
+            Value::Array(_) => Value::Array(out),
+        })
+    }
+}
+
+/// `field`, carrying `t`.
+fn retyped(field: &Field, t: ArrowType) -> Field {
+    field.clone().with_data_type(t)
+}
+
+/// The fields of a map's entries as a key and a value type.
+fn entry_types(from: &MapType) -> [&DataType; 2] {
+    [from.key_type(), from.value_type()]
+}
+
+/// The carrier of `t`, of the Spark type `from`, once [`leaves`] has run.
+fn leaves_type(from: &DataType, t: &ArrowType) -> ArrowType {
+    let fields = |types: Vec<&DataType>, fields: &Fields| -> Fields {
+        types
+            .into_iter()
+            .zip(fields.iter())
+            .map(|(x, f)| Arc::new(retyped(f, leaves_type(x, f.data_type()))))
+            .collect()
+    };
+    match (from, t) {
+        (
+            DataType::YearMonthInterval { .. }
+            | DataType::DayTimeInterval { .. }
+            | DataType::CalendarInterval,
+            _,
+        ) => ArrowType::Utf8View,
+        (DataType::Array(x), ArrowType::List(f)) => ArrowType::List(Arc::new(retyped(
+            f,
+            leaves_type(x.element_type(), f.data_type()),
+        ))),
+        (DataType::Array(x), ArrowType::LargeList(f)) => ArrowType::LargeList(Arc::new(retyped(
+            f,
+            leaves_type(x.element_type(), f.data_type()),
+        ))),
+        (DataType::Map(m), ArrowType::Map(f, sorted)) => match f.data_type() {
+            ArrowType::Struct(kv) => ArrowType::Map(
+                Arc::new(retyped(
+                    f,
+                    ArrowType::Struct(fields(entry_types(m).to_vec(), kv)),
+                )),
+                *sorted,
+            ),
+            _ => t.clone(),
+        },
+        (DataType::Struct(s), ArrowType::Struct(fs)) => {
+            let types = s.fields().iter().map(StructField::data_type).collect();
+            ArrowType::Struct(fields(types, fs))
+        }
+        _ => t.clone(),
+    }
+}
+
+/// What [`map_leaves`] does to an interval column of a Spark type.
+type Leaf<'a> = dyn Fn(&DataType, &dyn Array) -> Result<ArrayRef> + 'a;
+
+/// `a`, of the Spark type `from`, with its intervals as strings.
+fn leaves(from: &DataType, a: &ArrayRef) -> Result<ArrayRef> {
+    map_leaves(from, a, &super::cast::render_interval)
+}
+
+/// `a`, of the Spark type `from`, with `leaf` applied to its intervals.
+fn map_leaves(from: &DataType, a: &ArrayRef, leaf: &Leaf<'_>) -> Result<ArrayRef> {
+    let bad = |e: arrow_schema::ArrowError| internal(&e.to_string());
+    fn structure(types: &[&DataType], s: &StructArray, leaf: &Leaf<'_>) -> Result<StructArray> {
+        let columns = types
+            .iter()
+            .zip(s.columns())
+            .map(|(t, c)| map_leaves(t, c, leaf))
+            .collect::<Result<Vec<_>>>()?;
+        let fields: Fields = s
+            .fields()
+            .iter()
+            .zip(&columns)
+            .map(|(f, c)| Arc::new(retyped(f, c.data_type().clone())))
+            .collect();
+        StructArray::try_new(fields, columns, s.nulls().cloned())
+            .map_err(|e| internal(&e.to_string()))
+    }
+    fn list<O: OffsetSizeTrait>(x: &DataType, a: &ArrayRef, leaf: &Leaf<'_>) -> Result<ArrayRef> {
+        let l = a.as_list::<O>();
+        let values = map_leaves(x, l.values(), leaf)?;
+        let (ArrowType::List(f) | ArrowType::LargeList(f)) = a.data_type() else {
+            return Err(internal("a list without its field"));
+        };
+        let field = Arc::new(retyped(f, values.data_type().clone()));
+        let out =
+            GenericListArray::<O>::try_new(field, l.offsets().clone(), values, l.nulls().cloned())
+                .map_err(|e| internal(&e.to_string()))?;
+        Ok(Arc::new(out))
+    }
+    Ok(match (from, a.data_type()) {
+        (
+            DataType::YearMonthInterval { .. }
+            | DataType::DayTimeInterval { .. }
+            | DataType::CalendarInterval,
+            _,
+        ) => leaf(from, a.as_ref())?,
+        (DataType::Array(x), ArrowType::List(_)) => list::<i32>(x.element_type(), a, leaf)?,
+        (DataType::Array(x), ArrowType::LargeList(_)) => list::<i64>(x.element_type(), a, leaf)?,
+        (DataType::Map(m), ArrowType::Map(f, sorted)) => {
+            let map = a.as_map();
+            let entries = structure(&entry_types(m), map.entries(), leaf)?;
+            let field = Arc::new(retyped(f, entries.data_type().clone()));
+            Arc::new(
+                MapArray::try_new(
+                    field,
+                    map.offsets().clone(),
+                    entries,
+                    map.nulls().cloned(),
+                    *sorted,
+                )
+                .map_err(bad)?,
+            )
+        }
+        (DataType::Struct(s), ArrowType::Struct(_)) => {
+            let types: Vec<&DataType> = s.fields().iter().map(StructField::data_type).collect();
+            Arc::new(structure(&types, a.as_struct(), leaf)?)
+        }
+        _ => Arc::clone(a),
+    })
 }
 
 /// `a` with its rows also NULL where `parent` is: the values a NULL parent
@@ -230,4 +511,65 @@ fn texts(p: &CastParts, a: &ArrayRef) -> Result<Vec<Option<String>>> {
                 .collect()
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY: DataType = DataType::DayTimeInterval {
+        start: DayTimeField::Day,
+        end: DayTimeField::Day,
+    };
+
+    fn pair(a: DataType, b: DataType) -> DataType {
+        StructType::new([
+            StructField::new("a", a, true),
+            StructField::new("b", b, true),
+        ])
+        .into()
+    }
+
+    fn array(t: DataType) -> DataType {
+        ArrayType::new(t, true).into()
+    }
+
+    fn map(k: DataType, v: DataType) -> DataType {
+        MapType::new(k, v, true).into()
+    }
+
+    #[test]
+    fn only_the_intervals_going_to_strings_are_rendered() {
+        let from = pair(DAY, DAY);
+        assert_eq!(
+            rendered_part(&from, &pair(DataType::String, DAY)),
+            Some(pair(DAY, DataType::Null))
+        );
+        assert_eq!(rendered_part(&from, &DataType::String), Some(from.clone()));
+        assert_eq!(rendered_part(&from, &from), None);
+        assert_eq!(
+            rendered_part(&array(from), &array(pair(DAY, DataType::String))),
+            Some(array(pair(DataType::Null, DAY)))
+        );
+        assert_eq!(
+            rendered_part(&map(DAY, DAY), &map(DAY, DataType::String)),
+            Some(map(DataType::Null, DAY))
+        );
+        assert_eq!(
+            rendered_part(&map(DAY, DAY), &DataType::String),
+            Some(map(DAY, DAY))
+        );
+        assert_eq!(rendered_part(&map(DAY, DAY), &map(DAY, DAY)), None);
+    }
+
+    #[test]
+    fn a_shape_the_cast_cannot_take_renders_nothing() {
+        let int = DataType::Integer;
+        assert_eq!(rendered_part(&array(DAY), &int), None);
+        assert_eq!(rendered_part(&map(DAY, DAY), &int), None);
+        assert_eq!(rendered_part(&pair(DAY, DAY), &int), None);
+        let one: DataType = StructType::new([StructField::new("a", DataType::String, true)]).into();
+        assert_eq!(rendered_part(&pair(DAY, DAY), &one), None);
+        assert_eq!(rendered_part(&int, &DataType::String), None);
+    }
 }

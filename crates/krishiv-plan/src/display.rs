@@ -1194,6 +1194,15 @@ impl Display for Literal {
             Self::DayTimeInterval { micros, start, end } => f.write_str(
                 &krishiv_types::interval::day_time_string(*micros, *start, *end),
             ),
+            Self::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => write!(
+                f,
+                "INTERVAL '{}'",
+                krishiv_types::interval::calendar_string(*months, *days, *micros)
+            ),
         }
     }
 }

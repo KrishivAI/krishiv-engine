@@ -1580,7 +1580,25 @@ fn unsupported_inputs_fail_explicitly() {
         }
         .into(),
     ]);
-    assert_eq!(class(&run(interval, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    let out = run(interval.clone(), &ctx).unwrap().output;
+    assert_eq!(
+        out[0].data_type,
+        krishiv_types::DataType::DEFAULT_YEAR_MONTH_INTERVAL
+    );
+    assert!(!out[0].nullable);
+    // `spark.sql.legacy.interval.enabled` makes Spark's literals calendar
+    // intervals, which is refused rather than answered differently.
+    let legacy = context(
+        catalog(),
+        ResolutionConf {
+            legacy_interval: true,
+            ..ResolutionConf::default()
+        },
+    );
+    assert_eq!(
+        class(&run(interval, &legacy)),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
     // With ordinals off, an integer key is a constant.
     let off = context(
         catalog(),
