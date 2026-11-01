@@ -391,7 +391,7 @@ const BUILD_COUNTERS: [(Counter, &str); 9] = [
     (Counter::MaxPartitionNs, "finalize_max_partition_ns"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 11] = [
+const PROBE_COUNTERS: [(Counter, &str); 10] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
@@ -402,7 +402,6 @@ const PROBE_COUNTERS: [(Counter, &str); 11] = [
     (Counter::GraceHashBuckets, "grace_hash_buckets"),
     (Counter::ReversedPartitions, "reversed_partitions"),
     (Counter::ProbeTableNs, "probe_table_ns"),
-    (Counter::MergeFallbacks, "merge_fallbacks"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -462,6 +461,10 @@ impl Counters {
 
     pub(crate) fn probe(&self) -> crate::metrics::ExtraMetrics {
         let mut out = self.report(&PROBE_COUNTERS);
+        // Only a join that fell back to sort-merge reports it.
+        if self.get(Counter::MergeFallbacks) > 0 {
+            out.extend(self.report(&[(Counter::MergeFallbacks, "merge_fallbacks")]));
+        }
         // Probe-length counters exist only when a detailed profile asked
         // for them (`ExecConfig::detailed_metrics`).
         if self.get(Counter::Lookups) > 0 {
