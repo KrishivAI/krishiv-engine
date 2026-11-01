@@ -41,10 +41,6 @@
       "reason": "SELECT array_insert(INTERVAL '1 02:03:04' DAY TO SECOND, 5, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
     },
     {
-      "id": "array_insert#f0cbf2e7fdb3/ansi_on",
-      "reason": "SELECT array_insert(array(1, 2, 3, 4), 5, CAST(1.5 AS FLOAT)) | array<double> not null where Spark has array<float> not null"
-    },
-    {
       "id": "array_insert#f741c55c4ba1/ansi_on",
       "reason": "SELECT array_insert(INTERVAL '1-2' YEAR TO MONTH, 5, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
     },

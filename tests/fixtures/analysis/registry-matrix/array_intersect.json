@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "array_intersect#59d4f59aa7e6/ansi_on",
+      "reason": "SELECT array_intersect(INTERVAL '1-2' YEAR TO MONTH, array(1, 3, 5)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    },
+    {
+      "id": "array_intersect#59d4f59aa7e6/ansi_off",
+      "reason": "SELECT array_intersect(INTERVAL '1-2' YEAR TO MONTH, array(1, 3, 5)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    },
+    {
+      "id": "array_intersect#74f2f89cfe6e/ansi_on",
+      "reason": "SELECT array_intersect(INTERVAL '1 02:03:04' DAY TO SECOND, array(1, 3, 5)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    },
+    {
+      "id": "array_intersect#74f2f89cfe6e/ansi_off",
+      "reason": "SELECT array_intersect(INTERVAL '1 02:03:04' DAY TO SECOND, array(1, 3, 5)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    },
+    {
+      "id": "array_intersect#ac88fadfc173/ansi_on",
+      "reason": "SELECT array_intersect(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    },
+    {
+      "id": "array_intersect#ac88fadfc173/ansi_off",
+      "reason": "SELECT array_intersect(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    },
+    {
+      "id": "array_intersect#cbea7cbae201/ansi_on",
+      "reason": "SELECT array_intersect(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    },
+    {
+      "id": "array_intersect#cbea7cbae201/ansi_off",
+      "reason": "SELECT array_intersect(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "array_intersect"
+}
