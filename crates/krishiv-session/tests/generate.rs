@@ -28,6 +28,10 @@ fn rows(s: &Session, sql: &str) -> Vec<Vec<String>> {
                             .as_primitive::<arrow_array::types::Int32Type>()
                             .value(i)
                             .to_string(),
+                        arrow_schema::DataType::Int64 => c
+                            .as_primitive::<arrow_array::types::Int64Type>()
+                            .value(i)
+                            .to_string(),
                         arrow_schema::DataType::Utf8View => c.as_string_view().value(i).to_owned(),
                         arrow_schema::DataType::Utf8 => c.as_string::<i32>().value(i).to_owned(),
                         other => format!("<{other}>"),
@@ -429,10 +433,15 @@ fn generators_beside_group_by_name_their_columns_as_spark_does() {
 #[test]
 fn stack_takes_a_bounded_int_row_count() {
     let s = Session::new().unwrap();
-    for sql in ["select stack(2147483647, 1)", "select stack(0, 1)"] {
+    assert_eq!(
+        error_of(&s, "select stack(2147483647, 1)").error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // Spark: the count must be in (0, 2147483647].
+    for sql in ["select stack(0, 1)", "select stack(-1, 1)"] {
         assert_eq!(
             error_of(&s, sql).error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::DatatypeMismatchValueOutOfRange,
             "{sql}"
         );
     }
@@ -625,4 +634,107 @@ fn a_generators_output_is_no_lateral_alias_beside_an_aggregate() {
             "{q}: {e}"
         );
     }
+}
+
+#[test]
+fn table_functions_mark_themselves_in_the_alias_count_error() {
+    let s = Session::new().unwrap();
+    // A table function: NUM_TABLE_VALUE_ALIASES_MISMATCH.
+    for sql in [
+        "select * from range(3) t(a, b)",
+        "select * from json_tuple('{\"a\":1}', 'a') t(x, y)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::NumTableValueAliasesMismatch,
+            "{sql}"
+        );
+    }
+    // A subquery that happens to select the same call: ASSIGNMENT_ARITY_MISMATCH.
+    for sql in [
+        "select * from (select json_tuple('{\"a\":1}', 'a', 'b')) t(x)",
+        "select * from (select explode(array(1, 2))) t(a, b)",
+    ] {
+        assert_eq!(
+            error_of(&s, sql).error_class(),
+            ErrorClass::AssignmentArityMismatch,
+            "{sql}"
+        );
+    }
+    assert_eq!(
+        rows(&s, "select * from json_tuple('{\"a\":1}', 'a') t(x)"),
+        table(&[&["1"]])
+    );
+}
+
+#[test]
+fn an_aggregate_in_order_by_cannot_grow_through_a_generator() {
+    let s = Session::new().unwrap();
+    // Spark 4.2.0: the call stays in the sort, which refuses it.
+    let e = error_of(
+        &s,
+        "select explode(array(k)) e from values (1), (2), (2) t(k) group by k order by count(*)",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedExprForOperator,
+        "{e}"
+    );
+    assert!(e.to_string().contains("count(1)"), "{e}");
+}
+
+#[test]
+fn stack_beside_aggregates_and_in_expressions() {
+    let s = Session::new().unwrap();
+    // Spark 4.2.0.
+    let e = error_of(&s, "select stack(2, 1, 2) + 1");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedGeneratorNestedInExpressions,
+        "{e}"
+    );
+    assert_eq!(
+        rows(&s, "select stack(cast(2 as int), 1, 2, 3, 4)"),
+        table(&[&["1", "2"], &["3", "4"]])
+    );
+    let mut got = rows(
+        &s,
+        "select stack(2, k, k + 1) from values (1), (2) t(k) group by k",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["1"], &["2"], &["2"], &["3"]]));
+    let mut got = rows(
+        &s,
+        "select k, count(*), stack(2, k, k + 1) from values (1), (2) t(k) group by k",
+    );
+    got.sort();
+    assert_eq!(
+        got,
+        table(&[
+            &["1", "1", "1"],
+            &["1", "1", "2"],
+            &["2", "1", "2"],
+            &["2", "1", "3"]
+        ])
+    );
+    let mut got = rows(
+        &s,
+        "select count(*), stack(2, 1, 2) from values (1), (2) t(k)",
+    );
+    got.sort();
+    assert_eq!(got, table(&[&["2", "1"], &["2", "2"]]));
+}
+
+#[test]
+fn having_cannot_read_an_aggregate_the_generator_hides() {
+    let s = Session::new().unwrap();
+    // Spark 4.2.0: INVALID_WHERE_CONDITION.
+    assert_eq!(
+        error_of(
+            &s,
+            "select explode(array(k)) e from values (1), (2), (2) t(k) group by k having count(*) > 1"
+        )
+        .error_class(),
+        ErrorClass::InvalidWhereCondition
+    );
 }

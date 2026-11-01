@@ -1685,19 +1685,10 @@ impl Lowerer {
                     "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
                     _ => None,
                 };
-                if name.parts.len() == 1 && lname == "json_tuple" {
-                    // `FROM json_tuple(json, k1, ...)` is the select list
-                    // `SELECT json_tuple(json, k1, ...)` over one row.
-                    let one_row = self.node(PlanNode::OneRowRelation, tf.span);
-                    let call = arc(self.call("json_tuple", lowered, tf.span));
-                    self.node(
-                        PlanNode::Project {
-                            input: arc(one_row),
-                            exprs: vec![call],
-                        },
-                        tf.span,
-                    )
-                } else if let (Some(kind), 1) = (kind, name.parts.len()) {
+                // `FROM json_tuple(..)` stays a table function: the analyzer
+                // runs it as the select list `SELECT json_tuple(..)` over one
+                // row, and its alias-count error differs from a subquery's.
+                if let (Some(kind), 1) = (kind, name.parts.len()) {
                     if let Some(a) = args.iter().find(|a| a.name.is_some()) {
                         return Err(unsupported("table-valued functions", a.span));
                     }
