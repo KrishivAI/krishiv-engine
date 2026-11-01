@@ -1,11 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      4
-    ],
-    "fn-aggregate": [
-      12
-    ],
     "nested-interval-types": [
       1,
       2
