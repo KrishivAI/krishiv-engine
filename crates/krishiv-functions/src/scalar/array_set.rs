@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Array membership, set and order functions: `array_contains`,
-//! `array_distinct`, `array_union`, `sort_array` and `arrays_zip`.
+//! `array_distinct`, `array_union`, `array_except`, `array_intersect`,
+//! `arrays_overlap`, `sort_array` and `arrays_zip`.
 //!
 //! Elements compare as Spark's `RowOrdering` does
 //! ([`krishiv_kernels::order::cmp_rows`]): NULL equals NULL and sorts first,
@@ -35,7 +36,10 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 pub(super) const NAMES: &[&str] = &[
     "array_contains",
     "array_distinct",
+    "array_except",
+    "array_intersect",
     "array_union",
+    "arrays_overlap",
     "arrays_zip",
     "sort_array",
 ];
@@ -64,6 +68,26 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             ));
             let ty = DataType::List(Arc::clone(&field));
             Ok(Binding::new(ty, move |x: &Inputs<'_>| union(x, &field)))
+        }
+        ("array_except" | "array_intersect", [DataType::List(l), DataType::List(r)])
+            if l.data_type() == r.data_type() && orders(l.data_type()) =>
+        {
+            let keep_matches = listed == "array_intersect";
+            let nullable = if keep_matches {
+                l.is_nullable() && r.is_nullable()
+            } else {
+                l.is_nullable()
+            };
+            let field = Arc::new(Field::new("element", l.data_type().clone(), nullable));
+            let ty = DataType::List(Arc::clone(&field));
+            Ok(Binding::new(ty, move |x: &Inputs<'_>| {
+                filtered(x, &field, keep_matches)
+            }))
+        }
+        ("arrays_overlap", [DataType::List(l), DataType::List(r)])
+            if l.data_type() == r.data_type() && orders(l.data_type()) =>
+        {
+            Ok(Binding::new(DataType::Boolean, overlap))
         }
         ("sort_array", [t @ DataType::List(f), DataType::Boolean]) if orders(f.data_type()) => {
             let field = Arc::clone(f);
@@ -277,6 +301,114 @@ fn union(x: &Inputs<'_>, field: &Arc<Field>) -> Result<ArrayRef, KrishivError> {
     }
     let out = rebuild(field, &values, &rows, "array_union", MAX_ARRAY_LENGTH)?;
     rezero(&out)
+}
+
+/// Whether `needle` (an index into `values`) equals an element among the
+/// `candidates` (indexes into `values`); NULL equals NULL.
+fn member(
+    values: &dyn Array,
+    nulls: Option<&NullBuffer>,
+    needle: usize,
+    candidates: &[usize],
+) -> Result<bool, KrishivError> {
+    let is_null = |i: usize| nulls.is_some_and(|n| n.is_null(i));
+    for &c in candidates {
+        let equal = match (is_null(needle), is_null(c)) {
+            (true, true) => true,
+            (false, false) => same_value(values, needle, values, c)?,
+            _ => false,
+        };
+        if equal {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `array_intersect(a, b)` (`keep_matches`) and `array_except(a, b)`: the
+/// distinct elements of `a` that are (or are not) in `b`, in `a`'s order.
+fn filtered(
+    x: &Inputs<'_>,
+    field: &Arc<Field>,
+    keep_matches: bool,
+) -> Result<ArrayRef, KrishivError> {
+    let name = if keep_matches {
+        "array_intersect"
+    } else {
+        "array_except"
+    };
+    let (ca, cb) = (x.column(0)?, x.column(1)?);
+    let (a, b) = (list_of(&ca, name)?, list_of(&cb, name)?);
+    let values = concat(&[a.values().as_ref(), b.values().as_ref()]).map_err(kernel)?;
+    let nulls = values.logical_nulls();
+    let base = a.values().len();
+    let mut rows = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        if a.is_null(row) || b.is_null(row) {
+            rows.push(None);
+            continue;
+        }
+        let (sa, la) = span(a, row);
+        let (sb, lb) = span(b, row);
+        let right: Vec<usize> = (sb..sb + lb).map(|i| base + i).collect();
+        let left: Vec<usize> = (sa..sa + la).collect();
+        let mut picks = Vec::new();
+        for &i in &left {
+            if member(values.as_ref(), nulls.as_ref(), i, &right)? == keep_matches {
+                picks.push(i);
+            }
+        }
+        rows.push(Some(to_indexes(&first_of_each(values.as_ref(), &picks)?)?));
+    }
+    let out = rebuild(field, &values, &rows, name, MAX_ARRAY_LENGTH)?;
+    rezero(&out)
+}
+
+/// `arrays_overlap(a, b)`: true on a shared non-NULL element; else NULL when
+/// both arrays are non-empty and either holds a NULL; else false.
+fn overlap(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+    let (ca, cb) = (x.column(0)?, x.column(1)?);
+    let (a, b) = (
+        list_of(&ca, "arrays_overlap")?,
+        list_of(&cb, "arrays_overlap")?,
+    );
+    let values = concat(&[a.values().as_ref(), b.values().as_ref()]).map_err(kernel)?;
+    let nulls = values.logical_nulls();
+    let is_null = |i: usize| nulls.as_ref().is_some_and(|n| n.is_null(i));
+    let base = a.values().len();
+    let mut out = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        if a.is_null(row) || b.is_null(row) {
+            out.push(None);
+            continue;
+        }
+        let (sa, la) = span(a, row);
+        let (sb, lb) = span(b, row);
+        let mut saw_null = false;
+        let mut hit = false;
+        'scan: for i in sa..sa + la {
+            if is_null(i) {
+                saw_null = true;
+                continue;
+            }
+            for j in sb..sb + lb {
+                if is_null(base + j) {
+                    saw_null = true;
+                } else if same_value(values.as_ref(), i, values.as_ref(), base + j)? {
+                    hit = true;
+                    break 'scan;
+                }
+            }
+        }
+        out.push(if hit {
+            Some(true)
+        } else if saw_null && la > 0 && lb > 0 {
+            None
+        } else {
+            Some(false)
+        });
+    }
+    Ok(Arc::new(BooleanArray::from(out)))
 }
 
 /// `sort_array(arr, ascending)`.

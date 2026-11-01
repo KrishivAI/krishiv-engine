@@ -37,7 +37,9 @@ __all__ = [
     "array_compact",
     "array_contains",
     "array_distinct",
+    "array_except",
     "array_insert",
+    "array_intersect",
     "array_max",
     "array_min",
     "array_position",
@@ -46,6 +48,7 @@ __all__ = [
     "array_repeat",
     "array_size",
     "array_union",
+    "arrays_overlap",
     "arrays_zip",
     "ascii",
     "asin",
@@ -418,9 +421,19 @@ def array_distinct(col: ColumnOrName) -> Column:
     return _call("array_distinct", _named(col, "col"))
 
 
+def array_except(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``array_except``."""
+    return _call("array_except", _named(col1, "col1"), _named(col2, "col2"))
+
+
 def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column:
     """Calls the registry function ``array_insert``."""
     return _call("array_insert", _named(arr, "arr"), _int_or_col(pos, "pos"), _lit(value, "value"))
+
+
+def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``array_intersect``."""
+    return _call("array_intersect", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def array_max(col: ColumnOrName) -> Column:
@@ -461,6 +474,11 @@ def array_size(col: ColumnOrName) -> Column:
 def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``array_union``."""
     return _call("array_union", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def arrays_overlap(a1: ColumnOrName, a2: ColumnOrName) -> Column:
+    """Calls the registry function ``arrays_overlap``."""
+    return _call("arrays_overlap", _named(a1, "a1"), _named(a2, "a2"))
 
 
 def arrays_zip(*cols: ColumnOrName) -> Column:

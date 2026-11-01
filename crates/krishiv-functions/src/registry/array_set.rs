@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The array set and order signatures: `array_contains`, `array_distinct`,
-//! `array_union`, `sort_array` and `arrays_zip` (Spark 4.2's
-//! `ArrayContains`, `ArrayDistinct`, `ArrayUnion`, `SortArray` and
-//! `ArraysZip`). Checked against the `array.sql` goldens and a Spark 4.2.0
-//! run.
+//! `array_union`, `array_except`, `array_intersect`, `arrays_overlap`,
+//! `sort_array` and `arrays_zip` (Spark 4.2's `ArrayContains`,
+//! `ArrayDistinct`, `ArrayUnion`, `ArrayExcept`, `ArrayIntersect`,
+//! `ArraysOverlap`, `SortArray` and `ArraysZip`). Checked against the
+//! `array.sql` goldens and a Spark 4.2.0 run.
 //!
 //! The element type of every function but `arrays_zip` must order
 //! (`DATATYPE_MISMATCH.INVALID_ORDERING_TYPE`: a map does not). An untyped
 //! `NULL` is `NULL_TYPE` for `array_contains` and
-//! `BINARY_ARRAY_DIFF_TYPES` for `array_union`; `array_distinct`,
+//! `BINARY_ARRAY_DIFF_TYPES` for the two-array functions; `array_distinct`,
 //! `sort_array` and `arrays_zip` cast it to an array of `NULL`s.
 //!
 //! `sort_array`'s order flag must fold (`NON_FOLDABLE_INPUT`); the analyzer
@@ -109,10 +110,16 @@ fn distinct(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     ))
 }
 
-/// `array_union(a, b)`: the distinct elements of both, as an array of the
-/// shared element type that holds NULL when either did.
-fn union(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    let name = "array_union";
+/// The result of a two-array function of this family: an array over the
+/// shared element type (a BOOLEAN when `boolean`), where `holds_null` says
+/// from the arguments' `containsNull` whether NULL can appear (for a
+/// BOOLEAN: whether the result can be NULL).
+fn pair(
+    name: &str,
+    c: &CallTypes<'_>,
+    holds_null: fn(bool, bool) -> bool,
+    boolean: bool,
+) -> Result<ArgType, KrishivError> {
     let (Some(DataType::Array(left)), Some(DataType::Array(right))) =
         (c.data_type(0), c.data_type(1))
     else {
@@ -127,16 +134,38 @@ fn union(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if !spark_orderable(left.element_type()) {
         return Err(not_orderable(name, c, left.element_type()));
     }
+    let holds = holds_null(left.contains_null(), right.contains_null());
+    if boolean {
+        return Ok(ArgType::new(DataType::Boolean, c.any_nullable() || holds));
+    }
     Ok(ArgType::new(
-        DataType::Array(
-            ArrayType::new(
-                left.element_type().clone(),
-                left.contains_null() || right.contains_null(),
-            )
-            .into(),
-        ),
+        DataType::Array(ArrayType::new(left.element_type().clone(), holds).into()),
         c.any_nullable(),
     ))
+}
+
+/// `array_union(a, b)`: the distinct elements of both, as an array of the
+/// shared element type that holds NULL when either did.
+fn union(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pair("array_union", c, |l, r| l || r, false)
+}
+
+/// `array_except(a, b)`: the distinct elements of `a` not in `b`, typed as
+/// `a`.
+fn except(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pair("array_except", c, |l, _| l, false)
+}
+
+/// `array_intersect(a, b)`: the distinct elements of `a` that are in `b`,
+/// holding NULL only when both could.
+fn intersect(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pair("array_intersect", c, |l, r| l && r, false)
+}
+
+/// `arrays_overlap(a, b)`: whether they share an element; NULL when they do
+/// not but a NULL element could have matched.
+fn overlap(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pair("arrays_overlap", c, |l, r| l || r, true)
 }
 
 /// `BINARY_ARRAY_DIFF_TYPES`: the arguments are not two arrays of one
@@ -211,6 +240,9 @@ pub(super) fn specs() -> Vec<Spec> {
         distinct,
     ));
     out.extend(scalar(&["array_union"], &Inputs::ArrayPair, union));
+    out.extend(scalar(&["array_except"], &Inputs::ArrayPair, except));
+    out.extend(scalar(&["array_intersect"], &Inputs::ArrayPair, intersect));
+    out.extend(scalar(&["arrays_overlap"], &Inputs::ArrayPair, overlap));
     out.extend(scalar(
         &["sort_array"],
         &Inputs::Expects(vec![InputType::Array, InputType::Strict(DataType::Boolean)]),
