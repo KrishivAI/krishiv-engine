@@ -387,6 +387,8 @@ pub(super) fn truncate_interval(to: &DataType, a: &dyn Array) -> Result<ArrayRef
         DataType::DayTimeInterval { end, .. } => {
             Arc::new(truncate_day_time(a.as_primitive(), micro_step(*end)))
         }
+        // A calendar interval has no fields to cut.
+        DataType::CalendarInterval => arrow_array::make_array(a.to_data()),
         other => return Err(internal(&format!("truncating a {other} as an interval"))),
     })
 }

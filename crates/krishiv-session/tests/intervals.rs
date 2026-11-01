@@ -435,9 +435,13 @@ fn a_nested_cast_renders_only_the_intervals_going_to_strings() -> R {
             "SELECT CAST(CAST(named_struct('a', INTERVAL '1' DAY, 'b', INTERVAL '25' HOUR) \
                AS STRUCT<a: STRING, b: INTERVAL DAY>) AS STRING), \
              CAST(CAST(array(named_struct('a', INTERVAL '13' MONTH, 'b', INTERVAL '13' MONTH)) \
-               AS ARRAY<STRUCT<a: STRING, b: INTERVAL YEAR>>) AS STRING)"
+               AS ARRAY<STRUCT<a: STRING, b: INTERVAL YEAR>>) AS STRING), \
+             CAST(CAST(named_struct('a', NULL, 'b', INTERVAL '25' HOUR) \
+               AS STRUCT<a: INTERVAL, b: INTERVAL DAY>) AS STRING)"
         )?,
-        ["{INTERVAL '1' DAY, INTERVAL '1' DAY}|[{INTERVAL '13' MONTH, INTERVAL '1' YEAR}]"]
+        [
+            "{INTERVAL '1' DAY, INTERVAL '1' DAY}|[{INTERVAL '13' MONTH, INTERVAL '1' YEAR}]|{null, INTERVAL '1' DAY}"
+        ]
     );
     Ok(())
 }
