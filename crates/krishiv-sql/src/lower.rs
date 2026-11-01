@@ -2184,7 +2184,7 @@ impl Lowerer {
                     && matches!(f.args[0].expr.kind, ExprKind::Keyword(_));
                 let function_name = match (unit_form, lname.as_str()) {
                     (true, "timestampadd" | "dateadd" | "date_add") => "timestampadd".to_owned(),
-                    (true, "timestampdiff" | "datediff" | "date_diff") => {
+                    (true, "timestampdiff" | "datediff" | "date_diff" | "timediff") => {
                         "timestampdiff".to_owned()
                     }
                     _ => name.value.clone(),

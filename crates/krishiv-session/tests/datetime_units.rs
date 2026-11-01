@@ -135,6 +135,24 @@ fn timestampadd_overflow_names_the_operation() {
 }
 
 #[test]
+fn timediff_is_timestampdiff() {
+    let s = session();
+    for (expr, want) in [
+        (
+            "timediff(HOUR, TIMESTAMP '2022-02-14 01:02:03', TIMESTAMP '2022-02-14 12:00:03')",
+            "10",
+        ),
+        (
+            "timediff(QUARTER, TIMESTAMP '2023-08-10 01:02:03', TIMESTAMP '2022-01-14 01:02:03')",
+            "-6",
+        ),
+        ("timediff(DAY, DATE '2022-02-15', DATE '2023-02-15')", "365"),
+    ] {
+        assert_eq!(one(&s, expr).as_deref(), Some(want), "{expr}");
+    }
+}
+
+#[test]
 fn timestampdiff_counts_whole_units_on_the_wall_clock() {
     let s = session();
     for (expr, want) in [
