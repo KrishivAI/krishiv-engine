@@ -232,6 +232,25 @@ fn a_store_that_lists_whole_has_no_listing_timeout() {
 }
 
 #[test]
+fn a_slow_listing_still_fails_when_told_to() {
+    rt().block_on(async {
+        let s = setup(IoConfig::default());
+        put(&s, "d/a", 1).await;
+        put(&s, "d/b", 1).await;
+        s.fault.set_list_latency(Duration::from_millis(1));
+        s.fault.fail_next_lists(1);
+        let dir = Path::from("d");
+        let failed: Vec<_> = s.fault.list(Some(&dir)).collect().await;
+        assert_eq!(failed.len(), 2);
+        assert!(failed[0].is_ok());
+        assert!(failed[1].is_err());
+        let next: Vec<_> = s.fault.list(Some(&dir)).collect().await;
+        assert!(next.iter().all(Result::is_ok));
+        assert_eq!(next.len(), 2);
+    });
+}
+
+#[test]
 fn versions_are_checked_on_every_read() {
     rt().block_on(async {
         let s = setup(IoConfig::default());

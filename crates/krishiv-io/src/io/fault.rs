@@ -273,12 +273,7 @@ impl ObjectStore for FaultStore {
             (fail, st.list_latency)
         };
         let inner = self.inner.list(prefix);
-        if !latency.is_zero() {
-            let wait = futures::stream::once(tokio::time::sleep(latency));
-            let wait = futures::StreamExt::filter_map(wait, |()| std::future::ready(None));
-            return Box::pin(futures::StreamExt::chain(wait, inner));
-        }
-        if fail {
+        let listing: BoxStream<'static, StoreResult<ObjectMeta>> = if fail {
             // One object, then a transient failure mid-listing.
             Box::pin(futures::StreamExt::chain(
                 futures::StreamExt::take(inner, 1),
@@ -286,7 +281,13 @@ impl ObjectStore for FaultStore {
             ))
         } else {
             inner
+        };
+        if latency.is_zero() {
+            return listing;
         }
+        let wait = futures::stream::once(tokio::time::sleep(latency));
+        let wait = futures::StreamExt::filter_map(wait, |()| std::future::ready(None));
+        Box::pin(futures::StreamExt::chain(wait, listing))
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> StoreResult<ListResult> {
