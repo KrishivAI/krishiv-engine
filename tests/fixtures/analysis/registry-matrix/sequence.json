@@ -498,11 +498,11 @@
     },
     {
       "id": "sequence#b2598b25c80d/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval year to month)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
     },
     {
       "id": "sequence#b2598b25c80d/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval year to month)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
     },
     {
       "id": "sequence#b32e1d98f3de/ansi_on",
@@ -690,11 +690,11 @@
     },
     {
       "id": "sequence#f504495080e3/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval month)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
     },
     {
       "id": "sequence#f504495080e3/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(NULL AS interval month)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
     },
     {
       "id": "sequence#fa3f9bfb1a24/ansi_on",

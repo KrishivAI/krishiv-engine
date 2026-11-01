@@ -83,6 +83,7 @@ mod hof;
 pub(crate) mod legacy;
 mod ops;
 mod pivot;
+mod recursive;
 mod resolve;
 mod setops;
 mod sqlfn;

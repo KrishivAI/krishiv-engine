@@ -38,7 +38,8 @@ use krishiv_plan::analyzer::{
     BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
 use krishiv_plan::{
-    Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan, TableVersion,
+    ALIAS_PART_SEP, Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan,
+    TableVersion,
 };
 
 use crate::cache::{RelationCache, is_cache_name};
@@ -47,6 +48,15 @@ use crate::cache::{RelationCache, is_cache_name};
 pub(crate) const CATALOG: &str = "spark_catalog";
 /// The namespace temporary tables live in.
 pub(crate) const NAMESPACE: &str = "default";
+/// The namespace global temporary views live in.
+pub(crate) const GLOBAL_NAMESPACE: &str = "global_temp";
+
+/// The key a global temporary view `name` is stored under in [`SessionCatalog`]: a prefix no SQL
+/// identifier spells (it starts with a control character), so it never collides with a temporary
+/// view and [`SessionCatalog::names`] can leave it out.
+pub(crate) fn global_key(name: &str) -> String {
+    format!("{GLOBAL_PREFIX}{name}")
+}
 
 /// A temporary table or view.
 #[derive(Debug)]
@@ -94,6 +104,22 @@ pub(crate) const HIDDEN_PREFIX: &str = "__krishiv_snapshot_";
 pub(crate) fn is_hidden_name(name: &str) -> bool {
     name.get(..HIDDEN_PREFIX.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(HIDDEN_PREFIX))
+}
+
+/// What every [`global_key`] starts with.
+const GLOBAL_PREFIX: &str = "\u{1}global_temp\u{1}";
+
+/// Whether `name` is spelled like a [`global_key`], in any letter case (catalog keys are
+/// lower-cased): no user-written name may be, or a local view could overwrite, read or drop a
+/// global one without the global view's checks.
+pub(crate) fn is_global_key(name: &str) -> bool {
+    name.get(..GLOBAL_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(GLOBAL_PREFIX))
+}
+
+/// Whether a user may not name a local view `name`: a snapshot pin, a cache entry or a global key.
+pub(crate) fn is_reserved_view_name(name: &str) -> bool {
+    is_hidden_name(name) || is_cache_name(name) || is_global_key(name)
 }
 
 /// The temporary tables and views of a session, by lower-case name.
@@ -202,7 +228,17 @@ impl SessionCatalog {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .map(|(n, _)| n.clone())
-            .filter(|n| !n.starts_with(HIDDEN_PREFIX))
+            .filter(|n| !n.starts_with(HIDDEN_PREFIX) && !n.starts_with(GLOBAL_PREFIX))
+            .collect()
+    }
+
+    /// The names of the global temporary views, as registered, in order.
+    pub(crate) fn global_names(&self) -> Vec<String> {
+        self.tables
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter_map(|(n, _)| n.strip_prefix(GLOBAL_PREFIX).map(str::to_owned))
             .collect()
     }
 
@@ -329,6 +365,12 @@ pub(crate) struct QueryCatalog {
     /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
     /// from under the query between substitution and planning.
     pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
+    /// The pinned tables a planned query's run releases: the ones its own
+    /// planning pinned (a table it only reads belongs to an earlier
+    /// expansion and stays).
+    releasable: Mutex<BTreeSet<String>>,
+    /// Memory held for pinned tables, by hidden name; released with them.
+    held: Mutex<HashMap<String, krishiv_memory::Reservation>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -377,6 +419,8 @@ impl QueryCatalog {
             session,
             cache,
             pinned: Mutex::new(HashMap::new()),
+            releasable: Mutex::new(BTreeSet::new()),
+            held: Mutex::new(HashMap::new()),
             files,
             scans,
             loaded: Mutex::new(HashMap::new()),
@@ -393,6 +437,46 @@ impl QueryCatalog {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(name, table);
+    }
+
+    /// Keeps `memory` reserved for as long as `name` stays pinned.
+    pub(crate) fn hold_reservation(&self, name: String, memory: krishiv_memory::Reservation) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name, memory);
+    }
+
+    /// Marks `names` as pinned by a planning call whose plan, when run,
+    /// releases them.
+    pub(crate) fn mark_releasable(&self, names: Vec<String>) {
+        self.releasable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(names);
+    }
+
+    /// Those of `candidates` marked releasable, forgotten as such.
+    pub(crate) fn take_releasable(&self, candidates: &[String]) -> Vec<String> {
+        let mut marked = self
+            .releasable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        candidates
+            .iter()
+            .filter(|c| marked.remove(*c))
+            .cloned()
+            .collect()
+    }
+
+    /// Releases the snapshots pinned under the hidden `names`.
+    pub(crate) fn unpin_cached(&self, names: &[String]) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        for n in names {
+            pinned.remove(n);
+            held.remove(n);
+        }
     }
 
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
@@ -1011,6 +1095,9 @@ impl Catalog for QueryCatalog {
                 resolve(&self.loaded, &self.session, &id.name, form)
             };
             let Some(table) = found else {
+                if form.temporary_only {
+                    return Ok(None);
+                }
                 return Ok(self.load_stored(id, form));
             };
             let (columns, kind) = match &*table {
@@ -1152,7 +1239,15 @@ pub(crate) struct StoredViews<'a> {
     pub(crate) path: Vec<Vec<String>>,
     /// `spark.sql.legacy.viewSchemaBindingMode` of the query's snapshot: views read by their schema binding mode.
     pub(crate) binding_enabled: bool,
+    /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
+    /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
+    /// created, not where it is read.
+    pub(crate) qualify: Option<&'a QualifyCalls<'a>>,
 }
+
+/// See [`StoredViews::qualify`]: the expression, the namespace it was written in and the path frozen with it.
+pub(crate) type QualifyCalls<'a> =
+    dyn Fn(&Arc<Expr>, &str, &[Vec<String>]) -> Option<Arc<Expr>> + 'a;
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
 /// its query as a subquery, with its bare table names resolved in the namespace the view was created in.
@@ -1260,7 +1355,7 @@ impl Expander<'_> {
             && !scope
                 .iter()
                 .any(|c| same_name(c, view, self.case_sensitive))
-            && (is_hidden_name(view) || is_cache_name(view))
+            && is_reserved_view_name(view)
         {
             return Err(TableOrViewNotFound {
                 relation_name: quote(view),
@@ -1301,24 +1396,42 @@ impl Expander<'_> {
             return self.expand_stored(plan, scope);
         }
         if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
-            && let [view] = name.as_slice()
             && options.is_empty()
-            && !scope
-                .iter()
-                .any(|c| same_name(c, view, self.case_sensitive))
         {
-            // (Hidden names are rejected above, before this view lookup.)
-            if let Some(entry) = self.catalog.get(view, self.case_sensitive)
+            // A bare name (not shadowed by a `WITH` definition) is a temporary view; `global_temp.name`
+            // is a global one.
+            let found = match name.as_slice() {
+                [view]
+                    if !scope
+                        .iter()
+                        .any(|c| same_name(c, view, self.case_sensitive)) =>
+                {
+                    // (Hidden names are rejected above, before this view lookup.)
+                    Some((view.as_str(), self.catalog.get(view, self.case_sensitive)))
+                }
+                [namespace, view] if namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE) => Some((
+                    view.as_str(),
+                    self.catalog
+                        .get(&global_key(view), self.case_sensitive)
+                        .filter(|_| !is_reserved_view_name(view)),
+                )),
+                _ => None,
+            };
+            if let Some((view, Some(entry))) = found
                 && let TempTable::View {
                     plan: definition,
                     columns,
                     ..
                 } = &*entry
             {
-                let key = view.to_lowercase();
+                // Debug-quoted parts keep the part boundaries: `a.b` (one part) and `a`.`b` differ.
+                let key = format!(
+                    "{:?}",
+                    name.iter().map(|p| p.to_lowercase()).collect::<Vec<_>>()
+                );
                 if self.path.contains(&key) {
                     return Err(InternalError {
-                        message: format!("temporary view `{key}` reads itself"),
+                        message: format!("temporary view `{}` reads itself", name.join(".")),
                     }
                     .into());
                 }
@@ -1331,7 +1444,13 @@ impl Expander<'_> {
                 return Ok(Arc::new(
                     LogicalPlan::new(PlanNode::SubqueryAlias {
                         input: input?,
-                        alias: view.clone(),
+                        // A global view's qualifier is `global_temp.v`, two parts (see
+                        // `ALIAS_PART_SEP`).
+                        alias: if name.len() == 2 {
+                            format!("{GLOBAL_NAMESPACE}{ALIAS_PART_SEP}{view}")
+                        } else {
+                            view.to_owned()
+                        },
                         columns,
                     })
                     .with_origin(plan.origin),
@@ -1590,7 +1709,18 @@ impl Expander<'_> {
         expr: Arc<Expr>,
         scope: &mut Vec<String>,
     ) -> Result<Arc<Expr>, KrishivError> {
-        let expr = expr.map_children(|child| self.expand_expr(child, scope))?;
+        let mut expr = expr.map_children(|child| self.expand_expr(child, scope))?;
+        // Inside a stored view the calls of its query resolve through the path it was created under.
+        if matches!(expr.node, ExprNode::Function(_))
+            && let (Some(qualify), Some(namespace), Some(path)) = (
+                self.stored.and_then(|s| s.qualify),
+                &self.view_namespace,
+                &self.view_path,
+            )
+            && let Some(next) = qualify(&expr, namespace, path)
+        {
+            expr = next;
+        }
         if let ExprNode::Subquery { kind, plan } = &expr.node {
             let expanded = self.go(Arc::clone(plan), scope)?;
             if !Arc::ptr_eq(&expanded, plan) {
@@ -1654,6 +1784,14 @@ pub(crate) fn reads_temporary(
         {
             return catalog.exists(bare, cs).then(|| bare.clone());
         }
+        if let PlanNode::Read(ReadSource::Table { name, .. }) = &plan.node
+            && let [namespace, view] = name.as_slice()
+            && namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE)
+        {
+            return catalog
+                .exists(&global_key(view), cs)
+                .then(|| format!("{GLOBAL_NAMESPACE}`.`{view}"));
+        }
         if let PlanNode::WithCte { input, ctes } = &plan.node {
             let outer = scope.len();
             for cte in ctes.iter() {
@@ -1707,18 +1845,27 @@ struct Checker<'a> {
 impl Checker<'_> {
     fn check(&mut self, plan: &Arc<LogicalPlan>) -> Result<(), KrishivError> {
         if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
-            && let [view] = name.as_slice()
             && options.is_empty()
-            && !self
-                .scope
-                .iter()
-                .any(|c| same_name(c, view, self.case_sensitive))
+            && let Some(view) = match name.as_slice() {
+                [view]
+                    if !self
+                        .scope
+                        .iter()
+                        .any(|c| same_name(c, view, self.case_sensitive)) =>
+                {
+                    Some(view.clone())
+                }
+                [namespace, view] if namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE) => {
+                    Some(global_key(view))
+                }
+                _ => None,
+            }
         {
-            if same_name(view, self.target, self.case_sensitive) {
+            if same_name(&view, self.target, self.case_sensitive) {
                 if self.catalog.get(self.target, self.case_sensitive).is_some() {
                     return Err(recursive_view(self.target, &self.stack));
                 }
-            } else if let Some(entry) = self.catalog.get(view, self.case_sensitive)
+            } else if let Some(entry) = self.catalog.get(&view, self.case_sensitive)
                 && let TempTable::View {
                     plan: definition, ..
                 } = &*entry
@@ -1727,7 +1874,7 @@ impl Checker<'_> {
                 if self.stack.iter().any(|v| v.to_lowercase() == key) {
                     return Err(recursive_view(self.target, &self.stack));
                 }
-                self.stack.push(view.clone());
+                self.stack.push(view);
                 // A view's definitions are its own: outer `WITH` names do
                 // not reach into it.
                 let outer = std::mem::take(&mut self.scope);
@@ -1775,12 +1922,20 @@ impl Checker<'_> {
     }
 }
 
+/// A view's catalog key as Spark names it in errors (`` `global_temp`.`v` `` for a global view).
+fn shown_view(key: &str) -> String {
+    match key.strip_prefix(GLOBAL_PREFIX) {
+        Some(view) => format!("{}.{}", quote(GLOBAL_NAMESPACE), quote(view)),
+        None => quote(key),
+    }
+}
+
 /// `RECURSIVE_VIEW` for a cycle through `stack` back to `target`.
 fn recursive_view(target: &str, stack: &[String]) -> KrishivError {
-    let mut path: Vec<String> = stack.iter().map(|v| quote(v)).collect();
-    path.push(quote(target));
+    let mut path: Vec<String> = stack.iter().map(|v| shown_view(v)).collect();
+    path.push(shown_view(target));
     RecursiveView {
-        view_ident: quote(target),
+        view_ident: shown_view(target),
         new_path: path.join(" -> "),
     }
     .into()
@@ -2028,6 +2183,7 @@ mod tests {
         let form = NameForm {
             case_sensitive: false,
             qualified: false,
+            temporary_only: false,
         };
         let t = resolve(&loaded, &session, "people", form).unwrap();
         loaded.lock().unwrap().insert("people".to_owned(), t);

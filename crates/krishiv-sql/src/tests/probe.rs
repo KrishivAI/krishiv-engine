@@ -235,6 +235,12 @@ fn agrees_with_spark_on_the_type_string_fixture() {
 /// Type strings whose syntax error the SQL parser places elsewhere than
 /// Spark (see `agrees_with_spark_on_the_type_string_fixture`).
 const FIELD_ERROR_POSITION_GAPS: &[&str] = &[
+    "interval 3",
+    "struct<a:interval month to year>",
+    "array<interval day to month>",
+    "array<interval year to>",
+    "map<interval day to,int>",
+    "struct<a:interval year to month x>",
     "struct<a:>",
     "struct<a:int comment 'x' not null>",
     "struct<a:int comment 'x'",

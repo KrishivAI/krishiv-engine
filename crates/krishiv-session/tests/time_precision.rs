@@ -146,3 +146,64 @@ fn a_cast_to_the_same_time_type_is_a_no_op() {
         "09:08:01.98"
     );
 }
+
+/// A `time(3)` column read from rows (not a folded constant) is cut by
+/// `extract`, and the output column is named and typed as Spark names it
+/// (golden: `extract(SECOND FROM CAST(.. AS TIME(1))):decimal(8,6)`).
+#[test]
+fn extract_second_on_a_column_and_the_output_schema() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let sql = "SELECT extract(SECOND FROM CAST(s AS time(3))) FROM \
+               VALUES ('09:08:01.987654'), ('00:00:00.123456') AS v(s)";
+    let df = block_on(s.sql(sql)).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(
+        schema.field(0).name(),
+        "extract(SECOND FROM CAST(s AS TIME(3)))"
+    );
+    assert_eq!(
+        schema.field(0).data_type(),
+        &arrow_schema::DataType::Decimal128(8, 6)
+    );
+    let batches = block_on(df.collect()).unwrap();
+    let mut got = Vec::new();
+    for b in &batches {
+        let col = b
+            .column(0)
+            .as_primitive::<arrow_array::types::Decimal128Type>();
+        got.extend((0..col.len()).map(|i| col.value(i)));
+    }
+    got.sort_unstable();
+    assert_eq!(got, vec![123_000, 1_987_000]);
+}
+
+/// `CAST(TIME AS DECIMAL(p, s))` is the seconds with the fraction, rounded
+/// half-up; a value that does not fit is `NUMERIC_VALUE_OUT_OF_RANGE` quoting
+/// it at scale 9 (golden `cast.sql`).
+#[test]
+fn a_time_casts_to_decimal_as_seconds() {
+    for (expr, want) in [
+        ("CAST(TIME '12:00:00' AS decimal(7, 2))", "43200.00"),
+        ("CAST(TIME '01:30:45' AS decimal(8, 3))", "5445.000"),
+        ("CAST(TIME '23:59:59.001' AS decimal(8, 3))", "86399.001"),
+        (
+            "CAST(TIME '23:59:59.999999' AS decimal(11, 6))",
+            "86399.999999",
+        ),
+        ("CAST(TIME '23:59:59.9' AS decimal(6, 0))", "86400"),
+        ("CAST(TIME '00:00:00' AS decimal(1, 0))", "0"),
+    ] {
+        assert_eq!(text(expr), want, "{expr}");
+    }
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let e = block_on(s.sql("SELECT CAST(TIME '00:01:00' AS decimal(1, 0))"))
+        .and_then(|df| block_on(df.collect()))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::NumericValueOutOfRangeWithSuggestion
+    );
+    assert!(e.to_string().contains("60.000000000"), "{e}");
+}

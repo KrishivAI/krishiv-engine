@@ -1469,7 +1469,7 @@ impl DataFrame {
         self.session
             .on_executor(async move {
                 let a = df.analysis().await?;
-                let (_, physical) = df.session.physical(&a.analyzed, &a.env).await?;
+                let (_, physical) = df.session.physical_inspected(&a.analyzed, &a.env).await?;
                 let mut all = a.analyzed.warnings.clone();
                 all.extend(physical.warnings().iter().cloned());
                 Ok(all)
@@ -1700,7 +1700,7 @@ impl DataFrame {
     }
 
     async fn temp_view_here(&self, name: &str) -> Result<(), KrishivError> {
-        if crate::catalog::is_hidden_name(name) || crate::cache::is_cache_name(name) {
+        if crate::catalog::is_reserved_view_name(name) {
             return Err(crate::catalog::reserved_temp_view_name(name));
         }
         // Spark analyzes the view's plan first: its errors come first.

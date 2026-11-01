@@ -18,11 +18,11 @@
     },
     {
       "id": "try_add#0ff872af44be/ansi_on",
-      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', CAST(NULL AS interval day)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', CAST(NULL AS interval day)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_add#0ff872af44be/ansi_off",
-      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', CAST(NULL AS interval day)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_add(timestamp'2021-01-01 00:00:00', CAST(NULL AS interval day)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_add#1071be3465ad/ansi_on",
@@ -126,11 +126,11 @@
     },
     {
       "id": "try_add#80670b49f5fe/ansi_on",
-      "reason": "SELECT try_add(date'2021-01-01', CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_add(date'2021-01-01', CAST(NULL AS interval year)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_add#80670b49f5fe/ansi_off",
-      "reason": "SELECT try_add(date'2021-01-01', CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_add(date'2021-01-01', CAST(NULL AS interval year)) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
       "id": "try_add#9e05d939ec33/ansi_on",
@@ -194,11 +194,11 @@
     },
     {
       "id": "try_add#ddadaf94c15e/ansi_on",
-      "reason": "SELECT try_add(CAST(NULL AS interval year), interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_add(CAST(NULL AS interval year), interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "try_add#ddadaf94c15e/ansi_off",
-      "reason": "SELECT try_add(CAST(NULL AS interval year), interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+      "reason": "SELECT try_add(CAST(NULL AS interval year), interval 2 year) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "try_add#ea909325f05e/ansi_on",

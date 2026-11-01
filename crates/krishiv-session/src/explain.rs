@@ -240,7 +240,8 @@ impl Session {
 
     async fn estimate_sql_here(&self, query: &str) -> Result<Option<Estimate>, KrishivError> {
         let env = self.query_env();
-        let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        let query = self.substituted(query);
+        let resolved = self.resolve_identifier_clauses(&query, &env.parser).await?;
         let redacted = krishiv_sql::redact_sql(&resolved);
         let statement = krishiv_sql::parse_statement(&resolved, &env.parser).map_err(|e| {
             crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
@@ -287,7 +288,7 @@ impl DataFrame {
         let analysis = self.analysis().await?;
         let (optimized, physical) = self
             .session
-            .physical(&analysis.analyzed, &analysis.env)
+            .physical_inspected(&analysis.analyzed, &analysis.env)
             .await?;
         let stats =
             ProviderStatistics(Arc::clone(&analysis.env.catalog) as Arc<dyn TableProviderResolver>);
@@ -365,7 +366,7 @@ impl DataFrame {
         };
         let (optimized, physical) = match self
             .session
-            .physical(&analysis.analyzed, &analysis.env)
+            .physical_inspected(&analysis.analyzed, &analysis.env)
             .await
         {
             Ok((optimized, physical)) => (optimized, physical.explain_all()),

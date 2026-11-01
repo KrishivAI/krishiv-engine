@@ -48,6 +48,10 @@ impl FunctionRegistry for Registry {
         self.base.lookup(name, profile)
     }
 
+    fn spark_deterministic(&self, name: &str) -> Option<bool> {
+        name.eq_ignore_ascii_case("rand").then_some(false)
+    }
+
     fn version(&self) -> u64 {
         self.version
     }
@@ -728,4 +732,47 @@ fn builtins_rank_before_session_functions() {
     let abs = func("abs", vec![], Some(DataType::Integer), int(1));
     let r = call(vec![f("abs", vec![int(-5)])], vec![abs]).unwrap();
     assert!(calls(&r).iter().any(|n| n == "abs"));
+}
+
+#[test]
+fn an_aggregate_over_a_nondeterministic_argument_is_refused() {
+    let r = call(vec![sum(add(c("a"), f("rand", vec![int(0)])))], Vec::new());
+    let (class, params) = err(&r);
+    assert_eq!(class, "AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION");
+    assert_eq!(params["sqlExpr"], "\"sum((a + SQRT(0)))\"");
+    // A deterministic argument is fine.
+    assert!(call(vec![sum(add(c("a"), int(1)))], Vec::new()).is_ok());
+}
+
+#[test]
+fn another_error_wins_over_a_nondeterministic_aggregate_argument() {
+    let r = call(vec![c("a"), sum(f("rand", vec![int(0)]))], Vec::new());
+    assert_eq!(err(&r).0, "MISSING_GROUP_BY");
+}
+
+#[test]
+fn a_sql_function_is_as_deterministic_as_its_body() {
+    let noisy = func(
+        "noisy",
+        Vec::new(),
+        Some(DataType::Double),
+        f("rand", vec![int(0)]),
+    );
+    let r = call(vec![sum(f("noisy", Vec::new()))], vec![noisy]);
+    assert_eq!(
+        err(&r).0,
+        "AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION"
+    );
+    // A deterministic body takes a nondeterministic argument.
+    let r = call(
+        vec![sum(f("add2", vec![f("rand", vec![int(0)])]))],
+        vec![add2()],
+    );
+    assert!(r.is_ok(), "{:?}", r.err().map(|e| e.error.to_string()));
+}
+
+#[test]
+fn an_unknown_function_is_reported_before_its_arguments_errors() {
+    let r = call(vec![f("no_such_fn", vec![c("no_such_column")])], Vec::new());
+    assert_eq!(err(&r).0, "UNRESOLVED_ROUTINE");
 }

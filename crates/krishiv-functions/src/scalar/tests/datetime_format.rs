@@ -791,3 +791,49 @@ fn wrong_types_and_counts_do_not_bind() {
         );
     }
 }
+
+/// `extract(SECOND FROM t)` over a `time(p)` binds the declared precision
+/// the analyzer appends as a literal third argument, once; a NULL or a
+/// column there is refused, not read per batch.
+#[test]
+fn extract_second_binds_its_time_precision_from_a_literal() {
+    use arrow_array::types::Decimal128Type;
+    use arrow_array::{Int32Array, Time64NanosecondArray};
+    let field: ArrayRef = strs(&[Some("SECOND")]);
+    let times: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![
+        Some(32_881_987_654_000_i64),
+        None,
+    ]));
+    let arg_types = |third: BindArg| {
+        [
+            BindArg::Literal(Arc::clone(&field)),
+            times.data_type().clone().into(),
+            third,
+        ]
+    };
+    let two: ArrayRef = Arc::new(Int32Array::from(vec![Some(2)]));
+    let f = bind_scalar(
+        "extract",
+        &arg_types(BindArg::Literal(Arc::clone(&two))),
+        &utc(),
+    )
+    .unwrap();
+    let out = f
+        .invoke(&[lit(&field), col(&times), lit(&two)], times.len())
+        .unwrap();
+    let out = out.as_primitive::<Decimal128Type>();
+    assert_eq!(out.value(0), 1_980_000);
+    assert!(out.is_null(1));
+    // Without the argument the full value is read.
+    let plain = bind_scalar("extract", &arg_types(BindArg::Literal(two))[..2], &utc()).unwrap();
+    let out = plain
+        .invoke(&[lit(&field), col(&times)], times.len())
+        .unwrap();
+    assert_eq!(out.as_primitive::<Decimal128Type>().value(0), 1_987_654);
+    // A NULL precision and one that is not a literal are refused.
+    let null: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+    for bad in [BindArg::Literal(null), arrow_schema::DataType::Int32.into()] {
+        let e = bind_scalar("extract", &arg_types(bad), &utc()).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+    }
+}
