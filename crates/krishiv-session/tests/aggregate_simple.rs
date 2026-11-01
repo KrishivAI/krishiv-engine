@@ -349,15 +349,15 @@ fn max_by_and_min_by_in_windows() -> R {
     Ok(())
 }
 
-/// `max_by(x, y, k)` returns an array: not supported, and the wrong number
-/// of arguments is Spark's error.
+/// `max_by(x, y, k)` returns an array of the `k` best values (the goldens
+/// are in `max-min-by-k`); the wrong number of arguments is Spark's error.
 #[test]
-fn max_by_with_a_limit_is_unsupported() -> R {
+fn max_by_with_a_limit_returns_an_array() -> R {
     let s = session()?;
     for f in ["max_by", "min_by"] {
-        let (class, params) = error(&s, &format!("SELECT {f}(x, y, 2) FROM t"))?;
-        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE");
-        assert!(param(&params, "feature").is_some_and(|m| m.contains("array")));
+        let (names, rows) = query(&s, &format!("SELECT {f}(id, y, 2) FROM t"))?;
+        assert!(names[0].contains("List"), "{names:?}");
+        assert_eq!(rows.len(), 1);
         let (class, _) = error(&s, &format!("SELECT {f}(x) FROM t"))?;
         assert_eq!(class, "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
     }
