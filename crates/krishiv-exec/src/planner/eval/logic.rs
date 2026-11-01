@@ -6,7 +6,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Int64Type, Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
@@ -366,6 +366,7 @@ pub(crate) fn cmp(
         ArrowType::Decimal128(..) => prim!(Decimal128Type),
         ArrowType::Date32 => prim!(Date32Type),
         ArrowType::Timestamp(..) => prim!(TimestampMicrosecondType),
+        ArrowType::Time64(_) => prim!(Time64NanosecondType),
         ArrowType::Boolean => {
             let (a, b) = (bool_operand(l), bool_operand(r));
             match kind {

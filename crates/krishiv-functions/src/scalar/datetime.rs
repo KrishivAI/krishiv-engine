@@ -18,7 +18,8 @@ use arrow_array::types::{
     Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, TimestampMicrosecondArray,
+    Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, Time64NanosecondArray,
+    TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
@@ -111,6 +112,7 @@ pub(super) const NAMES: &[&str] = &[
     "curdate",
     "current_timestamp",
     "now",
+    "current_time",
     "localtimestamp",
     "date_format",
     "to_date",
@@ -1325,6 +1327,29 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let a = TimestampMicrosecondArray::from(vec![now; x.rows()]).with_timezone("UTC");
                 Ok(Arc::new(a) as ArrayRef)
             })
+        }
+        ("current_time", [] | [DataType::Int32]) => {
+            // The query's start instant as a wall clock of the session zone,
+            // cut to the precision (a constant the registry already checked).
+            let now = opts.query_start_micros;
+            let offset = i64::from(opts.time_zone.offset_at_utc(now.div_euclid(1_000_000)));
+            let local = now.saturating_add(offset.saturating_mul(1_000_000));
+            let nanos = local.rem_euclid(86_400_000_000) * 1_000;
+            let bare = args.is_empty();
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    let step = if bare {
+                        1_000
+                    } else {
+                        let p = x.array::<Int32Type>(0)?;
+                        let digits = p.iter().flatten().next().unwrap_or(6).clamp(0, 6);
+                        10_i64.pow(9_u32.saturating_sub(digits.unsigned_abs()))
+                    };
+                    let v = nanos - nanos % step;
+                    Ok(Arc::new(Time64NanosecondArray::from(vec![v; x.rows()])) as ArrayRef)
+                },
+            )
         }
         ("localtimestamp", []) => {
             // The wall clock of the session zone, as a `timestamp_ntz`.

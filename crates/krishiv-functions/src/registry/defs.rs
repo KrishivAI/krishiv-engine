@@ -275,6 +275,35 @@ fn clock_timestamp_ntz(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::TimestampNtz, false))
 }
 
+/// `current_time([p])`: `TIME(p)`, `p` a foldable integer in `[0, 6]`
+/// (`TIME(6)` without it); never NULL.
+fn clock_time(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let precision = match c.constant(0) {
+        None if c.args().is_empty() => 6,
+        Some(Constant::Integral(n)) if (0..=6).contains(n) => u8::try_from(*n).unwrap_or(6),
+        Some(Constant::Integral(n)) => {
+            return Err(DatatypeMismatchValueOutOfRange {
+                sql_expr: format!("\"current_time({n})\""),
+                expr_name: "precision".to_owned(),
+                value_range: "[0, 6]".to_owned(),
+                current_value: n.to_string(),
+            }
+            .into());
+        }
+        Some(Constant::Error(e)) => return Err(e.clone()),
+        _ => {
+            return Err(DatatypeMismatchNonFoldableInput {
+                sql_expr: format!("\"current_time({})\"", c.sql(0).unwrap_or_default()),
+                input_name: "`precision`".to_owned(),
+                input_type: "\"INT\"".to_owned(),
+                input_expr: format!("\"{}\"", c.sql(0).unwrap_or_default()),
+            }
+            .into());
+        }
+    };
+    Ok(ArgType::new(DataType::Time { precision }, false))
+}
+
 fn user(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::String, false))
 }
@@ -1084,6 +1113,11 @@ fn datetime() -> Vec<Spec> {
         &["current_timestamp", "now"],
         &Inputs::Any,
         clock_timestamp,
+    ));
+    out.extend(scalar(
+        &["current_time"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        clock_time,
     ));
     out.extend(scalar(
         &["current_user", "user", "session_user"],
