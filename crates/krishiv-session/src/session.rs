@@ -354,12 +354,14 @@ impl SessionBuilder {
             IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
         io.attach_memory(&memory);
         #[cfg(unix)]
-        let local = krishiv_io::SettledLocalFileSystem::new();
+        io.register_whole_listing_store(
+            StoreId::new(LOCAL_STORE),
+            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
         #[cfg(not(unix))]
-        let local = LocalFileSystem::new();
         io.register_store(
             StoreId::new(LOCAL_STORE),
-            Arc::new(local) as Arc<dyn ObjectStore>,
+            Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
         );
         let metrics = Arc::new(MetricsRegistry::new());
         register_gauges(&metrics, &memory, &io)?;
