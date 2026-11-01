@@ -290,6 +290,18 @@ fn default_argument(
     }
 }
 
+/// An interval constructor's short calls: the fewest arguments it takes, its
+/// full arity and whether the last is seconds (`0.000000`, not `0`).
+fn interval_defaults(name: &str) -> Option<(usize, usize, bool)> {
+    match name {
+        "make_ym_interval" => Some((0, 2, false)),
+        "make_dt_interval" => Some((0, 4, true)),
+        "make_interval" => Some((0, 7, true)),
+        "try_make_interval" => Some((1, 7, true)),
+        _ => None,
+    }
+}
+
 /// A conditional function rewritten during analysis (Spark's
 /// `RuntimeReplaceable`).
 #[derive(Clone, Copy)]
@@ -1986,6 +1998,23 @@ impl Resolver<'_> {
                 // Only for built-ins: a qualified session UDF named `assert_true`
                 // takes its arguments as written, as do the other built-in
                 // constructors below and the conditional rewrites.
+                // The catalog probes up to six arguments, too few to see
+                // these limits.
+                if is_builtin_entry(&entry)
+                    && let Some((least, total, _)) = interval_defaults(entry.id.name())
+                    && n > total
+                {
+                    let counts: Vec<String> = (least..=total).map(|c| c.to_string()).collect();
+                    return Err(AnalysisError::new(
+                        WrongNumArgsWithoutSuggestion {
+                            function_name: format!("`{}`", entry.id.name()),
+                            expected_num: format!("[{}]", counts.join(", ")),
+                            actual_num: n.to_string(),
+                            docroot: SPARK_DOC_ROOT.to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 let mut owned: Vec<Bound>;
                 let (kids, n) = if is_builtin_entry(&entry)
                     && entry.id.name() == "assert_true"
@@ -2036,6 +2065,39 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 3)
+                } else if is_builtin_entry(&entry)
+                    && let Some((least, total, seconds)) = interval_defaults(entry.id.name())
+                    && (least..total).contains(&n)
+                {
+                    // `make_dt_interval(1)` is `make_dt_interval(1, 0, 0,
+                    // 0.000000)`; Spark names the column with the defaults.
+                    owned = kids[..n].to_vec();
+                    owned.extend((n..total).map(|at| {
+                        if seconds && at + 1 == total {
+                            let seconds =
+                                DecimalType::try_new(18, 6).unwrap_or(DecimalType::USER_DEFAULT);
+                            default_argument(
+                                Literal::Decimal {
+                                    unscaled: 0,
+                                    data_type: seconds,
+                                },
+                                DataType::Decimal(seconds),
+                                false,
+                                e.origin,
+                            )
+                        } else {
+                            default_argument(
+                                Literal::Integer(0),
+                                DataType::Integer,
+                                false,
+                                e.origin,
+                            )
+                        }
+                    }));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], total)
                 } else if is_builtin_entry(&entry) && entry.id.name() == "sort_array" && n == 1 {
                     // `sort_array(arr)` is `sort_array(arr, true)`.
                     owned = kids[..n].to_vec();

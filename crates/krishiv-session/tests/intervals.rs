@@ -394,6 +394,56 @@ fn a_try_function_evaluates_a_nondeterministic_operand_once_per_row() -> R {
 }
 
 #[test]
+fn interval_constructors_read_columns_row_by_row() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT coalesce(CAST(make_interval(y, 0, 0, d, 0, 0, s) AS STRING), 'null') \
+             FROM VALUES (1, 2, 1.5), (NULL, 2, 1.5), (0, 0, 0.0) t(y, d, s)"
+        )?,
+        ["1 years 2 days 1.5 seconds", "null", "0 seconds"]
+    );
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT coalesce(CAST(make_dt_interval(d, 1) AS STRING), 'null') \
+             FROM VALUES (1), (NULL) t(d)"
+        )?,
+        ["INTERVAL '1 01:00:00' DAY TO SECOND", "null"]
+    );
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT coalesce(CAST(try_make_interval(y) AS STRING), 'null') \
+             FROM VALUES (1), (2147483647) t(y)"
+        )?,
+        ["1 years", "null"]
+    );
+    Ok(())
+}
+
+/// Spark answers these; NULL would be a wrong result.
+#[test]
+fn a_constructed_calendar_interval_past_the_nanosecond_field_is_refused() -> R {
+    let session = Session::new()?;
+    for ansi in [true, false] {
+        block_on(session.sql(&format!("SET spark.sql.ansi.enabled = {ansi}")))?;
+        for expr in [
+            "make_interval(0, 0, 0, 0, 0, 0, 999999999999.999999)",
+            "try_make_interval(0, 0, 0, 0, 2147483647)",
+        ] {
+            assert_eq!(
+                answer(&session, expr).error_class.as_deref(),
+                Some("KRISHIV_UNSUPPORTED_FEATURE"),
+                "{expr}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn an_operand_read_as_another_type_can_make_the_result_null() -> R {
     let session = Session::new()?;
     block_on(session.sql("SET spark.sql.ansi.enabled = false"))?;

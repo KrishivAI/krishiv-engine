@@ -1641,6 +1641,234 @@
    "value": null
   },
   {
+   "expr": "make_ym_interval(178956971, -100)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_ym_interval(178956971, -100)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_ym_interval(-178956970, -8)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_ym_interval(-178956970, -8)",
+   "type": "interval year to month",
+   "value": "INTERVAL '-178956970-8' YEAR TO MONTH"
+  },
+  {
+   "expr": "make_dt_interval(106751991, 4, 0, 54.775807)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(106751991, 4, 0, 54.775807)",
+   "type": "interval day to second",
+   "value": "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND"
+  },
+  {
+   "expr": "make_dt_interval(106751991, 5, -60, 54.775807)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(106751991, 5, -60, 54.775807)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_dt_interval(106751992, -24, 0, 0)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(106751992, -24, 0, 0)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_dt_interval(-1, 0, 0, -0.5)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(-1, 0, 0, -0.5)",
+   "type": "interval day to second",
+   "value": "INTERVAL '-1 00:00:00.5' DAY TO SECOND"
+  },
+  {
+   "expr": "make_interval(0, 0, 2147483647, 8)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_interval(0, 0, 2147483647, 8, 0, 0, 0.000000)",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "make_interval(0, 0, 306783379, -100)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_interval(0, 0, 306783379, -100, 0, 0, 0.000000)",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "try_make_interval(0, 0, 306783379, -100)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_make_interval(0, 0, 306783379, -100, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "make_interval(-1, -2, -3, -4, -5, -6, -7.5)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_interval(-1, -2, -3, -4, -5, -6, -7.5)",
+   "type": "interval",
+   "value": "-1 years -2 months -25 days -5 hours -6 minutes -7.5 seconds"
+  },
+  {
+   "expr": "make_interval(0, 0, 1, 1)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_interval(0, 0, 1, 1, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": "8 days"
+  },
+  {
+   "expr": "try_make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+   "type": "interval",
+   "value": "1 years 2 months 25 days 5 hours 6 minutes 7.5 seconds"
+  },
+  {
+   "expr": "try_make_interval(null, 1)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_make_interval(NULL, 1, 0, 0, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_make_interval(1)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_make_interval(1, 0, 0, 0, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": "1 years"
+  },
+  {
+   "expr": "try_make_interval()",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_ym_interval(1, 2, 3)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 4, 5)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_interval(1, 2, 3, 4, 5, 6, 7, 8)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "try_make_interval(1, 2, 3, 4, 5, 6, 7, 8)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_ym_interval('1', '2')",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_ym_interval(1, 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "make_ym_interval(1.5, 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_ym_interval(1.5, 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "make_ym_interval(true, 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, '4.5')",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(1, 2, 3, 4.5)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 02:03:04.5' DAY TO SECOND"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 4.5D)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(1, 2, 3, 4.5)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 02:03:04.5' DAY TO SECOND"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 1E30D)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(1, 2, 3, 1.0E30)",
+   "type": "interval day to second",
+   "value_error_class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION"
+  },
+  {
+   "expr": "make_interval(1, 2, 3, 4, 5, 6, '7.5')",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+   "type": "interval",
+   "value": "1 years 2 months 25 days 5 hours 6 minutes 7.5 seconds"
+  },
+  {
+   "expr": "make_interval(1, 2, 3, 4, 5, 6, 1E30D)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_interval(1, 2, 3, 4, 5, 6, 1.0E30)",
+   "type": "interval",
+   "value_error_class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 1.1234567)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_dt_interval(1, 2, 3, 1.1234567)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 02:03:01.123457' DAY TO SECOND"
+  },
+  {
+   "expr": "make_interval(2147483648L)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_interval(2147483648, 0, 0, 0, 0, 0, 0.000000)",
+   "type": "interval",
+   "value_error_class": "CAST_OVERFLOW"
+  },
+  {
+   "expr": "make_ym_interval(2147483648L, 0)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "make_ym_interval(2147483648, 0)",
+   "type": "interval year to month",
+   "value_error_class": "CAST_OVERFLOW"
+  },
+  {
    "expr": "SELECT sum(i) FROM VALUES (interval '1' day), (interval '2' day), (null) AS t(i)",
    "zone": "UTC",
    "ansi": true,
@@ -3527,6 +3755,234 @@
    "name": "make_interval(NULL, 1, 0, 0, 0, 0, 0.000000)",
    "type": "interval",
    "value": null
+  },
+  {
+   "expr": "make_ym_interval(178956971, -100)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_ym_interval(178956971, -100)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_ym_interval(-178956970, -8)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_ym_interval(-178956970, -8)",
+   "type": "interval year to month",
+   "value": "INTERVAL '-178956970-8' YEAR TO MONTH"
+  },
+  {
+   "expr": "make_dt_interval(106751991, 4, 0, 54.775807)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(106751991, 4, 0, 54.775807)",
+   "type": "interval day to second",
+   "value": "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND"
+  },
+  {
+   "expr": "make_dt_interval(106751991, 5, -60, 54.775807)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(106751991, 5, -60, 54.775807)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_dt_interval(106751992, -24, 0, 0)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(106751992, -24, 0, 0)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_dt_interval(-1, 0, 0, -0.5)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(-1, 0, 0, -0.5)",
+   "type": "interval day to second",
+   "value": "INTERVAL '-1 00:00:00.5' DAY TO SECOND"
+  },
+  {
+   "expr": "make_interval(0, 0, 2147483647, 8)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_interval(0, 0, 2147483647, 8, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "make_interval(0, 0, 306783379, -100)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_interval(0, 0, 306783379, -100, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_make_interval(0, 0, 306783379, -100)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_make_interval(0, 0, 306783379, -100, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "make_interval(-1, -2, -3, -4, -5, -6, -7.5)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_interval(-1, -2, -3, -4, -5, -6, -7.5)",
+   "type": "interval",
+   "value": "-1 years -2 months -25 days -5 hours -6 minutes -7.5 seconds"
+  },
+  {
+   "expr": "make_interval(0, 0, 1, 1)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_interval(0, 0, 1, 1, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": "8 days"
+  },
+  {
+   "expr": "try_make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+   "type": "interval",
+   "value": "1 years 2 months 25 days 5 hours 6 minutes 7.5 seconds"
+  },
+  {
+   "expr": "try_make_interval(null, 1)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_make_interval(NULL, 1, 0, 0, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_make_interval(1)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_make_interval(1, 0, 0, 0, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": "1 years"
+  },
+  {
+   "expr": "try_make_interval()",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_ym_interval(1, 2, 3)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 4, 5)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_interval(1, 2, 3, 4, 5, 6, 7, 8)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "try_make_interval(1, 2, 3, 4, 5, 6, 7, 8)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "make_ym_interval('1', '2')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_ym_interval(1, 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "make_ym_interval(1.5, 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_ym_interval(1.5, 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "make_ym_interval(true, 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, '4.5')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(1, 2, 3, 4.5)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 02:03:04.5' DAY TO SECOND"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 4.5D)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(1, 2, 3, 4.5)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 02:03:04.5' DAY TO SECOND"
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 1E30D)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(1, 2, 3, 1.0E30)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "make_interval(1, 2, 3, 4, 5, 6, '7.5')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+   "type": "interval",
+   "value": "1 years 2 months 25 days 5 hours 6 minutes 7.5 seconds"
+  },
+  {
+   "expr": "make_interval(1, 2, 3, 4, 5, 6, 1E30D)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_interval(1, 2, 3, 4, 5, 6, 1.0E30)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "make_dt_interval(1, 2, 3, 1.1234567)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_dt_interval(1, 2, 3, 1.1234567)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 02:03:01.123457' DAY TO SECOND"
+  },
+  {
+   "expr": "make_interval(2147483648L)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_interval(2147483648, 0, 0, 0, 0, 0, 0.000000)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "make_ym_interval(2147483648L, 0)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "make_ym_interval(2147483648, 0)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
   },
   {
    "expr": "SELECT sum(i) FROM VALUES (interval '1' day), (interval '2' day), (null) AS t(i)",

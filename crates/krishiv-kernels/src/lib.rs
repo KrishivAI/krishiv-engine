@@ -51,6 +51,7 @@ pub mod hash;
 pub mod integer;
 pub mod interval;
 pub mod interval_cast;
+pub mod interval_make;
 pub mod json;
 pub mod list;
 pub mod map;

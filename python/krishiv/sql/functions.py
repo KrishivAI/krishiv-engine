@@ -31,6 +31,10 @@ _HAND_WRITTEN = [
     "column",
     "concat",
     "convert_timezone",
+    "make_dt_interval",
+    "make_interval",
+    "make_ym_interval",
+    "try_make_interval",
     "count",
     "countDistinct",
     "count_distinct",
@@ -119,6 +123,75 @@ def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: Column
         _lit(sourceTz, "sourceTz"),
         _lit(targetTz, "targetTz"),
         _named(sourceTs, "sourceTs"),
+    )
+
+
+def _field_or_zero(col: ColumnOrName | None, name: str) -> Column:
+    return lit(0) if col is None else _named(col, name)
+
+
+def make_ym_interval(years: ColumnOrName | None = None, months: ColumnOrName | None = None) -> Column:
+    """A year-month interval; an omitted field is zero."""
+    return _call("make_ym_interval", _field_or_zero(years, "years"), _field_or_zero(months, "months"))
+
+
+def make_dt_interval(
+    days: ColumnOrName | None = None,
+    hours: ColumnOrName | None = None,
+    mins: ColumnOrName | None = None,
+    secs: ColumnOrName | None = None,
+) -> Column:
+    """A day-time interval; an omitted field is zero."""
+    return _call(
+        "make_dt_interval",
+        _field_or_zero(days, "days"),
+        _field_or_zero(hours, "hours"),
+        _field_or_zero(mins, "mins"),
+        _field_or_zero(secs, "secs"),
+    )
+
+
+def make_interval(
+    years: ColumnOrName | None = None,
+    months: ColumnOrName | None = None,
+    weeks: ColumnOrName | None = None,
+    days: ColumnOrName | None = None,
+    hours: ColumnOrName | None = None,
+    mins: ColumnOrName | None = None,
+    secs: ColumnOrName | None = None,
+) -> Column:
+    """A calendar interval; an omitted field is zero."""
+    return _call(
+        "make_interval",
+        _field_or_zero(years, "years"),
+        _field_or_zero(months, "months"),
+        _field_or_zero(weeks, "weeks"),
+        _field_or_zero(days, "days"),
+        _field_or_zero(hours, "hours"),
+        _field_or_zero(mins, "mins"),
+        _field_or_zero(secs, "secs"),
+    )
+
+
+def try_make_interval(
+    years: ColumnOrName | None = None,
+    months: ColumnOrName | None = None,
+    weeks: ColumnOrName | None = None,
+    days: ColumnOrName | None = None,
+    hours: ColumnOrName | None = None,
+    mins: ColumnOrName | None = None,
+    secs: ColumnOrName | None = None,
+) -> Column:
+    """``make_interval``, NULL on overflow; an omitted field is zero."""
+    return _call(
+        "try_make_interval",
+        _field_or_zero(years, "years"),
+        _field_or_zero(months, "months"),
+        _field_or_zero(weeks, "weeks"),
+        _field_or_zero(days, "days"),
+        _field_or_zero(hours, "hours"),
+        _field_or_zero(mins, "mins"),
+        _field_or_zero(secs, "secs"),
     )
 
 

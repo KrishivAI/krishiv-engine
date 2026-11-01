@@ -624,6 +624,54 @@ fn try_make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(make_timestamp_result(c, DataType::TimestampNtz, true))
 }
 
+/// The seconds of `make_dt_interval` and `make_interval`: `DECIMAL(18,6)`.
+fn interval_seconds_input() -> InputType {
+    exact(DataType::Decimal(
+        DecimalType::try_new(18, 6).unwrap_or(DecimalType::USER_DEFAULT),
+    ))
+}
+
+fn make_dt_interval_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 3];
+    inputs.push(interval_seconds_input());
+    inputs
+}
+
+fn make_interval_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 6];
+    inputs.push(interval_seconds_input());
+    inputs
+}
+
+fn make_ym_interval(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let ty = DataType::YearMonthInterval {
+        start: YearMonthField::Year,
+        end: YearMonthField::Month,
+    };
+    Ok(ArgType::new(ty, c.any_nullable()))
+}
+
+fn make_dt_interval(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let ty = DataType::DayTimeInterval {
+        start: DayTimeField::Day,
+        end: DayTimeField::Second,
+    };
+    Ok(ArgType::new(ty, c.any_nullable()))
+}
+
+/// An overflow is NULL with ANSI off, so the result may be null then whatever
+/// the arguments.
+fn make_interval(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        DataType::CalendarInterval,
+        !c.ansi() || c.any_nullable(),
+    ))
+}
+
+fn try_make_interval(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::CalendarInterval, true))
+}
+
 fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![
         instant_input(c, 0),
@@ -1068,6 +1116,19 @@ fn datetime() -> Vec<Spec> {
         &Inputs::Built(InputBuilder(convert_timezone_inputs)),
         timestamp_ntz_result,
     ));
+    out.extend(scalar(
+        &["make_ym_interval"],
+        &Inputs::Expects(vec![exact(DataType::Integer); 2]),
+        make_ym_interval,
+    ));
+    out.extend(scalar(
+        &["make_dt_interval"],
+        &Inputs::Built(InputBuilder(make_dt_interval_inputs)),
+        make_dt_interval,
+    ));
+    let calendar = Inputs::Built(InputBuilder(make_interval_inputs));
+    out.extend(scalar(&["make_interval"], &calendar, make_interval));
+    out.extend(scalar(&["try_make_interval"], &calendar, try_make_interval));
     out.extend(scalar(
         &["make_date"],
         &Inputs::Expects(vec![exact(DataType::Integer)]),
