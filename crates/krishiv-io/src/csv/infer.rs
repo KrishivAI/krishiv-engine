@@ -514,7 +514,8 @@ pub(crate) fn infer<'a>(
                 .iter()
                 .map(|f| SplitFile {
                     size: f.size,
-                    splittable: true,
+                    // A compressed file is one split, sampled once.
+                    splittable: crate::text::codec::Codec::of_path(f.path.as_ref()).is_none(),
                 })
                 .collect();
             let parts = plan(&split_config(o)?, &listing);

@@ -389,11 +389,12 @@ impl Compressor {
             Enc::Bzip2(e) => e.write_all(data).map_err(io),
             Enc::Block { pending, out } => {
                 pending.extend_from_slice(data);
-                while pending.len() >= WRITE_BLOCK {
-                    let rest = pending.split_off(WRITE_BLOCK);
-                    Self::cut(codec, pending, out)?;
-                    *pending = rest;
+                let mut done = 0;
+                while pending.len() - done >= WRITE_BLOCK {
+                    Self::cut(codec, &pending[done..done + WRITE_BLOCK], out)?;
+                    done += WRITE_BLOCK;
                 }
+                pending.drain(..done);
                 Ok(())
             }
         }
