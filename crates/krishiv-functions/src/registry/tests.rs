@@ -74,6 +74,11 @@ fn every_definition_is_in_sparks_catalog() {
         if d.name == "raise_error" {
             assert!(s.deterministic.is_none() && s.kind.is_none());
             assert!(!d.deterministic);
+        } else if d.name == "aes_encrypt" {
+            // A missing IV is random; the engine, unlike the catalog,
+            // keeps the optimizer from moving the call.
+            assert_eq!(s.deterministic, Some(true));
+            assert!(!d.deterministic);
         } else {
             assert_eq!(Some(d.deterministic), s.deterministic, "{}", d.name);
             assert_eq!(s.kind, Some(d.kind), "{}", d.name);

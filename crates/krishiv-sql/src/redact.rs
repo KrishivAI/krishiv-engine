@@ -202,18 +202,26 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
         let mut angle = 0_usize;
         let mut prev_word = String::new();
         let mut range: Option<(usize, usize)> = None;
-        for u in &code[i + 2..] {
+        for (j, u) in code[i + 2..].iter().enumerate() {
             let word = std::mem::take(&mut prev_word);
             if u.kind == TokenKind::Word {
                 prev_word = u.span.text(sql).to_owned();
             }
+            // A `<` opens a type only after a type word and before a type
+            // (a word that is a type name, or a `field:` of a struct), so
+            // `map < 1` and `array < col` stay comparisons.
+            let opens_type = ["map", "array", "struct"]
+                .iter()
+                .any(|w| word.eq_ignore_ascii_case(w))
+                && code[i + 2..].get(j + 1).is_some_and(|n| {
+                    n.kind == TokenKind::Word
+                        && (is_type_word(n.span.text(sql))
+                            || code[i + 2..]
+                                .get(j + 2)
+                                .is_some_and(|m| m.kind == TokenKind::Sym(Sym::Colon)))
+                });
             match u.kind {
-                TokenKind::Sym(Sym::Lt)
-                    if angle > 0
-                        || ["map", "array", "struct"]
-                            .iter()
-                            .any(|w| word.eq_ignore_ascii_case(w)) =>
-                {
+                TokenKind::Sym(Sym::Lt) if angle > 0 || opens_type => {
                     angle += 1;
                 }
                 TokenKind::Sym(Sym::Gt) if angle > 0 => angle -= 1,
@@ -239,6 +247,44 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
             marks.push(Mark::Secret(a..b));
         }
     }
+}
+
+/// Whether `w` names a SQL data type (the start of `MAP<STRING, INT>`).
+fn is_type_word(w: &str) -> bool {
+    [
+        "map",
+        "array",
+        "struct",
+        "string",
+        "varchar",
+        "char",
+        "int",
+        "integer",
+        "bigint",
+        "smallint",
+        "tinyint",
+        "long",
+        "short",
+        "byte",
+        "float",
+        "double",
+        "real",
+        "decimal",
+        "dec",
+        "numeric",
+        "boolean",
+        "binary",
+        "date",
+        "timestamp",
+        "timestamp_ntz",
+        "timestamp_ltz",
+        "interval",
+        "variant",
+        "time",
+        "void",
+    ]
+    .iter()
+    .any(|t| w.eq_ignore_ascii_case(t))
 }
 
 /// `SET key = value` with a sensitive key: the value (raw text to the end
