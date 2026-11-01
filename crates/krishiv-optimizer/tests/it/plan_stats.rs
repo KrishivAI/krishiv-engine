@@ -677,6 +677,50 @@ fn a_with_reference_reads_its_definition() {
     assert_eq!(alone.rows(&reference), krishiv_optimizer::DEFAULT_ROWS);
 }
 
+/// A reference finds its definition wherever it sits: through a definition
+/// reading another, in a subquery, and under an inner `WITH` of the same name.
+#[test]
+fn a_with_reference_finds_its_definition_in_every_scope() {
+    fn references(p: &Arc<LogicalPlan>, out: &mut Vec<Arc<LogicalPlan>>) {
+        if matches!(p.node, PlanNode::CteRef(_)) {
+            out.push(Arc::clone(p));
+        }
+        p.for_each_child(&mut |c| references(c, out));
+        p.for_each_expr(&mut |e| {
+            if let ExprNode::Subquery { plan, .. } = &e.node {
+                references(plan, out);
+            }
+        });
+    }
+    let t_rows = {
+        let plan = resolve("SELECT a FROM t");
+        PlanStats::compute(plan.root(), &fixture()).rows(plan.root())
+    };
+    for sql in [
+        "WITH c AS (SELECT a FROM t), d AS (SELECT a FROM c) SELECT * FROM d",
+        "WITH c AS (SELECT a FROM t) SELECT 1 WHERE EXISTS (SELECT 1 FROM c)",
+        "WITH c AS (SELECT ga AS a FROM g) \
+         SELECT * FROM (WITH c AS (SELECT a FROM t) SELECT * FROM c)",
+    ] {
+        let plan = resolve(sql);
+        let stats = PlanStats::compute(plan.root(), &fixture());
+        let mut found = Vec::new();
+        references(plan.root(), &mut found);
+        assert!(!found.is_empty(), "{sql}");
+        for r in &found {
+            assert_eq!(stats.rows(r), t_rows, "{sql}");
+            assert!(stats.has_statistics(r), "{sql}");
+        }
+    }
+    // A definition over a table without statistics rests on the default.
+    let plan = resolve("WITH c AS (SELECT ga FROM g) SELECT * FROM c");
+    let stats = PlanStats::compute(plan.root(), &fixture());
+    let mut found = Vec::new();
+    references(plan.root(), &mut found);
+    assert!(!found.is_empty());
+    assert!(found.iter().all(|r| !stats.has_statistics(r)));
+}
+
 /// Every relation is estimated once, shared subtrees and subquery plans
 /// included, and asking again estimates nothing more.
 #[test]
