@@ -323,10 +323,10 @@ impl Registry {
                     kind: spec.kind,
                     // A function Spark rejects in every probe is taken as
                     // nondeterministic: the optimizer then never moves it.
-                    // `aes_encrypt` draws a random IV when the call gives none,
-                    // so the optimizer must not duplicate or move it, though
-                    // Spark's catalog lists it as deterministic.
-                    deterministic: row.deterministic.unwrap_or(false) && spec.name != "aes_encrypt",
+                    // `aes_encrypt` stays as the catalog lists it (a real
+                    // Spark run accepts it inside `count(DISTINCT ...)`);
+                    // the engine still draws an IV per row.
+                    deterministic: row.deterministic.unwrap_or(false),
                     since: row.since,
                     arity: row.arity.clone(),
                     inputs: spec.inputs,
