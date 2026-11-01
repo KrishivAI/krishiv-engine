@@ -984,12 +984,11 @@ fn typed_timestamp_literals_resolve_like_spark() {
             "{sql}"
         );
     }
-    // Clock-dependent spellings need the query clock.
-    for sql in [
-        "SELECT TIMESTAMP 'now'",
-        "SELECT TIMESTAMP_LTZ '10:00'",
-        "SELECT TIMESTAMP '10:00'",
-    ] {
+    // `now` reads the query clock.
+    let a = analyze_with("SELECT TIMESTAMP 'now'", false, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // A time of day alone still needs the query clock's date.
+    for sql in ["SELECT TIMESTAMP_LTZ '10:00'", "SELECT TIMESTAMP '10:00'"] {
         let e = analyze_with(sql, false, utc).unwrap_err();
         assert_eq!(
             e.error.error_class(),

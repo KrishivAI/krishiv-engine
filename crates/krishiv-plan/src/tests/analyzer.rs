@@ -2438,9 +2438,18 @@ fn typed_literals_resolve_with_the_session_zone() {
             "{value}"
         );
     }
-    // Clock-dependent spellings need the query clock.
+    // Spark's special values read the query clock and keep the literal's type.
+    for (kind, value, ty) in [
+        (TypedLiteralKind::Timestamp, "now", "timestamp"),
+        (TypedLiteralKind::TimestampNtz, "today", "timestamp_ntz"),
+        (TypedLiteralKind::Date, "tomorrow", "date"),
+        (TypedLiteralKind::Timestamp, "epoch", "timestamp"),
+    ] {
+        let a = project(kind, value, utc).unwrap();
+        assert_eq!(a.output[0].data_type.simple_string(), ty, "{value}");
+    }
+    // A bare time of day needs the clock too, which is not supported yet.
     for (kind, value) in [
-        (TypedLiteralKind::Timestamp, "now"),
         (TypedLiteralKind::TimestampLtz, "10:00"),
         (TypedLiteralKind::Timestamp, "10:00"),
     ] {

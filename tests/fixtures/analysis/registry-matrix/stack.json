@@ -1,0 +1,262 @@
+{
+  "entries": [
+    {
+      "id": "stack#012828f547c8/ansi_on",
+      "reason": "SELECT stack(2, 1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#012828f547c8/ansi_off",
+      "reason": "SELECT stack(2, 1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#1c30a0d17061/ansi_on",
+      "reason": "SELECT stack(2, 1, CAST(1.5 AS DECIMAL(38,18)), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#1c30a0d17061/ansi_off",
+      "reason": "SELECT stack(2, 1, CAST(1.5 AS DECIMAL(38,18)), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#21448aaa9556/ansi_on",
+      "reason": "SELECT stack(2, 1, CAST(1 AS TINYINT), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#21448aaa9556/ansi_off",
+      "reason": "SELECT stack(2, 1, CAST(1 AS TINYINT), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#2e7db84b83d3/ansi_on",
+      "reason": "SELECT stack(2, 1, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "stack#2e7db84b83d3/ansi_off",
+      "reason": "SELECT stack(2, 1, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "stack#393c37357ddb/ansi_on",
+      "reason": "SELECT stack(2, 1, map('a', 1), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#393c37357ddb/ansi_off",
+      "reason": "SELECT stack(2, 1, map('a', 1), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#39c6fa511abe/ansi_on",
+      "reason": "SELECT stack(2, 1, 1, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#39c6fa511abe/ansi_off",
+      "reason": "SELECT stack(2, 1, 1, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#3e5cc728d58f/ansi_on",
+      "reason": "SELECT stack(2, 1, true, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#3e5cc728d58f/ansi_off",
+      "reason": "SELECT stack(2, 1, true, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#4397edac31d5/ansi_on",
+      "reason": "SELECT stack(2, 1, TIMESTAMP'2024-02-29 12:34:56.123456', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#4397edac31d5/ansi_off",
+      "reason": "SELECT stack(2, 1, TIMESTAMP'2024-02-29 12:34:56.123456', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#4498286ef6d4/ansi_on",
+      "reason": "SELECT stack(CAST(NULL AS int), 1, 2, 3) | KRISHIV_UNSUPPORTED_FEATURE: stack with a row count that is no INT literal from 1 to 4096 where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "stack#4498286ef6d4/ansi_off",
+      "reason": "SELECT stack(CAST(NULL AS int), 1, 2, 3) | KRISHIV_UNSUPPORTED_FEATURE: stack with a row count that is no INT literal from 1 to 4096 where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "stack#606474c0db44/ansi_on",
+      "reason": "SELECT stack(2, 1, 2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    },
+    {
+      "id": "stack#606474c0db44/ansi_off",
+      "reason": "SELECT stack(2, 1, 2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    },
+    {
+      "id": "stack#60d118076f9a/ansi_on",
+      "reason": "SELECT stack(2, 1, 'abc', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#60d118076f9a/ansi_off",
+      "reason": "SELECT stack(2, 1, 'abc', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#64867f05ba18/ansi_on",
+      "reason": "SELECT stack(2, 1, 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    },
+    {
+      "id": "stack#64867f05ba18/ansi_off",
+      "reason": "SELECT stack(2, 1, 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    },
+    {
+      "id": "stack#73de25d12823/ansi_on",
+      "reason": "SELECT stack(2, 1, CAST(1 AS SMALLINT), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#73de25d12823/ansi_off",
+      "reason": "SELECT stack(2, 1, CAST(1 AS SMALLINT), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#7a2e37479f7d/ansi_on",
+      "reason": "SELECT stack(2, 1, CAST(NULL AS int), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#7a2e37479f7d/ansi_off",
+      "reason": "SELECT stack(2, 1, CAST(NULL AS int), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#8edc5c4d981b/ansi_on",
+      "reason": "SELECT stack(2, 1, X'01', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#8edc5c4d981b/ansi_off",
+      "reason": "SELECT stack(2, 1, X'01', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#a156be29f53a/ansi_on",
+      "reason": "SELECT stack(2, 1, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "stack#a156be29f53a/ansi_off",
+      "reason": "SELECT stack(2, 1, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "stack#b394df05d9dc/ansi_on",
+      "reason": "SELECT stack(2, 1, 1.5D, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#b394df05d9dc/ansi_off",
+      "reason": "SELECT stack(2, 1, 1.5D, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#b7f226fe33ea/ansi_on",
+      "reason": "SELECT stack(1, 1, 2, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#b7f226fe33ea/ansi_off",
+      "reason": "SELECT stack(1, 1, 2, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#b96c56e6ff69/ansi_on",
+      "reason": "SELECT stack(2, 1, DATE'2024-02-29', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#b96c56e6ff69/ansi_off",
+      "reason": "SELECT stack(2, 1, DATE'2024-02-29', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#bfb21d32e896/ansi_on",
+      "reason": "SELECT stack(2, 1, CAST(1.5 AS FLOAT), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#bfb21d32e896/ansi_off",
+      "reason": "SELECT stack(2, 1, CAST(1.5 AS FLOAT), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#c63c508ecdce/ansi_on",
+      "reason": "SELECT stack(2, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    },
+    {
+      "id": "stack#c63c508ecdce/ansi_off",
+      "reason": "SELECT stack(2, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    },
+    {
+      "id": "stack#c64f37750add/ansi_on",
+      "reason": "SELECT stack(2, 1, CAST(1.5 AS DECIMAL(10,2)), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#c64f37750add/ansi_off",
+      "reason": "SELECT stack(2, 1, CAST(1.5 AS DECIMAL(10,2)), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#d31d3fdb28ad/ansi_on",
+      "reason": "SELECT stack(2, 1, 1L, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#d31d3fdb28ad/ansi_off",
+      "reason": "SELECT stack(2, 1, 1L, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#d7b6f604d089/ansi_on",
+      "reason": "SELECT stack(2, 1, named_struct('a', 1, 'b', 'x'), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#d7b6f604d089/ansi_off",
+      "reason": "SELECT stack(2, 1, named_struct('a', 1, 'b', 'x'), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e072e74d7270/ansi_on",
+      "reason": "SELECT stack(2, 1, array(1, 2), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e072e74d7270/ansi_off",
+      "reason": "SELECT stack(2, 1, array(1, 2), 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e36294ad3d13/ansi_on",
+      "reason": "SELECT stack(2, 1, 2, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e36294ad3d13/ansi_off",
+      "reason": "SELECT stack(2, 1, 2, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e409b7c27f8c/ansi_on",
+      "reason": "SELECT stack(2, 1, '1', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e409b7c27f8c/ansi_off",
+      "reason": "SELECT stack(2, 1, '1', 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e759c6227a9e/ansi_on",
+      "reason": "SELECT stack(2, 1, NULL, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#e759c6227a9e/ansi_off",
+      "reason": "SELECT stack(2, 1, NULL, 3) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#ea1afba567a9/ansi_on",
+      "reason": "SELECT stack(INTERVAL '1 02:03:04' DAY TO SECOND, 1, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "stack#ea1afba567a9/ansi_off",
+      "reason": "SELECT stack(INTERVAL '1 02:03:04' DAY TO SECOND, 1, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "stack#eb357dc82f56/ansi_on",
+      "reason": "SELECT stack(INTERVAL '1-2' YEAR TO MONTH, 1, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "stack#eb357dc82f56/ansi_off",
+      "reason": "SELECT stack(INTERVAL '1-2' YEAR TO MONTH, 1, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "stack#ec76304687d5/ansi_on",
+      "reason": "SELECT stack(2, 1, 2, 1) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#ec76304687d5/ansi_off",
+      "reason": "SELECT stack(2, 1, 2, 1) | int not null where Spark has int"
+    },
+    {
+      "id": "stack#fdba287e56cd/ansi_on",
+      "reason": "SELECT stack(2, INTERVAL '1-2' YEAR TO MONTH, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    },
+    {
+      "id": "stack#fdba287e56cd/ansi_off",
+      "reason": "SELECT stack(2, INTERVAL '1-2' YEAR TO MONTH, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.STACK_COLUMN_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "stack"
+}
