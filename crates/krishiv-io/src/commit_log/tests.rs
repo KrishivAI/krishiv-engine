@@ -229,3 +229,32 @@ async fn the_probe_passes_on_a_store_with_put_if_absent_and_leaves_no_log() {
     assert!(!l.exists().await.unwrap());
     assert_eq!(l.snapshot().await.unwrap(), Snapshot::default());
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_commit_whose_response_was_lost_is_recognised_by_its_bytes() {
+    use crate::io::FaultStore;
+    let inner = Arc::new(InMemory::new());
+    let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let sched = IoScheduler::new(IoConfig::default());
+    let store = StoreId::new("memory://lost");
+    sched.register_store(store.clone(), Arc::clone(&fault) as Arc<dyn ObjectStore>);
+    let io = sched.context();
+    let l = CommitLog::new(&io, store, Path::from("t"), "memory://lost/t".to_owned());
+    let e = entry("w", CommitMode::Append, &["f1"], &[]);
+    // The first attempt landed but its answer was lost (the next put fails
+    // transiently, as the retry's first try would): the object is ours.
+    inner
+        .put(
+            &Path::from("t/_krishiv_log/00000000000000000000.json"),
+            encode_entry(&e).into(),
+        )
+        .await
+        .unwrap();
+    fault.fail_next_puts(1);
+    assert_eq!(l.commit(None, &e).await.unwrap(), 0);
+    // Another writer's entry at the version is a lost race, not ours.
+    let other = entry("other", CommitMode::Append, &["f2"], &[]);
+    fault.fail_next_puts(1);
+    assert_eq!(l.commit(None, &other).await.unwrap(), 1);
+    assert_eq!(names(&l.snapshot().await.unwrap()), ["f1", "f2"]);
+}
