@@ -87,7 +87,7 @@ fn region_zones_resolve_against_the_bundled_database() {
         id: "America/Los_Angeles",
         rules: &FixedOffset(-28_800),
     };
-    assert!(f.format_timestamp(0, la).is_err());
+    assert_eq!(f.format_timestamp(0, la).unwrap(), "PST");
     assert!(DateTimePattern::new("v", Purpose::Format).is_err());
 }
 
@@ -253,11 +253,11 @@ proptest::proptest! {
 
 #[test]
 fn optional_section_keeps_real_errors() {
-    // Spark 4.2 prints "2020 PST"; a region zone name is not known here,
-    // so the error must surface instead of the section being dropped.
+    // A zone name that is not known must surface instead of the section
+    // being dropped.
     let p = DateTimePattern::new("yyyy[ z]", Purpose::Format).unwrap();
     let la = Zone {
-        id: "America/Los_Angeles",
+        id: "Mars/Olympus_Mons",
         rules: &FixedOffset(-28_800),
     };
     let e = p.format_timestamp(0, la).unwrap_err();
@@ -283,4 +283,29 @@ fn long_adjacent_numbers_do_not_overflow() {
     let pattern = format!("y{}", "ddHHmmss".repeat(6));
     let p = DateTimePattern::new(&pattern, Purpose::Parse).unwrap();
     assert_eq!(p.parse_local(&"1".repeat(60), false).unwrap(), None);
+}
+
+#[test]
+fn region_zone_names_follow_daylight_time() {
+    let short = DateTimePattern::new("z", Purpose::Format).unwrap();
+    let full = DateTimePattern::new("zzzz", Purpose::Format).unwrap();
+    let berlin = |micros: i64, offset: i32| {
+        let zone = Zone {
+            id: "Europe/Berlin",
+            rules: &FixedOffset(offset),
+        };
+        (
+            short.format_timestamp(micros, zone).unwrap(),
+            full.format_timestamp(micros, zone).unwrap(),
+        )
+    };
+    // 2024-01-15 and 2024-07-15, noon UTC.
+    assert_eq!(
+        berlin(1_705_320_000_000_000, 3600),
+        ("CET".into(), "Central European Standard Time".into())
+    );
+    assert_eq!(
+        berlin(1_721_044_800_000_000, 7200),
+        ("CEST".into(), "Central European Summer Time".into())
+    );
 }
