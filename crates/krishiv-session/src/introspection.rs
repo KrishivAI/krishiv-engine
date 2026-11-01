@@ -401,9 +401,6 @@ impl Session {
                 self.ordered_frame(&["key", "value"], &[], rows).await
             }
             ShowKind::CreateTable { name, serde, .. } => {
-                if *serde {
-                    return Err(unsupported("SHOW CREATE TABLE ... AS SERDE"));
-                }
                 let env = self.query_env();
                 let name = self.table_name(name, &env)?;
                 self.require_current_profile("SHOW CREATE TABLE")?;
@@ -415,6 +412,11 @@ impl Session {
                     .into());
                 }
                 let table = self.stored_relation(&name)?;
+                // A view prints the same either way; a data source table has no serde to show,
+                // and Spark's error for it is not modelled yet.
+                if *serde && table.view.is_none() {
+                    return Err(unsupported("SHOW CREATE TABLE ... AS SERDE on a table"));
+                }
                 if table.view.is_some() {
                     self.authorize_view_select(&name.namespace, &name.name, &env)
                         .await?;

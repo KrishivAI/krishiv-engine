@@ -57,3 +57,12 @@ fn a_view_lists_its_properties_before_the_schema_mode() {
     );
     assert!(text.contains("'a' = '1',\n  'b' = '2')"), "{text}");
 }
+
+#[test]
+fn a_view_shows_the_same_statement_as_serde() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE tbl (a INT, b INT) USING parquet")).unwrap();
+    block_on(s.sql("CREATE VIEW v (aaa, bbb) AS SELECT a, b FROM tbl")).unwrap();
+    assert_eq!(show_create(&s, "v AS SERDE"), show_create(&s, "v"));
+    assert!(block_on(s.sql("SHOW CREATE TABLE tbl AS SERDE")).is_err());
+}
