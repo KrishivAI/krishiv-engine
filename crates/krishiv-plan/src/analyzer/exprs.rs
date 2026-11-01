@@ -4877,6 +4877,18 @@ impl Resolver<'_> {
             col
         };
         if c.plan_id.is_none()
+            && let [name, _, ..] = &c.name[..]
+            && let Some(var) = self.lambda_var(name)
+        {
+            // `x.field` of a lambda variable `x`: a field of its struct.
+            let attr = Attr {
+                col: var,
+                qual: Arc::from(Vec::new()),
+                source: None,
+            };
+            return self.resolve_attr_as(&attr, 1, &c.name, origin, None, true);
+        }
+        if c.plan_id.is_none()
             && let [name] = &c.name[..]
             && let Some(var) = self.lambda_var(name)
         {
@@ -5059,10 +5071,18 @@ impl Resolver<'_> {
         if self.parameter_attrs().is_empty() {
             return Err(unresolved(&c.name, cx.scope, origin));
         }
+        // A parameter the name matches is out of reach here (the body
+        // nests deeper than a parameter is visible), and Spark proposes
+        // nothing for it.
+        let cs = self.ctx.conf.case_sensitive;
         let candidates: Vec<Attr> = cx
             .scope
             .iter()
-            .chain(self.parameter_attrs())
+            .chain(
+                self.parameter_attrs()
+                    .iter()
+                    .filter(|a| !matches!(&c.name[..], [n] if same(&a.col.name, n, cs))),
+            )
             .cloned()
             .collect();
         Err(unresolved(&c.name, &candidates, origin))
@@ -5401,10 +5421,25 @@ impl Resolver<'_> {
         origin: Origin,
         outer: Option<usize>,
     ) -> Result<Bound, AnalysisError> {
+        self.resolve_attr_as(a, used, parts, origin, outer, false)
+    }
+
+    /// [`Self::resolve_attr`]; `lambda` makes the base a lambda variable
+    /// (`x.field` inside a higher-order function's lambda).
+    fn resolve_attr_as(
+        &mut self,
+        a: &Attr,
+        used: usize,
+        parts: &[String],
+        origin: Origin,
+        outer: Option<usize>,
+        lambda: bool,
+    ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
         let mut col = a.col.clone();
         col.name.clone_from(&parts[used - 1]);
         let node = match outer {
+            _ if lambda => ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
             None => ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
             Some(_) => ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
         };
