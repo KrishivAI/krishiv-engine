@@ -814,6 +814,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 input: boxed(scan()),
                 keys,
                 limit: 10,
+                bound: None,
             },
         ),
         (

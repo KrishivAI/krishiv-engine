@@ -389,6 +389,9 @@ pub struct TopNNode {
     pub keys: ::prost::alloc::vec::Vec<SortKey>,
     #[prost(uint64, tag = "3")]
     pub limit: u64,
+    /// ignorable: a reader that skips it offers no bound, and scans only prune less.
+    #[prost(uint64, optional, tag = "4")]
+    pub bound: ::core::option::Option<u64>,
 }
 /// feature: window
 /// Window functions over an input sorted by the partitioning columns, then

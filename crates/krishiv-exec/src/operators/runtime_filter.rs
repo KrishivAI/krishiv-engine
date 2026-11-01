@@ -159,6 +159,7 @@ fn describe(f: &RuntimeFilter) -> String {
     let form = match &f.published().snapshot {
         FilterSnapshot::Pending => "pending".to_owned(),
         FilterSnapshot::Disabled(_) => "disabled".to_owned(),
+        FilterSnapshot::Tightening(_) => "top-N bound".to_owned(),
         FilterSnapshot::Final(k) => match k.form() {
             FilterForm::Range => "range".to_owned(),
             FilterForm::SmallSet(n) => format!("small set of {n}"),

@@ -531,6 +531,7 @@ impl Decoder {
                 input: self.boxed(t.input)?,
                 keys: sort_keys(&t.keys)?,
                 limit: t.limit,
+                bound: t.bound.map(FilterId),
             },
             Kind::Window(w) => PhysNode::Window {
                 input: self.boxed(w.input)?,

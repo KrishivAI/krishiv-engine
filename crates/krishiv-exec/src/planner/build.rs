@@ -631,8 +631,9 @@ impl<'a> Planner<'a> {
             && let Some(total) = n.checked_add(skip)
             && usize::try_from(total).is_ok_and(|t| t <= TopN::MAX_ROWS)
         {
+            let deterministic = krishiv_optimizer::plan_is_deterministic(sorted);
             let sorted = self.plan(sorted)?;
-            let top = self.top_n(sorted, order, total)?;
+            let top = self.top_n(sorted, order, total, deterministic)?;
             if skip == 0 {
                 return Ok(top);
             }
@@ -1431,6 +1432,7 @@ impl<'a> Planner<'a> {
         keys: &[SortKey],
         n: u64,
         detail: String,
+        bound: Option<FilterId>,
     ) -> Result<Planned> {
         let schema = top_n_op(&input.schema, keys, n)?.schema();
         let layout = input.layout.clone();
@@ -1440,6 +1442,7 @@ impl<'a> Planner<'a> {
                 input,
                 keys: local,
                 limit: n,
+                bound,
             },
             schema,
             layout,
@@ -1468,13 +1471,80 @@ impl<'a> Planner<'a> {
         local
     }
 
-    fn top_n(&mut self, input: Planned, order: &[SortOrder], n: u64) -> Result<Planned> {
+    /// The runtime filter a top-N of `n` rows over `input` offers its bound
+    /// on `keys`' first key through (design P2-T063), if a scan can use it:
+    /// the key is a column of a scan directly below, read in byte order.
+    /// `deterministic`: nothing below changes with the rows it sees (dropping
+    /// rows moves what `rand()` returns for later ones). A conjunct that may
+    /// raise has already cleared the scan's sites: the filter above must see
+    /// every row.
+    fn top_n_bound(
+        &mut self,
+        input: &Planned,
+        keys: &[SortKey],
+        n: u64,
+        deterministic: bool,
+    ) -> Option<FilterId> {
+        fn scan_below(node: &PhysNode) -> Option<&ScanNode> {
+            match node {
+                PhysNode::Scan(s) => Some(s),
+                PhysNode::Filter { input, .. } => scan_below(input),
+                _ => None,
+            }
+        }
+        if n == 0 || !deterministic {
+            return None;
+        }
+        let key = keys.first()?;
+        let attr = *input.layout.get(key.column)?;
+        let key_type = input.schema.fields().get(key.column)?.data_type().clone();
+        let scan = scan_below(&input.node)?;
+        let bound_column = scan.scan.output.iter().find(|c| c.id == attr)?;
+        if !krishiv_io::runtime_filter::supported_key_type(&key_type)
+            || matches!(
+                bound_column.data_type,
+                krishiv_types::DataType::CollatedString(_)
+            )
+        {
+            return None;
+        }
+        let site = input
+            .sites
+            .iter()
+            .find(|s| s.attr == attr && s.scan == scan.id)?;
+        let id = FilterId(self.next_filter);
+        self.next_filter += 1;
+        self.scan_filters
+            .entry(site.scan)
+            .or_default()
+            .push(ScanRuntimeFilter {
+                id,
+                column: site.column.clone(),
+                key_type,
+            });
+        Some(id)
+    }
+
+    fn top_n(
+        &mut self,
+        input: Planned,
+        order: &[SortOrder],
+        n: u64,
+        deterministic: bool,
+    ) -> Result<Planned> {
         let (input, keys) = self.sort_keys(input, order)?;
-        // Each partition keeps its best `n` rows before the gather.
-        let input = if input.placement.satisfies(Distribution::Single) {
-            input
+        let bound = self.top_n_bound(&input, &keys, n, deterministic);
+        let detail = |bound: Option<FilterId>| match bound {
+            Some(id) => format!("{n}, {}, bound {id}", orders(order)),
+            None => format!("{n}, {}", orders(order)),
+        };
+        // Each partition keeps its best `n` rows before the gather, and that
+        // is where the rows are ranked first, so that top-N offers the bound.
+        let (input, bound) = if input.placement.satisfies(Distribution::Single) {
+            (input, bound)
         } else {
-            Self::local_top_n(input, &keys, n, format!("{n}, {}", orders(order)))?
+            let local = Self::local_top_n(input, &keys, n, detail(bound), bound)?;
+            (local, None)
         };
         let input = self.require(input, Distribution::Single)?;
         let schema = top_n_op(&input.schema, &keys, n)?.schema();
@@ -1484,10 +1554,11 @@ impl<'a> Planner<'a> {
                 input,
                 keys,
                 limit: n,
+                bound,
             },
             schema,
             layout,
-            ("TopN", format!("{n}, {}", orders(order))),
+            ("TopN", detail(bound)),
         );
         planned.sites.clear();
         Ok(planned)

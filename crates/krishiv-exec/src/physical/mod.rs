@@ -411,6 +411,9 @@ pub enum PhysNode {
         keys: Vec<SortKey>,
         /// The row count.
         limit: u64,
+        /// The runtime filter it offers its bound on the first key through,
+        /// to a scan below (design P2-T063).
+        bound: Option<FilterId>,
     },
     /// Window functions over `input`, which is sorted by the plan's
     /// partitioning, then its ordering: the input's columns, then one per
@@ -808,7 +811,7 @@ plan_data!(enum PhysNode {
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
-    TopN { input, keys, limit },
+    TopN { input, keys, limit, bound },
     Window { input, window },
     WindowGroupLimit { input, limit },
     Aggregate { input, aggregate },

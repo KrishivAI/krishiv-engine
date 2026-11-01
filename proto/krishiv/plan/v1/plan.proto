@@ -302,6 +302,8 @@ message TopNNode {
   uint32 input = 1;
   repeated SortKey keys = 2;
   uint64 limit = 3;
+  // ignorable: a reader that skips it offers no bound, and scans only prune less.
+  optional uint64 bound = 4;
 }
 
 // feature: window

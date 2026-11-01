@@ -633,9 +633,18 @@ impl Instantiation<'_> {
                 let op = group_limit_op(&input.schema, limit)?;
                 Ok(operator(input, op))
             }
-            PhysNode::TopN { input, keys, limit } => {
+            PhysNode::TopN {
+                input,
+                keys,
+                limit,
+                bound,
+            } => {
                 let input = self.node(input)?;
-                let top = top_n_op(&input.schema, keys, *limit)?;
+                let top = top_n(&input.schema, keys, *limit)?;
+                let top = Arc::new(match bound {
+                    Some(id) => top.with_bound(Arc::clone(&self.values), *id),
+                    None => top,
+                });
                 Ok(breaker(input, Arc::clone(&top) as Arc<dyn Sink>, top))
             }
             PhysNode::Aggregate { input, aggregate } => {
@@ -1154,9 +1163,13 @@ pub(crate) fn sort_op(
 }
 
 pub(crate) fn top_n_op(schema: &SchemaRef, keys: &[SortKey], limit: u64) -> Result<Arc<TopN>> {
+    Ok(Arc::new(top_n(schema, keys, limit)?))
+}
+
+fn top_n(schema: &SchemaRef, keys: &[SortKey], limit: u64) -> Result<TopN> {
     let limit =
         usize::try_from(limit).map_err(|_| internal("top-N limit out of range".to_owned()))?;
-    Ok(Arc::new(TopN::new(Arc::clone(schema), keys, 0, limit)?))
+    TopN::new(Arc::clone(schema), keys, 0, limit)
 }
 
 /// The filter pushed into a scan of `scan` over its table schema `table`.

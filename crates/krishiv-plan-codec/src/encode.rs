@@ -305,10 +305,16 @@ impl Encoder {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
             }),
-            PhysNode::TopN { input, keys, limit } => Kind::TopN(pb::TopNNode {
+            PhysNode::TopN {
+                input,
+                keys,
+                limit,
+                bound,
+            } => Kind::TopN(pb::TopNNode {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
                 limit: *limit,
+                bound: bound.map(|b| b.0),
             }),
             PhysNode::Aggregate { input, aggregate } => {
                 Kind::Aggregate(self.aggregate(input, aggregate)?)

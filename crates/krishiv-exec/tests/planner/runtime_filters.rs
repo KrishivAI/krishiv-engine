@@ -670,3 +670,99 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
         [false]
     );
 }
+
+/// `ORDER BY ... LIMIT` queries whose rows have one right answer: `v` breaks
+/// every tie. The first key is what a top-N bounds: NULLs on either side,
+/// NaN and signed zeros, decimals, strings, an `OFFSET`, a filter, and more
+/// rows than the table has.
+const TOP_N: [&str; 12] = [
+    "SELECT k32, v FROM big ORDER BY k32, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32 NULLS LAST, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32 DESC, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32 DESC NULLS FIRST, v LIMIT 5",
+    "SELECT x, v FROM big ORDER BY x, v LIMIT 7",
+    "SELECT x, v FROM big ORDER BY x DESC, v LIMIT 7",
+    "SELECT f, v FROM big ORDER BY f DESC NULLS FIRST, v LIMIT 7",
+    "SELECT d51, v FROM big ORDER BY d51, v LIMIT 5",
+    "SELECT s, v FROM big ORDER BY s DESC, v LIMIT 5",
+    "SELECT k64, v FROM big ORDER BY k64, v LIMIT 5 OFFSET 3",
+    "SELECT k64, v FROM big WHERE v > 10 ORDER BY k64 DESC, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32, v LIMIT 5000",
+];
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
+    /// A top-N's bound drops only rows it would drop itself.
+    #[test]
+    fn top_n_results_do_not_depend_on_its_bound(
+        seed in 1u64..u64::MAX,
+        domain in prop_oneof![Just(4i32), Just(400)],
+        nulls in 0u32..30,
+        rows_in in prop_oneof![Just(100usize), Just(1500)],
+    ) {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut rng = seed;
+        write(dir.path(), "big.parquet", &table(&mut rng, rows_in, domain, nulls));
+        let sources = [("big", vec!["big.parquet".to_owned()])];
+        let mut t = parquet_files(dir.path(), &sources, true, &rt);
+        for q in TOP_N {
+            configured(&mut t, MODES[0].1);
+            let off = rows(&run(&t.plan_sql(q).unwrap()).0);
+            configured(&mut t, MODES[1].1);
+            let plan = t.plan_sql(q).unwrap();
+            prop_assert!(plan.to_string().contains("bound #"), "{}:\n{}", q, plan);
+            prop_assert_eq!(&rows(&run(&plan).0), &off, "{}:\n{}", q, plan);
+        }
+    }
+}
+
+/// The bound prunes a clustered key's row groups, and isn't planned where it
+/// could change a result.
+#[test]
+fn a_top_n_bound_prunes_and_stays_away_from_what_it_could_change() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 7;
+    let big = table(&mut rng, 4000, 4000, 0);
+    let mut keys: Vec<i32> = big
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    keys.sort_unstable();
+    let mut cols = big.columns().to_vec();
+    cols[0] = Arc::new(Int32Array::from(keys));
+    let big = RecordBatch::try_new(big.schema(), cols).unwrap();
+    write(dir.path(), "big.parquet", &big);
+    let sources = [("big", vec!["big.parquet".to_owned()])];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    configured(&mut t, &[]);
+    let plan = t
+        .plan_sql("SELECT k32, v FROM big ORDER BY k32 NULLS LAST LIMIT 3")
+        .unwrap();
+    let (_, c) = run(&plan);
+    assert!(c.units_pruned + c.rows_dropped > 0, "{c:?}\n{plan}");
+    for q in [
+        // ANSI division may raise: the filter must see every row.
+        "SELECT k32, v FROM big WHERE 100 / v > 0 ORDER BY k32 LIMIT 3",
+        // Dropped rows would move what `rand()` returns for later ones.
+        "SELECT k32, v FROM big WHERE rand() < 2 ORDER BY k32 LIMIT 3",
+        // The key is computed.
+        "SELECT k32, v FROM big ORDER BY k32 + 1 LIMIT 3",
+        "SELECT k32, v FROM big ORDER BY k32 LIMIT 0",
+    ] {
+        let plan = t.plan_sql(q).unwrap();
+        assert!(!plan.to_string().contains("bound #"), "{q}:\n{plan}");
+    }
+    configured(&mut t, MODES[0].1);
+    let plan = t
+        .plan_sql("SELECT k32, v FROM big ORDER BY k32 LIMIT 3")
+        .unwrap();
+    assert!(!plan.to_string().contains("bound #"), "{plan}");
+}
