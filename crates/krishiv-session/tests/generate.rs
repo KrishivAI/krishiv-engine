@@ -767,7 +767,10 @@ fn order_by_an_aggregate_over_a_generator_below_it() {
         )
         .len(),
         2
+    );
+}
 
+#[test]
 fn order_by_a_grouping_column_the_generator_select_does_not_list() {
     let s = Session::new().unwrap();
     let v = "values (1, array(1, 2)), (2, array(3)) t(k, arr)";
@@ -798,5 +801,46 @@ fn nested_generators_under_group_by_are_nested_in_expressions() {
     assert_eq!(
         e.error_class(),
         ErrorClass::UnsupportedGeneratorNestedInExpressions
+    );
+}
+
+#[test]
+fn stack_matches_spark_edge_cases() {
+    let s = Session::new().unwrap();
+    for (sql, class) in [
+        (
+            "select stack(2, 1, '2')",
+            ErrorClass::DatatypeMismatchStackColumnDiffTypes,
+        ),
+        (
+            "select stack(2, 1, 2) + 1",
+            ErrorClass::UnsupportedGeneratorNestedInExpressions,
+        ),
+        (
+            "select stack(0, 1)",
+            ErrorClass::DatatypeMismatchValueOutOfRange,
+        ),
+        (
+            "select * from stack(2, 1, 2) as t(x, y, z)",
+            ErrorClass::NumTableValueAliasesMismatch,
+        ),
+        (
+            "select * from json_tuple('{\"a\":1}', 'a') as t(x, y)",
+            ErrorClass::NumTableValueAliasesMismatch,
+        ),
+    ] {
+        assert_eq!(error_of(&s, sql).error_class(), class, "{sql}");
+    }
+    assert_eq!(
+        rows(&s, "select stack(cast(2 as int), 1, 2, 3, 4)"),
+        table(&[&["1", "2"], &["3", "4"]])
+    );
+    assert_eq!(
+        rows(&s, "select stack(2, 1, 2, 3)"),
+        table(&[&["1", "2"], &["3", "NULL"]])
+    );
+    assert_eq!(
+        rows(&s, "select * from stack(2, 1, 2) as t(x)"),
+        table(&[&["1"], &["2"]])
     );
 }
