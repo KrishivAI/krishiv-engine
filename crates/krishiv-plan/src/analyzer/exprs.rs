@@ -5300,7 +5300,14 @@ impl Resolver<'_> {
                     let mut names: Vec<String> = hits
                         .iter()
                         .map(|a| {
-                            let mut p = a.qual.to_vec();
+                            // A select-list generator's reserved qualifier is
+                            // internal; Spark prints its columns bare.
+                            let mut p: Vec<String> = a
+                                .qual
+                                .iter()
+                                .filter(|q| !q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+                                .cloned()
+                                .collect();
                             p.push(a.col.name.clone());
                             quoted(&p)
                         })

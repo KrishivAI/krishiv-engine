@@ -905,3 +905,18 @@ fn a_multi_name_alias_needs_a_generator() {
         table(&[&["1", "2", "1"]])
     );
 }
+
+#[test]
+fn an_ambiguous_generator_column_prints_without_the_internal_qualifier() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "select explode(arr), col from values (array(1), 2) t(arr, col)",
+        "select col, explode(arr) from values (array(1), 2) t(arr, col)",
+    ] {
+        let e = error_of(&s, sql);
+        assert_eq!(e.error_class(), ErrorClass::AmbiguousReference, "{sql}");
+        let text = e.to_string();
+        assert!(text.contains("[`col`, `t`.`col`]"), "{text}");
+        assert!(!text.contains("__krishiv"), "{text}");
+    }
+}
