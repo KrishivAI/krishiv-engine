@@ -612,6 +612,7 @@ fn compression_codecs_round_trip() {
         ("null", "null"),
         ("snappy", "snappy"),
         ("deflate", "deflate"),
+        ("bzip2", "bzip2"),
     ] {
         let o = env.options(&[("compression", option)]);
         let bytes = env.encode(&schema, std::slice::from_ref(&batch), &o);
@@ -625,10 +626,9 @@ fn compression_codecs_round_trip() {
         let got = env.scan(&file, &table_req, &o).unwrap();
         assert_eq!(concat(&out_schema, &got), retype_batch(&batch, &out_schema));
     }
-    // `bzip2`, `xz` and `zstandard` are accepted options but not enabled in
+    // `xz` and `zstandard` are accepted options but not enabled in
     // this build: `zstandard` is Spark's `CODEC_NOT_AVAILABLE` error.
     let refused = [
-        ("bzip2", ErrorClass::KrishivUnsupportedFeature),
         ("xz", ErrorClass::KrishivUnsupportedFeature),
         (
             "zstandard",
@@ -4012,4 +4012,129 @@ fn avro_target_file_bytes_rolls_files() {
         })
         .sum();
     assert!(rows > 1000, "{rows}");
+}
+
+/// Files written by Spark 4.2's `spark-avro` (`tests/scripts/gen_avro_spark.py`,
+/// one row of every supported type and a row of NULLs) in each block codec
+/// read back as Spark showed them; `xz` and `zstandard` are the typed
+/// refusals.
+#[test]
+fn spark_written_files_read_back_equal() {
+    let env = Env::new();
+    let fixture = |codec: &str| {
+        let p = format!(
+            "{}/../../tests/fixtures/spark-4.2.0/avro/people-{codec}.avro",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))
+    };
+    let o = env.options(&[]);
+    let read = |codec: &str| {
+        let file = env.put(&format!("spark-{codec}.avro"), fixture(codec));
+        let schema = env.infer(&file, &o);
+        let req = ScanRequest::all(Arc::clone(&schema));
+        let out = mapped_schema(&schema, &req);
+        let got = env.scan(&file, &req, &o).unwrap();
+        (schema, concat(&out, &got))
+    };
+    let (schema, plain) = read("uncompressed");
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "id", "s", "d", "f", "b", "bin", "dt", "ts", "ntz", "dec", "arr", "m", "st", "n", "ti",
+            "si", "bg"
+        ]
+    );
+    let types: Vec<String> = schema
+        .fields()
+        .iter()
+        .map(|f| format!("{}", f.data_type()))
+        .collect();
+    assert_eq!(plain.num_rows(), 2);
+    // Row 1: every value, as `df.show()` printed it.
+    let c = |name: &str| Arc::clone(plain.column_by_name(name).unwrap());
+    assert_eq!(c("id").as_primitive::<Int32Type>().value(0), 1);
+    assert_eq!(c("s").as_string_view().value(0), "a");
+    assert_eq!(
+        c("d")
+            .as_primitive::<arrow_array::types::Float64Type>()
+            .value(0),
+        1.5
+    );
+    assert_eq!(
+        c("f")
+            .as_primitive::<arrow_array::types::Float32Type>()
+            .value(0),
+        2.5
+    );
+    assert!(c("b").as_boolean().value(0));
+    assert_eq!(c("bin").as_binary_view().value(0), b"x");
+    assert_eq!(c("dt").as_primitive::<Date32Type>().value(0), 18_263);
+    assert_eq!(
+        c("ts").as_primitive::<TimestampMicrosecondType>().value(0),
+        1_577_934_245_678_901
+    );
+    assert_eq!(
+        c("ntz").as_primitive::<TimestampMicrosecondType>().value(0),
+        1_577_934_245_678_901
+    );
+    assert_eq!(c("dec").as_primitive::<Decimal128Type>().value(0), 1234);
+    assert_eq!(c("bg").as_primitive::<Int64Type>().value(0), 9_000_000_000);
+    assert_eq!(c("ti").as_primitive::<Int32Type>().value(0), 5);
+    assert_eq!(c("si").as_primitive::<Int32Type>().value(0), 6);
+    assert!(c("n").is_null(0));
+    // Row 2 is NULL in every column but the id.
+    for n in names.iter().skip(1) {
+        assert!(c(n).is_null(1), "{n} {types:?}");
+    }
+    for codec in ["snappy", "deflate", "bzip2"] {
+        let (s, got) = read(codec);
+        assert_eq!(s, schema, "{codec}");
+        assert_eq!(got, plain, "{codec}");
+    }
+    for (codec, class) in [
+        ("xz", ErrorClass::KrishivUnsupportedFeature),
+        (
+            "zstandard",
+            ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion,
+        ),
+    ] {
+        let file = env.put(&format!("spark-{codec}.avro"), fixture(codec));
+        let e = env
+            .rt
+            .block_on(AvroFormat.infer_schema(&env.io, std::slice::from_ref(&file), &o))
+            .unwrap_err();
+        assert_eq!(class_of(&e), class, "{codec}");
+    }
+}
+
+/// Writes one file per codec into `$KRISHIV_AVRO_DUMP` for
+/// `tests/scripts/check_avro_written.py` (Spark 4.2 reads them).
+#[test]
+#[ignore = "writes files for the Spark check; run with KRISHIV_AVRO_DUMP=<dir>"]
+fn dump_written_files_for_spark() {
+    let Ok(dir) = std::env::var("KRISHIV_AVRO_DUMP") else {
+        return;
+    };
+    let env = Env::new();
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("v", DataType::Utf8View, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from((0..500).collect::<Vec<_>>())),
+            Arc::new(StringViewArray::from(
+                (0..500).map(|i| Some(format!("v{i}"))).collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .unwrap();
+    for codec in ["uncompressed", "snappy", "deflate", "bzip2"] {
+        let o = env.options(&[("compression", codec)]);
+        let bytes = env.encode(&schema, std::slice::from_ref(&batch), &o);
+        std::fs::write(format!("{dir}/{codec}.avro"), bytes).unwrap();
+    }
 }

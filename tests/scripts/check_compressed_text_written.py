@@ -6,6 +6,7 @@ Usage (local-mode pyspark, in a temp dir; see krishiv-internal CLAUDE.md):
   env -u SPARK_HOME uv run --no-project --python 3.12 --with 'pyspark==4.2.0' python check_compressed_text_written.py $D
 Each file holds the same three rows, repeated three times (nine rows).
 """
+
 import glob
 import os
 import sys

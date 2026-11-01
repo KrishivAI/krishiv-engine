@@ -93,8 +93,8 @@ object_store = { version = "=0.14.2", default-features = false }
 # parsing. Only the pure-Rust codecs are enabled (deflate is built in;
 # snappy needs no OpenSSL). The `zstandard` feature stays off: it pulls
 # zstd 0.13, which carries RUSTSEC-2026-0391, and no apache-avro release
-# allows zstd 0.14; zstandard, bzip2 and xz files are refused.
-apache-avro = { version = "=0.22.0", default-features = false, features = ["snappy"] }
+# allows zstd 0.14; zstandard and xz files are refused.
+apache-avro = { version = "=0.22.0", default-features = false, features = ["bzip", "snappy"] }
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }
