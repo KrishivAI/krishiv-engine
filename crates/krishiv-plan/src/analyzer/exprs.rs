@@ -206,6 +206,37 @@ fn with_children(e: &Expr, kids: Vec<Arc<Expr>>) -> Arc<Expr> {
     Arc::new(x)
 }
 
+/// The `TIMESTAMP_NTZ` function a timestamp-producing call runs as under
+/// `spark.sql.timestampType = TIMESTAMP_NTZ`, with how many of `kids` it
+/// takes: `to_timestamp` over a string, date or timestamp, and the numeric
+/// forms of `make_timestamp` / `try_make_timestamp` (the optional zone is
+/// ignored). `None` for any other call.
+fn ntz_variant(name: &str, kids: &[Bound]) -> Option<(&'static str, usize)> {
+    let is = |n: &str| name.eq_ignore_ascii_case(n);
+    if is("to_timestamp") && (1..=2).contains(&kids.len()) {
+        let ok = matches!(
+            kids[0].ty.data_type,
+            Some(
+                DataType::String
+                    | DataType::Date
+                    | DataType::Timestamp
+                    | DataType::TimestampNtz
+                    | DataType::Null
+            )
+        );
+        return ok.then_some(("to_timestamp_ntz", kids.len()));
+    }
+    if (6..=7).contains(&kids.len()) {
+        if is("make_timestamp") {
+            return Some(("make_timestamp_ntz", 6));
+        }
+        if is("try_make_timestamp") {
+            return Some(("try_make_timestamp_ntz", 6));
+        }
+    }
+    None
+}
+
 /// The shown form of a call whose bound form is `expr`, the arguments
 /// `cast` of `kids`: the call over what `kids` show, when that differs.
 fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> {
@@ -1741,6 +1772,32 @@ impl Resolver<'_> {
                                 .into_iter()
                                 .map(|k| Expr::clone(&k))
                                 .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
+                }
+                // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`
+                // and the numeric forms of `make_timestamp` produce a
+                // `TIMESTAMP_NTZ` (a zone argument is ignored) and Spark
+                // still names them as written.
+                if !session_qualified
+                    && self.ctx.conf.timestamp_ntz
+                    && let Some((ntz, take)) = ntz_variant(lookup_name, &kids[..n])
+                {
+                    let call = Expr::function(
+                        ntz,
+                        kids[..take].iter().map(|k| Expr::clone(&k.expr)).collect(),
+                    )
+                    .with_origin(e.origin);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..take]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            lookup_name.to_ascii_lowercase(),
+                            kids[..n].iter().map(|k| Expr::clone(&k.shown())).collect(),
                         )
                         .with_origin(e.origin),
                     ));
