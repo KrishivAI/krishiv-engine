@@ -2100,6 +2100,7 @@ impl Lowerer {
                 // otherwise): Spark resolves a constant string argument to the
                 // column it names.
                 if qualifier.is_empty()
+                    && !name.quoted
                     && name.value.eq_ignore_ascii_case("identifier")
                     && f.args.len() == 1
                     && let ExprKind::Literal(Literal::String(text)) = &f.args[0].expr.kind
@@ -2492,6 +2493,26 @@ fn multipart_identifier(text: &str) -> Option<Vec<String>> {
             None => return Some(parts),
             Some('.') => {}
             Some(_) => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::multipart_identifier;
+
+    #[test]
+    fn multipart_identifiers_split_like_spark() {
+        let parts = |t| multipart_identifier(t);
+        assert_eq!(parts("a"), Some(vec!["a".to_owned()]));
+        assert_eq!(parts("t.c1"), Some(vec!["t".to_owned(), "c1".to_owned()]));
+        assert_eq!(
+            parts("`a.b`.c"),
+            Some(vec!["a.b".to_owned(), "c".to_owned()])
+        );
+        assert_eq!(parts("`a``b`"), Some(vec!["a`b".to_owned()]));
+        for bad in ["", ".a", "a.", "a..b", "`a", "`a`b"] {
+            assert_eq!(parts(bad), None, "{bad}");
         }
     }
 }

@@ -770,3 +770,9 @@ fn a_sql_function_is_as_deterministic_as_its_body() {
     );
     assert!(r.is_ok(), "{:?}", r.err().map(|e| e.error.to_string()));
 }
+
+#[test]
+fn an_unknown_function_is_reported_before_its_arguments_errors() {
+    let r = call(vec![f("no_such_fn", vec![c("no_such_column")])], Vec::new());
+    assert_eq!(err(&r).0, "UNRESOLVED_ROUTINE");
+}
