@@ -222,19 +222,49 @@ fn a_csv_read_gets_the_partition_columns_from_the_path() {
 }
 
 #[test]
-fn the_options_that_change_discovery_are_refused() {
+fn recursive_file_lookup_reads_every_file_without_partition_columns() {
     let dir = tempfile::tempdir().unwrap();
     let s = Session::new().unwrap();
-    let root = written(&s, dir.path(), &[2020], &[Some("eu")]);
-    for option in ["recursiveFileLookup", "basePath"] {
-        let df = s.read().option(option, "true").parquet([root.as_str()]);
-        let e = block_on(df.schema()).unwrap_err();
-        assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{option}"
-        );
-    }
+    let root = written(&s, dir.path(), &[2020, 2021], &[Some("eu"), Some("us")]);
+    let df = s
+        .read()
+        .option("recursiveFileLookup", "true")
+        .parquet([root.as_str()]);
+    let names: Vec<String> = block_on(df.schema())
+        .unwrap()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert!(!names.contains(&"year".to_owned()), "{names:?}");
+    assert!(names.contains(&"id".to_owned()), "{names:?}");
+}
+
+#[test]
+fn base_path_keeps_partition_columns_of_a_subdirectory() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let root = written(&s, dir.path(), &[2020, 2021], &[Some("eu"), Some("us")]);
+    let sub = format!("{root}/year=2020");
+    let df = s
+        .read()
+        .option("basePath", root.as_str())
+        .parquet([sub.as_str()]);
+    let names: Vec<String> = block_on(df.schema())
+        .unwrap()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert!(names.contains(&"year".to_owned()), "{names:?}");
+    assert!(names.contains(&"region".to_owned()), "{names:?}");
+    // A basePath that is not a parent of the path is refused.
+    let other = tempfile::tempdir().unwrap();
+    let df = s
+        .read()
+        .option("basePath", other.path().to_str().unwrap())
+        .parquet([sub.as_str()]);
+    assert!(block_on(df.schema()).is_err());
 }
 
 #[test]

@@ -404,13 +404,7 @@ impl FileReads {
         options: &BTreeMap<String, OptionValue>,
         known: Option<SchemaRef>,
     ) -> Result<FileListing> {
-        // Both change which directories are partitions or files.
-        if let Some(name) = ["recursiveFileLookup", "basePath"]
-            .iter()
-            .find(|n| options.keys().any(|k| k.eq_ignore_ascii_case(n)))
-        {
-            return Err(unsupported(format!("the {name} read option")));
-        }
+        let mode = self.list_mode(options)?;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
         for p in paths {
@@ -418,14 +412,14 @@ impl FileReads {
                 return Err(unsupported("paths with credentials".to_owned()));
             };
             if krishiv_io::partition::glob::has_glob(text) {
-                self.list_glob(text, options, &mut listed).await?;
+                self.list_glob(text, options, &mode, &mut listed).await?;
                 continue;
             }
             // The store is instantiated from the plan's option values
             // (plans stay pure data): the read's `fs.*` options override
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
-            self.list_path(&at, &mut listed).await?;
+            self.list_path(&at, &mode, &mut listed).await?;
         }
         listed.sort_by(|a, b| a.0.path.as_ref().cmp(b.0.path.as_ref()));
         let format = match self.formats.get(format) {
@@ -515,6 +509,7 @@ impl FileReads {
         &self,
         text: &str,
         options: &BTreeMap<String, OptionValue>,
+        mode: &ListMode,
         out: &mut Vec<(FileRef, Vec<Segment>)>,
     ) -> Result<()> {
         let first = text.find(['*', '?', '[', '{']).unwrap_or(text.len());
@@ -555,19 +550,89 @@ impl FileReads {
                 path,
                 display,
             };
-            self.list_path(&found, out).await?;
+            self.list_path(&found, mode, out).await?;
         }
         Ok(())
+    }
+
+    /// The `recursiveFileLookup` and `basePath` read options.
+    fn list_mode(&self, options: &BTreeMap<String, OptionValue>) -> Result<ListMode> {
+        let get = |name: &str| {
+            options
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v)
+        };
+        let recursive = get("recursiveFileLookup")
+            .and_then(OptionValue::as_plain)
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+        let base = match get("basePath") {
+            Some(v) => {
+                let Some(text) = v.as_plain() else {
+                    return Err(unsupported("paths with credentials".to_owned()));
+                };
+                Some(self.paths.locate_with_options(text, options)?)
+            }
+            None => None,
+        };
+        Ok(ListMode { recursive, base })
+    }
+
+    /// The `name=value` directories from `mode`'s base path down to the
+    /// directories of `dirs` (those below `at`, already split).
+    fn base_segments(at: &LocatedPath, mode: &ListMode, dirs: &[String]) -> Result<Vec<Segment>> {
+        if mode.recursive {
+            return Ok(Vec::new());
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut display = at.display.clone();
+        if let Some(base) = &mode.base {
+            let base_parts: Vec<String> =
+                base.path.parts().map(|p| p.as_ref().to_owned()).collect();
+            let at_parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+            if at_parts.len() < base_parts.len() || at_parts[..base_parts.len()] != base_parts[..] {
+                return Err(unsupported(format!(
+                    "the basePath {} is not a parent of the path {}",
+                    base.display, at.display
+                )));
+            }
+            names.extend(at_parts[base_parts.len()..].iter().cloned());
+            display = base.display.clone();
+        }
+        names.extend(dirs.iter().cloned());
+        names
+            .iter()
+            .map(|dir| {
+                parse_segment(dir).ok_or_else(|| {
+                    unsupported(format!(
+                        "reading the subdirectory {display}/{dir} (it is not a name=value partition directory)"
+                    ))
+                })
+            })
+            .collect()
     }
 
     async fn list_path(
         &self,
         at: &LocatedPath,
+        mode: &ListMode,
         out: &mut Vec<(FileRef, Vec<Segment>)>,
     ) -> Result<()> {
         if let Some(meta) = self.io.head(&at.store, &at.path).await? {
             if !at.path.filename().is_some_and(hidden) {
-                out.push((FileRef::from_meta(at.store.clone(), &meta), Vec::new()));
+                // The file's own directories above `at` count only with a basePath.
+                let parent = at.path.parts().count().saturating_sub(1);
+                let probe = LocatedPath {
+                    store: at.store.clone(),
+                    path: Path::from_iter(at.path.parts().take(parent)),
+                    display: at.display.clone(),
+                };
+                let segs = if mode.base.is_some() {
+                    Self::base_segments(&probe, mode, &[])?
+                } else {
+                    Vec::new()
+                };
+                out.push((FileRef::from_meta(at.store.clone(), &meta), segs));
             }
             return Ok(());
         }
@@ -584,21 +649,23 @@ impl FileReads {
                 continue;
             }
             let dirs = below.len().saturating_sub(1);
-            let mut segments = Vec::with_capacity(dirs);
-            for dir in &below[..dirs] {
-                let Some(segment) = parse_segment(dir.as_ref()) else {
-                    return Err(unsupported(format!(
-                        "reading the subdirectory {}/{} (it is not a name=value partition directory)",
-                        at.display,
-                        dir.as_ref()
-                    )));
-                };
-                segments.push(segment);
-            }
+            let names: Vec<String> = below[..dirs]
+                .iter()
+                .map(|p| p.as_ref().to_owned())
+                .collect();
+            let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
         }
         Ok(())
     }
+}
+
+/// How a read lists files: `recursiveFileLookup` (every file below the
+/// paths, no partition discovery) and `basePath` (where partition discovery
+/// starts).
+struct ListMode {
+    recursive: bool,
+    base: Option<LocatedPath>,
 }
 
 /// `schema` followed by `partitions`.
