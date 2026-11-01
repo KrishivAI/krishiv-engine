@@ -1162,25 +1162,33 @@ fn every_arrow_representation_reads_and_nested_types_are_refused() {
 }
 
 #[test]
-fn a_region_time_zone_fails_only_timestamp_conversions() {
+fn a_region_time_zone_shifts_by_its_rules_and_unknown_ones_fail() {
     let o = options(&serde_json::json!({"timeZone": "America/New_York"}));
+    let ts = ddl("a int, t timestamp");
+    let got = read(b"1,2020-01-01 10:00:00\n", &o, &ScanRequest::all(ts)).expect("region zone");
+    let micros = got[0]
+        .column(1)
+        .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+        .value(0);
+    // 10:00 in New York (UTC-5) is 15:00 UTC.
+    assert_eq!(micros, (18_262 * 86_400 + 15 * 3_600) * 1_000_000);
+    assert!(encode(&types_batch(), &o).is_ok());
+    let o = options(&serde_json::json!({"timeZone": "Foo/Bar"}));
     let ints = ScanRequest::all(int_schema());
     assert_eq!(
         rows_of(&read(b"1,x\n", &o, &ints).expect("no timestamps")).len(),
         1
     );
-    let ts = ddl("a int, t timestamp");
-    let e = read(b"1,2020-01-01 10:00:00\n", &o, &ScanRequest::all(ts)).expect_err("zone");
+    let e = read(
+        b"1,2020-01-01 10:00:00\n",
+        &o,
+        &ScanRequest::all(ddl("a int, t timestamp")),
+    )
+    .expect_err("zone");
     assert_eq!(
         e.error_class(),
-        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+        krishiv_common::error::ErrorClass::InvalidTimezone
     );
-    let e = encode(&types_batch(), &o).expect_err("zone");
-    assert_eq!(
-        e.error_class(),
-        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
-    );
-    assert!(encode(&strings_batch(), &o).is_ok());
 }
 
 #[test]
