@@ -25,6 +25,8 @@
         "yields": { "$ref": "#/$defs/u64" },
         "max_slice_ns": { "$ref": "#/$defs/u64", "description": "Longest single poll of a driver." },
         "stalls": { "$ref": "#/$defs/u64", "description": "Polls longer than the stall threshold." },
+        "busy_ns": { "$ref": "#/$defs/u64", "description": "Added within v1 (absent in earlier documents): time the drivers spent in polls, summed." },
+        "hash_probe_share": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }], "description": "Added within v1 (absent in earlier documents): the operators' probe_table_ns over busy_ns; null when no hash table was probed. Derived, so a reader recomputes it." },
         "memory": {
           "type": "object",
           "description": "Added within v1 (absent in earlier documents): the query's memory pool.",
