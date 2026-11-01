@@ -150,10 +150,16 @@ impl Session {
         let mut names = self.state.catalog.global_names();
         names.retain(|n| keep(pattern, n));
         names.sort();
-        let rows = names
+        let mut rows: Vec<Vec<Cell>> = names
             .into_iter()
             .map(|n| vec![s(crate::catalog::GLOBAL_NAMESPACE), s(n), s("true")])
             .collect();
+        // Spark lists the session's local temporary views after the global ones.
+        rows.extend(
+            self.temp_view_names(pattern)
+                .into_iter()
+                .map(|n| vec![s(""), s(n), s("true")]),
+        );
         self.ordered_frame(columns, &["isTemporary"], rows).await
     }
 

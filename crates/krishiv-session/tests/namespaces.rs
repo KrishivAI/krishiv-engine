@@ -214,6 +214,10 @@ fn a_global_temporary_view_lives_in_global_temp() {
         rows(&s, "SELECT c FROM global_temp.gv"),
         vec![vec!["2".to_owned()]]
     );
+    assert_eq!(
+        class(&s, "CREATE VIEW pv AS SELECT * FROM global_temp.gv"),
+        "INVALID_TEMP_OBJ_REFERENCE"
+    );
     run(&s, "DROP VIEW global_temp.gv");
     assert_eq!(
         class(&s, "SELECT * FROM global_temp.gv"),

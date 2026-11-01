@@ -1670,6 +1670,14 @@ pub(crate) fn reads_temporary(
         {
             return catalog.exists(bare, cs).then(|| bare.clone());
         }
+        if let PlanNode::Read(ReadSource::Table { name, .. }) = &plan.node
+            && let [namespace, view] = name.as_slice()
+            && namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE)
+        {
+            return catalog
+                .exists(&global_key(view), cs)
+                .then(|| format!("{GLOBAL_NAMESPACE}`.`{view}"));
+        }
         if let PlanNode::WithCte { input, ctes } = &plan.node {
             let outer = scope.len();
             for cte in ctes.iter() {

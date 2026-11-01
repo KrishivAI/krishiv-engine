@@ -1983,6 +1983,9 @@ fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> O
         };
         let start = item.expr.span.start.checked_sub(query.span.start)?;
         let end = item.expr.span.end.checked_sub(query.span.start)?;
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) || start > end {
+            return None;
+        }
         text.replace_range(start..end, &replacement);
     }
     Some(text)
