@@ -1880,7 +1880,20 @@ impl Rewriter {
                 if keys.iter().any(|k| has_outer(Node::Expr(k))) {
                     return Err(correlated_reference(keys, plan.origin));
                 }
-                let (inner, renumber) = self.domained(input, distinct, domain)?;
+                let (inner, renumber) = match &input.node {
+                    // The analyzer's `INTERSECT` / `EXCEPT`: nothing between
+                    // the distinct and the join, where a `SELECT` has a
+                    // projection.
+                    PlanNode::Join {
+                        left,
+                        right,
+                        kind,
+                        condition,
+                    } if distinct_of(input, keys) => self.domained_join(
+                        input, left, right, *kind, condition, distinct, domain, true,
+                    )?,
+                    _ => self.domained(input, distinct, domain)?,
+                };
                 let extra: Vec<Arc<Expr>> = domain_columns(domain, renumber)
                     .iter()
                     .map(|c| col_expr(c, Origin::UNKNOWN))
@@ -1926,7 +1939,7 @@ impl Rewriter {
                 right,
                 kind,
                 condition,
-            } => self.domained_join(plan, left, right, *kind, condition, distinct, domain),
+            } => self.domained_join(plan, left, right, *kind, condition, distinct, domain, false),
             _ => Err(unsupported(
                 "outer references below a join, aggregate, limit or set operation",
                 plan.origin,
@@ -1948,6 +1961,7 @@ impl Rewriter {
         condition: &JoinCondition,
         distinct: &Arc<LogicalPlan>,
         domain: &[BoundColumn],
+        below_distinct: bool,
     ) -> R<(Arc<LogicalPlan>, Renumber)> {
         let on = match condition {
             JoinCondition::On(on) => Some(on),
@@ -1961,7 +1975,7 @@ impl Rewriter {
             // `INTERSECT` / `EXCEPT` are a semi / anti join here; Spark checks
             // them as set operations, so both sides may be correlated.
             JoinKind::LeftSemi | JoinKind::LeftAnti
-                if in_right && is_set_operation(left, right, on) =>
+                if in_right && below_distinct && is_set_operation(left, right, on) =>
             {
                 (true, true)
             }
@@ -1990,9 +2004,15 @@ impl Rewriter {
             }
             // Spark's answer for a FULL JOIN correlated only in `ON` is not
             // the per-row join: refused rather than answered differently.
+            JoinKind::FullOuter => {
+                return Err(unsupported(
+                    "outer references in the condition of a FULL JOIN",
+                    plan.origin,
+                ));
+            }
             _ => {
                 return Err(unsupported(
-                    "outer references in the condition of this join type",
+                    "outer references below a join of this kind",
                     plan.origin,
                 ));
             }
@@ -2174,6 +2194,17 @@ fn is_set_operation(
                 && matches!(&f.args[..], [x, y]
                     if column_id(x) == Some(a.id) && column_id(y) == Some(b.id))
         })
+}
+
+/// Whether `keys` group by exactly `input`'s columns, in order.
+fn distinct_of(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
+    input.resolved_output().is_some_and(|out| {
+        out.len() == keys.len()
+            && out
+                .iter()
+                .zip(keys)
+                .all(|(c, k)| column_id(k) == Some(c.id))
+    })
 }
 
 fn column_id(e: &Expr) -> Option<AttrId> {

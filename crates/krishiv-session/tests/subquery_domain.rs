@@ -289,3 +289,25 @@ fn a_correlated_limit_reads_a_sort_below_a_derived_table() -> R {
     assert_eq!(run(&s, &q("asc"))?, ["1|10", "2|20"]);
     Ok(())
 }
+
+#[test]
+fn a_written_semi_join_is_no_set_operation() -> R {
+    let s = session()?;
+    for join in ["left semi join", "left anti join"] {
+        for select in ["*", "distinct *"] {
+            let e = failure(
+                &s,
+                &format!(
+                    "select t0a, (select sum(t1c) from (select {select} from \
+                     (select t1c from t1) a {join} (select t2c from t2 where t2a = t0a) b \
+                     on a.t1c <=> b.t2c)) from t0"
+                ),
+            );
+            assert!(
+                e.contains("ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED"),
+                "{join} {select}: {e}"
+            );
+        }
+    }
+    Ok(())
+}
