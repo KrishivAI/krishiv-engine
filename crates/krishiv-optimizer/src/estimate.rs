@@ -20,7 +20,7 @@
 //!   cannot disturb ([`carries`]), anything else is a guess.
 //! - **Union**: rows add; distinct counts are the most of any input.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -238,6 +238,10 @@ pub(crate) struct Estimator<'a> {
     done: HashMap<usize, (Arc<LogicalPlan>, Arc<RelStats>)>,
     /// How many relations were estimated (not looked up).
     computed: usize,
+    /// The `WITH` definitions in scope, by their output attributes.
+    ctes: HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
+    /// The definitions being estimated: a reference to one reads as unknown.
+    open: HashSet<Vec<AttrId>>,
 }
 
 impl<'a> Estimator<'a> {
@@ -251,6 +255,8 @@ impl<'a> Estimator<'a> {
             propagate,
             done: HashMap::new(),
             computed: 0,
+            ctes: HashMap::new(),
+            open: HashSet::new(),
         }
     }
 
@@ -267,8 +273,7 @@ impl<'a> Estimator<'a> {
         }
         let mut est = self.compute(p);
         est.from_statistics = match &p.node {
-            PlanNode::Scan(_) => est.from_statistics,
-            PlanNode::CteRef(_) => false,
+            PlanNode::Scan(_) | PlanNode::CteRef(_) => est.from_statistics,
             _ => {
                 let mut all = true;
                 p.for_each_child(&mut |c| all &= self.plan(c).from_statistics);
@@ -334,7 +339,6 @@ impl<'a> Estimator<'a> {
             }
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
-            | PlanNode::WithCte { input, .. }
             | PlanNode::JoinHint { input, .. }
             // A window adds columns (without statistics), never rows.
             | PlanNode::Window { input, .. }
@@ -382,6 +386,44 @@ impl<'a> Estimator<'a> {
                 let skipped = limit_value(offset).map_or(0.0, to_f64);
                 let rows = (est.rows - skipped).max(0.0);
                 est.with_rows(rows)
+            }
+            PlanNode::WithCte { input, ctes } => {
+                for cte in ctes {
+                    let source = cte
+                        .plan
+                        .resolved_output()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|c| c.id)
+                        .collect();
+                    self.ctes.insert(source, Arc::clone(&cte.plan));
+                }
+                RelStats::clone(&self.plan(input))
+            }
+            // A reference holds what its definition holds, under its own
+            // attributes, as a `Shift` instance of the same relation does.
+            PlanNode::CteRef(r) => {
+                let Some(def) = self.ctes.get(&r.source).cloned() else {
+                    return RelStats::unknown(DEFAULT_ROWS, ids());
+                };
+                if !self.open.insert(r.source.clone()) {
+                    return RelStats::unknown(DEFAULT_ROWS, ids());
+                }
+                let est = self.plan(&def);
+                self.open.remove(&r.source);
+                RelStats {
+                    rows: est.rows,
+                    cols: r
+                        .source
+                        .iter()
+                        .zip(&r.output)
+                        .map(|(s, o)| {
+                            let c = est.cols.get(s).cloned();
+                            (o.id, c.unwrap_or_else(|| AttrStats::guess(est.rows)))
+                        })
+                        .collect(),
+                    from_statistics: est.from_statistics,
+                }
             }
             PlanNode::Shift { input, offset } => {
                 let est = self.plan(input);

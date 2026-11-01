@@ -116,8 +116,9 @@ pub(super) struct CastParts {
     pub(super) mode: KernelMode,
     pub(super) zone: krishiv_kernels::datetime::ZoneRef,
     /// Where the `time(p)` targets are: a time cast to `time(p)` drops the
-    /// digits below `p` (so does a string cast: `extract(SECOND FROM
-    /// cast('09:08:01.987654' as time(1)))` is 1.9). Arrow's
+    /// digits below `p` (a string cast keeps them, as Spark does:
+    /// `time_to_micros(cast('09:08:01.987654' as time(1)))` is
+    /// 32881987654). Arrow's
     /// `Time64` does not carry `p`, so a nested target's precisions travel
     /// here.
     pub(super) precision: Precision,
@@ -270,8 +271,8 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &p.zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
-    let out = match out.data_type() {
-        ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond) if p.precision.unit() > 1 => {
+    let out = match (input.data_type(), out.data_type()) {
+        (ArrowType::Time64(_), ArrowType::Time64(_)) if p.precision.unit() > 1 => {
             use arrow_array::types::Time64NanosecondType;
             let unit = p.precision.unit();
             Arc::new(

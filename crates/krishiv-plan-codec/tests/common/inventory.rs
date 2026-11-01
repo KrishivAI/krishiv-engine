@@ -529,6 +529,39 @@ pub(crate) fn window_offset_values() -> WindowPlan {
     }
 }
 
+pub(crate) fn window_range_values() -> WindowPlan {
+    let aggs = aggregate_exprs();
+    let range = |lower, upper| WindowFrame {
+        units: FrameUnits::Range,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Aggregate(aggs[0].clone()),
+                range(FrameBound::RangeInt(-5), FrameBound::RangeInt(i128::MAX)),
+                "int",
+            ),
+            window_function(
+                WindowFunction::Aggregate(aggs[3].clone()),
+                range(
+                    FrameBound::UnboundedPreceding,
+                    FrameBound::RangeFloat((-1.5_f64).to_bits()),
+                ),
+                "float",
+            ),
+            window_function(
+                WindowFunction::Aggregate(aggs[0].clone()),
+                range(FrameBound::RangeInt(i128::MIN), FrameBound::CurrentRow),
+                "lowest",
+            ),
+        ],
+    }
+}
+
 pub(crate) fn residual() -> Residual {
     Residual {
         layout: vec![AttrId(1), AttrId(2), AttrId(3)],
@@ -814,6 +847,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Window {
                 input: boxed(scan()),
                 window: window_offset_values(),
+            },
+        ),
+        (
+            "window_range_values",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_range_values(),
             },
         ),
         (

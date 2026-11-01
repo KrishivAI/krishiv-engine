@@ -478,6 +478,31 @@ fn common_subexpression_elimination_leaves_nothing_to_prune() {
     }
 }
 
+/// Seed 11392797822206781768 of `random_queries_reach_the_lowest_operator`: a
+/// join condition implies a filter its input already holds. Rebuilding that
+/// input broke its sharing with a restriction's domain below `Shift`, and pruning
+/// then narrowed the two copies apart, so the plan was not a fixed point.
+#[test]
+fn an_implied_filter_already_held_keeps_the_input_shared() {
+    let seed = 11_392_797_822_206_781_768_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}
+
 /// Seed 3574806867649217214 of `random_queries_reach_the_lowest_operator`:
 /// the aggregate's input is already a semi join on its key (the `LEFT SEMI
 /// JOIN` the query writes, its right side a shifted instance of `u`). The

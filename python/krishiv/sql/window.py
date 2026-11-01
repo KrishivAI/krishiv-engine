@@ -221,10 +221,6 @@ class Window:
             A :class:`WindowSpec` with the frame boundaries defined,
             from `start` (inclusive) to `end` (inclusive).
 
-        .. note:: The engine has no window frames with value bounds yet:
-            such a frame fails with the engine's own
-            ``KRISHIV_UNSUPPORTED_FEATURE`` error, as the SQL form does.
-
         Examples
         --------
         >>> from krishiv.sql import Window, functions as sf
@@ -326,10 +322,6 @@ class WindowSpec:
             boundary end, inclusive.
             The frame is unbounded if this is ``Window.unboundedFollowing``, or
             any value greater than or equal to min(sys.maxsize, 9223372036854775807).
-
-        .. note:: The engine has no window frames with value bounds yet:
-            such a frame fails with the engine's own
-            ``KRISHIV_UNSUPPORTED_FEATURE`` error, as the SQL form does.
         """
         start, end = _bounds(start, end)
         return WindowSpec(self._s.range_between(start, end))

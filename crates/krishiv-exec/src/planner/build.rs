@@ -908,8 +908,8 @@ impl<'a> Planner<'a> {
     }
 
     /// Whether every table `plan` reads reports statistics, so its estimate
-    /// does not rest on default row counts. A `WITH` reference counts as
-    /// default-sized, as the estimator treats it.
+    /// does not rest on default row counts. A `WITH` reference has its
+    /// definition's, as the estimator treats it.
     pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
         self.stats.has_statistics(plan)
     }
