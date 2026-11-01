@@ -105,7 +105,7 @@ impl TimeZoneRules for ZoneRef {
 /// cycles (146097 days: the same dates, weekdays and leapness, which is
 /// what the yearly-repeating modern rules read). A transition weekday may
 /// still drift across the fold.
-fn fold_seconds(seconds: i64) -> i64 {
+pub(crate) fn fold_seconds(seconds: i64) -> i64 {
     const CYCLE: i64 = 146_097 * 86_400;
     let (lo, hi) = (Timestamp::MIN.as_second(), Timestamp::MAX.as_second());
     if seconds > hi {

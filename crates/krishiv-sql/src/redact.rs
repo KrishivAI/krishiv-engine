@@ -227,7 +227,12 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
                     match n.kind {
                         TokenKind::Word => {
                             is_type_word(n.span.text(sql))
-                                || after.is_some_and(|m| m.kind == TokenKind::Sym(Sym::Colon))
+                                || after.is_some_and(|m| {
+                                    m.kind == TokenKind::Sym(Sym::Colon)
+                                        // `field TYPE`: the colon may be omitted.
+                                        || (m.kind == TokenKind::Word
+                                            && is_type_word(m.span.text(sql)))
+                                })
                         }
                         // A quoted struct field: `STRUCT<`a`: INT>` or
                         // `STRUCT<`a` INT>`.

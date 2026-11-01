@@ -262,6 +262,25 @@ fn the_key_never_reaches_an_error_message() {
     }
 }
 
+/// A failure while evaluating the key (ANSI cast of a bad string) names no
+/// value of it.
+#[test]
+fn an_execution_error_in_the_key_hides_the_key() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
+    for sql in [
+        "SELECT aes_encrypt('Spark', CAST(CAST('secretkey-123456' AS INT) AS STRING))",
+        "SELECT aes_decrypt(unhex('00'), CAST(CAST(c AS INT) AS STRING)) FROM VALUES ('secretkey-123456') t(c)",
+        "SELECT try_aes_decrypt(unhex('00'), CAST(CAST(c AS INT) AS STRING)) FROM VALUES ('secretkey-123456') t(c)",
+    ] {
+        let err = one(&s, sql).expect_err(sql);
+        assert!(
+            !err.to_string().contains("secretkey-123456"),
+            "{sql}: {err}"
+        );
+    }
+}
+
 #[test]
 fn datepart_reads_the_time_precision_like_date_part() {
     let s = Session::new().unwrap();

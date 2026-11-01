@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "hash#1d95ab5f2f7f/ansi_on",
-      "reason": "SELECT hash(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#1d95ab5f2f7f/ansi_off",
-      "reason": "SELECT hash(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "hash#51a176d3611e/ansi_on",
       "reason": "SELECT hash('Spark', map('a', 1), 2) | resolves to int where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
@@ -23,46 +15,6 @@
     {
       "id": "hash#68ccd0f7afcd/ansi_off",
       "reason": "SELECT hash(map('a', 1), array(123), 2) | resolves to int where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
-    },
-    {
-      "id": "hash#7d1796847464/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#7d1796847464/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#838d1e1f3358/ansi_on",
-      "reason": "SELECT hash('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#838d1e1f3358/ansi_off",
-      "reason": "SELECT hash('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#ab6c7c5a6f40/ansi_on",
-      "reason": "SELECT hash('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#ab6c7c5a6f40/ansi_off",
-      "reason": "SELECT hash('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#adbe9020216d/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#adbe9020216d/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#ce8dfe4ae46a/ansi_on",
-      "reason": "SELECT hash(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#ce8dfe4ae46a/ansi_off",
-      "reason": "SELECT hash(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "hash#f0c7f0566e00/ansi_on",

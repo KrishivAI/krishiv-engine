@@ -74,6 +74,7 @@ pub(super) fn compile_udf(
             nullable: f.nullable,
             folded: None,
             constant: false,
+            secret_arg: None,
         }),
         canonical,
     ))
@@ -131,7 +132,7 @@ fn wide_literal(l: &Literal) -> Result<ArrayRef> {
 }
 
 /// Whether `a` and `b` differ at most in the nullability of nested fields.
-fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
+pub(super) fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
     match (a, b) {
         (ArrowType::List(x), ArrowType::List(y)) => same_shape(x.data_type(), y.data_type()),
         (ArrowType::Struct(x), ArrowType::Struct(y)) => {
@@ -145,7 +146,7 @@ fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
 }
 
 /// `array` with the nested field flags of `to` (see [`same_shape`]).
-fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
+pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
     match to {
         ArrowType::List(f) if array.data_type() != to => {
             let list = array
@@ -273,6 +274,10 @@ pub(super) fn compile(
             constant: args_constant
                 && (name == "aes_encrypt"
                     || krishiv_functions::scalar::is_constant_of_constants(name)),
+            secret_arg: ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+                .iter()
+                .any(|f| name.eq_ignore_ascii_case(f))
+                .then_some(1),
         }),
         canonical,
     ))
@@ -293,6 +298,9 @@ struct Call {
     folded: Option<OnceLock<ArrayRef>>,
     /// Whether the value is the same for every row (see `is_constant`).
     constant: bool,
+    /// The argument whose evaluation errors must not show their values (an
+    /// AES key, ADR 0042).
+    secret_arg: Option<usize>,
 }
 
 impl PhysExpr for Call {
@@ -337,8 +345,17 @@ impl Call {
         let args = self
             .args
             .iter()
-            .map(|a| {
-                Ok(match a.eval(batch, partition)? {
+            .enumerate()
+            .map(|(i, a)| {
+                let v = a.eval(batch, partition).map_err(|e| {
+                    // A failure while evaluating the key shows no value of it.
+                    if self.secret_arg == Some(i) {
+                        e.with_redacted_parameters()
+                    } else {
+                        e
+                    }
+                })?;
+                Ok(match v {
                     Value::Array(v) => Arg::Array(v),
                     Value::Scalar(v) => Arg::Scalar(v),
                 })

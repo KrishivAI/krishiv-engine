@@ -1,20 +1,12 @@
 {
   "entries": [
     {
-      "id": "percentile_disc#007f9263497e/ansi_on",
-      "reason": "SELECT percentile_disc(INTERVAL '1 02:03:04' DAY TO SECOND) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "percentile_disc#007f9263497e/ansi_off",
-      "reason": "SELECT percentile_disc(INTERVAL '1 02:03:04' DAY TO SECOND) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "percentile_disc#0bd1a903c3cf/ansi_on",
-      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "percentile_disc#0bd1a903c3cf/ansi_off",
-      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "percentile_disc#408fcdb6212e/ansi_on",
@@ -22,19 +14,11 @@
     },
     {
       "id": "percentile_disc#a13ac3605f44/ansi_on",
-      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "percentile_disc#a13ac3605f44/ansi_off",
-      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "percentile_disc#a3f67bdaee3a/ansi_on",
-      "reason": "SELECT percentile_disc(INTERVAL '1-2' YEAR TO MONTH) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "percentile_disc#a3f67bdaee3a/ansi_off",
-      "reason": "SELECT percentile_disc(INTERVAL '1-2' YEAR TO MONTH) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     }
   ],
   "format_version": 1,

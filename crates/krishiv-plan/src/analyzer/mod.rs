@@ -90,6 +90,7 @@ mod fold_ops;
 mod generate;
 mod hints;
 mod hof;
+mod intervals;
 pub(crate) mod legacy;
 mod ops;
 mod pivot;
@@ -338,6 +339,9 @@ pub struct ResolutionConf {
     /// Spark 4.2 defaults it to false; Krishiv refuses a `TIME` anywhere
     /// while it is off (stricter than Spark, design P2-T181 section 2).
     pub time_type: bool,
+    /// `spark.sql.legacy.interval.enabled`: Spark's literals become calendar
+    /// intervals; refused here (`KRISHIV_UNSUPPORTED_FEATURE`).
+    pub legacy_interval: bool,
 }
 
 impl Default for ResolutionConf {
@@ -365,13 +369,14 @@ impl Default for ResolutionConf {
             udf_parameter_shadows_function: false,
             legacy_time_parser: false,
             time_type: false,
+            legacy_interval: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 21] = [
+    pub const KEYS: [&'static str; 22] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -393,6 +398,7 @@ impl ResolutionConf {
         "spark.sql.legacy.codingErrorAction",
         "spark.sql.legacy.negativeIndexInArrayInsert",
         "spark.sql.timeType.enabled",
+        "spark.sql.legacy.interval.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -448,6 +454,7 @@ impl ResolutionConf {
             legacy_coding_error_action: on(Self::KEYS[18]),
             legacy_negative_index_in_array_insert: on(Self::KEYS[19]),
             time_type: on(Self::KEYS[20]),
+            legacy_interval: on(Self::KEYS[21]),
         }
     }
 }
@@ -545,6 +552,7 @@ impl ContextFingerprint {
             c.udf_parameter_shadows_function,
             c.legacy_negative_index_in_array_insert,
             c.time_type,
+            c.legacy_interval,
         ];
         num(
             &mut b,
