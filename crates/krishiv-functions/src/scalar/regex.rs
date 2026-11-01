@@ -110,7 +110,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         ("regexp_extract_all", 2 | 3) if indexed => {
             let with_idx = types.len() == 3;
             Binding::new(
-                DataType::List(Arc::new(Field::new("element", DataType::Utf8View, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8View, true))),
                 move |x: &Inputs<'_>| extract_all_column(x, with_idx),
             )
         }
@@ -144,7 +144,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 return Some((listed, Err(bad_types(listed, args))));
             }
             Binding::new(
-                DataType::List(Arc::new(Field::new("element", DataType::Utf8View, false))),
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8View, true))),
                 split,
             )
         }
@@ -380,14 +380,15 @@ fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
 
 /// `regexp_extract_all(str, regexp[, idx])` over a batch: group `idx` of
 /// every match, an `array<string>` (NULL in, NULL out). The list holds
-/// non-nullable `Utf8View` items under the field `element`, as for `split`.
+/// nullable `Utf8View` items under the field `element` (Spark's
+/// `ArrayType(subject.dataType)`).
 fn extract_all_column(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
     const FUNCTION: &str = "`regexp_extract_all`";
     let strings = x.strings(0)?;
     let patterns = x.str(1)?;
     let idxs = with_idx.then(|| x.int(2)).transpose()?;
     let mut cache = Cache::default();
-    let item = Field::new("element", DataType::Utf8View, false);
+    let item = Field::new("element", DataType::Utf8View, true);
     let mut builder = ListBuilder::new(StringViewBuilder::new()).with_field(Arc::new(item));
     let mut total = 0usize;
     for row in 0..x.rows() {
@@ -677,7 +678,7 @@ fn split(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
     };
     let mut cache = Cache::default();
     let values = StringViewBuilder::new();
-    let item = Field::new("element", DataType::Utf8View, false);
+    let item = Field::new("element", DataType::Utf8View, true);
     let mut builder = ListBuilder::new(values).with_field(Arc::new(item));
     for row in 0..x.rows() {
         let (Some(source), Some(pattern), Some(limit)) = (

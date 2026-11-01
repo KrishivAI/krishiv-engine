@@ -1,0 +1,150 @@
+{
+  "entries": [
+    {
+      "id": "time#104f773c7767/ansi_on",
+      "reason": "SELECT time(DATE'2024-02-29') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#104f773c7767/ansi_off",
+      "reason": "SELECT time(DATE'2024-02-29') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#138dea37a8c7/ansi_on",
+      "reason": "SELECT time(CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#138dea37a8c7/ansi_off",
+      "reason": "SELECT time(CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#154033e8fa46/ansi_on",
+      "reason": "SELECT time(CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#154033e8fa46/ansi_off",
+      "reason": "SELECT time(CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#2a654d6f0e0d/ansi_on",
+      "reason": "SELECT time(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#2a654d6f0e0d/ansi_off",
+      "reason": "SELECT time(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#2e0d2010cb8f/ansi_on",
+      "reason": "SELECT time(true) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#2e0d2010cb8f/ansi_off",
+      "reason": "SELECT time(true) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#3ed3fe2bcc8d/ansi_on",
+      "reason": "SELECT time(1) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#3ed3fe2bcc8d/ansi_off",
+      "reason": "SELECT time(1) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#47aba414b21f/ansi_on",
+      "reason": "SELECT time(1L) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#47aba414b21f/ansi_off",
+      "reason": "SELECT time(1L) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#59bd81d13c34/ansi_on",
+      "reason": "SELECT time(X'01') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#59bd81d13c34/ansi_off",
+      "reason": "SELECT time(X'01') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#5d6b34c49c4a/ansi_on",
+      "reason": "SELECT time(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#5d6b34c49c4a/ansi_off",
+      "reason": "SELECT time(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#74527b45260a/ansi_on",
+      "reason": "SELECT time(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#74527b45260a/ansi_off",
+      "reason": "SELECT time(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#7836878b7e2e/ansi_on",
+      "reason": "SELECT time(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#7836878b7e2e/ansi_off",
+      "reason": "SELECT time(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#7be75b52ccf3/ansi_on",
+      "reason": "SELECT time(CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#7be75b52ccf3/ansi_off",
+      "reason": "SELECT time(CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#86b23b1c4931/ansi_on",
+      "reason": "SELECT time(1.5D) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#86b23b1c4931/ansi_off",
+      "reason": "SELECT time(1.5D) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#8dc7069906ac/ansi_on",
+      "reason": "SELECT time(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#8dc7069906ac/ansi_off",
+      "reason": "SELECT time(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#98f7e3acb227/ansi_on",
+      "reason": "SELECT time(array(1, 2)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#98f7e3acb227/ansi_off",
+      "reason": "SELECT time(array(1, 2)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#9a0e31360f11/ansi_on",
+      "reason": "SELECT time(CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#9a0e31360f11/ansi_off",
+      "reason": "SELECT time(CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#9df418badb66/ansi_on",
+      "reason": "SELECT time(map('a', 1)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#9df418badb66/ansi_off",
+      "reason": "SELECT time(map('a', 1)) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#d7f4bdb18895/ansi_on",
+      "reason": "SELECT time(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time#d7f4bdb18895/ansi_off",
+      "reason": "SELECT time(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "time"
+}

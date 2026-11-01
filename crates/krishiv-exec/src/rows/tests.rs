@@ -596,7 +596,7 @@ fn join_index(
     idx: &[usize],
     probe: &[ArrayRef],
     choice: IndexChoice,
-    touch: bool,
+    prefetch: bool,
 ) -> (Vec<u32>, Vec<u32>, bool) {
     let b = layout.encode(build).unwrap_or_else(|e| panic!("{e}"));
     let src = Gathered {
@@ -612,7 +612,7 @@ fn join_index(
     let p = layout.encode(probe).unwrap_or_else(|e| panic!("{e}"));
     let which: Vec<u32> = (0..u32::try_from(p.len()).unwrap_or(0)).collect();
     let mut heads = Vec::new();
-    index.find_with(layout, &p, &which, &src, &mut heads, touch);
+    index.find_with(layout, &p, &which, &src, &mut heads, prefetch);
     assert_eq!(heads.len(), p.len());
     (heads, next, index.is_flat())
 }
@@ -652,12 +652,12 @@ fn check_join_index(build: &[ArrayRef], probe: &[ArrayRef], null_safe: &[bool]) 
     let (flat, flat_next, is_flat) =
         join_index(&layout, build, &stored, probe, IndexChoice::Flat, false);
     assert!(is_flat);
-    for (choice, touch) in [
+    for (choice, prefetch) in [
         (IndexChoice::Salted, false),
         (IndexChoice::Salted, true),
         (IndexChoice::Adaptive, false),
     ] {
-        let (heads, next, flat_kind) = join_index(&layout, build, &stored, probe, choice, touch);
+        let (heads, next, flat_kind) = join_index(&layout, build, &stored, probe, choice, prefetch);
         assert_eq!(flat_kind, choice != IndexChoice::Salted);
         assert_eq!(heads, flat, "{choice:?} heads");
         assert_eq!(next, flat_next, "{choice:?} chains");
@@ -716,7 +716,7 @@ fn a_large_build_takes_the_salted_directory() {
     );
     assert!(!flat);
     assert_eq!(heads, [5, NO_MATCH, 7]);
-    // `find` touches a directory this large first: the same answer.
+    // `find` prefetches first: the same answer.
     let b = layout.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let src = Gathered {
         rows: b.gather(&layout, &all).unwrap_or_else(|e| panic!("{e}")),
@@ -726,7 +726,6 @@ fn a_large_build_takes_the_salted_directory() {
     let mut next = vec![NO_MATCH; n];
     let index = JoinIndex::build(&layout, &src, n, 1, IndexChoice::Adaptive, &mut next)
         .unwrap_or_else(|e| panic!("{e}"));
-    assert!(index.memory_size() >= TOUCH_MIN_BYTES);
     let p = layout.encode(&[probe]).unwrap_or_else(|e| panic!("{e}"));
     let mut found = Vec::new();
     index.find(&layout, &p, &[0, 1, 2], &src, &mut found);

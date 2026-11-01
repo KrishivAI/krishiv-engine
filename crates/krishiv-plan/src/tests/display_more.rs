@@ -153,6 +153,8 @@ fn every_expression_form_prints() {
     let cases: Vec<(Expr, &str)> = vec![
         (
             Expr::new(ExprNode::Star(Star {
+                replace: Vec::new(),
+                position: None,
                 qualifier: vec!["t".to_owned()],
                 except: Vec::new(),
                 plan_id: Some(PlanId(4)),

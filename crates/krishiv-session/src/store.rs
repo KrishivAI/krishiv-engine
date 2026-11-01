@@ -46,11 +46,15 @@ pub(crate) struct StoreColumn {
 }
 
 /// A permanent view: its query as SQL text, parsed again at each read (so it follows the tables it reads), and the
-/// namespace that was current when it was created, in which its bare table names resolve.
+/// namespace that was current when it was created, in which its bare table names resolve when its frozen path does not hold them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ViewDef {
     pub(crate) sql: String,
     pub(crate) namespace: String,
+    /// The SQL path when the view was created (Spark freezes it with the view): the bare names of its text
+    /// resolve through it first, whatever `SET PATH` does later, and fall back to `namespace` when no schema
+    /// of the path holds the name.
+    pub(crate) path: Vec<Vec<String>>,
     /// The names the query's output had when the view was created (before a column list renamed them): a
     /// read projects the stored columns from the query's output by these names, so a base table that gained
     /// columns does not change the view (Spark's schema compensation).
