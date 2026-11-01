@@ -439,7 +439,7 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["date_diff", "datediff"] {
         rows.push(Row::new(name, "end: ColumnOrName, start: ColumnOrName"));
     }
-    for name in ["date_part", "extract"] {
+    for name in ["date_part", "datepart", "extract"] {
         rows.push(Row::new(name, "field: Column, source: ColumnOrName"));
     }
     for name in ["date_add", "date_sub", "dateadd"] {

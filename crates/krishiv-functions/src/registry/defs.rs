@@ -1001,7 +1001,7 @@ fn datetime() -> Vec<Spec> {
         make_date_result,
     ));
     out.extend(scalar(
-        &["extract", "date_part"],
+        &["extract", "date_part", "datepart"],
         &Inputs::Built(InputBuilder(extract_inputs)),
         extract_result,
     ));

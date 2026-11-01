@@ -1,0 +1,134 @@
+{
+  "entries": [
+    {
+      "id": "datepart#06ed5d342173/ansi_on",
+      "reason": "SELECT datepart('seconds', CAST(NULL AS interval hour to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "datepart#06ed5d342173/ansi_off",
+      "reason": "SELECT datepart('seconds', CAST(NULL AS interval hour to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "datepart#0bee190caf2d/ansi_on",
+      "reason": "SELECT datepart('days', interval 5 days 3 hours 7 minutes) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#0bee190caf2d/ansi_off",
+      "reason": "SELECT datepart('days', interval 5 days 3 hours 7 minutes) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#1037ae6e7926/ansi_on",
+      "reason": "SELECT datepart(CAST(X'C328FF' AS STRING), TIMESTAMP '2019-08-12 01:00:00.123456') | NON_FOLDABLE_ARGUMENT where Spark has INVALID_EXTRACT_FIELD"
+    },
+    {
+      "id": "datepart#1037ae6e7926/ansi_off",
+      "reason": "SELECT datepart(CAST(X'C328FF' AS STRING), TIMESTAMP '2019-08-12 01:00:00.123456') | NON_FOLDABLE_ARGUMENT where Spark has INVALID_EXTRACT_FIELD"
+    },
+    {
+      "id": "datepart#1cc425062eab/ansi_on",
+      "reason": "SELECT datepart('MONTH', CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "datepart#1cc425062eab/ansi_off",
+      "reason": "SELECT datepart('MONTH', CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "datepart#325b59ae9b21/ansi_on",
+      "reason": "SELECT datepart('YEAR', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#325b59ae9b21/ansi_off",
+      "reason": "SELECT datepart('YEAR', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#3485b3c9dc43/ansi_on",
+      "reason": "SELECT datepart('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#3485b3c9dc43/ansi_off",
+      "reason": "SELECT datepart('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#365e7623533f/ansi_on",
+      "reason": "SELECT datepart('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#365e7623533f/ansi_off",
+      "reason": "SELECT datepart('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#59d7a9302223/ansi_on",
+      "reason": "SELECT datepart(INTERVAL '1-2' YEAR TO MONTH, TIMESTAMP '2019-08-12 01:00:00.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#59d7a9302223/ansi_off",
+      "reason": "SELECT datepart(INTERVAL '1-2' YEAR TO MONTH, TIMESTAMP '2019-08-12 01:00:00.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#af55a49c3ed7/ansi_on",
+      "reason": "SELECT datepart(INTERVAL '1 02:03:04' DAY TO SECOND, TIMESTAMP '2019-08-12 01:00:00.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#af55a49c3ed7/ansi_off",
+      "reason": "SELECT datepart(INTERVAL '1 02:03:04' DAY TO SECOND, TIMESTAMP '2019-08-12 01:00:00.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#b14d70b31dba/ansi_on",
+      "reason": "SELECT datepart(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#b14d70b31dba/ansi_off",
+      "reason": "SELECT datepart(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#b1deed49f56b/ansi_on",
+      "reason": "SELECT datepart(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#b1deed49f56b/ansi_off",
+      "reason": "SELECT datepart(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#bd44947cc117/ansi_on",
+      "reason": "SELECT datepart('days', CAST(NULL AS interval day to minute)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "datepart#bd44947cc117/ansi_off",
+      "reason": "SELECT datepart('days', CAST(NULL AS interval day to minute)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "datepart#d344ad2f8e3d/ansi_on",
+      "reason": "SELECT datepart('YEAR', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_EXTRACT_FIELD"
+    },
+    {
+      "id": "datepart#d344ad2f8e3d/ansi_off",
+      "reason": "SELECT datepart('YEAR', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_EXTRACT_FIELD"
+    },
+    {
+      "id": "datepart#d6c393002650/ansi_on",
+      "reason": "SELECT datepart(array(1, 2), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#d6c393002650/ansi_off",
+      "reason": "SELECT datepart(array(1, 2), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#e1890bffd3c6/ansi_on",
+      "reason": "SELECT datepart('MONTH', INTERVAL '2021-11' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#e1890bffd3c6/ansi_off",
+      "reason": "SELECT datepart('MONTH', INTERVAL '2021-11' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "datepart#e28e058c05cc/ansi_on",
+      "reason": "SELECT datepart('MINUTE', CAST(NULL AS interval day to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "datepart#e28e058c05cc/ansi_off",
+      "reason": "SELECT datepart('MINUTE', CAST(NULL AS interval day to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    }
+  ],
+  "format_version": 1,
+  "function": "datepart"
+}

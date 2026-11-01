@@ -152,7 +152,7 @@ impl Bound {
 /// to, when `field` is a literal naming one.
 fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
     use krishiv_kernels::datetime::DatePart as P;
-    if !matches!(function, "extract" | "date_part") {
+    if !matches!(function, "extract" | "date_part" | "datepart") {
         return None;
     }
     let ExprNode::Function(f) = &call.node else {

@@ -115,6 +115,7 @@ __all__ = [
     "date_trunc",
     "dateadd",
     "datediff",
+    "datepart",
     "day",
     "dayname",
     "dayofmonth",
@@ -820,6 +821,11 @@ def dateadd(start: ColumnOrName, days: ColumnOrName | int) -> Column:
 def datediff(end: ColumnOrName, start: ColumnOrName) -> Column:
     """Calls the registry function ``datediff``."""
     return _call("datediff", _named(end, "end"), _named(start, "start"))
+
+
+def datepart(field: Column, source: ColumnOrName) -> Column:
+    """Calls the registry function ``datepart``."""
+    return _call("datepart", _named(field, "field"), _named(source, "source"))
 
 
 def day(col: ColumnOrName) -> Column:
