@@ -975,6 +975,22 @@ fn call<'a>(
     };
     // `a [NOT] LIKE|ILIKE ANY|SOME|ALL (p, ...)`, as Spark writes the form.
     match (op, args.len()) {
+        // The key of `aes_encrypt`/`aes_decrypt` never reaches a plan, an
+        // error message or a log (ADR 0042).
+        _ if matches!(name, "aes_encrypt" | "aes_decrypt" | "try_aes_decrypt")
+            && args.len() >= 2
+            && !distinct =>
+        {
+            out.extend([
+                Piece::Owned(format!("{name}(")),
+                arg(0),
+                Piece::Str(", ***"),
+            ]);
+            for a in &args[2..] {
+                out.extend([Piece::Str(", "), Piece::Expr(a)]);
+            }
+            out.push(Piece::Str(")"));
+        }
         (Some(op), n) if n >= 1 && op.quantified_like().is_some() => {
             let q = op.quantified_like().unwrap_or_default();
             out.extend([arg(0), Piece::Str(if q.negated { " NOT " } else { " " })]);

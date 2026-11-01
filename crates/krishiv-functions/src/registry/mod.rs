@@ -21,6 +21,7 @@ mod bitwise;
 mod catalog;
 mod collection;
 mod conditional;
+mod crypto;
 mod csv;
 mod defs;
 mod element;

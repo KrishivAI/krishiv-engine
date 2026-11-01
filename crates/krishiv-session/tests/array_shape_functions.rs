@@ -208,3 +208,17 @@ fn sequence_over_columns() {
     let err = run(&s, "SELECT sequence(1, 3, x) FROM VALUES (1), (0) AS t(x)").unwrap_err();
     assert_eq!(err.error_class().name(), "_LEGACY_ERROR_TEMP_3243");
 }
+
+#[test]
+fn sequence_strings_need_ansi() {
+    let s = Session::new().unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    for sql in ["sequence('1', 5)", "sequence(1, 'abc')", "sequence(1, '1')"] {
+        let err = run(&s, &format!("SELECT {sql}")).unwrap_err();
+        assert_eq!(
+            err.error_class().name(),
+            "DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES",
+            "{sql}"
+        );
+    }
+}

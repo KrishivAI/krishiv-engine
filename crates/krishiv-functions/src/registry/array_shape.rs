@@ -102,10 +102,14 @@ fn rank(t: &DataType) -> Option<u8> {
 /// The widest integral type among the typed arguments, or `None` when an
 /// argument is not integral (Spark: start and stop both strings, or no typed
 /// argument at all, is `SEQUENCE_WRONG_INPUT_TYPES`). A string beside an
-/// integral argument is cast to `BIGINT`, as Spark's implicit cast does.
+/// integral argument is cast to `BIGINT` under ANSI, as Spark's implicit cast
+/// does; with `spark.sql.ansi.enabled=false` it is a type error.
 fn sequence_type(c: &CallTypes<'_>) -> Option<DataType> {
     let is_string = |i: usize| matches!(c.data_type(i), Some(DataType::String));
     if is_string(0) && is_string(1) {
+        return None;
+    }
+    if !c.ansi() && (0..c.args().len()).any(is_string) {
         return None;
     }
     let mut widest: Option<DataType> = None;

@@ -30,6 +30,8 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "aes_decrypt",
+    "aes_encrypt",
     "approx_count_distinct",
     "approx_percentile",
     "array",
@@ -327,6 +329,7 @@ __all__ = [
     "trim",
     "trunc",
     "try_add",
+    "try_aes_decrypt",
     "try_avg",
     "try_divide",
     "try_element_at",
@@ -390,6 +393,44 @@ def acosh(col: ColumnOrName) -> Column:
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     """Calls the registry function ``add_months``."""
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
+
+
+def aes_decrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``aes_decrypt``."""
+    return _call(
+        "aes_decrypt",
+        _named(input, "input"),
+        _named(key, "key"),
+        *_opt(_named, mode, "mode"),
+        *_opt(_named, padding, "padding"),
+        *_opt(_named, aad, "aad"),
+    )
+
+
+def aes_encrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    iv: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``aes_encrypt``."""
+    return _call(
+        "aes_encrypt",
+        _named(input, "input"),
+        _named(key, "key"),
+        *_opt(_named, mode, "mode"),
+        *_opt(_named, padding, "padding"),
+        *_opt(_named, iv, "iv"),
+        *_opt(_named, aad, "aad"),
+    )
 
 
 def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None = None) -> Column:
@@ -1962,6 +2003,24 @@ def trunc(date: ColumnOrName, format: str) -> Column:
 def try_add(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_add``."""
     return _call("try_add", _named(left, "left"), _named(right, "right"))
+
+
+def try_aes_decrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``try_aes_decrypt``."""
+    return _call(
+        "try_aes_decrypt",
+        _named(input, "input"),
+        _named(key, "key"),
+        *_opt(_named, mode, "mode"),
+        *_opt(_named, padding, "padding"),
+        *_opt(_named, aad, "aad"),
+    )
 
 
 def try_avg(col: ColumnOrName) -> Column:

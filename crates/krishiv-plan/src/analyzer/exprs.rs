@@ -6882,6 +6882,13 @@ fn call(
     arg_names: Option<&[Option<String>]>,
     data_type: Option<&DataType>,
 ) -> String {
+    // The key of `aes_encrypt`/`aes_decrypt` never reaches a name, an error
+    // message or a log (ADR 0042).
+    if matches!(name, "aes_encrypt" | "aes_decrypt" | "try_aes_decrypt") && k.len() >= 2 {
+        let mut shown: Vec<&str> = k.to_vec();
+        shown[1] = "***";
+        return format!("{name}({})", shown.join(", "));
+    }
     let infix = |sym: &str| format!("({} {sym} {})", k[0], k[1]);
     // `[NOT] LIKE|ILIKE ANY|SOME|ALL` with literal patterns: Spark's
     // `LikeAny`-family name, `likeany(child)` (the child is `lower(child)`

@@ -507,6 +507,20 @@ pub(super) fn rows() -> Vec<Row> {
     }
     rows.extend([
         Row::new(
+            "aes_encrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, iv: ColumnOrName = None, aad: ColumnOrName = None",
+        ),
+        Row::new(
+            "aes_decrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
+        ),
+        Row::new(
+            "try_aes_decrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
+        ),
+    ]);
+    rows.extend([
+        Row::new(
             "assert_true",
             "col: ColumnOrName, errMsg: Column | str = None",
         ),

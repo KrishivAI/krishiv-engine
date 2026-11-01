@@ -1562,7 +1562,7 @@ fn unsupported_inputs_fail_explicitly() {
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
     }));
-    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("factorial", vec![c("b")])]);
+    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("collation", vec![c("b")])]);
     for plan in [files, sha] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     }

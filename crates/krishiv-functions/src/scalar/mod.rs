@@ -23,6 +23,7 @@
 //! of `rows` values or a literal as a one-row array. The result always has
 //! `rows` values, also when every argument is a literal.
 
+mod aes;
 mod args;
 mod arith;
 mod array;
@@ -461,7 +462,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 30] = [
+const FAMILIES: [(&[&str], Binder); 31] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -470,6 +471,7 @@ const FAMILIES: [(&[&str], Binder); 30] = [
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
+    (aes::NAMES, aes::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
     (json_tuple::NAMES, json_tuple::bind),

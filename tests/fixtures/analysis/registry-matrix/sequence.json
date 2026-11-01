@@ -26,19 +26,11 @@
     },
     {
       "id": "sequence#0ffcf0eef171/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), true) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), true) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#0ffcf0eef171/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), true) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
-    },
-    {
-      "id": "sequence#1007bdbd3486/ansi_on",
-      "reason": "SELECT sequence('1', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
-    },
-    {
-      "id": "sequence#1007bdbd3486/ansi_off",
-      "reason": "SELECT sequence('1', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), true) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#129f06f2a5e4/ansi_on",
@@ -58,11 +50,11 @@
     },
     {
       "id": "sequence#16f6c1e500e2/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#16f6c1e500e2/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#194e77f7fa69/ansi_on",
@@ -97,14 +89,6 @@
       "reason": "SELECT sequence(DATE'0001-01-01', to_date('2018-03-01'), interval 1 month) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "sequence#2af2814ff6e9/ansi_on",
-      "reason": "SELECT sequence(1, 'abc') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
-    },
-    {
-      "id": "sequence#2af2814ff6e9/ansi_off",
-      "reason": "SELECT sequence(1, 'abc') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
-    },
-    {
       "id": "sequence#333b8eb5c05a/ansi_on",
       "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -130,11 +114,11 @@
     },
     {
       "id": "sequence#3b7a7117ff50/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#3b7a7117ff50/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#3d037bfe6511/ansi_on",
@@ -170,11 +154,11 @@
     },
     {
       "id": "sequence#43f5bf83c793/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#43f5bf83c793/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#46526c3906e9/ansi_on",
@@ -186,19 +170,19 @@
     },
     {
       "id": "sequence#46e2f798b10c/ansi_on",
-      "reason": "SELECT sequence(1, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(1, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#46e2f798b10c/ansi_off",
-      "reason": "SELECT sequence(1, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(1, TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#480ea34a6c48/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#480ea34a6c48/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#4cf7afaf4a48/ansi_on",
@@ -218,11 +202,11 @@
     },
     {
       "id": "sequence#535ff10c9cfd/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#535ff10c9cfd/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#53af25b3917f/ansi_on",
@@ -258,11 +242,11 @@
     },
     {
       "id": "sequence#615b34709c82/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#615b34709c82/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#6bacdaffbc9e/ansi_on",
@@ -290,11 +274,11 @@
     },
     {
       "id": "sequence#73f5c0cc52ff/ansi_on",
-      "reason": "SELECT sequence(DATE'2024-02-29', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(DATE'2024-02-29', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#73f5c0cc52ff/ansi_off",
-      "reason": "SELECT sequence(DATE'2024-02-29', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(DATE'2024-02-29', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#73fa61f78e3b/ansi_on",
@@ -338,19 +322,11 @@
     },
     {
       "id": "sequence#7d2bdb1360c7/ansi_on",
-      "reason": "SELECT sequence(1, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(1, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#7d2bdb1360c7/ansi_off",
-      "reason": "SELECT sequence(1, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
-    },
-    {
-      "id": "sequence#80ddfefe0a3b/ansi_on",
-      "reason": "SELECT sequence('abc', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
-    },
-    {
-      "id": "sequence#80ddfefe0a3b/ansi_off",
-      "reason": "SELECT sequence('abc', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(1, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#824582274e20/ansi_on",
@@ -370,11 +346,11 @@
     },
     {
       "id": "sequence#8935670449c8/ansi_on",
-      "reason": "SELECT sequence(TIMESTAMP'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(TIMESTAMP'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#8935670449c8/ansi_off",
-      "reason": "SELECT sequence(TIMESTAMP'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(TIMESTAMP'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#8da4b9e695df/ansi_on",
@@ -386,11 +362,11 @@
     },
     {
       "id": "sequence#8f9c0db18869/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#8f9c0db18869/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#8fd1bb549361/ansi_on",
@@ -410,19 +386,19 @@
     },
     {
       "id": "sequence#9ed063d3215c/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), NULL) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), NULL) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#9ed063d3215c/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), NULL) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), NULL) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#a10b76f32e61/ansi_on",
-      "reason": "SELECT sequence(1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#a10b76f32e61/ansi_off",
-      "reason": "SELECT sequence(1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#a2a4f0dd90ba/ansi_on",
@@ -490,11 +466,11 @@
     },
     {
       "id": "sequence#b2467da4cb98/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), '1') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), '1') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#b2467da4cb98/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), '1') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), '1') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#b2598b25c80d/ansi_on",
@@ -514,19 +490,19 @@
     },
     {
       "id": "sequence#b3cf986ada1f/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#b3cf986ada1f/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#b9829d4862b6/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), X'01') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), X'01') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#b9829d4862b6/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), X'01') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), X'01') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#bca72db9e8df/ansi_on",
@@ -554,27 +530,19 @@
     },
     {
       "id": "sequence#c62d8cc43c51/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#c62d8cc43c51/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
-    },
-    {
-      "id": "sequence#c89e10783686/ansi_on",
-      "reason": "SELECT sequence(1, '1') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings"
-    },
-    {
-      "id": "sequence#c89e10783686/ansi_off",
-      "reason": "SELECT sequence(1, '1') | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#ca96038b8e51/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#ca96038b8e51/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#cce478cc4543/ansi_on",
@@ -594,19 +562,19 @@
     },
     {
       "id": "sequence#cf3e1121ffc4/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#cf3e1121ffc4/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#d01d9144d407/ansi_on",
-      "reason": "SELECT sequence(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#d01d9144d407/ansi_off",
-      "reason": "SELECT sequence(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 5) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#d12e4f46c718/ansi_on",
@@ -634,11 +602,11 @@
     },
     {
       "id": "sequence#d83ec93f2b46/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#d83ec93f2b46/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#d89bb544023a/ansi_on",
@@ -650,11 +618,11 @@
     },
     {
       "id": "sequence#de1e47bcff4b/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#de1e47bcff4b/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#e7ff2267fb3c/ansi_on",
@@ -666,19 +634,19 @@
     },
     {
       "id": "sequence#ee0950e460ed/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1L) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1L) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#ee0950e460ed/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1L) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), 1L) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#f0e9903aac2f/ansi_on",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#f0e9903aac2f/ansi_off",
-      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates, timestamps or strings where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
+      "reason": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: sequence over dates or timestamps where Spark has DATATYPE_MISMATCH.SEQUENCE_WRONG_INPUT_TYPES"
     },
     {
       "id": "sequence#f49336cfe797/ansi_on",
