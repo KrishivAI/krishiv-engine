@@ -6931,7 +6931,9 @@ fn call(
             format!("(IF({}, {}, {}))", k[0], k[1], k[2])
         }
         _ if name.eq_ignore_ascii_case("positive") && k.len() == 1 => format!("(+ {})", k[0]),
-        _ if name.eq_ignore_ascii_case("extract") && k.len() == 2 => {
+        // A third argument is the precision the analyzer appends for a
+        // `time(p)`: not part of the call as written.
+        _ if name.eq_ignore_ascii_case("extract") && (2..=3).contains(&k.len()) => {
             format!("extract({} FROM {})", k[0], k[1])
         }
         // `trim` family: one argument is `trim(src)` / `ltrim(src)` /
