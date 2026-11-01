@@ -21,8 +21,9 @@ use krishiv_common::error::{
     DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
-    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
-    InvalidExtractFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    GroupByPosOutOfRange, InternalError, InvalidAggregateFilterNotBoolean,
+    InvalidExtractBaseFieldType, InvalidExtractFieldType,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
     InvalidWithinGroupExpressionDistinctUnsupported,
@@ -1257,6 +1258,19 @@ impl Resolver<'_> {
                 })
                 .cloned()
                 .collect(),
+        };
+        let out = match s.position {
+            Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
+            Some(n) => {
+                return Err(AnalysisError::new(
+                    GroupByPosOutOfRange {
+                        index: n.to_string(),
+                        size: out.len().to_string(),
+                    },
+                    origin,
+                ));
+            }
+            None => out,
         };
         if out.is_empty() && !s.qualifier.is_empty() {
             return Err(AnalysisError::new(
@@ -7404,6 +7418,8 @@ mod tests {
     #[test]
     fn stars_print_as_sql() {
         let star = Expr::new(ExprNode::Star(crate::Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: Vec::new(),
             except: Vec::new(),
             plan_id: None,

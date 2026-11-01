@@ -287,6 +287,10 @@ impl Encoder {
                     }
                 }
                 self.flag(s.plan_id.is_some());
+                for (name, _) in &s.replace {
+                    self.text(name);
+                }
+                self.num(s.position.map_or(0, |n| n as u64));
             }
             ExprNode::Function(f) => {
                 self.tag("function");
@@ -1176,6 +1180,8 @@ mod tests {
             (
                 "star",
                 unresolved(ExprNode::Star(Star {
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: vec!["t".into()],
                     except: vec![vec!["a".into()]],
                     plan_id: Some(PlanId(1)),

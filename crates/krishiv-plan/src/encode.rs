@@ -1101,6 +1101,8 @@ impl<'k, 'a> Encoder<'k, 'a> {
             ExprNode::Star(Star {
                 qualifier,
                 except,
+                replace,
+                position,
                 plan_id,
             }) => {
                 self.u8(3);
@@ -1108,6 +1110,15 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.len(except.len());
                 except.iter().for_each(|path| self.strs(path));
                 self.plan_ref(*plan_id);
+                // Only a replacing star writes more, so the encoding of
+                // every other plan is unchanged.
+                if !replace.is_empty() {
+                    self.len(replace.len());
+                    replace.iter().for_each(|(name, _)| self.str(name));
+                }
+                if let Some(n) = position {
+                    self.len(*n);
+                }
             }
             ExprNode::Function(FunctionCall {
                 name,

@@ -480,8 +480,26 @@ impl Resolver<'_> {
         for e in exprs {
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
-                for a in self.expand(s, &cx, e.origin)? {
-                    items.push(column_bound(&a, e.origin));
+                let expanded = self.expand(s, &cx, e.origin)?;
+                let replaced = self.replacements(s, &expanded, e.origin)?;
+                for (a, with) in expanded.iter().zip(replaced) {
+                    let Some(with) = with else {
+                        items.push(column_bound(a, e.origin));
+                        continue;
+                    };
+                    // `|> SET name = expr`: the expression takes the
+                    // column's place and name.
+                    let item = Arc::new(
+                        Expr::new(ExprNode::Alias {
+                            expr: with,
+                            name: a.col.name.clone(),
+                        })
+                        .with_origin(e.origin),
+                    );
+                    let mut cx = Self::cx(&c.out, &rels, env, op);
+                    cx.lateral = lca.then_some(&lateral[..]);
+                    cx.windows = WindowUse::Allowed;
+                    items.push(self.bind(&item, &cx)?);
                 }
                 continue;
             }
@@ -504,6 +522,33 @@ impl Resolver<'_> {
             items.push(b);
         }
         Ok(items)
+    }
+
+    /// For each column of a star's expansion, the expression of its
+    /// `|> SET` assignment (the last one naming it). A name that is not
+    /// a column of the expansion is `UNRESOLVED_COLUMN`.
+    fn replacements(
+        &self,
+        s: &crate::Star,
+        out: &[Attr],
+        origin: Origin,
+    ) -> Result<Vec<Option<Arc<Expr>>>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        let same = |a: &str, b: &str| {
+            if cs {
+                a == b
+            } else {
+                a.eq_ignore_ascii_case(b)
+            }
+        };
+        let mut with: Vec<Option<Arc<Expr>>> = vec![None; out.len()];
+        for (name, expr) in &s.replace {
+            let Some(i) = out.iter().position(|a| same(&a.col.name, name)) else {
+                return Err(unresolved(std::slice::from_ref(name), out, origin));
+            };
+            with[i] = Some(Arc::clone(expr));
+        }
+        Ok(with)
     }
 
     /// `b` as a named expression: an attribute, or aliased by Spark's
@@ -1611,6 +1656,14 @@ impl Resolver<'_> {
         for (slot, k) in group.iter_mut().zip(keys) {
             if let Some(n) = self.ordinal(k) {
                 *slot = Some(self.group_ordinal(n, k.origin, items, c)?);
+            } else if let ExprNode::Star(s) = &k.node
+                && s.position.is_some()
+            {
+                // `|> AGGREGATE ... GROUP BY n`: the n-th input column.
+                let rels = [c];
+                let cx = Self::cx(&c.out, &rels, env, "Aggregate");
+                let attrs = self.expand(s, &cx, k.origin)?;
+                *slot = attrs.first().map(|a| column_bound(a, k.origin));
             }
         }
         // Spark resolves the select list first, then ordinals, then the
