@@ -606,3 +606,18 @@ fn a_sql_function_keeps_the_ansi_mode_it_was_created_under() {
     let r = block_on(async { s.sql("SELECT cast_plain(0)").await?.collect().await });
     assert!(r.is_ok(), "{r:?}");
 }
+
+/// A parameter is visible one scalar subquery down; two down it is an
+/// unresolved column, as in Spark (`sql-udf` 2.2.1).
+#[test]
+fn a_parameter_in_a_doubly_nested_subquery_is_unresolved() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION sub_one(a INT) RETURNS INT RETURN 1 + (SELECT a)")).unwrap();
+    let ok = block_on(async { s.sql("SELECT sub_one(5)").await?.collect().await });
+    assert!(ok.is_ok(), "{ok:?}");
+    let r = block_on(
+        s.sql("CREATE FUNCTION sub_two(a INT) RETURNS INT RETURN 1 + (SELECT (SELECT a))"),
+    );
+    let e = format!("{:?}", r.expect_err("deep"));
+    assert!(e.contains("UnresolvedColumn"), "{e}");
+}
