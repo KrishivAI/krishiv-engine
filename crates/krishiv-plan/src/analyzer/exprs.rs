@@ -2642,6 +2642,18 @@ impl Resolver<'_> {
                     ..keep(arg_type(to.clone(), nullable))
                 }
             }
+            // Generators take their several names before this point
+            // (`extract_generator`, lowering): any other expression with
+            // a multi-part alias is an error.
+            ExprNode::MultiAlias { expr, names } => {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::MultiAliasWithoutGenerator {
+                        names: format!("({})", names.join(", ")),
+                        expr: format!("\"{}\"", pretty(expr, self.ctx.conf.session_zone)),
+                    },
+                    e.origin,
+                ));
+            }
             ExprNode::Alias { name, .. } => {
                 let output = self.attr(name, &kids[0].ty);
                 Bound {
@@ -6827,6 +6839,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
         // to `named_struct` shows its children as written); a resolved
         // one is its expression (its output names the attribute).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
+        ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {

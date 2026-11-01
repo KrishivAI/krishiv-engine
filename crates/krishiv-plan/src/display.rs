@@ -818,6 +818,10 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 Name(std::slice::from_ref(name))
             )));
         }
+        ExprNode::MultiAlias { expr, names } => {
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(format!(" AS ({})", names.join(", "))));
+        }
         ExprNode::Field { base, name } => {
             out.push(Piece::Expr(base));
             out.push(Piece::Owned(format!(

@@ -1558,6 +1558,22 @@ impl Resolver<'_> {
         // A select item `stack(..)` is `inline` over its array of rows,
         // as in a plain select list.
         let stacked = self.stack_items(&c, aggregates, env)?;
+        // `generator(..) AS (a, b)`: the names go to the generated columns,
+        // the item resolves as the bare call.
+        let mut written: Vec<String> = Vec::new();
+        let stacked: Vec<Arc<Expr>> = stacked
+            .iter()
+            .map(|e| match &e.node {
+                ExprNode::MultiAlias { expr, names }
+                    if matches!(&expr.node, ExprNode::Function(f)
+                        if super::generate::is_generator_name(&f.name)) =>
+                {
+                    written = names.clone();
+                    Arc::clone(expr)
+                }
+                _ => Arc::clone(e),
+            })
+            .collect();
         let aggregates = &stacked[..];
         self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
@@ -1567,7 +1583,7 @@ impl Resolver<'_> {
         // item's place in the aggregate, the generator runs above it.
         // A written alias of the generator (the analyzer names every item,
         // so the written one is read from the unresolved list).
-        let written = aggregates.iter().find_map(|e| match &e.node {
+        if let Some(name) = aggregates.iter().find_map(|e| match &e.node {
             ExprNode::Alias { name, expr }
                 if matches!(&expr.node, ExprNode::Function(f)
                 if super::generate::is_generator_name(&f.name)) =>
@@ -1575,7 +1591,9 @@ impl Resolver<'_> {
                 Some(name.clone())
             }
             _ => None,
-        });
+        }) {
+            written = vec![name];
+        }
         let (items, generator) = self.extract_generator(p.origin, items, written)?;
         // `GROUP BY ALL`: a lone unqualified `all` in SQL groups by the select
         // list, unless a column or a select-list alias named `all` takes it

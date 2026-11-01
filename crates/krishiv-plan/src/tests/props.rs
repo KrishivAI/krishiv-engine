@@ -808,6 +808,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             m_type(to, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::MultiAlias { expr, names } => {
+            names.iter_mut().any(|n| m_string(n, w)) || m_expr(expr, w)
+        }
         ExprNode::Lambda { params, body } => {
             site!(
                 w,

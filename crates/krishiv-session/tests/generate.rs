@@ -874,3 +874,34 @@ fn generators_beside_aliases_aggregates_and_windows() {
         table(&[&["1", "2"], &["2", "2"]])
     );
 }
+
+#[test]
+fn a_multi_name_alias_needs_a_generator() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        error_of(&s, "select 1 as (a, b)").error_class(),
+        ErrorClass::MultiAliasWithoutGenerator
+    );
+    assert_eq!(
+        error_of(
+            &s,
+            "select k as (a, b), count(*) from values (1) t(k) group by k"
+        )
+        .error_class(),
+        ErrorClass::MultiAliasWithoutGenerator
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select posexplode(arr) as (p, e), count(*) c from values (1, array(5,6)) t(k, arr) group by arr"
+        ),
+        table(&[&["0", "5", "1"], &["1", "6", "1"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select inline(arr) as (x, y), count(*) c from values (array(named_struct('a', 1, 'b', 2))) t(arr) group by arr"
+        ),
+        table(&[&["1", "2", "1"]])
+    );
+}
