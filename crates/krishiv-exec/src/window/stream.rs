@@ -13,6 +13,8 @@
 //! one by one in partition order, as in memory and as Spark's frames fold
 //! them, so the results are the in-memory evaluation's. Memory: a frame per
 //! reader, the lead's batch before the one it reads, and one output batch.
+//! Frames and offset functions read the file on their own
+//! ([`disk`](super::disk)).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -26,13 +28,16 @@ use arrow_array::{
 use arrow_buffer::i256;
 use arrow_row::OwnedRow;
 use arrow_schema::DataType;
-use krishiv_memory::{ConsumerHandle, SpillFile, SpillReader, SpillWriter};
+use krishiv_common::error::KrishivError;
+use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillReader, SpillWriter};
 use krishiv_types::batch::Batch;
 
+use super::disk::{Current, Framed, current_keys, needs_peer_end};
 use super::eval::{
     Slice, arguments, count_f64, decimal_array, decimal_value, decimals, exact_decimal,
-    filter_mask, ntile, passes, picks_bytes, replaces, to_view, too_large, view_type,
+    filter_mask, keeps_values, ntile, passes, picks_bytes, replaces, to_view, too_large, view_type,
 };
+use super::spill::Counters;
 use super::{Env, Shape, WindowFunction};
 use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction, Running};
 use crate::context::QueryContext;
@@ -43,8 +48,12 @@ use crate::operators::KeyEncoder;
 pub(super) enum Fold {
     /// Through the aggregate's [`Accumulator`]: group 0 holds the state,
     /// group 1 takes rows the filter drops, groups from 2 on take
-    /// snapshots.
-    Rows(Box<Accumulator>),
+    /// snapshots. An exact percentile's value map grows with the rows:
+    /// `charge` covers it, refusing rows past the memory left.
+    Rows {
+        acc: Box<Accumulator>,
+        charge: Option<Reservation>,
+    },
     /// A decimal `sum` or `avg`, exact.
     Decimal {
         a: Box<AggregateExpr>,
@@ -92,7 +101,21 @@ impl Fold {
         };
         let mut acc = Accumulator::new(&local, ansi)?;
         acc.resize(2);
-        Ok(Self::Rows(Box::new(acc)))
+        Ok(Self::Rows {
+            acc: Box::new(acc),
+            charge: None,
+        })
+    }
+
+    /// Charges a state that grows with its rows to `consumer`, from the pool.
+    pub(super) fn charged(mut self, a: &AggregateExpr, consumer: &ConsumerHandle) -> Self {
+        if let Self::Rows { charge, .. } = &mut self
+            && keeps_values(a)
+        {
+            *charge =
+                Some(Reservation::new(Arc::clone(consumer.pool()), consumer.id()).unguarded());
+        }
+        self
     }
 
     /// Folds `rows` rows (`args`, the rows `mask` drops folding nothing)
@@ -111,7 +134,7 @@ impl Fold {
             ));
         }
         match self {
-            Self::Rows(acc) => {
+            Self::Rows { acc, charge } => {
                 let groups: Vec<u32> = (0..rows).map(|i| u32::from(!passes(mask, i))).collect();
                 let parts = vec![0_u32; rows];
                 let mut next = 2_u32;
@@ -134,6 +157,15 @@ impl Fold {
                             snapshots: &slots,
                         },
                     )?;
+                }
+                // What the batch's rows add while they fold is in a batch's
+                // evaluation cost (`eval::cost`); what stays is charged here.
+                if let Some(charge) = charge {
+                    let size = acc.size();
+                    charge
+                        .try_grow(size.saturating_sub(charge.size()))
+                        .map_err(KrishivError::from)?;
+                    charge.shrink(charge.size().saturating_sub(size));
                 }
                 let ids: Vec<u32> = (2..next).collect();
                 acc.evaluate(&ids)
@@ -205,7 +237,7 @@ impl Fold {
     /// The value over every row folded so far.
     pub(super) fn value(&mut self) -> Result<ArrayRef> {
         match self {
-            Self::Rows(acc) => acc.evaluate(&[0]),
+            Self::Rows { acc, .. } => acc.evaluate(&[0]),
             Self::Decimal {
                 a,
                 sum,
@@ -258,7 +290,7 @@ impl BytesOut {
 }
 
 /// All of `b`'s rows as an evaluation slice.
-fn whole_batch(b: &RecordBatch) -> Slice<'_> {
+pub(super) fn whole_batch(b: &RecordBatch) -> Slice<'_> {
     Slice {
         batch: b,
         offset: 0,
@@ -270,7 +302,7 @@ fn whole_batch(b: &RecordBatch) -> Slice<'_> {
 
 /// Folds `b`'s rows into `fold` (the aggregate of function `j`), keeping
 /// the value after each row with `snap`.
-fn fold_batch(
+pub(super) fn fold_batch(
     env: &Env,
     j: usize,
     fold: &mut Fold,
@@ -349,13 +381,14 @@ pub(super) fn copy_partition(
     head: Vec<RecordBatch>,
     mut next: impl FnMut() -> Result<Option<RecordBatch>>,
     mut writer: SpillWriter,
+    consumer: &ConsumerHandle,
     query: &QueryContext,
 ) -> Result<Copied> {
     let mut whole: Vec<Option<Fold>> = Vec::with_capacity(env.plan.functions.len());
     for f in &env.plan.functions {
         whole.push(match &f.function {
             WindowFunction::Aggregate(a) if f.shape()? == Shape::Whole => {
-                Some(Fold::new(a, env.ansi)?)
+                Some(Fold::new(a, env.ansi)?.charged(a, consumer))
             }
             _ => None,
         });
@@ -533,6 +566,10 @@ pub(super) struct Emit {
     /// Per function: its fold (aggregates over a `ROWS` frame up to the
     /// current row only).
     running: Vec<Option<Fold>>,
+    /// Per function: how it reads the file (frames and offset functions).
+    framed: Vec<Option<Framed>>,
+    consumer: Arc<ConsumerHandle>,
+    counters: Arc<Counters>,
     query: Arc<QueryContext>,
 }
 
@@ -543,6 +580,7 @@ impl Emit {
         env: &Env,
         disk: OnDisk,
         consumer: &Arc<ConsumerHandle>,
+        counters: Arc<Counters>,
         query: Arc<QueryContext>,
     ) -> Result<Self> {
         let reader = || -> Result<SpillReader> {
@@ -552,16 +590,17 @@ impl Emit {
         };
         let mut running = Vec::with_capacity(env.plan.functions.len());
         let mut folds = Vec::with_capacity(env.plan.functions.len());
+        let mut framed = Vec::with_capacity(env.plan.functions.len());
         let mut lead = false;
         for f in &env.plan.functions {
             let (r, l) = match &f.function {
                 WindowFunction::Aggregate(a) => match f.shape()? {
-                    Shape::Whole => (None, None),
-                    Shape::RunningRows => (Some(Fold::new(a, env.ansi)?), None),
-                    Shape::RunningPeers => (None, Some(Fold::new(a, env.ansi)?)),
-                    // Refused before the copy (`spill.rs`).
-                    Shape::Frame => {
-                        return Err(internal("a frame evaluated from disk".to_owned()));
+                    Shape::Whole | Shape::Frame => (None, None),
+                    Shape::RunningRows => {
+                        (Some(Fold::new(a, env.ansi)?.charged(a, consumer)), None)
+                    }
+                    Shape::RunningPeers => {
+                        (None, Some(Fold::new(a, env.ansi)?.charged(a, consumer)))
                     }
                 },
                 WindowFunction::CumeDist => {
@@ -570,7 +609,8 @@ impl Emit {
                 }
                 _ => (None, None),
             };
-            lead |= l.is_some();
+            lead |= l.is_some() || needs_peer_end(f);
+            framed.push(Framed::open(env, f, &disk.file, consumer)?);
             running.push(r);
             folds.push(l);
         }
@@ -597,6 +637,9 @@ impl Emit {
             peers: 0,
             prev_order: None,
             running,
+            framed,
+            consumer: Arc::clone(consumer),
+            counters,
             query,
         })
     }
@@ -645,6 +688,35 @@ impl Emit {
             dense.push(self.peers);
         }
         let total = self.disk.rows;
+        // What frames and offset functions read of the current rows.
+        let peers: Vec<(usize, usize)> = if self.framed.iter().any(Option::is_some) {
+            ranks
+                .iter()
+                .enumerate()
+                .map(|(i, &r)| {
+                    let end = groups
+                        .get(i)
+                        .zip(self.lead.as_ref())
+                        .map_or(0, |(&(k, p), l)| as_usize(l.queue[k].ends[p]));
+                    (as_usize(r - 1), end)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let keys = if self.framed.iter().any(Option::is_some) {
+            current_keys(env, &b)?
+        } else {
+            None
+        };
+        let current = Current {
+            batch: &b,
+            at: as_usize(self.at),
+            total: as_usize(total),
+            peers: &peers,
+            keys: keys.as_ref(),
+            counters: &self.counters,
+        };
         let int = |v: u64| i32::try_from(v).map_err(|_| too_large());
         let row = |i: usize| self.at + i as u64;
         let mut columns: Vec<ArrayRef> = b.columns().to_vec();
@@ -688,12 +760,17 @@ impl Emit {
                         })
                         .collect::<Result<Vec<_>>>()?,
                 )),
-                // Refused before the copy (`spill.rs`).
-                WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
-                    return Err(internal(
-                        "an offset function evaluated from disk".to_owned(),
-                    ));
-                }
+                WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => self.framed[j]
+                    .as_mut()
+                    .ok_or_else(|| internal("an offset function's reader missing".to_owned()))?
+                    .column(
+                        env,
+                        j,
+                        &current,
+                        &self.disk.file,
+                        &self.consumer,
+                        &self.query,
+                    )?,
                 WindowFunction::Aggregate(_) => match f.shape()? {
                     Shape::Whole => {
                         let v = self.disk.whole[j].as_ref().ok_or_else(|| {
@@ -709,9 +786,17 @@ impl Emit {
                             .ok_or_else(|| internal("a running fold missing".to_owned()))?;
                         fold_batch(env, j, fold, &b, &vec![true; n])?
                     }
-                    Shape::Frame => {
-                        return Err(internal("a frame evaluated from disk".to_owned()));
-                    }
+                    Shape::Frame => self.framed[j]
+                        .as_mut()
+                        .ok_or_else(|| internal("a window frame's reader missing".to_owned()))?
+                        .column(
+                            env,
+                            j,
+                            &current,
+                            &self.disk.file,
+                            &self.consumer,
+                            &self.query,
+                        )?,
                     Shape::RunningPeers => {
                         let lead = self
                             .lead
@@ -753,6 +838,6 @@ impl Emit {
 }
 
 /// A row count that fits memory as `usize` (counts of rows read).
-fn as_usize(v: u64) -> usize {
+pub(super) fn as_usize(v: u64) -> usize {
     usize::try_from(v).unwrap_or(usize::MAX)
 }

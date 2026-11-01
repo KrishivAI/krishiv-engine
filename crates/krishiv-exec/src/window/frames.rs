@@ -190,7 +190,7 @@ impl RangeKeys {
 
     /// `bound` as a value bound: `CURRENT ROW` is the distance 0, which
     /// Spark's frames compare through the same bound ordering.
-    fn offset(&self, bound: FrameBound) -> FrameBound {
+    pub(super) fn offset(&self, bound: FrameBound) -> FrameBound {
         match (bound, &self.keys) {
             (FrameBound::CurrentRow, Keys::Int(_)) => FrameBound::RangeInt(0),
             (FrameBound::CurrentRow, _) => FrameBound::RangeFloat(0.0_f64.to_bits()),
@@ -201,7 +201,7 @@ impl RangeKeys {
     /// How row `j` orders against `target` (the current row's key moved by
     /// the bound; `None` when that key is NULL): `Less` when `j` sorts
     /// before it.
-    fn cmp(&self, j: usize, target: Option<&Target>) -> Result<std::cmp::Ordering> {
+    pub(super) fn cmp(&self, j: usize, target: Option<&Target>) -> Result<std::cmp::Ordering> {
         use std::cmp::Ordering;
         let Some(target) = target else {
             return Ok(match (self.valid[j], self.nulls_first) {
@@ -233,7 +233,7 @@ impl RangeKeys {
     /// descending order moves the other way), in the key's type: past its
     /// range the sum raises under ANSI and wraps otherwise, as Spark's
     /// `Add` of the key and the bound does. `None` for a NULL key.
-    fn target(&self, i: usize, bound: FrameBound) -> Result<Option<Target>> {
+    pub(super) fn target(&self, i: usize, bound: FrameBound) -> Result<Option<Target>> {
         if !self.valid[i] {
             return Ok(None);
         }
@@ -302,7 +302,7 @@ impl RangeKeys {
 }
 
 #[derive(Clone)]
-enum Target {
+pub(super) enum Target {
     Int(i128),
     Float(f64),
 }
@@ -327,8 +327,8 @@ pub(super) fn is_range_offset(b: FrameBound) -> bool {
 /// `[.., pe)` while the rows are before the bound (the first row at or
 /// after it, for a lower edge) or not past it (the first row past it, for
 /// an upper edge).
-fn range_edge(
-    order: &RangeKeys,
+fn range_edge<K: FrameKeys>(
+    order: &mut K,
     i: usize,
     pe: usize,
     at: &mut usize,
@@ -342,7 +342,12 @@ fn range_edge(
         if target.is_none() {
             target = Some(order.target(i, bound)?);
         }
-        let c = order.cmp(*at, target.as_ref().and_then(Option::as_ref))?;
+        let t = target.as_ref().and_then(Option::as_ref);
+        let c = if upper {
+            order.upper(*at, t)?
+        } else {
+            order.lower(*at, t)?
+        };
         if if upper { c.is_gt() } else { c.is_ge() } {
             break;
         }
@@ -366,9 +371,9 @@ struct Sliding {
 }
 
 impl Sliding {
-    fn window(
+    fn window<K: FrameKeys>(
         &mut self,
-        order: &RangeKeys,
+        order: &mut K,
         i: usize,
         (ps, pe): (usize, usize),
         (lower, upper): (FrameBound, FrameBound),
@@ -384,27 +389,33 @@ impl Sliding {
         // (the sum can overflow, and Spark does not compute what it does
         // not compare).
         let (mut lo, mut hi) = (None, None);
-        let target =
-            |at: &mut Option<Option<Target>>, bound: FrameBound| -> Result<Option<Target>> {
-                if at.is_none() {
-                    *at = Some(order.target(i, bound)?);
-                }
-                Ok(at.clone().flatten())
-            };
+        fn target<K: FrameKeys>(
+            order: &K,
+            i: usize,
+            at: &mut Option<Option<Target>>,
+            bound: FrameBound,
+        ) -> Result<Option<Target>> {
+            if at.is_none() {
+                *at = Some(order.target(i, bound)?);
+            }
+            Ok(at.clone().flatten())
+        }
+        // `head` reads the lower edge's keys, `next` the upper edge's: each
+        // moves forward only.
         while self.head < self.tail {
-            let t = target(&mut lo, lower)?;
-            if !order.cmp(self.head, t.as_ref())?.is_lt() {
+            let t = target(order, i, &mut lo, lower)?;
+            if !order.lower(self.head, t.as_ref())?.is_lt() {
                 break;
             }
             self.head += 1;
         }
         while self.next < pe {
-            let t = target(&mut hi, upper)?;
-            if !order.cmp(self.next, t.as_ref())?.is_le() {
+            let t = target(order, i, &mut hi, upper)?;
+            if !order.upper(self.next, t.as_ref())?.is_le() {
                 break;
             }
-            let t = target(&mut lo, lower)?;
-            if order.cmp(self.next, t.as_ref())?.is_ge() {
+            let t = target(order, i, &mut lo, lower)?;
+            if order.upper(self.next, t.as_ref())?.is_ge() {
                 if self.head == self.tail {
                     self.head = self.next;
                 } else if self.next != self.tail {
@@ -424,61 +435,99 @@ impl Sliding {
     }
 }
 
-/// Each row's frame, `[start, end)` in unit rows (empty when `start >=
-/// end`).
-pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u32)>> {
-    let mut out = Vec::with_capacity(rows.n);
-    // The sliding edges of the partition being walked.
-    let (mut lower_at, mut upper_at) = (0, 0);
-    let mut sliding = Sliding::default();
-    let both = frame.units == FrameUnits::Range
-        && (is_range_offset(frame.lower) || is_range_offset(frame.upper))
-        && [frame.lower, frame.upper]
-            .into_iter()
-            .all(|b| is_range_offset(b) || b == FrameBound::CurrentRow);
-    for i in 0..rows.n {
-        let (ps, pe) = (rows.part)(i);
+/// The ordering keys a [`Walk`] reads. Rows of the lower edge, and rows of
+/// the upper edge, are each asked for in increasing order, so a partition
+/// on disk can stream them (`disk.rs`).
+pub(super) trait FrameKeys {
+    /// See [`RangeKeys::target`].
+    fn target(&self, i: usize, bound: FrameBound) -> Result<Option<Target>>;
+    /// See [`RangeKeys::offset`].
+    fn offset(&self, bound: FrameBound) -> FrameBound;
+    /// How row `j`, read for the lower edge, orders against `target`.
+    fn lower(&mut self, j: usize, target: Option<&Target>) -> Result<std::cmp::Ordering>;
+    /// How row `j`, read for the upper edge, orders against `target`.
+    fn upper(&mut self, j: usize, target: Option<&Target>) -> Result<std::cmp::Ordering>;
+}
+
+impl FrameKeys for &RangeKeys {
+    fn target(&self, i: usize, bound: FrameBound) -> Result<Option<Target>> {
+        RangeKeys::target(self, i, bound)
+    }
+
+    fn offset(&self, bound: FrameBound) -> FrameBound {
+        RangeKeys::offset(self, bound)
+    }
+
+    fn lower(&mut self, j: usize, target: Option<&Target>) -> Result<std::cmp::Ordering> {
+        self.cmp(j, target)
+    }
+
+    fn upper(&mut self, j: usize, target: Option<&Target>) -> Result<std::cmp::Ordering> {
+        self.cmp(j, target)
+    }
+}
+
+/// The frames of one function, row after row in partition order.
+pub(super) struct Walk {
+    frame: WindowFrame,
+    /// Both bounds compare keys: the frame slides as [`Sliding`] does.
+    both: bool,
+    /// The moving edges of the partition being walked.
+    lower_at: usize,
+    upper_at: usize,
+    sliding: Sliding,
+}
+
+impl Walk {
+    pub(super) fn new(frame: WindowFrame) -> Self {
+        Self {
+            frame,
+            both: frame.units == FrameUnits::Range
+                && (is_range_offset(frame.lower) || is_range_offset(frame.upper))
+                && [frame.lower, frame.upper]
+                    .into_iter()
+                    .all(|b| is_range_offset(b) || b == FrameBound::CurrentRow),
+            lower_at: 0,
+            upper_at: 0,
+            sliding: Sliding::default(),
+        }
+    }
+
+    /// Row `i`'s frame, `[start, end)` (empty when `start >= end`), in a
+    /// partition `[ps, pe)`; `peers` gives its peer group.
+    pub(super) fn row<K: FrameKeys>(
+        &mut self,
+        i: usize,
+        (ps, pe): (usize, usize),
+        peers: impl Fn() -> (usize, usize),
+        order: &mut Option<K>,
+    ) -> Result<(usize, usize)> {
+        let frame = self.frame;
         let at = |k: i64| -> usize {
             let i = i64::try_from(i).unwrap_or(i64::MAX);
             let ps = i64::try_from(ps).unwrap_or(0);
             let pe = i64::try_from(pe).unwrap_or(i64::MAX);
             usize::try_from(i.saturating_add(k).clamp(ps, pe)).unwrap_or(0)
         };
-        let peers = || (rows.peers)(i);
         if i == ps {
-            lower_at = ps;
-            upper_at = ps;
+            self.lower_at = ps;
+            self.upper_at = ps;
         }
-        let mut ranged = |bound: FrameBound, upper: bool| match rows.order {
-            Some(order) => range_edge(
-                order,
-                i,
-                pe,
-                if upper { &mut upper_at } else { &mut lower_at },
-                bound,
-                upper,
-            ),
-            None => Err(internal("a range bound without an ordering key".to_owned())),
-        };
-        if both {
-            let Some(order) = rows.order else {
-                return Err(internal("a range bound without an ordering key".to_owned()));
-            };
-            let (start, end) = sliding.window(
-                order,
-                i,
-                (ps, pe),
-                (order.offset(frame.lower), order.offset(frame.upper)),
-            )?;
-            out.push((id(start)?, id(end)?));
-            continue;
+        let no_key = || internal("a range bound without an ordering key".to_owned());
+        if self.both {
+            let order = order.as_mut().ok_or_else(no_key)?;
+            let bounds = (order.offset(frame.lower), order.offset(frame.upper));
+            return self.sliding.window(order, i, (ps, pe), bounds);
         }
         let start = match (frame.units, frame.lower) {
             (_, FrameBound::UnboundedPreceding) => ps,
             (FrameUnits::Rows, FrameBound::CurrentRow) => i,
             (FrameUnits::Range, FrameBound::CurrentRow) => peers().0,
             (FrameUnits::Rows, FrameBound::Offset(k)) => at(k),
-            (FrameUnits::Range, b) if is_range_offset(b) => ranged(b, false)?,
+            (FrameUnits::Range, b) if is_range_offset(b) => {
+                let order = order.as_mut().ok_or_else(no_key)?;
+                range_edge(order, i, pe, &mut self.lower_at, b, false)?
+            }
             (units, lower) => {
                 return Err(internal(format!("a {units:?} frame starting at {lower:?}")));
             }
@@ -488,12 +537,27 @@ pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u3
             (FrameUnits::Rows, FrameBound::CurrentRow) => i + 1,
             (FrameUnits::Range, FrameBound::CurrentRow) => peers().1,
             (FrameUnits::Rows, FrameBound::Offset(k)) => at(k.saturating_add(1)),
-            (FrameUnits::Range, b) if is_range_offset(b) => ranged(b, true)?,
+            (FrameUnits::Range, b) if is_range_offset(b) => {
+                let order = order.as_mut().ok_or_else(no_key)?;
+                range_edge(order, i, pe, &mut self.upper_at, b, true)?
+            }
             (units, upper) => {
                 return Err(internal(format!("a {units:?} frame ending at {upper:?}")));
             }
         };
-        out.push((id(start)?, id(end.max(start))?));
+        Ok((start, end.max(start)))
+    }
+}
+
+/// Each row's frame, `[start, end)` in unit rows (empty when `start >=
+/// end`).
+pub(super) fn frames(frame: WindowFrame, rows: &Rows<'_>) -> Result<Vec<(u32, u32)>> {
+    let mut out = Vec::with_capacity(rows.n);
+    let mut walk = Walk::new(frame);
+    let mut order = rows.order;
+    for i in 0..rows.n {
+        let (start, end) = walk.row(i, (rows.part)(i), || (rows.peers)(i), &mut order)?;
+        out.push((id(start)?, id(end)?));
     }
     Ok(out)
 }
@@ -583,7 +647,10 @@ pub(super) fn aggregate(
     match method {
         Method::Decimal => decimal(a, &args, mask.as_ref(), frames, ansi),
         Method::Bytes => Err(internal("strings over frames picked above".to_owned())),
-        Method::Tree => tree(a, &args, mask.as_ref(), frames, ansi),
+        Method::Tree => {
+            let rows = slices.iter().map(|s| s.len).sum();
+            tree(a, &args, mask.as_ref(), rows, frames, ansi)
+        }
         Method::InOrder => in_order(a, &args, mask.as_ref(), frames, ansi),
     }
 }
@@ -605,10 +672,11 @@ fn tree(
     a: &AggregateExpr,
     args: &[ArrayRef],
     mask: Option<&BooleanArray>,
+    rows: usize,
     frames: &[(u32, u32)],
     ansi: bool,
 ) -> Result<ArrayRef> {
-    let n = frames.len();
+    let n = rows;
     let mut t = accumulator(a, ansi)?;
     t.resize(2 * n);
     let leaves: Vec<u32> = (0..n)
@@ -639,7 +707,7 @@ fn tree(
     }
     // Each frame's nodes, left to right, merged into its row's group.
     let mut out = accumulator(a, ansi)?;
-    out.resize(n);
+    out.resize(frames.len());
     let (mut groups, mut nodes) = (Vec::new(), Vec::new());
     let mut right = Vec::new();
     for (r, &(s, e)) in frames.iter().enumerate() {
@@ -671,7 +739,7 @@ fn tree(
     if !nodes.is_empty() {
         out.merge(&groups, &t.state(&nodes)?)?;
     }
-    let ids: Vec<u32> = (0..n).map(id).collect::<Result<_>>()?;
+    let ids: Vec<u32> = (0..frames.len()).map(id).collect::<Result<_>>()?;
     out.evaluate(&ids)
 }
 
@@ -1093,4 +1161,27 @@ pub(super) fn nth_value(
         picks.push((j.filter(|&j| j < e), None));
     }
     gather(values, None, &picks, data_type)
+}
+
+/// A column as it is gathered: strings and binaries as views (gathering
+/// views shares the input's buffers).
+pub(super) fn viewed(col: &ArrayRef) -> Result<ArrayRef> {
+    match col.data_type() {
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView => to_view(col),
+        _ => Ok(Arc::clone(col)),
+    }
+}
+
+/// The type of a gathered column of `t`.
+pub(super) fn view_of(t: &DataType) -> DataType {
+    match t {
+        DataType::Utf8 | DataType::LargeUtf8 => DataType::Utf8View,
+        DataType::Binary | DataType::LargeBinary => DataType::BinaryView,
+        t => t.clone(),
+    }
 }
