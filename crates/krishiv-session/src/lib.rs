@@ -65,6 +65,7 @@ mod sql_path;
 mod store;
 mod table_commands;
 mod udfs;
+mod variable_substitution;
 mod variables;
 mod view_schema;
 mod window;

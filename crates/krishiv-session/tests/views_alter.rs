@@ -152,7 +152,7 @@ fn view_errors() {
         "TABLE_OR_VIEW_NOT_FOUND"
     );
     assert_eq!(
-        class(&s, "CREATE GLOBAL TEMPORARY VIEW g AS SELECT 1"),
+        class(&s, "CREATE GLOBAL TEMPORARY VIEW g (a INT) USING parquet"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert_eq!(

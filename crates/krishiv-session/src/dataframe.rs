@@ -1700,7 +1700,7 @@ impl DataFrame {
     }
 
     async fn temp_view_here(&self, name: &str) -> Result<(), KrishivError> {
-        if crate::catalog::is_hidden_name(name) || crate::cache::is_cache_name(name) {
+        if crate::catalog::is_reserved_view_name(name) {
             return Err(crate::catalog::reserved_temp_view_name(name));
         }
         // Spark analyzes the view's plan first: its errors come first.

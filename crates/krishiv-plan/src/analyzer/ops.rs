@@ -3240,7 +3240,10 @@ impl Resolver<'_> {
             };
             self.make(Origin::UNKNOWN, node, out, &[&c])
         };
-        let qual: Arc<[String]> = Arc::from(vec![alias.to_owned()]);
+        let qual: Arc<[String]> = alias
+            .split(crate::plan::ALIAS_PART_SEP)
+            .map(str::to_owned)
+            .collect();
         let out = inner
             .out
             .iter()

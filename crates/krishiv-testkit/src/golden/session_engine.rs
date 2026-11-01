@@ -33,7 +33,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::{Executor, ExecutorConfig, TokioExecutor};
 use krishiv_session::Session;
 use krishiv_sql::ParserOptions;
-use krishiv_sql::ast::{DescribeKind, Statement};
+use krishiv_sql::ast::{DescribeKind, ShowKind, Statement};
 use krishiv_types::DataType;
 
 use super::cell::{Cell, CellFormat};
@@ -331,6 +331,12 @@ impl Engine for SessionEngine {
             Ok(Statement::Describe(d))
                 if matches!(d.kind, DescribeKind::Table { .. } | DescribeKind::Query { .. })
         );
+        // `HiveResult` prints only the name column (the second) of SHOW TABLES and SHOW VIEWS, the
+        // schema line still lists all three.
+        let names_only = matches!(
+            krishiv_sql::parse_statement(sql, &self.options()),
+            Ok(Statement::Show(s)) if matches!(s.kind, ShowKind::Tables { .. } | ShowKind::Views { .. })
+        );
         let output = &analyzed.output;
         let schema = format!(
             "struct<{}>",
@@ -356,7 +362,9 @@ impl Engine for SessionEngine {
                     .zip(&types)
                     .map(|(col, ty)| arrow_cell(col, row, ty))
                     .collect::<Result<Vec<_>, _>>()?;
-                let cells = if padded && cells.len() == 3 {
+                let cells = if names_only && cells.len() == 3 {
+                    cells.into_iter().skip(1).take(1).collect()
+                } else if padded && cells.len() == 3 {
                     cells.into_iter().map(describe_cell).collect()
                 } else {
                     cells

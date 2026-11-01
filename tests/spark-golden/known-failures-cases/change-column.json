@@ -1,9 +1,7 @@
 {
   "cases": {
     "sql-commands": [
-      24,
-      25,
-      27
+      25
     ]
   },
   "file": "change-column",

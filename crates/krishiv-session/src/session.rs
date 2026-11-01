@@ -55,9 +55,9 @@ use krishiv_udf_sdk::{UdfLibrary, guard_call};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
-use crate::cache::{RelationCache, is_cache_name};
+use crate::cache::RelationCache;
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
-use crate::catalog::{is_hidden_name, reserved_temp_view_name};
+use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
@@ -551,8 +551,22 @@ impl Session {
             .await
     }
 
+    /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
+    pub(crate) fn substituted<'q>(&self, query: &'q str) -> std::borrow::Cow<'q, str> {
+        let config = self.state.conf.snapshot();
+        if crate::conf::get(&config, "spark.sql.variable.substitute")
+            .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
+        {
+            crate::variable_substitution::substitute(query, &|k| crate::conf::get(&config, k))
+        } else {
+            std::borrow::Cow::Borrowed(query)
+        }
+    }
+
     pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let query = self.substituted(query);
+        let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
         // run with the names they stand for.
         let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
@@ -823,7 +837,7 @@ impl Session {
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
     ) -> Result<(), KrishivError> {
-        if is_hidden_name(name) || is_cache_name(name) {
+        if is_reserved_view_name(name) {
             return Err(reserved_temp_view_name(name));
         }
         let columns = schema
@@ -953,6 +967,9 @@ impl Session {
     /// ```
     #[must_use = "whether the view existed"]
     pub fn drop_temp_view(&self, name: &str) -> bool {
+        if is_global_key(name) {
+            return false;
+        }
         let dropped = self.state.catalog.drop_table(name);
         self.state.cache.invalidate_table(name);
         dropped
