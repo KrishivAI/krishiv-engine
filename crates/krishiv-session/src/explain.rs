@@ -287,7 +287,7 @@ impl DataFrame {
         let analysis = self.analysis().await?;
         let (optimized, physical) = self
             .session
-            .physical(&analysis.analyzed, &analysis.env)
+            .physical_inspected(&analysis.analyzed, &analysis.env)
             .await?;
         let stats =
             ProviderStatistics(Arc::clone(&analysis.env.catalog) as Arc<dyn TableProviderResolver>);
@@ -365,7 +365,7 @@ impl DataFrame {
         };
         let (optimized, physical) = match self
             .session
-            .physical(&analysis.analyzed, &analysis.env)
+            .physical_inspected(&analysis.analyzed, &analysis.env)
             .await
         {
             Ok((optimized, physical)) => (optimized, physical.explain_all()),

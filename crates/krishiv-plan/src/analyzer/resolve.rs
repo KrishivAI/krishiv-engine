@@ -121,6 +121,9 @@ pub(super) struct Resolver<'a> {
     pub(super) b: &'a Bindings,
     pub(super) next_id: u64,
     next_env: usize,
+    /// The recursive CTEs being resolved, innermost last: each loop's id
+    /// and the attributes its recursive term reads (see `recursive`).
+    pub(super) loops: Vec<(u32, Vec<Attr>)>,
     memo: HashMap<(usize, usize), Rel>,
     /// Relations without outer references, by (relation, CTE scope): they
     /// resolve alike in every environment with that CTE scope, so a plan
@@ -172,6 +175,7 @@ pub(super) fn resolve(
         b,
         next_id: 0,
         next_env: 0,
+        loops: Vec::new(),
         memo: HashMap::new(),
         closed: HashMap::new(),
         canon: HashMap::new(),
@@ -394,7 +398,10 @@ impl Resolver<'_> {
                     continue;
                 }
                 stack.push((Arc::clone(&p), true));
-                if !matches!(p.node, PlanNode::WithCte { .. }) {
+                if !matches!(
+                    p.node,
+                    PlanNode::WithCte { .. } | PlanNode::UnionLoop { .. }
+                ) {
                     let mut kids = Vec::new();
                     p.for_each_child(&mut |c| kids.push(self.rep(c)));
                     if matches!(p.node, PlanNode::Shift { .. }) {
@@ -684,6 +691,14 @@ impl Resolver<'_> {
             PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                ..
+            } => self.union_loop(p, *id, anchor, recursive, *max_level, env),
+            PlanNode::UnionLoopRef { id, .. } => self.loop_ref(p, *id),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Pivot {
                 input,
@@ -883,6 +898,8 @@ impl Resolver<'_> {
             | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Generate { .. }
+            | PlanNode::UnionLoop { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
     }
