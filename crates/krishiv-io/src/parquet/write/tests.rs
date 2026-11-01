@@ -608,3 +608,35 @@ fn wide_rows_cannot_overshoot_the_block_size() {
         );
     }
 }
+
+#[test]
+fn collated_columns_write_the_spark_row_metadata() {
+    use krishiv_types::{Collation, DataType as Spark};
+    let footer = |schema: Schema| {
+        let schema = Arc::new(schema);
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let file = write(&[batch], &options(&[])).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+        reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let key = "org.apache.spark.sql.parquet.row.metadata";
+    // Every file carries the key; only a collated leaf puts `__COLLATIONS` in it.
+    let plain = footer(Schema::new(vec![Field::new("a", DataType::Utf8View, true)]));
+    let plain_json = plain.iter().find(|e| e.key == key).unwrap().value.clone();
+    assert!(!plain_json.unwrap().contains("__COLLATIONS"));
+    let lcase = Spark::collated_string(Collation::parse("UTF8_LCASE").unwrap());
+    let kv = footer(Schema::new(vec![lcase.to_arrow_field("a", true)]));
+    let json = kv
+        .iter()
+        .find(|e| e.key == key)
+        .unwrap()
+        .value
+        .clone()
+        .unwrap();
+    assert!(json.contains("spark.UTF8_LCASE"), "{json}");
+}
