@@ -25,6 +25,8 @@ pub mod beneath;
 pub mod cache;
 mod coalesce;
 pub mod fault;
+#[cfg(unix)]
+pub mod local_listing;
 mod pace;
 pub mod stores;
 pub mod upload;
