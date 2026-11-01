@@ -2219,7 +2219,12 @@ impl Resolver<'_> {
         let e0 = if computed.is_empty() {
             c.clone()
         } else {
-            let mut exprs: Vec<Arc<Expr>> = Vec::with_capacity(computed.len());
+            // The child's columns pass through, then the computed keys.
+            let mut exprs: Vec<Arc<Expr>> = c
+                .out
+                .iter()
+                .map(|a| col_expr(&a.col, Origin::UNKNOWN))
+                .collect();
             let mut out: Vec<Attr> = c.out.to_vec();
             for (_, e, a) in &computed {
                 exprs.push(Arc::new(

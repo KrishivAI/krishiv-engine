@@ -134,3 +134,15 @@ fn a_with_clause_scopes_over_the_rows_of_an_insert() {
         .is_err()
     );
 }
+
+#[test]
+fn replace_table_is_create_or_replace_table() {
+    let s = Session::new().unwrap();
+    let a = block_on(s.sql("REPLACE TABLE rt (c1 INT) USING csv")).unwrap_err();
+    let b = block_on(s.sql("CREATE OR REPLACE TABLE rt (c1 INT) USING csv")).unwrap_err();
+    assert_eq!(a.error_class(), b.error_class());
+    assert_eq!(
+        a.error_class(),
+        krishiv_common::error::ErrorClass::UnsupportedFeatureTableOperation
+    );
+}

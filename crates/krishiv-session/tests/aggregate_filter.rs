@@ -521,3 +521,28 @@ fn counts_beside_multi_distinct_over_empty_input_are_zero() -> R {
     );
     Ok(())
 }
+
+/// Two distinct argument sets over a grouping expression that is no plain column: the expansion
+/// computes the key below it and passes the input's columns through.
+#[test]
+fn distinct_sets_group_by_an_expression() -> R<()> {
+    let s = session()?;
+    let df = block_on(s.sql(
+        "SELECT CAST(count(DISTINCT h) AS STRING), CAST(sum(DISTINCT s) AS STRING) \
+         FROM (SELECT * FROM VALUES ('a', 1.0, 10), ('b', 2.0, 20), ('b', 2.0, 30) AS t(h, s, d)) \
+         GROUP BY d > 15",
+    ))?;
+    let mut rows: Vec<String> = Vec::new();
+    for b in block_on(df.collect())? {
+        for i in 0..b.num_rows() {
+            rows.push(format!(
+                "{}|{}",
+                b.column(0).as_string_view().value(i),
+                b.column(1).as_string_view().value(i)
+            ));
+        }
+    }
+    rows.sort();
+    assert_eq!(rows, ["1|1.0", "1|2.0"]);
+    Ok(())
+}

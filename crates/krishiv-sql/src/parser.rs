@@ -1621,6 +1621,11 @@ impl<'s> Parser<'s> {
             self.reset_command()?
         } else if self.kw_at(0, "CREATE") {
             self.create_command()?
+        } else if self.kw_at(0, "REPLACE") && self.kw_at(1, "TABLE") {
+            // `REPLACE TABLE` is `CREATE OR REPLACE TABLE`.
+            let start = self.start();
+            self.bump();
+            self.create_table_command(start, true, false, false)?
         } else if self.kw_at(0, "DROP") {
             self.drop_command()?
         } else if self.kw_at(0, "USE") {
