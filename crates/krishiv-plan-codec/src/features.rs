@@ -141,6 +141,7 @@ registry! {
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
+    (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
@@ -298,6 +299,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Generate { .. } => Some(Feature::Generate),
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
+            PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
@@ -491,6 +493,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             .iter()
             .for_each(|a| aggregate_constructs(a, f)),
         PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
+        PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
         PhysNode::Scan(_)
@@ -611,6 +614,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         PhysNode::ReplicateRows { count, .. } => roots.push(count),
         PhysNode::Generate { arg, .. } => roots.push(arg),
         PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
@@ -711,7 +715,11 @@ fn partial_below_join(root: &PhysNode) -> bool {
         {
             return true;
         }
-        let below = below || matches!(node, PhysNode::HashJoin(_) | PhysNode::NestedLoopJoin(_));
+        let below = below
+            || matches!(
+                node,
+                PhysNode::HashJoin(_) | PhysNode::SortMergeJoin(_) | PhysNode::NestedLoopJoin(_)
+            );
         stack.extend(node.children().into_iter().map(|c| (c, below)));
     }
     false
