@@ -468,6 +468,7 @@ impl Decoder {
                     anchor: self.boxed(u.anchor)?,
                     recursive: self.boxed(u.recursive)?,
                     layout: layout(&u.layout),
+                    nullable: u.nullable.clone(),
                     limits: krishiv_exec::physical::LoopLimits {
                         level: limits.level,
                         rows: limits.rows,

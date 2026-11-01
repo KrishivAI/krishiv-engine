@@ -261,6 +261,7 @@ message UnionLoopNode {
   uint32 recursive = 3;
   repeated uint64 layout = 4;
   LoopLimits limits = 5;
+  repeated bool nullable = 6;
 }
 
 // feature: union_loop

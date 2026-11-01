@@ -1016,10 +1016,12 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             anchor,
             recursive,
             max_level,
+            limit,
             ..
         } => {
             site!(w, *id += 1);
             site!(w, *max_level = max_level.map_or(Some(1), |n| Some(n + 1)));
+            site!(w, *limit = limit.map_or(Some(1), |n| Some(n + 1)));
             m_plan(anchor, w) || m_plan(recursive, w)
         }
         PlanNode::Read(s) => m_source(s, w),

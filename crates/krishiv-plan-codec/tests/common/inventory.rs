@@ -776,6 +776,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     }],
                 }),
                 layout: vec![AttrId(1)],
+                nullable: vec![true],
                 limits: krishiv_exec::physical::LoopLimits {
                     level: 100,
                     rows: 1_000_000,
@@ -793,6 +794,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     layout: vec![AttrId(1)],
                 }),
                 layout: vec![AttrId(1)],
+                nullable: vec![true],
                 limits: krishiv_exec::physical::LoopLimits {
                     level: u32::MAX,
                     rows: u64::MAX,

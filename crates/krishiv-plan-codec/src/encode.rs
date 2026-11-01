@@ -229,8 +229,10 @@ impl Encoder {
                 anchor,
                 recursive,
                 layout: l,
+                nullable,
                 limits,
             } => Kind::UnionLoop(pb::UnionLoopNode {
+                nullable: nullable.clone(),
                 id: *id,
                 anchor: self.node_index(anchor)?,
                 recursive: self.node_index(recursive)?,

@@ -81,7 +81,7 @@ pub(crate) struct SinkGlobal {
 }
 
 /// The list of a finalized shared plan.
-struct Output {
+pub(crate) struct Output {
     state: Mutex<Vec<Segment>>,
     schema: SchemaRef,
     /// The hook and consumer of the list, and where a spill writes (with a
@@ -89,9 +89,93 @@ struct Output {
     spill: Option<(Arc<OutputSpill>, Arc<ConsumerHandle>, SpillScope)>,
     executor: Arc<dyn Executor>,
     query: Arc<QueryContext>,
+    /// Where an [`append`](Output::append) takes its memory (a list that is
+    /// written after it was made; none for a finalized shared plan).
+    owner: Option<Arc<ConsumerHandle>>,
 }
 
 impl Output {
+    /// An empty list whose batches are appended one run at a time, in
+    /// memory under a consumer of its own and spilled to `scope` under
+    /// pressure (without a scope the list stays in memory and a full pool
+    /// is an error). Used for the rounds of a recursive CTE.
+    pub(crate) fn open(
+        query: &Arc<QueryContext>,
+        executor: &Arc<dyn Executor>,
+        op: crate::context::OperatorId,
+        schema: SchemaRef,
+        scope: Option<SpillScope>,
+        name: &str,
+    ) -> Arc<Self> {
+        let (spill, owner) = match scope {
+            Some(scope) => {
+                let (hook, consumer) = OutputSpill::register_for(query, executor, op, name);
+                (Some((hook, Arc::clone(&consumer), scope)), consumer)
+            }
+            None => (
+                None,
+                ConsumerHandle::register_counted(
+                    Arc::clone(query.pool()),
+                    name,
+                    None,
+                    query.spill_stats(op),
+                ),
+            ),
+        };
+        let out = Arc::new(Self {
+            state: Mutex::new(Vec::new()),
+            schema,
+            spill,
+            executor: Arc::clone(executor),
+            query: Arc::clone(query),
+            owner: Some(owner),
+        });
+        if let Some((hook, _, _)) = &out.spill {
+            let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
+            hook.attach(weak);
+        }
+        out
+    }
+
+    /// Appends `batches` as one run (spilled to one file together). A full
+    /// pool first spills this list's own memory.
+    ///
+    /// # Errors
+    /// The pool refuses the memory and nothing in memory can be spilled; a
+    /// failed spill write.
+    pub(crate) async fn append(self: &Arc<Self>, batches: Vec<Batch>) -> Result<()> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| internal("a finalized list was appended to".to_owned()))?;
+        let bytes: usize = batches
+            .iter()
+            .map(|b| b.data().get_array_memory_size())
+            .sum();
+        let mut reservation = owner.reservation();
+        while let Err(e) = reservation.try_grow(bytes) {
+            let freed = if self.spill.is_some() {
+                Arc::clone(self).spill_unread().await?
+            } else {
+                0
+            };
+            if freed == 0 {
+                return Err(KrishivError::from(e));
+            }
+        }
+        lock(&self.state).push(Segment::Memory {
+            batches,
+            reservation,
+        });
+        if let Some((hook, _, _)) = &self.spill {
+            hook.set_spillable_bytes(self.memory_bytes());
+        }
+        Ok(())
+    }
+
     fn batches(&self) -> u64 {
         lock(&self.state).iter().map(Segment::len).sum()
     }
@@ -340,6 +424,7 @@ impl Sink for SharedSink {
                 spill,
                 executor: Arc::clone(ctx.executor()),
                 query: Arc::clone(ctx.query()),
+                owner: None,
             });
             if let Some((hook, _, _)) = &out.spill {
                 let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
@@ -420,12 +505,26 @@ impl Sink for SharedSink {
 /// One `SharedRead`: reads every batch of the list.
 pub(crate) struct SharedSource {
     schema: SchemaRef,
+    /// The list read when it is not a finalized shared plan's.
+    fixed: Option<Arc<Output>>,
 }
 
 impl SharedSource {
+    /// A reader of the list `output` (the previous round of a recursive
+    /// CTE), which must not be appended to any more.
+    pub(crate) fn over(output: Arc<Output>) -> Arc<Self> {
+        Arc::new(Self {
+            schema: Arc::clone(&output.schema),
+            fixed: Some(output),
+        })
+    }
+
     /// A reader of rows of `schema` (the shared plan's, in its own order).
     pub(crate) fn new(schema: SchemaRef) -> Arc<Self> {
-        Arc::new(Self { schema })
+        Arc::new(Self {
+            schema,
+            fixed: None,
+        })
     }
 }
 
@@ -454,16 +553,18 @@ impl Source for SharedSource {
     }
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
-        let state = ctx
-            .dependency()
-            .cloned()
-            .ok_or_else(|| internal("a shared plan was read before it was built".to_owned()))?;
-        let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
-        let output = sink
-            .done
-            .get()
-            .cloned()
-            .ok_or_else(|| internal("a shared plan was read before it finalized".to_owned()))?;
+        let output =
+            if let Some(fixed) = &self.fixed {
+                Arc::clone(fixed)
+            } else {
+                let state = ctx.dependency().cloned().ok_or_else(|| {
+                    internal("a shared plan was read before it was built".to_owned())
+                })?;
+                let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
+                sink.done.get().cloned().ok_or_else(|| {
+                    internal("a shared plan was read before it finalized".to_owned())
+                })?
+            };
         let batches = output.batches();
         Ok(Arc::new(ReaderGlobal {
             output,

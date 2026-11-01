@@ -342,6 +342,8 @@ pub struct UnionLoopNode {
     pub layout: ::prost::alloc::vec::Vec<u64>,
     #[prost(message, optional, tag = "5")]
     pub limits: ::core::option::Option<LoopLimits>,
+    #[prost(bool, repeated, tag = "6")]
+    pub nullable: ::prost::alloc::vec::Vec<bool>,
 }
 /// feature: union_loop
 /// The bounds on a loop, decided at planning.

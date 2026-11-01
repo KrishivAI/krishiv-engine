@@ -547,8 +547,9 @@ impl<'a> Planner<'a> {
                 anchor,
                 recursive,
                 max_level,
+                limit,
                 output,
-            } => self.union_loop(*id, anchor, recursive, *max_level, output),
+            } => self.union_loop(*id, anchor, recursive, *max_level, *limit, output),
             PlanNode::UnionLoopRef { id, output } => self.loop_ref(*id, output),
             PlanNode::OneRowRelation => Ok(one_row()),
             PlanNode::Range {
@@ -577,6 +578,7 @@ impl<'a> Planner<'a> {
         anchor: &Arc<LogicalPlan>,
         recursive: &Arc<LogicalPlan>,
         max_level: Option<u32>,
+        limit: Option<u64>,
         output: &[BoundColumn],
     ) -> Result<Planned> {
         let anchor = self.plan(anchor)?;
@@ -604,7 +606,8 @@ impl<'a> Planner<'a> {
             ));
         }
         let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
-        let limits = loop_limits(&self.cx.config, max_level);
+        let mut limits = loop_limits(&self.cx.config, max_level);
+        limits.pushed_limit = limit;
         let explain = ExplainNode::new(
             "UnionLoop",
             format!("#{id} [{}]", columns(output)),
@@ -616,6 +619,7 @@ impl<'a> Planner<'a> {
                 anchor: Box::new(anchor.node),
                 recursive: Box::new(recursive.node),
                 layout: layout.clone(),
+                nullable: output.iter().map(|c| c.nullable).collect(),
                 limits,
             },
             schema,

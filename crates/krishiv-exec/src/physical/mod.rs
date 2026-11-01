@@ -65,12 +65,12 @@ mod shared_tests;
 
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
-pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub(crate) use instantiate::{
-    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
+    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
     group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op,
     top_n_op,
 };
+pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
 pub use splits::{
     ScanSplits, SplitFileRef, assign_batch_splits, assign_file_splits, deal_ranges, files_of,
@@ -488,6 +488,9 @@ pub enum PhysNode {
         recursive: Box<PhysNode>,
         /// The attribute of each output column.
         layout: Vec<AttrId>,
+        /// Whether each output column may be null (the anchor's or the
+        /// recursive term's may be).
+        nullable: Vec<bool>,
         /// The bounds on the loop.
         limits: LoopLimits,
     },
@@ -834,7 +837,7 @@ plan_data!(enum PhysNode {
     WriteFiles { input, write },
     Exchange(exchange),
     SharedRead { id, layout },
-    UnionLoop { id, anchor, recursive, layout, limits },
+    UnionLoop { id, anchor, recursive, layout, nullable, limits },
     LoopRef { id, layout },
 });
 plan_data!(struct LoopLimits { level, rows, pushed_limit });

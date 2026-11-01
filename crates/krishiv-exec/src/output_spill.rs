@@ -32,7 +32,7 @@ use futures::future::BoxFuture;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_memory::{ConsumerHandle, OwnerId, SpillSignal, SpillTicket, Spillable};
 
-use crate::context::{QueryContext, TaskContext};
+use crate::context::{OperatorId, QueryContext, TaskContext};
 use crate::error::Result;
 use crate::executor::Executor;
 use crate::sync::{Event, Mutex, lock};
@@ -101,15 +101,31 @@ impl OutputSpill {
     /// (its spill files count with the operator's). Attach the output with
     /// [`attach`](Self::attach) and move its reservations to the consumer.
     pub(crate) fn register(ctx: &TaskContext, name: &str) -> (Arc<Self>, Arc<ConsumerHandle>) {
+        Self::register_for(ctx.query(), ctx.executor(), ctx.op(), name)
+    }
+
+    /// As [`register`](Self::register), from the parts of a task context
+    /// (for an operator that makes outputs after its `global_state`).
+    pub(crate) fn register_for(
+        query: &Arc<QueryContext>,
+        executor: &Arc<dyn Executor>,
+        op: OperatorId,
+        name: &str,
+    ) -> (Arc<Self>, Arc<ConsumerHandle>) {
         let hook = Arc::new_cyclic(|me| Self {
             me: Weak::clone(me),
             signal: SpillSignal::new(),
             output: OnceLock::new(),
             running: Mutex::new(false),
-            query: Arc::clone(ctx.query()),
-            executor: Arc::clone(ctx.executor()),
+            query: Arc::clone(query),
+            executor: Arc::clone(executor),
         });
-        let consumer = ctx.register_consumer(name, Arc::clone(&hook) as Arc<dyn Spillable>);
+        let consumer = ConsumerHandle::register_counted(
+            Arc::clone(query.pool()),
+            name,
+            Some(Arc::clone(&hook) as Arc<dyn Spillable>),
+            query.spill_stats(op),
+        );
         (hook, consumer)
     }
 

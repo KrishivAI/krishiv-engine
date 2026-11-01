@@ -579,6 +579,7 @@ impl Lowerer {
                 anchor,
                 recursive: arc(recursive),
                 max_level,
+                limit: None,
                 output: Vec::new(),
             },
             c.span,

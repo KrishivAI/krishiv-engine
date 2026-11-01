@@ -68,12 +68,6 @@ use crate::variables::SessionVariables;
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
 
-tokio::task_local! {
-    /// The query-start instant (microseconds since the epoch) of the
-    /// physical planning in progress on this task.
-    static QUERY_START: i64;
-}
-
 /// Now, as microseconds since the epoch.
 fn query_start_micros() -> i64 {
     std::time::SystemTime::now()
@@ -81,48 +75,6 @@ fn query_start_micros() -> i64 {
         .ok()
         .and_then(|d| i64::try_from(d.as_micros()).ok())
         .unwrap_or_default()
-}
-
-/// Unpins the hidden tables a planning call pinned when dropped.
-struct PinGuard {
-    catalog: Arc<crate::catalog::QueryCatalog>,
-    names: Vec<String>,
-}
-
-impl Drop for PinGuard {
-    fn drop(&mut self) {
-        self.catalog.unpin_cached(&self.names);
-    }
-}
-
-/// Unpins a run's per-execution tables when dropped: the run's stream ends
-/// or is dropped, or starting it failed.
-struct Release {
-    catalog: Arc<crate::catalog::QueryCatalog>,
-    names: Vec<String>,
-}
-
-impl Drop for Release {
-    fn drop(&mut self) {
-        self.catalog.unpin_cached(&self.names);
-    }
-}
-
-/// A run's stream, holding the [`Release`] of its tables.
-struct Released {
-    inner: RecordBatchStream,
-    _release: Release,
-}
-
-impl futures::Stream for Released {
-    type Item = Result<RecordBatch, KrishivError>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
-    }
 }
 
 /// A stream of result batches; dropping it cancels the query.
@@ -1346,16 +1298,8 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false, true).await?;
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false).await?;
         Ok((optimized, physical))
-    }
-
-    /// An empty reservation in a pool of its own under the session's, for
-    /// the rows a recursive CTE keeps.
-    pub(crate) fn recursion_reservation(&self) -> krishiv_memory::Reservation {
-        let pool = self.state.memory.child("recursive-cte", None);
-        let consumer = pool.register("recursive-cte", None);
-        krishiv_memory::Reservation::new(pool, consumer)
     }
 
     /// As [`Self::physical`] for a plan that is only inspected (EXPLAIN,
@@ -1365,7 +1309,7 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false, false).await?;
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false).await?;
         Ok((optimized, physical))
     }
 
@@ -1378,62 +1322,22 @@ impl Session {
         env: &QueryEnv,
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        self.physical_with(analyzed, env, trace, false).await
+        self.physical_with(analyzed, env, trace).await
     }
 
-    /// `run_loops` false: recursive CTEs are not run (see
-    /// [`Self::physical_inspected`]).
     async fn physical_with(
         &self,
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
         trace: bool,
-        run_loops: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        // One query-start instant for the plan and every recursion round it
-        // plans (`current_timestamp()` is constant within a query): the
-        // outermost call takes it, nested ones read it.
-        let start = QUERY_START
-            .try_with(|s| *s)
-            .unwrap_or_else(|_| query_start_micros());
-        // The hidden tables the planning pins are released when this call
-        // ends in an error, is cancelled, or only inspects the plan; a plan
-        // that will run keeps them, and the run releases the ones its scans
-        // name (`Self::run_on_query`).
-        let mut pins = PinGuard {
-            catalog: Arc::clone(&env.catalog),
-            names: Vec::new(),
-        };
-        let planned = QUERY_START
-            .scope(
-                start,
-                self.physical_pinned(analyzed, env, trace, run_loops, &mut pins.names, start),
-            )
-            .await;
-        if run_loops && planned.is_ok() {
-            env.catalog.mark_releasable(std::mem::take(&mut pins.names));
-        }
-        planned
-    }
-
-    async fn physical_pinned(
-        &self,
-        analyzed: &AnalyzedPlan,
-        env: &QueryEnv,
-        trace: bool,
-        run_loops: bool,
-        pins: &mut Vec<String>,
-        start: i64,
-    ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        // Planning makes no spill directory: a query gets its scope when
-        // its plan is instantiated (`Self::worker`), so a plan that is only
-        // inspected (EXPLAIN, warnings) makes none.
-        let expanded;
+        let start = query_start_micros();
+        // A recursive CTE runs as an operator of the physical plan; the
+        // session only tells each loop how many rows its readers need.
+        let limited;
         let analyzed = if crate::recursion::has_loop(analyzed.plan.root()) {
-            let (plan, hidden) = self.expand_loops(analyzed, env, run_loops).await?;
-            pins.extend(hidden);
-            expanded = plan;
-            &expanded
+            limited = crate::recursion::push_limits(analyzed)?;
+            &limited
         } else {
             analyzed
         };
@@ -1547,31 +1451,6 @@ impl Session {
 
     /// Runs `physical` instantiated with `worker`.
     async fn run_on_query(
-        &self,
-        physical: &PhysicalPlan,
-        worker: WorkerContext,
-        env: &QueryEnv,
-        detailed: bool,
-    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
-        let release = Release {
-            catalog: Arc::clone(&env.catalog),
-            names: env
-                .catalog
-                .take_releasable(&crate::recursion::loop_tables(physical)),
-        };
-        let (stream, query) = self
-            .run_on_query_inner(physical, worker, env, detailed)
-            .await?;
-        Ok((
-            Box::pin(Released {
-                inner: stream,
-                _release: release,
-            }),
-            query,
-        ))
-    }
-
-    async fn run_on_query_inner(
         &self,
         physical: &PhysicalPlan,
         worker: WorkerContext,

@@ -282,6 +282,19 @@ fn explain_and_estimate_do_not_run_the_loop() {
 }
 
 #[test]
+fn a_loop_in_an_unreachable_branch_does_not_run() {
+    let s = Session::new().unwrap();
+    // The loop would exceed its level limit if it ran: it is only a branch
+    // of a CASE that is never taken (Spark returns 1).
+    let got = rows(
+        &s,
+        "SELECT CASE WHEN false THEN (WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+         SELECT n + 1 FROM r) SELECT count(*) FROM r) ELSE 1 END",
+    );
+    assert_eq!(got, vec![vec!["1".to_owned()]]);
+}
+
+#[test]
 fn limit_all_on_every_read_lifts_the_row_limit() {
     let s = Session::new().unwrap();
     block_on(s.sql("SET spark.sql.cteRecursionRowLimit=50")).unwrap();
@@ -344,18 +357,19 @@ fn a_nested_loop_reading_the_enclosing_round_runs_within_it() {
 }
 
 #[test]
-fn the_rows_a_recursion_keeps_count_against_the_memory_limit() {
+fn the_rows_a_recursion_keeps_spill_under_the_memory_limit() {
     let s = Session::builder()
         .config("krishiv.memory.limit", "4MB")
         .build()
         .unwrap();
-    // Wide rows: each round fits, the accumulated rows do not.
-    let class = class_of(
+    // Wide rows: each round fits, the rows of all rounds (10 MB) do not. The
+    // working table spills, the result is still complete.
+    let got = column(rows(
         &s,
         "WITH RECURSIVE r(n, pad) MAX RECURSION LEVEL 100 AS (SELECT 1, repeat('x', 100000) \
          UNION ALL SELECT n + 1, pad FROM r WHERE n < 100) SELECT count(*) FROM r",
-    );
-    assert_eq!(class, ErrorClass::UnableToAcquireMemory);
+    ));
+    assert_eq!(got, ["100"]);
 }
 
 #[test]
