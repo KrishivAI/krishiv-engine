@@ -133,7 +133,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -187,6 +187,9 @@ pub mod node {
         /// feature: generate
         #[prost(message, tag = "20")]
         Generate(super::GenerateNode),
+        /// feature: sort_merge_join
+        #[prost(message, tag = "21")]
+        SortMergeJoin(super::SortMergeJoinNode),
     }
 }
 /// feature: shared_subplan
@@ -628,6 +631,27 @@ pub struct HashJoinNode {
     /// ignorable: a reader without it builds every row, with the same result.
     #[prost(bool, tag = "11")]
     pub distinct_build: bool,
+}
+/// feature: sort_merge_join
+/// A join of its inputs sorted on the keys; the sorts are the join's own.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SortMergeJoinNode {
+    #[prost(uint32, tag = "1")]
+    pub probe: u32,
+    #[prost(uint32, tag = "2")]
+    pub build: u32,
+    #[prost(enumeration = "JoinType", tag = "3")]
+    pub join_type: i32,
+    #[prost(uint64, repeated, tag = "4")]
+    pub probe_keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "5")]
+    pub build_keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(bool, repeated, tag = "6")]
+    pub null_safe: ::prost::alloc::vec::Vec<bool>,
+    #[prost(message, optional, tag = "7")]
+    pub residual: ::core::option::Option<Residual>,
+    #[prost(bool, tag = "8")]
+    pub single_match: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {

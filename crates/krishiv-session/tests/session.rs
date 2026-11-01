@@ -1135,9 +1135,10 @@ fn ignored_hints_come_back_as_warnings() {
     );
     assert!(w.iter().any(|w| w.contains("relation 'missing'")), "{w:?}");
     // Planning: a join hint the join cannot follow.
-    let w = warnings("SELECT /*+ MERGE(o) */ p.id FROM people p JOIN other o ON p.id = o.id");
+    let w =
+        warnings("SELECT /*+ BROADCAST(p) */ p.id FROM people p LEFT JOIN other o ON p.id = o.id");
     assert!(
-        w.iter().any(|w| w.starts_with("Hint (strategy=merge)")),
+        w.iter().any(|w| w.starts_with("Hint (strategy=broadcast)")),
         "{w:?}"
     );
     // The query still runs, and a query without hints has none.

@@ -13,8 +13,8 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind, WritePlan,
+    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
+    SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::physical::{SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
@@ -545,6 +545,7 @@ impl Decoder {
                 aggregate: aggregate(a)?,
             },
             Kind::HashJoin(j) => PhysNode::HashJoin(self.hash_join(j)?),
+            Kind::SortMergeJoin(j) => PhysNode::SortMergeJoin(self.merge_join(j)?),
             Kind::NestedLoopJoin(j) => PhysNode::NestedLoopJoin(NestedLoopPlan {
                 probe: self.boxed(j.probe)?,
                 build: self.boxed(j.build)?,
@@ -642,6 +643,35 @@ impl Decoder {
             ));
         }
         Ok(plan)
+    }
+
+    fn merge_join(&mut self, j: &pb::SortMergeJoinNode) -> Result<SortMergeJoinPlan> {
+        let (probe_keys, build_keys) = (usizes(&j.probe_keys)?, usizes(&j.build_keys)?);
+        if probe_keys.is_empty()
+            || probe_keys.len() != build_keys.len()
+            || probe_keys.len() != j.null_safe.len()
+        {
+            return Err(corrupt(
+                "a sort-merge join whose key lists differ in length",
+            ));
+        }
+        let join_type = join_type(j.join_type)?;
+        if j.single_match && join_type != JoinType::LeftOuter {
+            return Err(corrupt("single match on a join that is not left outer"));
+        }
+        if join_type == JoinType::NullAwareAnti {
+            return Err(corrupt("a null-aware anti sort-merge join"));
+        }
+        Ok(SortMergeJoinPlan {
+            probe: self.boxed(j.probe)?,
+            build: self.boxed(j.build)?,
+            join_type,
+            probe_keys,
+            build_keys,
+            null_safe: j.null_safe.clone(),
+            residual: self.residual(j.residual.as_ref())?,
+            single_match: j.single_match,
+        })
     }
 
     fn exchange(&mut self, e: &pb::ExchangeNode) -> Result<ExchangePlan> {

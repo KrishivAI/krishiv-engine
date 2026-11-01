@@ -52,14 +52,14 @@ use object_store::path::Path;
 
 use super::{
     AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SubqueryPlan, ValueId, Version,
-    WritePlan, files_of, partitions_of,
+    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SortMergeJoinPlan, SubqueryPlan,
+    ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
 use crate::join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, NestedLoopJoin, NestedLoopJoinNode,
-    NestedLoopSpec,
+    NestedLoopSpec, SortMergeJoin, SortMergeJoinNode,
 };
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
@@ -646,6 +646,7 @@ impl Instantiation<'_> {
                 Ok(Built { node, schema })
             }
             PhysNode::HashJoin(j) => self.hash_join(j),
+            PhysNode::SortMergeJoin(j) => self.merge_join(j),
             PhysNode::NestedLoopJoin(j) => {
                 let probe = self.node(&j.probe)?;
                 let build = self.node(&j.build)?;
@@ -897,6 +898,26 @@ impl Instantiation<'_> {
         // The value names this input without owning it (see
         // `BroadcastBuild`): the plan holds it.
         Ok(input)
+    }
+
+    fn merge_join(&mut self, j: &SortMergeJoinPlan) -> Result<Built> {
+        let probe = self.node(&j.probe)?;
+        let build = self.node(&j.build)?;
+        let join = sort_merge_join(
+            &probe.schema,
+            &build.schema,
+            j,
+            &self.env,
+            self.spill.clone(),
+        )?;
+        Ok(Built {
+            schema: join.schema(),
+            node: Arc::new(SortMergeJoinNode {
+                join: Arc::new(join),
+                probe: probe.node,
+                build: build.node,
+            }),
+        })
     }
 
     fn hash_join(&mut self, j: &HashJoinPlan) -> Result<Built> {
@@ -1264,6 +1285,26 @@ pub(crate) fn hash_join(
         })
         .collect::<Result<Vec<_>>>()?;
     join.with_filter_values(filters, Arc::clone(values), producer)
+}
+
+pub(crate) fn sort_merge_join(
+    probe: &SchemaRef,
+    build: &SchemaRef,
+    j: &SortMergeJoinPlan,
+    env: &EvalEnv,
+    spill: Option<SpillScope>,
+) -> Result<SortMergeJoin> {
+    SortMergeJoin::try_new(JoinSpec {
+        join_type: j.join_type,
+        probe_schema: Arc::clone(probe),
+        build_schema: Arc::clone(build),
+        probe_keys: j.probe_keys.clone(),
+        build_keys: j.build_keys.clone(),
+        null_safe: j.null_safe.clone(),
+        filter: residual(probe, build, j.residual.as_ref(), env)?,
+        single_match: j.single_match,
+        spill,
+    })
 }
 
 pub(crate) fn nested_loop_join(

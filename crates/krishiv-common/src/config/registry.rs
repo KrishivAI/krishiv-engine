@@ -23,6 +23,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_RADIX_BITS,
+    &EXEC_JOIN_STRATEGY,
+    &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -117,6 +119,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
+    ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
     ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
@@ -160,6 +163,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.cteRecursionLevelLimit",
         &CTE_RECURSION_LEVEL_LIMIT,
+    ),
+    (
+        "krishiv.exec.join.smj.bufferBytes",
+        &EXEC_JOIN_SMJ_BUFFER_BYTES,
     ),
     ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
     (
@@ -508,6 +515,33 @@ pub static EXEC_JOIN_RADIX_BITS: ConfigEntry = ConfigEntry {
     doc: "Internal: a row-layout hash join build splits its rows into 2^bits partitions by \
           the top bits of the key hash (3 to 6) and indexes them in parallel. Results are \
           the same for every value.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Forces the sort-merge join on equi-joins without a strategy hint (P2-T056).
+pub static EXEC_JOIN_STRATEGY: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.strategy",
+    value_type: ValueType::Enum(&["auto", "sortMerge"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("auto"))),
+    doc: "Internal: `auto` runs equi-joins as hash joins unless a `MERGE` hint asks otherwise; \
+          `sortMerge` runs every equi-join without a strategy hint as a sort-merge join, except \
+          `NOT IN` and keys that cannot be ordered. Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// The bytes one key's rows may hold in a sort-merge join (P2-T056).
+pub static EXEC_JOIN_SMJ_BUFFER_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.smj.bufferBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(0)),
+    doc: "Bytes of one join key's right-side rows a sort-merge join keeps in memory before it \
+          moves them to a spill file; 0 takes a share of the memory pool. Spark bounds these \
+          rows by count (`spark.sql.sortMergeJoinExec.buffer.in.memory.threshold` and \
+          `spark.sql.sortMergeJoinExec.buffer.spill.threshold`), which have no effect here.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

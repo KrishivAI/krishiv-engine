@@ -82,6 +82,7 @@ fn validate(schema: &Value, doc: &Value, root: &Value, path: &str) -> Result<(),
             "string" => doc.is_string(),
             "boolean" => doc.is_boolean(),
             "integer" => doc.is_u64() || doc.is_i64(),
+            "number" => doc.is_number(),
             "null" => doc.is_null(),
             other => return Err(bad(&format!("unsupported type {other}"))),
         };

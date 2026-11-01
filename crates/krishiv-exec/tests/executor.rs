@@ -754,6 +754,17 @@ fn config_join_row_layout_keys() {
     assert_eq!(read("9").join_radix_bits, 6);
 }
 
+#[test]
+fn config_merge_join_buffer_bytes() {
+    let default = ExecConfig::from_config(&Config::new());
+    assert_eq!(default.join_merge_buffer_bytes, 0);
+    let (config, _) = Config::from_pairs([("krishiv.exec.join.smj.bufferBytes", "4m")]).unwrap();
+    assert_eq!(
+        ExecConfig::from_config(&config).join_merge_buffer_bytes,
+        4 << 20
+    );
+}
+
 /// Sort hash buckets are on by default; `krishiv.exec.sort.hashBuckets`
 /// turns them off.
 #[test]

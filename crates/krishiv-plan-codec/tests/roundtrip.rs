@@ -51,6 +51,7 @@ variants!(
     WindowGroupLimit,
     Aggregate,
     HashJoin,
+    SortMergeJoin,
     NestedLoopJoin,
     Union,
     WriteFiles,
@@ -75,6 +76,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::WindowGroupLimit { .. } => Variant::WindowGroupLimit,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
+        PhysNode::SortMergeJoin(_) => Variant::SortMergeJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
@@ -462,6 +464,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "sort_merge_join"
             | "partial_aggregate"
             | "shared_subplan"
             | "rust_udf"

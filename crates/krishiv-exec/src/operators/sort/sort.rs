@@ -165,6 +165,8 @@ pub struct Sort {
     /// The keys to bucket by ([`Sort::with_hash_buckets`]).
     bucket_keys: Option<Arc<KeyEncoder>>,
     prune: Option<Prune>,
+    /// Read bucket by bucket ([`Sort::bucket_reader`]), not claimed.
+    read_by_bucket: bool,
 }
 
 impl Sort {
@@ -186,6 +188,53 @@ impl Sort {
             counters: Arc::default(),
             bucket_keys: None,
             prune: None,
+            read_by_bucket: false,
+        })
+    }
+
+    /// Keeps a spilled result's runs by bucket, for
+    /// [`Sort::bucket_reader`] (a merge join reads the same bucket of two
+    /// sorts); the source side's claims then find nothing spilled.
+    #[must_use]
+    pub(crate) fn read_by_bucket(mut self) -> Self {
+        self.read_by_bucket = true;
+        self
+    }
+
+    /// The buckets of a finalized sort's `global` state.
+    pub(crate) fn bucket_count(global: &GlobalState) -> Result<usize> {
+        Ok(global_ref::<SortGlobal>(global, "Sort")?.buckets)
+    }
+
+    /// The memory merging bucket `b` of a finalized sort takes up front (no
+    /// more than its output batch when nothing spilled).
+    pub(crate) fn bucket_need(global: &GlobalState, b: usize, batch_rows: usize) -> Result<usize> {
+        let g = global_ref::<SortGlobal>(global, "Sort")?;
+        let s = lock(&g.readers.state);
+        Ok(s.by_bucket.get(b).map_or(0, |runs| {
+            if runs.is_empty() {
+                0
+            } else {
+                merge_need(runs, runs.len(), batch_rows, false)
+            }
+        }))
+    }
+
+    /// A reader of bucket `b` alone, for [`Source::get_data`]: no claim, and
+    /// its merge waits for its memory with arbitration.
+    pub(crate) fn bucket_reader(
+        &self,
+        env: &crate::join::MergeEnv,
+        handle: &Arc<ConsumerHandle>,
+        b: usize,
+    ) -> LocalState {
+        Box::new(SortSource {
+            state: SourceState::Start,
+            bucket: Some(b),
+            query: Arc::clone(&env.query),
+            executor: Arc::clone(&env.executor),
+            handle: Arc::clone(handle),
+            batch_rows: env.query.config().batch_size.max(1),
         })
     }
 
@@ -858,6 +907,8 @@ struct Readers {
 struct ReadersState {
     /// Each bucket's runs, claimed from the end.
     spilled: Vec<Vec<SpillRun>>,
+    /// Each bucket's runs by bucket number (`Sort::read_by_bucket`).
+    by_bucket: Vec<Vec<SpillRun>>,
     /// Readers holding a bucket (reserving or merging it).
     active: usize,
     /// Readers merging a bucket.
@@ -1140,8 +1191,22 @@ impl Sort {
             return Ok(());
         }
         let handle = Arc::clone(ctx.consumer().consumer());
+        let mut max_fan_in = self.max_fan_in;
+        // A merge join reads two final merges at once: each keeps to a quarter
+        // of the pool, so the two and the join's group fit together.
+        if let Some(limit) = handle
+            .pool()
+            .effective_limit()
+            .filter(|_| self.read_by_bucket)
+        {
+            while max_fan_in > 2
+                && merge_need(runs, max_fan_in.min(runs.len()), batch_rows, false) > limit / 4
+            {
+                max_fan_in /= 2;
+            }
+        }
         let (mut budget, fan_in) =
-            merge_budget(runs, self.max_fan_in, batch_rows, &handle, true).await?;
+            merge_budget(runs, max_fan_in, batch_rows, &handle, true).await?;
         let target = budget.size();
         while runs.len() > fan_in {
             self.counters.passes.fetch_add(1, Ordering::Relaxed);
@@ -1394,6 +1459,10 @@ impl Sink for Sort {
             for runs in &mut spilled {
                 self.reduce(runs, batch_rows, ctx).await?;
             }
+            if self.read_by_bucket {
+                lock(&g.readers.state).by_bucket = spilled;
+                return Ok(());
+            }
             spilled.retain(|runs| !runs.is_empty());
             // Readers claim from the end: the first bucket first.
             spilled.reverse();
@@ -1488,6 +1557,8 @@ fn buffered(parts: &[Part]) -> usize {
 /// The source side's per-driver state.
 struct SortSource {
     state: SourceState,
+    /// The one bucket this reader reads ([`Sort::bucket_reader`]).
+    bucket: Option<usize>,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
     handle: Arc<ConsumerHandle>,
@@ -1550,6 +1621,7 @@ impl Source for Sort {
     fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
         Ok(Box::new(SortSource {
             state: SourceState::Start,
+            bucket: None,
             query: Arc::clone(ctx.query()),
             executor: Arc::clone(ctx.executor()),
             handle: Arc::clone(ctx.consumer().consumer()),
@@ -1569,15 +1641,32 @@ impl Source for Sort {
                 match mem::replace(&mut l.state, SourceState::Done) {
                     SourceState::Start => {
                         let held = lock(&g.shared).held.clone();
-                        l.state = match held {
-                            Some(held) => SourceState::Held(held, None),
-                            None => SourceState::Spilled,
+                        l.state = match (held, l.bucket) {
+                            (Some(held), b) => SourceState::Held(held, b),
+                            (None, None) => SourceState::Spilled,
+                            (None, Some(b)) => {
+                                let runs = lock(&g.readers.state)
+                                    .by_bucket
+                                    .get_mut(b)
+                                    .map(mem::take)
+                                    .unwrap_or_default();
+                                if runs.is_empty() {
+                                    return Ok(None);
+                                }
+                                let merging = self.open_runs(l, runs, None).await?;
+                                let merging = merging.map_err(|_| {
+                                    internal("a waiting merge was refused memory".to_owned())
+                                })?;
+                                SourceState::Merging(merging, After::Spilled)
+                            }
                         };
                     }
                     SourceState::Held(held, bucket) => {
-                        let next = match bucket {
-                            Some(b) => Some(b),
-                            None => held.claim()?,
+                        let next = match (bucket, l.bucket) {
+                            (Some(b), _) => Some(b),
+                            // Its one bucket is read.
+                            (None, Some(_)) => return Ok(None),
+                            (None, None) => held.claim()?,
                         };
                         let Some(b) = next else {
                             continue;
@@ -1597,6 +1686,8 @@ impl Source for Sort {
                             }
                         }
                     }
+                    // Its one bucket is read.
+                    SourceState::Spilled if l.bucket.is_some() => return Ok(None),
                     SourceState::Spilled => {
                         // Listen before claiming, so a merge ending in
                         // between is not missed.
