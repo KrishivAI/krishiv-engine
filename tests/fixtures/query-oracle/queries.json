@@ -1,0 +1,10338 @@
+{
+"duckdb": "2.0.0",
+"seed": 20261101,
+"queries": [
+{
+"sql": "SELECT count(*) AS a0, count(a0.l_partkey) AS a1 FROM lineitem a0 WHERE a0.l_quantity BETWEEN 11.00 AND 34.00",
+"rows": [
+[
+"28988",
+"28988"
+]
+]
+},
+{
+"sql": "SELECT a0.r_comment AS g0, a0.r_name AS g1, max(a0.r_comment) AS a0 FROM region a0 WHERE NULLIF(a0.r_regionkey, 0) > 1 GROUP BY a0.r_comment, a0.r_name",
+"rows": [
+[
+"c, special dependencies around ",
+"ASIA",
+"c, special dependencies around "
+],
+[
+"e dolphins are furiously about the carefully ",
+"EUROPE",
+"e dolphins are furiously about the carefully "
+],
+[
+" foxes boost furiously along the carefully dogged tithes. slyly regular orbits according to the special epit",
+"MIDDLE EAST",
+" foxes boost furiously along the carefully dogged tithes. slyly regular orbits according to the special epit"
+]
+]
+},
+{
+"sql": "SELECT a0.c_name AS g0, a0.c_comment AS g1, count(*) AS a0 FROM customer a0 WHERE a0.c_phone LIKE '24%' GROUP BY a0.c_name, a0.c_comment",
+"rows": [
+[
+"Customer#000001279",
+"ng requests. regular accounts sleep slyly. ",
+"1"
+],
+[
+"Customer#000001317",
+"xpress requests wake blithely. blithely unusual platele",
+"1"
+],
+[
+"Customer#000000933",
+"finally pending packages wake furiously dogged pinto beans. carefully silent packages on the q",
+"1"
+],
+[
+"Customer#000001177",
+"rate furiously! dugouts hinder furiously about the regular packages. bold ",
+"1"
+],
+[
+"Customer#000001407",
+"uests lose furiously carefully blithe packages. slyly ironic do",
+"1"
+],
+[
+"Customer#000000236",
+"ily special instructions. deposits use carefully. unusual, permanent accounts about the carefully iron",
+"1"
+],
+[
+"Customer#000000827",
+"r deposits are. carefully express packages impress furiously",
+"1"
+],
+[
+"Customer#000000912",
+"s sleep slyly along the regular, even i",
+"1"
+],
+[
+"Customer#000001282",
+"ideas. furiously close accounts wake",
+"1"
+],
+[
+"Customer#000000795",
+"hily furious accounts. blithely final epi",
+"1"
+],
+[
+"Customer#000000834",
+"ns. quickly regular notornis about the quickly silent pinto beans sleep quickly about the asymptotes: c",
+"1"
+],
+[
+"Customer#000001172",
+"pinto beans. slyly pending requests cajole after the fluffily express frays! furiously fluffy instructions are furio",
+"1"
+],
+[
+"Customer#000001243",
+". express, final platelets nod. special, regular orbits haggle carefully alongside of the carefully br",
+"1"
+],
+[
+"Customer#000000114",
+"e quickly ironic instructions wake blithely according to the special, bold foxe",
+"1"
+],
+[
+"Customer#000000269",
+"slyly express dolphins. requests sleep slyly above the special p",
+"1"
+],
+[
+"Customer#000000475",
+" are furiously ironic ideas. blithely special requests sleep q",
+"1"
+],
+[
+"Customer#000000507",
+"y after the slyly thin accounts. blithely regular requests are quickly. unusual pinto beans cajole even",
+"1"
+],
+[
+"Customer#000000861",
+"ole blithely about the slyly close theo",
+"1"
+],
+[
+"Customer#000001277",
+"inal ideas. quickly express platele",
+"1"
+],
+[
+"Customer#000000403",
+"packages sleep fluffily. foxes inside the blit",
+"1"
+],
+[
+"Customer#000000577",
+"ar theodolites haggle quickly re",
+"1"
+],
+[
+"Customer#000000756",
+"quickly among the quickly pending foxes. fluffily regular pinto beans among the express, ironic foxes",
+"1"
+],
+[
+"Customer#000000843",
+"y busily pending requests. quickly final accounts engage according to the special theodolites. special instruction",
+"1"
+],
+[
+"Customer#000000970",
+"ecial deposits nag carefully furiously",
+"1"
+],
+[
+"Customer#000000655",
+"ngside of the requests. express deposits boost quickly.",
+"1"
+],
+[
+"Customer#000000867",
+"final packages use blithely across the ironic",
+"1"
+],
+[
+"Customer#000001464",
+"ers hinder blithely. quickly ironic theodolites sleep fluffily regular, speci",
+"1"
+],
+[
+"Customer#000001133",
+"its affix above the slyly ironic pearls. quickly final ideas boost caref",
+"1"
+],
+[
+"Customer#000000784",
+" accounts. pinto beans boost furiously. ironic, bold courts above the quickly",
+"1"
+],
+[
+"Customer#000001116",
+"ly around the quickly special accounts.",
+"1"
+],
+[
+"Customer#000000400",
+"gle. unusual pinto beans nag care",
+"1"
+],
+[
+"Customer#000000578",
+"press instructions use sometimes regular, express pint",
+"1"
+],
+[
+"Customer#000000612",
+" about the fluffily bold requests. furiously slow platelets haggle sl",
+"1"
+],
+[
+"Customer#000000739",
+"blithely theodolites. bold accounts mold furiously. ironic ideas haggle quickly. regular requests wake above the ",
+"1"
+],
+[
+"Customer#000000359",
+" after the furiously bold ideas. carefully bold ideas wake ruthle",
+"1"
+],
+[
+"Customer#000000617",
+"quests. quickly even deposits about the blithely bold accounts ",
+"1"
+],
+[
+"Customer#000000913",
+"symptotes. platelets are carefully carefully special foxes. carefully unusua",
+"1"
+],
+[
+"Customer#000001255",
+"bold deposits cajole slyly unusual theodolites. furiously pending escapades nag quickly stealth",
+"1"
+],
+[
+"Customer#000001318",
+"blithely furiously silent requests. regular, silent ideas detect at the iron",
+"1"
+],
+[
+"Customer#000000439",
+"equests. slyly special instructions along the furiously spec",
+"1"
+],
+[
+"Customer#000000499",
+"ithely quickly regular sheaves. fluffily final waters affix carefully silent pinto beans. theod",
+"1"
+],
+[
+"Customer#000000800",
+"ly pending packages cajole slyly final theodolites. carefully silent accounts kindle. blith",
+"1"
+],
+[
+"Customer#000001271",
+"mptotes. slyly silent dependencies wake fluffily about the bol",
+"1"
+],
+[
+"Customer#000001375",
+"deposits. ironic, final packages boost furiously deposits. express plat",
+"1"
+],
+[
+"Customer#000001497",
+"kly even pinto beans. slyly final courts detect quickly ironic accounts. id",
+"1"
+],
+[
+"Customer#000000089",
+"theodolites x-ray carefully even pinto beans. carefully final requests dazzle",
+"1"
+],
+[
+"Customer#000000355",
+"gle quickly blithely express requests. quickly express pinto bean",
+"1"
+],
+[
+"Customer#000001114",
+"eposits. quickly even packages sleep carefully against the carefully regular platelets. ",
+"1"
+],
+[
+"Customer#000001156",
+" slyly about the final, quick deposits. fluffily special instructions impr",
+"1"
+],
+[
+"Customer#000001185",
+"xcuses wake accounts! special pinto beans try to are quickly unusual, final dolphins. regular, f",
+"1"
+]
+]
+},
+{
+"sql": "SELECT a0.s_acctbal, a0.s_phone FROM supplier a0 WHERE NULLIF(a0.s_nationkey, 10) <> 24 UNION SELECT a0.s_acctbal, a0.s_phone FROM supplier a0 WHERE a0.s_name LIKE 'Su%'",
+"rows": [
+[
+"308.56",
+"18-453-357-6394"
+],
+[
+"6942.67",
+"28-739-447-2525"
+],
+[
+"9202.57",
+"29-603-653-2494"
+],
+[
+"5119.38",
+"31-267-327-4328"
+],
+[
+"-283.84",
+"21-151-690-3663"
+],
+[
+"2972.26",
+"32-822-502-4215"
+],
+[
+"8080.14",
+"26-940-594-4852"
+],
+[
+"2958.09",
+"24-810-354-4471"
+],
+[
+"2733.69",
+"22-966-435-7200"
+],
+[
+"1044.10",
+"15-670-998-6860"
+],
+[
+"1191.94",
+"24-402-227-9600"
+],
+[
+"7773.41",
+"22-421-568-4862"
+],
+[
+"7241.40",
+"19-475-537-1368"
+],
+[
+"368.76",
+"26-528-528-1157"
+],
+[
+"1432.69",
+"18-179-925-7181"
+],
+[
+"9508.37",
+"16-821-608-1166"
+],
+[
+"3393.08",
+"28-613-996-1505"
+],
+[
+"530.82",
+"13-715-945-6730"
+],
+[
+"2371.51",
+"23-273-493-3679"
+],
+[
+"3017.47",
+"10-470-144-1330"
+],
+[
+"6115.65",
+"18-851-856-5633"
+],
+[
+"6177.35",
+"17-886-101-6083"
+],
+[
+"7014.50",
+"28-113-898-6643"
+],
+[
+"4186.95",
+"17-281-345-4863"
+],
+[
+"5873.07",
+"31-914-775-1978"
+],
+[
+"4192.40",
+"11-383-516-1199"
+],
+[
+"8564.12",
+"17-138-897-9374"
+],
+[
+"6565.11",
+"32-698-298-6317"
+],
+[
+"9759.38",
+"17-713-930-5667"
+],
+[
+"-40.45",
+"31-646-289-1906"
+],
+[
+"2470.84",
+"12-701-432-8346"
+],
+[
+"2766.80",
+"14-728-888-8882"
+],
+[
+"2588.83",
+"29-142-539-1403"
+],
+[
+"6150.38",
+"34-278-310-2731"
+],
+[
+"237.31",
+"20-519-982-2343"
+],
+[
+"4641.08",
+"25-843-787-7479"
+],
+[
+"7627.85",
+"27-498-742-3860"
+],
+[
+"9189.82",
+"25-656-247-5058"
+],
+[
+"5742.03",
+"15-781-401-3047"
+],
+[
+"3576.55",
+"14-563-538-1657"
+],
+[
+"-224.84",
+"28-716-704-8686"
+],
+[
+"2971.10",
+"24-228-763-7840"
+],
+[
+"166.32",
+"22-535-310-6971"
+],
+[
+"1638.02",
+"19-259-876-1014"
+],
+[
+"3580.35",
+"34-748-308-3215"
+],
+[
+"4032.68",
+"15-679-861-2259"
+],
+[
+"1365.79",
+"24-696-997-4969"
+],
+[
+"9107.22",
+"13-727-620-7813"
+],
+[
+"4515.80",
+"18-550-360-2464"
+],
+[
+"6201.77",
+"16-380-123-9217"
+],
+[
+"7040.82",
+"26-729-551-1115"
+],
+[
+"-811.62",
+"11-555-705-5922"
+],
+[
+"2944.23",
+"19-189-635-8862"
+],
+[
+"5630.62",
+"24-722-551-9498"
+],
+[
+"7174.74",
+"17-167-806-8199"
+],
+[
+"3191.70",
+"31-351-324-5062"
+],
+[
+"7162.15",
+"34-876-912-6007"
+],
+[
+"21.18",
+"31-758-894-4436"
+],
+[
+"2512.41",
+"14-361-296-6426"
+],
+[
+"-290.06",
+"32-231-247-6991"
+],
+[
+"4515.87",
+"19-561-560-7437"
+],
+[
+"287.16",
+"29-974-934-4713"
+],
+[
+"-831.07",
+"27-681-514-6892"
+],
+[
+"2455.98",
+"33-300-836-9529"
+],
+[
+"1883.37",
+"29-903-665-7065"
+],
+[
+"3437.24",
+"22-888-654-7193"
+],
+[
+"5302.37",
+"20-403-398-8662"
+],
+[
+"4780.93",
+"34-869-118-7803"
+],
+[
+"6820.35",
+"33-990-965-2201"
+],
+[
+"9365.80",
+"12-253-590-5816"
+],
+[
+"9170.71",
+"10-620-939-2254"
+],
+[
+"5916.91",
+"26-515-530-4159"
+],
+[
+"1309.70",
+"34-278-790-7004"
+],
+[
+"1687.81",
+"29-601-884-9219"
+],
+[
+"9198.31",
+"32-431-945-3541"
+],
+[
+"4381.41",
+"31-720-790-5245"
+],
+[
+"8179.68",
+"11-743-919-7272"
+],
+[
+"3086.13",
+"21-191-938-9469"
+],
+[
+"5926.41",
+"19-559-422-5776"
+],
+[
+"1887.62",
+"28-708-999-2028"
+],
+[
+"586.16",
+"27-249-395-9123"
+],
+[
+"-963.79",
+"32-444-835-2434"
+],
+[
+"-724.31",
+"28-177-572-9691"
+],
+[
+"3671.34",
+"28-272-909-1617"
+],
+[
+"5755.94",
+"27-918-335-1736"
+],
+[
+"-891.99",
+"10-538-384-8460"
+],
+[
+"3556.47",
+"33-484-637-7873"
+],
+[
+"92.44",
+"26-659-969-5586"
+],
+[
+"4170.51",
+"30-166-486-1559"
+],
+[
+"3891.91",
+"34-852-489-8585"
+],
+[
+"-966.20",
+"14-144-830-2814"
+],
+[
+"3793.13",
+"26-758-310-7496"
+],
+[
+"6642.22",
+"14-618-678-1789"
+],
+[
+"9915.24",
+"34-211-567-6800"
+],
+[
+"-632.16",
+"26-471-195-5486"
+],
+[
+"6096.58",
+"18-396-489-9719"
+],
+[
+"8466.50",
+"14-491-707-8310"
+],
+[
+"1467.77",
+"24-529-559-2461"
+],
+[
+"6255.87",
+"13-604-986-9056"
+],
+[
+"4746.66",
+"34-860-229-1674"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN (a0.s_acctbal BETWEEN 368.76 AND 1638.02 AND a0.s_nationkey < 2) THEN a0.s_address END AS c0, COALESCE(NULLIF(a0.s_comment, NULL), a0.s_comment) AS c1 FROM supplier a0 WHERE a0.s_acctbal >= (SELECT min(s_acctbal) FROM supplier s0 WHERE (s0.s_comment IS NOT NULL AND s0.s_comment IS NOT NULL))",
+"rows": [
+[
+"NULL",
+" instructions. slyly unusual"
+],
+[
+"NULL",
+" the pending packages. furiously expres"
+],
+[
+"NULL",
+"ong the fluffily idle packages: bold foxes mold silent package"
+],
+[
+"NULL",
+"al braids affix through the regular"
+],
+[
+"NULL",
+"accounts. instructions ha"
+],
+[
+"NULL",
+" sleep fluffily against the blithely special dugouts. furiously express th"
+],
+[
+"NULL",
+"ke across the slyly ironic packages. carefully special pinto beans wake blithely. even deposits los"
+],
+[
+"NULL",
+"iously about the bold packages. "
+],
+[
+"NULL",
+"asymptotes cajole along the furiously bold deposits. iron"
+],
+[
+"NULL",
+"ronic pinto beans. slyly even i"
+],
+[
+"NULL",
+"efully across the furiously regular requests. pending, regular instructions against the bold, expre"
+],
+[
+"NULL",
+"ending deposits. carefully express dependencies detect. blithely regular pla"
+],
+[
+"NULL",
+"against the quickly ironic packages. slyly regular excuses wake since"
+],
+[
+"NULL",
+"leep despite the fluffily thin accounts. caref"
+],
+[
+"NULL",
+"nently against the bravely bold deposits. carefully ironic platelets are. pendi"
+],
+[
+"NULL",
+"platelets thrash against the slyly special req"
+],
+[
+"NULL",
+"se slyly furiously even notornis. furiously regular packa"
+],
+[
+"NULL",
+"es wake above the slyly ironic pearls"
+],
+[
+"NULL",
+"g the carefully regular packages. blithely unusual instructions sl"
+],
+[
+"NULL",
+"es. fluffily ironic instructions nag slyly slyly pending realms. blithely final r"
+],
+[
+"NULL",
+"thlessly bold accounts. slyly even accounts against the special requests boost slyly bl"
+],
+[
+"NULL",
+"oxes among the special pains cajole furiously"
+],
+[
+"NULL",
+"sual asymptotes affix quickly at the instructions. deposits "
+],
+[
+"NULL",
+"olphins. unusual deposits nag along the fluffily"
+],
+[
+"NULL",
+"quickly pending accounts cajole blithely against the ironic, pending theodolites. even, silent reque"
+],
+[
+"NULL",
+" from the foxes. special deposits cajole blithely special theodolites-- quickly bold "
+],
+[
+"NULL",
+"permanently bold gifts. unusual instructions af"
+],
+[
+"NULL",
+"ng the packages. even, regular asymptotes hang carefully. quietly express epitaphs are about the f"
+],
+[
+"NULL",
+" across the furiously final theodolites are against the quickly thin requests. instructio"
+],
+[
+"NULL",
+"lyly pending requests run slyly furiously slow deposits. carefully regular deposits use. packages ar"
+],
+[
+"NULL",
+"s use carefully according to the slyly regular accounts. packages among the st"
+],
+[
+"NULL",
+"inments. silently final pinto beans among the "
+],
+[
+"NULL",
+"l packages cajole unusual, final packages. slyly express requests"
+],
+[
+"NULL",
+"al packages wake blithely. quickly express accounts cajole packages. final ideas haggle "
+],
+[
+"NULL",
+"lyly above the furiously ironic attainments. pending dugouts was quic"
+],
+[
+"NULL",
+"ithely even pinto beans. bold, express pinto beans according to the carefully r"
+],
+[
+"NULL",
+"deposits. furiously ironic dolphins after the slyly even accounts haggle against the excuses. "
+],
+[
+"NULL",
+"inst the slyly final pinto beans. carefully un"
+],
+[
+"NULL",
+"ts. special, final requests along the thinly regular accounts are across the bold pac"
+],
+[
+"NULL",
+"ress deposits affix blithely ideas. final"
+],
+[
+"NULL",
+"ss courts: blithely ironic excuses might haggl"
+],
+[
+"NULL",
+"egular ideas haggle. furiously ironic acco"
+],
+[
+"NULL",
+"y regular deposits-- requests in"
+],
+[
+"NULL",
+"even deposits. furiously e"
+],
+[
+"NULL",
+"ndencies detect quickly unusual foxes. special, "
+],
+[
+"NULL",
+"d somas use around the furious"
+],
+[
+"NULL",
+"nd the packages; final, pending dependencie"
+],
+[
+"NULL",
+"ecial excuses detect blithely. slyly regular requests "
+],
+[
+"NULL",
+"thely bold packages. final, pending instructions nod? even requests above the regular, "
+],
+[
+"NULL",
+" furiously special ideas; regular dependencies wake furiously someti"
+],
+[
+"NULL",
+"ording to the ironic accounts: express deposits nag daringly. slyly ironic packages grow daringly q"
+],
+[
+"NULL",
+"arefully silent pinto beans use furiously furiously even deposits. regular packages are furious"
+],
+[
+"NULL",
+"fully pending accounts. packages "
+],
+[
+"NULL",
+"ake quickly foxes. deposits boost furiously. carefully final packag"
+],
+[
+"NULL",
+"al requests after the blithely express ideas affix carefully above the express, ironic "
+],
+[
+"NULL",
+"fully final accounts. even accounts across the thin, final notornis are slyly"
+],
+[
+"NULL",
+"entiments boost. blithely regular fo"
+],
+[
+"NULL",
+"d the fluffily even ideas. slyly final requests are quickly furi"
+],
+[
+"NULL",
+"s impress furiously along the blithely ironic deposi"
+],
+[
+"NULL",
+"y regular requests. final ideas a"
+],
+[
+"NULL",
+"the quickly bold foxes. slyly ev"
+],
+[
+"NULL",
+"egular packages. fluffily regular dolphins along the furiously sly packages integrate aro"
+],
+[
+"NULL",
+"y. regular, special deposits integrate furiously unusual deposits. unusual, ironic dolphins"
+],
+[
+"NULL",
+" furiously ironic accounts wake against "
+],
+[
+"NULL",
+"regular asymptotes wake furiously furiously ironic packages. ideas sleep above t"
+],
+[
+"NULL",
+"uests cajole blithely across t"
+],
+[
+"NULL",
+"arefully pending accounts sl"
+],
+[
+"NULL",
+"ronic notornis: furiously silent theodolites sno"
+],
+[
+"NULL",
+"nusual packages wake furiously. furiously ironic frays along the quickly regular deposits bo"
+],
+[
+"NULL",
+"n instructions are about the ironic, ironic excuses. instructions cajol"
+],
+[
+"NULL",
+" the quickly even ideas. accounts alongside of the even dependencies detect ruthlessly acr"
+],
+[
+"NULL",
+"ccounts. blithely bold deposits use carefully ironic"
+],
+[
+"NULL",
+" along the instructions. dep"
+],
+[
+"NULL",
+"ully about the even packages. blithely regular dependencies across the even platelets play daring"
+],
+[
+"NULL",
+"platelets cajole. sentiments "
+],
+[
+"NULL",
+"ending foxes wake carefully blithely express accounts. final accounts u"
+],
+[
+"NULL",
+"ainst the blithely ironic packages poach at the regul"
+],
+[
+"NULL",
+"ccounts. evenly express deposits between the blithely pending instructions unwind regular ideas. bl"
+],
+[
+"NULL",
+" slyly. quietly slow instructions around the furiously ironic theodolites are am"
+],
+[
+"NULL",
+"ring, even sentiments are. evenly even ideas wake fluffily blithely ironic packages. even platelets"
+],
+[
+"NULL",
+"ven pinto beans run furiously. deposits use carefully across the slyly blithe packages. car"
+],
+[
+"NULL",
+"e ironic accounts. furiously even accounts inside the reque"
+],
+[
+"NULL",
+"ccounts are fluffily? blithely pending packages should haggle furiousl"
+],
+[
+"NULL",
+"ironic warthogs. carefully final dependenci"
+],
+[
+"NULL",
+"ckages. express requests haggle busy, regu"
+],
+[
+"NULL",
+" foxes boost after the carefully silent asymptotes. slyl"
+],
+[
+"NULL",
+" beans are silently idle requests. regular deposits above the requests slee"
+],
+[
+"NULL",
+"dugouts haggle slyly deposits"
+],
+[
+"NULL",
+"gular theodolites. deposits after the regular deposits "
+],
+[
+"NULL",
+"pinto beans. blithely final re"
+],
+[
+"NULL",
+"pending pinto beans after the silent accounts boost fluffily quickly regular i"
+],
+[
+"NULL",
+"sits unwind blithely. even, final gifts wake furiously of t"
+],
+[
+"NULL",
+"instructions mold slyly special dolphins. quickly regular instru"
+],
+[
+"NULL",
+"s are fluffily. bold accounts dazzle blithely regular packag"
+],
+[
+"NULL",
+"iously special packages integrate. finally pendi"
+],
+[
+"NULL",
+"ously quick deposits. furiously bold requests along"
+],
+[
+"NULL",
+"riously even pains. quickly special depende"
+],
+[
+"NULL",
+" to the unusual accounts. carefully ironic"
+],
+[
+"NULL",
+" deposits sleep. quickly sp"
+],
+[
+"NULL",
+"refully final, regular accounts. permanently ironic platelets wake blithely along the f"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.o_orderpriority AS c0 FROM orders a0 WHERE (a0.o_totalprice BETWEEN 47317.62 AND 71568.37 OR a0.o_clerk > 'Clerk#000000295')",
+"rows": [
+[
+"2-HIGH"
+],
+[
+"1-URGENT"
+],
+[
+"3-MEDIUM"
+],
+[
+"5-LOW"
+],
+[
+"4-NOT SPECIFIED"
+]
+]
+},
+{
+"sql": "SELECT a0.n_comment AS c0, a0.n_nationkey AS c1, a0.n_regionkey AS c2 FROM nation a0 WHERE a0.n_regionkey IN (SELECT b0.r_regionkey FROM region b0 WHERE (b0.r_name <> 'AFRICA' AND b0.r_name <= 'ASIA'))",
+"rows": [
+[
+"instructions wake quickly. final deposits haggle. final, silent theodolites ",
+"1",
+"1"
+],
+[
+"asymptotes use fluffily quickly bold instructions. slyly bold dependencies sleep carefully pending accounts",
+"2",
+"1"
+],
+[
+"ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+"3",
+"1"
+],
+[
+"uriously unusual deposits about the slyly final pinto beans could",
+"8",
+"2"
+],
+[
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque",
+"9",
+"2"
+],
+[
+" quickly final packages. furiously i",
+"12",
+"2"
+],
+[
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir",
+"17",
+"1"
+],
+[
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"18",
+"2"
+],
+[
+"lly across the quickly even pinto beans. caref",
+"21",
+"2"
+],
+[
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"24",
+"1"
+]
+]
+},
+{
+"sql": "SELECT max(a1.o_orderstatus) AS a0, count(DISTINCT a1.o_comment) AS a1, count(*) AS a2 FROM lineitem a0 JOIN orders a1 ON a0.l_orderkey = a1.o_orderkey WHERE ((a0.l_comment LIKE 'aft%' AND NULLIF(a1.o_totalprice, 109229.37) = 278148.33) OR (a0.l_extendedprice = 40843.80 OR NULLIF(a0.l_orderkey, 38785) = 24579))",
+"rows": [
+[
+"F",
+"3",
+"8"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT CASE WHEN (a0.r_comment IS NOT NULL AND NULLIF(a0.r_regionkey, 3) > 2) THEN a0.r_name END AS c0, CASE WHEN (a0.r_regionkey BETWEEN 2 AND 4 AND a0.r_regionkey <> 1) THEN a0.r_name END AS c1 FROM region a0 WHERE (a0.r_comment IS NOT NULL OR a0.r_name LIKE 'AS%')",
+"rows": [
+[
+"MIDDLE EAST",
+"MIDDLE EAST"
+],
+[
+"NULL",
+"NULL"
+],
+[
+"NULL",
+"EUROPE"
+],
+[
+"NULL",
+"ASIA"
+]
+]
+},
+{
+"sql": "SELECT a0.l_discount AS g0, a2.ps_suppkey AS g1, count(a0.l_shipdate) AS a0 FROM lineitem a0 LEFT JOIN supplier a1 ON a0.l_suppkey = a1.s_suppkey AND (a1.s_acctbal = 4032.68 AND a1.s_nationkey IN (20, 1, 5)) JOIN partsupp a2 ON a1.s_suppkey = a2.ps_suppkey WHERE a0.l_quantity BETWEEN 21.00 AND 40.00 GROUP BY a0.l_discount, a2.ps_suppkey",
+"rows": [
+[
+"0.00",
+"2",
+"1680"
+],
+[
+"0.01",
+"2",
+"1520"
+],
+[
+"0.02",
+"2",
+"1360"
+],
+[
+"0.03",
+"2",
+"800"
+],
+[
+"0.04",
+"2",
+"2000"
+],
+[
+"0.05",
+"2",
+"1760"
+],
+[
+"0.06",
+"2",
+"1680"
+],
+[
+"0.07",
+"2",
+"1920"
+],
+[
+"0.08",
+"2",
+"1280"
+],
+[
+"0.09",
+"2",
+"2080"
+],
+[
+"0.10",
+"2",
+"1920"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT count(a0.ps_suppkey) AS a0, sum(a0.ps_suppkey) AS a1 FROM partsupp a0 WHERE a0.ps_partkey BETWEEN 197 AND 235) SELECT * FROM q",
+"rows": [
+[
+"156",
+"7546"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN (a0.n_nationkey IS NULL OR a0.n_regionkey BETWEEN 0 AND 3) THEN a0.n_name END AS c0, a0.n_regionkey AS c1, a0.n_comment AS c2 FROM nation a0 WHERE a0.n_regionkey NOT IN (SELECT b0.r_regionkey FROM region b0 WHERE (b0.r_comment IS NULL OR b0.r_name >= 'AMERICA'))",
+"rows": [
+[
+"ALGERIA",
+"0",
+"furiously regular requests. platelets affix furious"
+],
+[
+"ETHIOPIA",
+"0",
+"regular requests sleep carefull"
+],
+[
+"KENYA",
+"0",
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee"
+],
+[
+"MOROCCO",
+"0",
+"ct blithely: blithely express accounts nag carefully. silent packages haggle carefully abo"
+],
+[
+"MOZAMBIQUE",
+"0",
+" beans after the carefully regular accounts r"
+]
+]
+},
+{
+"sql": "SELECT a0.n_regionkey AS g0, count(*) AS a0, max(a0.n_comment) AS a1, count(*) AS a2 FROM nation a0 WHERE a0.n_name <> 'EGYPT' GROUP BY a0.n_regionkey",
+"rows": [
+[
+"0",
+"5",
+"regular requests sleep carefull",
+"5"
+],
+[
+"1",
+"5",
+"ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+"5"
+],
+[
+"2",
+"5",
+"uriously unusual deposits about the slyly final pinto beans could",
+"5"
+],
+[
+"3",
+"5",
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly ",
+"5"
+],
+[
+"4",
+"4",
+"the slyly regular ideas. silent Tiresias affix slyly fu",
+"4"
+]
+]
+},
+{
+"sql": "SELECT COALESCE(NULLIF(a0.p_mfgr, 'Manufacturer#5'), a0.p_mfgr) AS c0 FROM part a0 WHERE NOT EXISTS (SELECT 1 FROM partsupp b0 WHERE b0.ps_partkey = a0.p_partkey AND (b0.ps_availqty = 5045 OR b0.ps_supplycost <> 639.87))",
+"rows": []
+},
+{
+"sql": "SELECT a0.c_comment AS c0, a0.c_nationkey AS c1, a0.c_custkey AS c2 FROM customer a0 WHERE a0.c_custkey >= (SELECT max(c_custkey) FROM customer s0 WHERE s0.c_nationkey BETWEEN 10 AND 13)",
+"rows": [
+[
+" final, final accounts integrate slyly furiously ironic pinto beans-",
+"10",
+"1495"
+],
+[
+"lyly regular theodolites about the bu",
+"3",
+"1496"
+],
+[
+"kly even pinto beans. slyly final courts detect quickly ironic accounts. id",
+"14",
+"1497"
+],
+[
+"refully bold packages cajole ",
+"19",
+"1498"
+],
+[
+"ts are. regular asymptotes wake evenly regular accounts. rut",
+"3",
+"1499"
+],
+[
+" pending theodolites haggle boldly after the pending accounts. caref",
+"5",
+"1500"
+]
+]
+},
+{
+"sql": "SELECT COALESCE(NULLIF(a0.r_regionkey, 3), a0.r_regionkey) AS c0, a0.r_comment AS c1 FROM region a0 WHERE EXISTS (SELECT 1 FROM nation b0 WHERE b0.n_regionkey = a0.r_regionkey AND (b0.n_comment IS NOT NULL AND b0.n_name <= 'INDONESIA'))",
+"rows": [
+[
+"0",
+"ar packages. regular excuses among the ironic requests cajole fluffily blithely final requests. furiously express p"
+],
+[
+"1",
+"s are. furiously even pinto bea"
+],
+[
+"2",
+"c, special dependencies around "
+],
+[
+"3",
+"e dolphins are furiously about the carefully "
+],
+[
+"4",
+" foxes boost furiously along the carefully dogged tithes. slyly regular orbits according to the special epit"
+]
+]
+},
+{
+"sql": "SELECT a0.s_address AS c0 FROM supplier a0 WHERE a0.s_nationkey = (SELECT min(s_nationkey) FROM supplier s0 WHERE s0.s_comment IS NOT NULL)",
+"rows": [
+[
+"pWDbwg 5EgcbQPlpH"
+],
+[
+"lpJwCaJ0T2jdr5"
+],
+[
+"PAHtpWJZD5"
+]
+]
+},
+{
+"sql": "SELECT count(DISTINCT a3.ps_suppkey) AS a0 FROM lineitem a0 JOIN supplier a1 ON a0.l_suppkey = a1.s_suppkey JOIN part a2 ON a0.l_partkey = a2.p_partkey LEFT JOIN partsupp a3 ON a2.p_partkey = a3.ps_partkey AND a3.ps_comment IS NULL WHERE (a0.l_receiptdate BETWEEN DATE '1994-09-14' AND DATE '1996-08-28' AND (a1.s_suppkey BETWEEN 4 AND 74 OR NULLIF(a3.ps_partkey, 1236) = 1620))",
+"rows": [
+[
+"0"
+]
+]
+},
+{
+"sql": "SELECT a0.s_name FROM supplier a0 WHERE a0.s_phone IS NOT NULL UNION ALL SELECT a0.s_name FROM supplier a0 WHERE a0.s_phone IN ('15-781-401-3047', '11-555-705-5922', '24-696-997-4969')",
+"rows": [
+[
+"Supplier#000000001"
+],
+[
+"Supplier#000000002"
+],
+[
+"Supplier#000000003"
+],
+[
+"Supplier#000000004"
+],
+[
+"Supplier#000000005"
+],
+[
+"Supplier#000000006"
+],
+[
+"Supplier#000000007"
+],
+[
+"Supplier#000000008"
+],
+[
+"Supplier#000000009"
+],
+[
+"Supplier#000000010"
+],
+[
+"Supplier#000000011"
+],
+[
+"Supplier#000000012"
+],
+[
+"Supplier#000000013"
+],
+[
+"Supplier#000000014"
+],
+[
+"Supplier#000000015"
+],
+[
+"Supplier#000000016"
+],
+[
+"Supplier#000000017"
+],
+[
+"Supplier#000000018"
+],
+[
+"Supplier#000000019"
+],
+[
+"Supplier#000000020"
+],
+[
+"Supplier#000000021"
+],
+[
+"Supplier#000000022"
+],
+[
+"Supplier#000000023"
+],
+[
+"Supplier#000000024"
+],
+[
+"Supplier#000000025"
+],
+[
+"Supplier#000000026"
+],
+[
+"Supplier#000000027"
+],
+[
+"Supplier#000000028"
+],
+[
+"Supplier#000000029"
+],
+[
+"Supplier#000000030"
+],
+[
+"Supplier#000000031"
+],
+[
+"Supplier#000000032"
+],
+[
+"Supplier#000000033"
+],
+[
+"Supplier#000000034"
+],
+[
+"Supplier#000000035"
+],
+[
+"Supplier#000000036"
+],
+[
+"Supplier#000000037"
+],
+[
+"Supplier#000000038"
+],
+[
+"Supplier#000000039"
+],
+[
+"Supplier#000000040"
+],
+[
+"Supplier#000000041"
+],
+[
+"Supplier#000000042"
+],
+[
+"Supplier#000000043"
+],
+[
+"Supplier#000000044"
+],
+[
+"Supplier#000000045"
+],
+[
+"Supplier#000000046"
+],
+[
+"Supplier#000000047"
+],
+[
+"Supplier#000000048"
+],
+[
+"Supplier#000000049"
+],
+[
+"Supplier#000000050"
+],
+[
+"Supplier#000000051"
+],
+[
+"Supplier#000000052"
+],
+[
+"Supplier#000000053"
+],
+[
+"Supplier#000000054"
+],
+[
+"Supplier#000000055"
+],
+[
+"Supplier#000000056"
+],
+[
+"Supplier#000000057"
+],
+[
+"Supplier#000000058"
+],
+[
+"Supplier#000000059"
+],
+[
+"Supplier#000000060"
+],
+[
+"Supplier#000000061"
+],
+[
+"Supplier#000000062"
+],
+[
+"Supplier#000000063"
+],
+[
+"Supplier#000000064"
+],
+[
+"Supplier#000000065"
+],
+[
+"Supplier#000000066"
+],
+[
+"Supplier#000000067"
+],
+[
+"Supplier#000000068"
+],
+[
+"Supplier#000000069"
+],
+[
+"Supplier#000000070"
+],
+[
+"Supplier#000000071"
+],
+[
+"Supplier#000000072"
+],
+[
+"Supplier#000000073"
+],
+[
+"Supplier#000000074"
+],
+[
+"Supplier#000000075"
+],
+[
+"Supplier#000000076"
+],
+[
+"Supplier#000000077"
+],
+[
+"Supplier#000000078"
+],
+[
+"Supplier#000000079"
+],
+[
+"Supplier#000000080"
+],
+[
+"Supplier#000000081"
+],
+[
+"Supplier#000000082"
+],
+[
+"Supplier#000000083"
+],
+[
+"Supplier#000000084"
+],
+[
+"Supplier#000000085"
+],
+[
+"Supplier#000000086"
+],
+[
+"Supplier#000000087"
+],
+[
+"Supplier#000000088"
+],
+[
+"Supplier#000000089"
+],
+[
+"Supplier#000000090"
+],
+[
+"Supplier#000000091"
+],
+[
+"Supplier#000000092"
+],
+[
+"Supplier#000000093"
+],
+[
+"Supplier#000000094"
+],
+[
+"Supplier#000000095"
+],
+[
+"Supplier#000000096"
+],
+[
+"Supplier#000000097"
+],
+[
+"Supplier#000000098"
+],
+[
+"Supplier#000000099"
+],
+[
+"Supplier#000000100"
+],
+[
+"Supplier#000000006"
+],
+[
+"Supplier#000000029"
+],
+[
+"Supplier#000000063"
+]
+]
+},
+{
+"sql": "SELECT a0.l_orderkey AS g0, max(a1.p_retailprice) AS a0, max(a1.p_partkey) AS a1 FROM lineitem a0 JOIN part a1 ON a0.l_partkey = a1.p_partkey WHERE ((a0.l_comment < 'sy, final pin' OR a0.l_receiptdate <= DATE '1994-07-25') AND a0.l_extendedprice = 33826.89) GROUP BY a0.l_orderkey",
+"rows": [
+[
+"45318",
+"1091.19",
+"1190"
+]
+]
+},
+{
+"sql": "SELECT sum(a1.p_partkey) AS a0, count(DISTINCT a1.p_retailprice) AS a1 FROM lineitem a0 JOIN part a1 ON a0.l_partkey = a1.p_partkey LEFT JOIN partsupp a2 ON a1.p_partkey = a2.ps_partkey AND (a2.ps_comment IS NULL AND a2.ps_comment IS NULL) WHERE a1.p_brand BETWEEN 'Brand#44' AND 'Brand#54'",
+"rows": [
+[
+"14540087",
+"432"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN a0.r_regionkey = 4 THEN a0.r_comment END AS c0, a0.r_regionkey AS c1 FROM region a0 WHERE NULLIF(a0.r_regionkey, 4) <> 1",
+"rows": [
+[
+"NULL",
+"0"
+],
+[
+"NULL",
+"2"
+],
+[
+"NULL",
+"3"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.s_phone AS g0, count(*) AS a0 FROM supplier a0 WHERE (a0.s_name < 'Supplier#000000016' OR (NOT a0.s_acctbal BETWEEN 368.76 AND 6820.35)) GROUP BY a0.s_phone) SELECT * FROM q",
+"rows": [
+[
+"25-656-247-5058",
+"1"
+],
+[
+"17-167-806-8199",
+"1"
+],
+[
+"11-383-516-1199",
+"1"
+],
+[
+"34-211-567-6800",
+"1"
+],
+[
+"27-681-514-6892",
+"1"
+],
+[
+"11-743-919-7272",
+"1"
+],
+[
+"25-843-787-7479",
+"1"
+],
+[
+"21-151-690-3663",
+"1"
+],
+[
+"18-179-925-7181",
+"1"
+],
+[
+"17-138-897-9374",
+"1"
+],
+[
+"31-646-289-1906",
+"1"
+],
+[
+"29-603-653-2494",
+"1"
+],
+[
+"28-716-704-8686",
+"1"
+],
+[
+"11-555-705-5922",
+"1"
+],
+[
+"34-876-912-6007",
+"1"
+],
+[
+"20-403-398-8662",
+"1"
+],
+[
+"34-852-489-8585",
+"1"
+],
+[
+"13-727-620-7813",
+"1"
+],
+[
+"26-729-551-1115",
+"1"
+],
+[
+"32-431-945-3541",
+"1"
+],
+[
+"26-659-969-5586",
+"1"
+],
+[
+"16-821-608-1166",
+"1"
+],
+[
+"28-113-898-6643",
+"1"
+],
+[
+"24-696-997-4969",
+"1"
+],
+[
+"18-453-357-6394",
+"1"
+],
+[
+"12-253-590-5816",
+"1"
+],
+[
+"32-231-247-6991",
+"1"
+],
+[
+"10-620-939-2254",
+"1"
+],
+[
+"28-739-447-2525",
+"1"
+],
+[
+"32-444-835-2434",
+"1"
+],
+[
+"15-679-861-2259",
+"1"
+],
+[
+"27-498-742-3860",
+"1"
+],
+[
+"26-940-594-4852",
+"1"
+],
+[
+"19-475-537-1368",
+"1"
+],
+[
+"29-974-934-4713",
+"1"
+],
+[
+"33-990-965-2201",
+"1"
+],
+[
+"28-177-572-9691",
+"1"
+],
+[
+"27-918-335-1736",
+"1"
+],
+[
+"28-613-996-1505",
+"1"
+],
+[
+"10-538-384-8460",
+"1"
+],
+[
+"22-421-568-4862",
+"1"
+],
+[
+"20-519-982-2343",
+"1"
+],
+[
+"17-713-930-5667",
+"1"
+],
+[
+"14-491-707-8310",
+"1"
+],
+[
+"26-471-195-5486",
+"1"
+],
+[
+"22-535-310-6971",
+"1"
+],
+[
+"14-144-830-2814",
+"1"
+],
+[
+"31-758-894-4436",
+"1"
+]
+]
+},
+{
+"sql": "SELECT a2.l_quantity AS g0, min(a0.o_clerk) AS a0, max(a2.l_shipinstruct) AS a1, count(*) AS a2 FROM orders a0 JOIN customer a1 ON a0.o_custkey = a1.c_custkey LEFT JOIN lineitem a2 ON a0.o_orderkey = a2.l_orderkey JOIN supplier a3 ON a2.l_suppkey = a3.s_suppkey WHERE (a2.l_orderkey < 30791 OR (a0.o_orderdate BETWEEN DATE '1992-10-30' AND DATE '1998-07-17' AND a0.o_comment IN (' slyly furiously speci', 'regular deposits use bli', ' deposits lose. bli'))) GROUP BY a2.l_quantity",
+"rows": [
+[
+"49.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"605"
+],
+[
+"27.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"622"
+],
+[
+"31.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"636"
+],
+[
+"7.00",
+"Clerk#000000004",
+"TAKE BACK RETURN",
+"610"
+],
+[
+"14.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"601"
+],
+[
+"8.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"609"
+],
+[
+"46.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"632"
+],
+[
+"5.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"614"
+],
+[
+"42.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"655"
+],
+[
+"29.00",
+"Clerk#000000006",
+"TAKE BACK RETURN",
+"590"
+],
+[
+"37.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"629"
+],
+[
+"13.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"620"
+],
+[
+"34.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"614"
+],
+[
+"17.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"619"
+],
+[
+"28.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"620"
+],
+[
+"12.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"637"
+],
+[
+"41.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"598"
+],
+[
+"35.00",
+"Clerk#000000007",
+"TAKE BACK RETURN",
+"618"
+],
+[
+"22.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"611"
+],
+[
+"36.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"590"
+],
+[
+"32.00",
+"Clerk#000000008",
+"TAKE BACK RETURN",
+"645"
+],
+[
+"9.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"662"
+],
+[
+"44.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"574"
+],
+[
+"25.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"613"
+],
+[
+"39.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"626"
+],
+[
+"3.00",
+"Clerk#000000004",
+"TAKE BACK RETURN",
+"614"
+],
+[
+"20.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"635"
+],
+[
+"2.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"614"
+],
+[
+"26.00",
+"Clerk#000000006",
+"TAKE BACK RETURN",
+"659"
+],
+[
+"19.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"645"
+],
+[
+"10.00",
+"Clerk#000000004",
+"TAKE BACK RETURN",
+"634"
+],
+[
+"21.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"630"
+],
+[
+"23.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"660"
+],
+[
+"47.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"606"
+],
+[
+"30.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"636"
+],
+[
+"50.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"658"
+],
+[
+"24.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"635"
+],
+[
+"38.00",
+"Clerk#000000008",
+"TAKE BACK RETURN",
+"588"
+],
+[
+"4.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"645"
+],
+[
+"1.00",
+"Clerk#000000004",
+"TAKE BACK RETURN",
+"633"
+],
+[
+"40.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"614"
+],
+[
+"11.00",
+"Clerk#000000005",
+"TAKE BACK RETURN",
+"591"
+],
+[
+"18.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"608"
+],
+[
+"16.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"601"
+],
+[
+"45.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"571"
+],
+[
+"15.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"582"
+],
+[
+"43.00",
+"Clerk#000000003",
+"TAKE BACK RETURN",
+"639"
+],
+[
+"48.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"682"
+],
+[
+"6.00",
+"Clerk#000000001",
+"TAKE BACK RETURN",
+"603"
+],
+[
+"33.00",
+"Clerk#000000002",
+"TAKE BACK RETURN",
+"594"
+]
+]
+},
+{
+"sql": "SELECT a0.r_regionkey AS c0 FROM region a0 WHERE a0.r_regionkey < (SELECT max(r_regionkey) FROM region s0 WHERE s0.r_comment IS NOT NULL)",
+"rows": [
+[
+"0"
+],
+[
+"1"
+],
+[
+"2"
+],
+[
+"3"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT CASE WHEN (NOT a0.ps_supplycost <> 310.87) THEN a0.ps_partkey END AS c0 FROM partsupp a0 WHERE ((a0.ps_comment IS NULL AND NULLIF(a0.ps_suppkey, 96) <> 97) AND (NOT a0.ps_availqty = 5045))",
+"rows": []
+},
+{
+"sql": "SELECT a0.s_acctbal AS c0 FROM supplier a0 WHERE a0.s_suppkey = (SELECT min(s_suppkey) FROM supplier s0 WHERE s0.s_suppkey BETWEEN 12 AND 85)",
+"rows": [
+[
+"1432.69"
+]
+]
+},
+{
+"sql": "SELECT count(a0.l_suppkey) AS a0 FROM lineitem a0 WHERE a0.l_quantity BETWEEN 9.00 AND 17.00",
+"rows": [
+[
+"10703"
+]
+]
+},
+{
+"sql": "SELECT a3.c_phone AS g0, count(*) AS a0, count(a2.o_shippriority) AS a1, count(a2.o_clerk) AS a2 FROM lineitem a0 JOIN part a1 ON a0.l_partkey = a1.p_partkey JOIN orders a2 ON a0.l_orderkey = a2.o_orderkey LEFT JOIN customer a3 ON a2.o_custkey = a3.c_custkey AND a3.c_name IN ('Customer#000000235', 'Customer#000001496', 'Customer#000000801') WHERE a0.l_tax BETWEEN 0.02 AND 0.08 GROUP BY a3.c_phone",
+"rows": [
+[
+"NULL",
+"46926",
+"46926",
+"46926"
+],
+[
+"13-802-978-9538",
+"27",
+"27",
+"27"
+],
+[
+"13-350-790-6416",
+"71",
+"71",
+"71"
+]
+]
+},
+{
+"sql": "SELECT sum(a1.p_partkey) AS a0 FROM partsupp a0 JOIN part a1 ON a0.ps_partkey = a1.p_partkey LEFT JOIN supplier a2 ON a0.ps_suppkey = a2.s_suppkey AND a2.s_comment IS NOT NULL WHERE a1.p_retailprice BETWEEN 1339.43 AND 1433.53",
+"rows": [
+[
+"748980"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.p_type AS c0 FROM part a0 WHERE a0.p_name IS NOT NULL",
+"rows": [
+[
+"SMALL POLISHED STEEL"
+],
+[
+"PROMO ANODIZED TIN"
+],
+[
+"ECONOMY ANODIZED BRASS"
+],
+[
+"ECONOMY ANODIZED TIN"
+],
+[
+"LARGE ANODIZED STEEL"
+],
+[
+"PROMO BRUSHED STEEL"
+],
+[
+"SMALL PLATED STEEL"
+],
+[
+"SMALL ANODIZED TIN"
+],
+[
+"ECONOMY ANODIZED STEEL"
+],
+[
+"SMALL ANODIZED STEEL"
+],
+[
+"MEDIUM PLATED NICKEL"
+],
+[
+"LARGE PLATED TIN"
+],
+[
+"PROMO BURNISHED COPPER"
+],
+[
+"PROMO PLATED COPPER"
+],
+[
+"LARGE POLISHED COPPER"
+],
+[
+"PROMO POLISHED NICKEL"
+],
+[
+"MEDIUM BURNISHED STEEL"
+],
+[
+"MEDIUM BURNISHED COPPER"
+],
+[
+"STANDARD PLATED COPPER"
+],
+[
+"PROMO BRUSHED TIN"
+],
+[
+"ECONOMY POLISHED NICKEL"
+],
+[
+"ECONOMY BRUSHED BRASS"
+],
+[
+"STANDARD BRUSHED BRASS"
+],
+[
+"LARGE PLATED STEEL"
+],
+[
+"PROMO PLATED NICKEL"
+],
+[
+"LARGE ANODIZED NICKEL"
+],
+[
+"LARGE ANODIZED COPPER"
+],
+[
+"SMALL BRUSHED BRASS"
+],
+[
+"SMALL ANODIZED NICKEL"
+],
+[
+"STANDARD ANODIZED TIN"
+],
+[
+"PROMO PLATED BRASS"
+],
+[
+"STANDARD BURNISHED COPPER"
+],
+[
+"SMALL BURNISHED BRASS"
+],
+[
+"SMALL PLATED TIN"
+],
+[
+"ECONOMY BRUSHED NICKEL"
+],
+[
+"MEDIUM BRUSHED TIN"
+],
+[
+"PROMO PLATED STEEL"
+],
+[
+"PROMO BURNISHED TIN"
+],
+[
+"SMALL BURNISHED STEEL"
+],
+[
+"LARGE POLISHED TIN"
+],
+[
+"STANDARD PLATED TIN"
+],
+[
+"LARGE BRUSHED COPPER"
+],
+[
+"MEDIUM POLISHED NICKEL"
+],
+[
+"MEDIUM PLATED COPPER"
+],
+[
+"STANDARD ANODIZED COPPER"
+],
+[
+"STANDARD BURNISHED NICKEL"
+],
+[
+"STANDARD BRUSHED COPPER"
+],
+[
+"SMALL BURNISHED NICKEL"
+],
+[
+"MEDIUM BRUSHED COPPER"
+],
+[
+"PROMO BURNISHED NICKEL"
+],
+[
+"SMALL POLISHED COPPER"
+],
+[
+"STANDARD POLISHED COPPER"
+],
+[
+"LARGE PLATED NICKEL"
+],
+[
+"STANDARD ANODIZED NICKEL"
+],
+[
+"ECONOMY BURNISHED STEEL"
+],
+[
+"STANDARD POLISHED TIN"
+],
+[
+"SMALL PLATED COPPER"
+],
+[
+"ECONOMY PLATED NICKEL"
+],
+[
+"SMALL POLISHED TIN"
+],
+[
+"PROMO POLISHED STEEL"
+],
+[
+"SMALL BRUSHED COPPER"
+],
+[
+"STANDARD ANODIZED BRASS"
+],
+[
+"MEDIUM ANODIZED NICKEL"
+],
+[
+"STANDARD POLISHED NICKEL"
+],
+[
+"ECONOMY ANODIZED NICKEL"
+],
+[
+"LARGE ANODIZED BRASS"
+],
+[
+"ECONOMY BRUSHED STEEL"
+],
+[
+"MEDIUM BURNISHED TIN"
+],
+[
+"MEDIUM POLISHED BRASS"
+],
+[
+"STANDARD PLATED STEEL"
+],
+[
+"SMALL ANODIZED COPPER"
+],
+[
+"PROMO BRUSHED NICKEL"
+],
+[
+"SMALL PLATED BRASS"
+],
+[
+"ECONOMY PLATED BRASS"
+],
+[
+"MEDIUM PLATED TIN"
+],
+[
+"MEDIUM POLISHED TIN"
+],
+[
+"PROMO ANODIZED NICKEL"
+],
+[
+"PROMO ANODIZED STEEL"
+],
+[
+"STANDARD PLATED BRASS"
+],
+[
+"ECONOMY POLISHED TIN"
+],
+[
+"STANDARD BURNISHED BRASS"
+],
+[
+"LARGE PLATED BRASS"
+],
+[
+"SMALL ANODIZED BRASS"
+],
+[
+"LARGE BURNISHED NICKEL"
+],
+[
+"ECONOMY BURNISHED BRASS"
+],
+[
+"LARGE POLISHED BRASS"
+],
+[
+"PROMO BURNISHED STEEL"
+],
+[
+"ECONOMY PLATED COPPER"
+],
+[
+"PROMO PLATED TIN"
+],
+[
+"SMALL BRUSHED STEEL"
+],
+[
+"STANDARD BRUSHED TIN"
+],
+[
+"MEDIUM ANODIZED BRASS"
+],
+[
+"ECONOMY BURNISHED COPPER"
+],
+[
+"ECONOMY BURNISHED NICKEL"
+],
+[
+"LARGE BURNISHED COPPER"
+],
+[
+"MEDIUM ANODIZED TIN"
+],
+[
+"MEDIUM BRUSHED STEEL"
+],
+[
+"PROMO BRUSHED COPPER"
+],
+[
+"ECONOMY ANODIZED COPPER"
+],
+[
+"LARGE BURNISHED STEEL"
+],
+[
+"LARGE POLISHED NICKEL"
+],
+[
+"LARGE ANODIZED TIN"
+],
+[
+"LARGE BRUSHED STEEL"
+],
+[
+"SMALL BRUSHED NICKEL"
+],
+[
+"STANDARD BURNISHED TIN"
+],
+[
+"ECONOMY BRUSHED COPPER"
+],
+[
+"MEDIUM BRUSHED BRASS"
+],
+[
+"MEDIUM ANODIZED STEEL"
+],
+[
+"STANDARD BRUSHED STEEL"
+],
+[
+"SMALL POLISHED NICKEL"
+],
+[
+"ECONOMY POLISHED COPPER"
+],
+[
+"PROMO POLISHED COPPER"
+],
+[
+"PROMO ANODIZED COPPER"
+],
+[
+"MEDIUM BURNISHED NICKEL"
+],
+[
+"SMALL BURNISHED COPPER"
+],
+[
+"ECONOMY POLISHED STEEL"
+],
+[
+"PROMO ANODIZED BRASS"
+],
+[
+"PROMO POLISHED TIN"
+],
+[
+"MEDIUM ANODIZED COPPER"
+],
+[
+"SMALL POLISHED BRASS"
+],
+[
+"ECONOMY POLISHED BRASS"
+],
+[
+"STANDARD POLISHED BRASS"
+],
+[
+"MEDIUM PLATED STEEL"
+],
+[
+"LARGE BURNISHED BRASS"
+],
+[
+"MEDIUM BURNISHED BRASS"
+],
+[
+"SMALL BRUSHED TIN"
+],
+[
+"ECONOMY BRUSHED TIN"
+],
+[
+"STANDARD BURNISHED STEEL"
+],
+[
+"MEDIUM PLATED BRASS"
+],
+[
+"STANDARD POLISHED STEEL"
+],
+[
+"ECONOMY PLATED STEEL"
+],
+[
+"LARGE PLATED COPPER"
+],
+[
+"PROMO BURNISHED BRASS"
+],
+[
+"STANDARD PLATED NICKEL"
+],
+[
+"MEDIUM POLISHED COPPER"
+],
+[
+"SMALL BURNISHED TIN"
+],
+[
+"PROMO POLISHED BRASS"
+],
+[
+"MEDIUM BRUSHED NICKEL"
+],
+[
+"MEDIUM POLISHED STEEL"
+],
+[
+"STANDARD BRUSHED NICKEL"
+],
+[
+"PROMO BRUSHED BRASS"
+],
+[
+"LARGE BRUSHED NICKEL"
+],
+[
+"LARGE BRUSHED BRASS"
+],
+[
+"LARGE BRUSHED TIN"
+],
+[
+"LARGE POLISHED STEEL"
+],
+[
+"SMALL PLATED NICKEL"
+],
+[
+"STANDARD ANODIZED STEEL"
+],
+[
+"ECONOMY PLATED TIN"
+],
+[
+"ECONOMY BURNISHED TIN"
+],
+[
+"LARGE BURNISHED TIN"
+]
+]
+},
+{
+"sql": "SELECT a1.s_acctbal AS g0, max(a2.n_comment) AS a0, count(*) AS a1 FROM partsupp a0 JOIN supplier a1 ON a0.ps_suppkey = a1.s_suppkey JOIN nation a2 ON a1.s_nationkey = a2.n_nationkey LEFT JOIN part a3 ON a0.ps_partkey = a3.p_partkey AND (a3.p_partkey IN (239, 292, 1359) AND a3.p_size IN (19, 42, 49)) WHERE a1.s_phone <> '25-656-247-5058' GROUP BY a1.s_acctbal",
+"rows": [
+[
+"-891.99",
+"furiously regular requests. platelets affix furious",
+"80"
+],
+[
+"-40.45",
+"lly across the quickly even pinto beans. caref",
+"80"
+],
+[
+"-290.06",
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly ",
+"80"
+],
+[
+"6201.77",
+"oggedly. regular packages solve across",
+"80"
+],
+[
+"2470.84",
+"asymptotes use fluffily quickly bold instructions. slyly bold dependencies sleep carefully pending accounts",
+"80"
+],
+[
+"2944.23",
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque",
+"80"
+],
+[
+"8179.68",
+"instructions wake quickly. final deposits haggle. final, silent theodolites ",
+"80"
+],
+[
+"6642.22",
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+"80"
+],
+[
+"9915.24",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"-224.84",
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"80"
+],
+[
+"5755.94",
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir",
+"80"
+],
+[
+"7162.15",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"9107.22",
+"ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+"80"
+],
+[
+"7040.82",
+" beans after the carefully regular accounts r",
+"80"
+],
+[
+"3191.70",
+"lly across the quickly even pinto beans. caref",
+"80"
+],
+[
+"-283.84",
+"pendencies; slyly express foxes integrate carefully across the reg",
+"80"
+],
+[
+"2512.41",
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+"80"
+],
+[
+"1638.02",
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque",
+"80"
+],
+[
+"166.32",
+" quickly final packages. furiously i",
+"80"
+],
+[
+"1467.77",
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee",
+"80"
+],
+[
+"2972.26",
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly ",
+"80"
+],
+[
+"9759.38",
+"ong the regular requests: blithely silent pinto beans hagg",
+"80"
+],
+[
+"8466.50",
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+"80"
+],
+[
+"5926.41",
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque",
+"80"
+],
+[
+"9198.31",
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly ",
+"80"
+],
+[
+"4641.08",
+"ct blithely: blithely express accounts nag carefully. silent packages haggle carefully abo",
+"80"
+],
+[
+"-831.07",
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir",
+"80"
+],
+[
+"7627.85",
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir",
+"80"
+],
+[
+"8564.12",
+"ong the regular requests: blithely silent pinto beans hagg",
+"80"
+],
+[
+"3891.91",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"6115.65",
+"uriously unusual deposits about the slyly final pinto beans could",
+"80"
+],
+[
+"9508.37",
+"oggedly. regular packages solve across",
+"80"
+],
+[
+"237.31",
+"furiously idle platelets nag. express asymptotes s",
+"80"
+],
+[
+"4515.80",
+"uriously unusual deposits about the slyly final pinto beans could",
+"80"
+],
+[
+"1432.69",
+"uriously unusual deposits about the slyly final pinto beans could",
+"80"
+],
+[
+"5742.03",
+"regular requests sleep carefull",
+"80"
+],
+[
+"-966.20",
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+"80"
+],
+[
+"287.16",
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care",
+"80"
+],
+[
+"8080.14",
+" beans after the carefully regular accounts r",
+"80"
+],
+[
+"3556.47",
+"carefully pending courts sleep above the ironic, regular theo",
+"80"
+],
+[
+"3086.13",
+"pendencies; slyly express foxes integrate carefully across the reg",
+"80"
+],
+[
+"3576.55",
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+"80"
+],
+[
+"368.76",
+" beans after the carefully regular accounts r",
+"80"
+],
+[
+"2766.80",
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+"80"
+],
+[
+"4186.95",
+"ong the regular requests: blithely silent pinto beans hagg",
+"80"
+],
+[
+"92.44",
+" beans after the carefully regular accounts r",
+"80"
+],
+[
+"5302.37",
+"furiously idle platelets nag. express asymptotes s",
+"80"
+],
+[
+"2455.98",
+"carefully pending courts sleep above the ironic, regular theo",
+"80"
+],
+[
+"3580.35",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"5630.62",
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee",
+"80"
+],
+[
+"7241.40",
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque",
+"80"
+],
+[
+"1887.62",
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"80"
+],
+[
+"4381.41",
+"lly across the quickly even pinto beans. caref",
+"80"
+],
+[
+"6096.58",
+"uriously unusual deposits about the slyly final pinto beans could",
+"80"
+],
+[
+"6255.87",
+"ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+"80"
+],
+[
+"6565.11",
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly ",
+"80"
+],
+[
+"3793.13",
+" beans after the carefully regular accounts r",
+"80"
+],
+[
+"9170.71",
+"furiously regular requests. platelets affix furious",
+"80"
+],
+[
+"9202.57",
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care",
+"80"
+],
+[
+"530.82",
+"ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+"80"
+],
+[
+"-632.16",
+" beans after the carefully regular accounts r",
+"80"
+],
+[
+"6820.35",
+"carefully pending courts sleep above the ironic, regular theo",
+"80"
+],
+[
+"3393.08",
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"80"
+],
+[
+"308.56",
+"uriously unusual deposits about the slyly final pinto beans could",
+"80"
+],
+[
+"3437.24",
+" quickly final packages. furiously i",
+"80"
+],
+[
+"21.18",
+"lly across the quickly even pinto beans. caref",
+"80"
+],
+[
+"4192.40",
+"instructions wake quickly. final deposits haggle. final, silent theodolites ",
+"80"
+],
+[
+"5916.91",
+" beans after the carefully regular accounts r",
+"80"
+],
+[
+"1309.70",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"1687.81",
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care",
+"80"
+],
+[
+"3671.34",
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"80"
+],
+[
+"4032.68",
+"regular requests sleep carefull",
+"80"
+],
+[
+"2733.69",
+" quickly final packages. furiously i",
+"80"
+],
+[
+"1883.37",
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care",
+"80"
+],
+[
+"-963.79",
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly ",
+"80"
+],
+[
+"2588.83",
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care",
+"80"
+],
+[
+"2958.09",
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee",
+"80"
+],
+[
+"5873.07",
+"lly across the quickly even pinto beans. caref",
+"80"
+],
+[
+"6177.35",
+"ong the regular requests: blithely silent pinto beans hagg",
+"80"
+],
+[
+"7174.74",
+"ong the regular requests: blithely silent pinto beans hagg",
+"80"
+],
+[
+"9365.80",
+"asymptotes use fluffily quickly bold instructions. slyly bold dependencies sleep carefully pending accounts",
+"80"
+],
+[
+"4170.51",
+"se slyly across the blithely regular deposits. deposits use carefully regular ",
+"80"
+],
+[
+"4515.87",
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque",
+"80"
+],
+[
+"2971.10",
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee",
+"80"
+],
+[
+"-811.62",
+"instructions wake quickly. final deposits haggle. final, silent theodolites ",
+"80"
+],
+[
+"1365.79",
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee",
+"80"
+],
+[
+"2371.51",
+"the slyly regular ideas. silent Tiresias affix slyly fu",
+"80"
+],
+[
+"3017.47",
+"furiously regular requests. platelets affix furious",
+"80"
+],
+[
+"6942.67",
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"80"
+],
+[
+"6150.38",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"7014.50",
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"80"
+],
+[
+"1044.10",
+"regular requests sleep carefull",
+"80"
+],
+[
+"1191.94",
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee",
+"80"
+],
+[
+"-724.31",
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"80"
+],
+[
+"586.16",
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir",
+"80"
+],
+[
+"4780.93",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"4746.66",
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"80"
+],
+[
+"7773.41",
+" quickly final packages. furiously i",
+"80"
+],
+[
+"5119.38",
+"lly across the quickly even pinto beans. caref",
+"80"
+]
+]
+},
+{
+"sql": "SELECT a0.p_retailprice AS c0 FROM part a0 WHERE EXISTS (SELECT 1 FROM partsupp b0 WHERE b0.ps_partkey = a0.p_partkey AND b0.ps_partkey IN (1921, 264, 874))",
+"rows": [
+[
+"1164.26"
+],
+[
+"1774.87"
+],
+[
+"1822.92"
+]
+]
+},
+{
+"sql": "SELECT a0.c_acctbal AS g0, a0.c_nationkey AS g1, min(a0.c_address) AS a0 FROM customer a0 WHERE a0.c_custkey BETWEEN 536 AND 731 GROUP BY a0.c_acctbal, a0.c_nationkey",
+"rows": [
+[
+"3109.96",
+"16",
+"46YLLvD4X7bQz Lm,xYgwg4EeR bt2XATa"
+],
+[
+"6058.08",
+"22",
+"XJr8gYN5Gm,ya,dpJ"
+],
+[
+"7252.65",
+"11",
+"eLW2AQWRpAlGsEEzLU"
+],
+[
+"-549.73",
+"23",
+"bqu1,j3Kos7LdHzNaofLKRVjmJ"
+],
+[
+"7669.16",
+"14",
+"DdlACAkJAXRXvCmCVASu6n3"
+],
+[
+"-932.38",
+"0",
+"ScWLJLyMaNulwoGAlE"
+],
+[
+"-487.92",
+"3",
+" 6FDIST 8gVnif"
+],
+[
+"7511.17",
+"7",
+"ntTKWBYCjrbZwz"
+],
+[
+"5684.01",
+"22",
+"V2ZKmk,KefK,tsFJBd9"
+],
+[
+"4716.68",
+"1",
+"S8PCuly3IEFhKWRjt7X1z"
+],
+[
+"6302.93",
+"9",
+"qIatJ9BrCIoB00em5ut dve7S,,AIaGi8mbuM"
+],
+[
+"2222.65",
+"10",
+"Y7ClYkAtlRFmObZbK4rdfd0U0hzlAUvWxZWf8"
+],
+[
+"9126.54",
+"8",
+"MP7RNboO0zyThPCqVl4iV"
+],
+[
+"2297.33",
+"17",
+"SIhhSVSz3qOlK1tD,5SOMb979R6OXN"
+],
+[
+"8438.40",
+"20",
+"w0k3o98iWdnjqlbhk"
+],
+[
+"5030.24",
+"16",
+"MESyX4,V4E1baub9bj1t1 ji0w6pf7mcV8r"
+],
+[
+"-303.95",
+"19",
+"yRH2mfbCgvAjVv3JwG8MQPuqu,b6"
+],
+[
+"6089.13",
+"17",
+"iwP8g4T9kXvxAIgbRXo"
+],
+[
+"90.45",
+"4",
+"SSDbX,7CqkhryooH2ETjBp1y,OfHt,isFeeaoEGH"
+],
+[
+"9234.50",
+"15",
+"0XuHp1sxLLEJ5tm3,rbMJhbyNIJr,HJ"
+],
+[
+"5134.35",
+"11",
+"xkQqR4pyD0KFzvlK8Hfi4kFfmonYLFnS63vI"
+],
+[
+"2336.99",
+"24",
+"VPu dvaqrCNzTOeRYX9rWFnEidi97JxN"
+],
+[
+"3025.84",
+"2",
+"IXwH 0sD0BilkWKjcyo"
+],
+[
+"6074.42",
+"2",
+"LCKiSHvMnrZjU600,FPiC,646wFH8xN0g9Op"
+],
+[
+"-919.65",
+"20",
+"05Fdg C9ANI6R0Vsas0PLEVzvj0I,gL"
+],
+[
+"2039.84",
+"17",
+"N9wE2dNFVw"
+],
+[
+"4367.53",
+"0",
+"tt4wI18kO0z37Fz"
+],
+[
+"2724.80",
+"20",
+"RtEIx4lt qg79isMPfnwzQHXTuNA"
+],
+[
+"6253.81",
+"3",
+"XvTncgydRju0us1f9"
+],
+[
+"9195.77",
+"16",
+"3GQ3xYCZ3S"
+],
+[
+"4974.68",
+"5",
+"iwTwOF0Cm0kmtuMH3gIQ,5VjZyBYX"
+],
+[
+"-795.23",
+"2",
+"hGY,aWjItzIObBeGfUBd7133xn"
+],
+[
+"8480.87",
+"15",
+"02C,bVE0zINrZ054QOb3ZOOniu4lCFIU9"
+],
+[
+"9630.24",
+"18",
+"3gvMAkhL5CH"
+],
+[
+"5795.15",
+"8",
+"YsyvRhaAgkezIee1iZrULYL0xZbEVfKF8mMT1gZG"
+],
+[
+"5447.12",
+"5",
+"cnMmU,52YaSUMLxNvi1"
+],
+[
+"2086.91",
+"5",
+",JAv2OFnJQBDG9 DwPxFD,  nKh1K6t"
+],
+[
+"-390.09",
+"5",
+"oM1bMPYgZ6,Lop9Z6FREEpdHgy3bO9PE"
+],
+[
+"3199.00",
+"18",
+"3gN19mmkOOGlU EOCIdo3S"
+],
+[
+"3342.75",
+"12",
+"ILSb8danwAbHWxlT"
+],
+[
+"1912.23",
+"17",
+"cpZ15XGaD9kIo"
+],
+[
+"483.89",
+"17",
+"NuR8GhTgrxf0GIZOzcTbL1fFiyalgh7a1BnZC8"
+],
+[
+"7887.60",
+"9",
+"k3IlPSC4FKB13 hc6omhVs1ibvqeWEV"
+],
+[
+"6397.58",
+"20",
+"d,R7MIjhU6 sdLEB79rOFQFSsPz"
+],
+[
+"8729.97",
+"19",
+"qB3aX PuSPp6,"
+],
+[
+"5297.68",
+"0",
+"8J9REJcMNbyv5m1usrXefHjbvq"
+],
+[
+"1735.44",
+"4",
+",eA4xy95eVuVdF7,GQGvHM"
+],
+[
+"8667.09",
+"6",
+"sSvYBjIqWv5qJyHrN39"
+],
+[
+"2438.10",
+"9",
+"Z0q9MCZQetKKd1AAGO0yDaX32VlcIo2Ad4"
+],
+[
+"85.05",
+"19",
+"SAfwlXYxu6R gFWjrYBmhcedhFCS9CWmg"
+],
+[
+"2323.45",
+"18",
+"2ZGbo8PM7AlLNFtZqPRgnNm0Hjg4"
+],
+[
+"3231.71",
+"12",
+"Z98oZLTO5N1HYXjyzNGJOokEIJm"
+],
+[
+"9712.75",
+"24",
+"  dcVkxZ,s,9xW ab60aC3slv3STVRwA1"
+],
+[
+"6004.52",
+"4",
+"MiwBsR,yF3r5HcqcG4dV1nI6,ocWMVeGLKcG3Bni"
+],
+[
+"2256.36",
+"16",
+"GxeiZiBL  jfomM8KsSGSSs"
+],
+[
+"3651.06",
+"21",
+"O8B6lGSi9SlJ"
+],
+[
+"339.49",
+"24",
+"LPiwlGotKjIHVdkU6"
+],
+[
+"4716.31",
+"9",
+"hT o7w7PX64RvqcVIJw2vvpcxiduVZ"
+],
+[
+"103.45",
+"3",
+"vjUZE18IV3X9mwI"
+],
+[
+"441.44",
+"9",
+"XZzRt7,CzzdgKpwIbb872AJLOJt"
+],
+[
+"3035.29",
+"5",
+"OlS,MEFZtVfLOOmfA2s,i82"
+],
+[
+"807.37",
+"18",
+"wfi3SKgDG,BH6qqlAE"
+],
+[
+"7270.82",
+"17",
+"BVrKgwOTbpbctN0k"
+],
+[
+"1469.59",
+"19",
+"L6VlaM,4e, u72a"
+],
+[
+"6307.59",
+"4",
+"BbacCSWI5F"
+],
+[
+"7820.26",
+"16",
+"dqD1cB Uq01TT4o00,OGTpqAwi74U0O9kC9O3"
+],
+[
+"3244.78",
+"9",
+"Siofl5l1QU"
+],
+[
+"8878.22",
+"15",
+"xI9MZcUjItgWf3B7Tjbvy"
+],
+[
+"6738.93",
+"2",
+"ahyOfxU7HBv"
+],
+[
+"5357.32",
+"22",
+"TzJlmgThRzBZdh3aSNIuqAQ7c1GP8u"
+],
+[
+"2091.63",
+"1",
+"iiT1iYp9 GzW,xx7EKrCu1oXBbYF8UW8D8kg"
+],
+[
+"9768.21",
+"1",
+"cXrnw1UtFF8dEfRuyUd621b1HxeYOC5hN"
+],
+[
+"4038.45",
+"24",
+"FUZJw3bq8ilEdhuU7x"
+],
+[
+"6898.65",
+"1",
+"uw6mTbtX6PVxkJbHxmhMdi"
+],
+[
+"3164.28",
+"17",
+"jBlCUNYYo9JDGTWc6mbyK2RnhiD8McaEahW"
+],
+[
+"5744.89",
+"13",
+"ywKnmVMaYPiBWpGkt5NB32oS"
+],
+[
+"6183.15",
+"18",
+"QL1 N2m,ajzeO0G xNc"
+],
+[
+"7029.24",
+"7",
+"C2o7ZdfnV2U pHHrgDL,gANrW,9o0,E0D7XDd4sR"
+],
+[
+"6019.20",
+"10",
+"RuNcXJQ5t248uDAEvo,BZnuUeEXFnnfB"
+],
+[
+"1394.44",
+"10",
+"jhLZlG1fRiSE0 wDLOCguVB96dH6a5"
+],
+[
+"3354.47",
+"8",
+"ZapugT4i t5e17zoerh8Uku4oqU2TZ9vQ0L,m6uG"
+],
+[
+"2894.22",
+"23",
+"mf1YdlVBgjCbyqJ"
+],
+[
+"6496.08",
+"19",
+"uOutzlnx4jeRSl8XF1YCQ7R1be94Hh8zjPa4wI"
+],
+[
+"-774.47",
+"15",
+"w trkIXuNSb3rtF7oxFk"
+],
+[
+"738.57",
+"21",
+"WygwoxE5p,uutql"
+],
+[
+"4804.57",
+"4",
+"Ty7FQxhrz7"
+],
+[
+"2688.88",
+"4",
+"kop3qDx0ZMcU1XiuDjliU3EmpLxYT8v"
+],
+[
+"1317.56",
+"13",
+"2NN5oEsMqp87pK5YkwGweyvR0hcjjBfmYkmgJs"
+],
+[
+"7059.15",
+"14",
+"RTX88BYOIBUoSD8tNEEzPB1tfp1Tgf"
+],
+[
+"1924.96",
+"0",
+"S87Yu1zDt2Yz"
+],
+[
+"7077.79",
+"6",
+"iY6vCimasqd7yxpAuk5QLRI487b7B"
+],
+[
+"1722.88",
+"5",
+"KCpta6YhOJGi4Lscl4Si0Eoi"
+],
+[
+"4954.25",
+"17",
+"6s Q yVgPKPoX5"
+],
+[
+"8216.79",
+"2",
+"myAI,72wssWUcw0iU0t8CV4mWxhY y3"
+],
+[
+"-132.97",
+"1",
+"ZpuT0UISTJWOQKo11psWSFtIsJfAaCo"
+],
+[
+"9442.55",
+"11",
+"nDy3fUelWF7"
+],
+[
+"1067.04",
+"16",
+"jB0cJEEcMjyRbMs2pwvTrjhOpoc45C66hgzitq"
+],
+[
+"-616.79",
+"22",
+"mCRaKbzncbZSnXsa"
+],
+[
+"5582.63",
+"3",
+"1v7y4dc rrwA3Yzg0JTRFt7UDvkZmK3"
+],
+[
+"148.98",
+"2",
+"ua6SfPHCOdkGGZJ MX,e07ZLWVe 6UOp"
+],
+[
+"4782.05",
+"3",
+"qngynrwQS qxo438UH3PZhh2T3C98"
+],
+[
+"3420.64",
+"21",
+"eUJ WL5RmGcpxmXrtxr"
+],
+[
+"3116.50",
+"19",
+"l1yp34XcQAmfPoRidIZJFlZhlgPE9zS"
+],
+[
+"-334.89",
+"15",
+"KCFBZoGH2stDQy8wHk"
+],
+[
+"5486.52",
+"15",
+"PJESH3U7LaTomDzxBxfURsd1sHAkO1PcS"
+],
+[
+"8993.23",
+"2",
+"Ko nnAeskJ QU0VhW k3b"
+],
+[
+"6344.66",
+"20",
+"wkmTqEmyI3UOEoG3q"
+],
+[
+"233.51",
+"9",
+"92tmfZDtyh4pPlMFezMoJIwqXZ685moPwks28"
+],
+[
+"3385.52",
+"2",
+"0CKouENIZODnfGq606hhoe5,vz55QJpaQaQCr,e"
+],
+[
+"2110.30",
+"0",
+"2nWLBKtuPVCtm"
+],
+[
+"7889.64",
+"5",
+"lf1o6b yId8 bgNhr,cSV1l"
+],
+[
+"5503.36",
+"6",
+",HroS064jMsi7o5p5"
+],
+[
+"-867.94",
+"18",
+"O nDoV237hLONLhHBPJ bTsT3FozCtFYyYYIvK"
+],
+[
+"1295.54",
+"0",
+"1o IzTSvGjwWa,3Goff26cqhLHuv"
+],
+[
+"8825.71",
+"15",
+"IMPgwCyEjy9R02m,AcHFZqcvXTb0SzHDKh1K"
+],
+[
+"3993.54",
+"8",
+"XzjJJr14j2auh5s0h9KH5RiFgy0VViy7"
+],
+[
+"6518.42",
+"9",
+" POg4GyLoqE3 Or2YT12oszjZtyN01KKQnRviezJ"
+],
+[
+"4272.43",
+"19",
+"nZNy4ljmTdAfLD8hfbl6"
+],
+[
+"3625.93",
+"14",
+"jLHuPzX2WElx"
+],
+[
+"3907.11",
+"4",
+"gZJkze uWpJdVni2kGT4fzpR,8WQK"
+],
+[
+"9698.21",
+"9",
+"sLAfa5uj44pW,k6dK5wPXIN2nQmZkuPU"
+],
+[
+"7420.60",
+"15",
+"uVh,ji5iUeQrGW 47qbPvmRQv"
+],
+[
+"9591.51",
+"15",
+"nEqoMlX Y2SPuLThffK311NaFr7HkQRLidc"
+],
+[
+"8364.99",
+"12",
+"IP3BenO5RH1UOILzp3me4nHm"
+],
+[
+"9311.17",
+"7",
+"o,OMA859cXnOy o"
+],
+[
+"9559.04",
+"15",
+"eyUl6yn9Tw"
+],
+[
+"1928.10",
+"24",
+"WdENejv7BlTyHTcSYXUXuOqUmgV2J0x4"
+],
+[
+"6181.23",
+"14",
+"Eu61rqopcZsjqtE7OCBFZdyt4fx45DnXPAb6np"
+],
+[
+"4879.55",
+"3",
+"hAjUxdsy5gWVsnugqRGwOyDtrJVc23z"
+],
+[
+"3686.07",
+"13",
+"6XIUkyR0f1zwNDdCB3DiZMgalv,PXU5wf0ls"
+],
+[
+"2443.52",
+"15",
+"oPw036ksFW4"
+],
+[
+"3374.92",
+"11",
+"mCS9LcAZGKtnr,"
+],
+[
+"2603.00",
+"19",
+"qtrfihX7PhVTzhfGBQCcp31JMy3"
+],
+[
+"4899.15",
+"15",
+"TcIbjNLibCRF9H6DoivP4s"
+],
+[
+"4366.23",
+"12",
+"8xcdym5iiS89YayitFZF9VL,IRKQ44 pEZibC"
+],
+[
+"8545.90",
+"15",
+"WG8hXBe80T3gNLEwplsaeWtSmLbIj0TFDZR"
+],
+[
+"3242.10",
+"24",
+" R8CdS3M5xp I"
+],
+[
+"1647.05",
+"19",
+"8wN2dDKisnM rZ6uhmWPS97mdcELLEjCj"
+],
+[
+"9676.98",
+"1",
+"xpi6NUfH9hW 138ti7jixB1vppoFtyXjH r8FDL0"
+],
+[
+"6679.75",
+"4",
+"rh70YV9PQD8NmjcqK74K"
+],
+[
+"-482.48",
+"2",
+"VQi7QC2eAe,Lhagyhn,V3P0UlKH 4"
+],
+[
+"5974.11",
+"13",
+"BN9j78D5LRdYIlelZznEZk8DFfYWyg5g"
+],
+[
+"5295.26",
+"20",
+"PQDMvTGcs T9n7ENDAhcE"
+],
+[
+"9120.93",
+"6",
+"l,0rATOUwpuGBIfxOx8hg2wAm"
+],
+[
+"8121.84",
+"4",
+"glvNkp762nND1kCrR"
+],
+[
+"3829.03",
+"10",
+"DwrL1iKm8lkbrb"
+],
+[
+"5184.70",
+"0",
+"S7rYQxJLtlsba"
+],
+[
+"1146.49",
+"11",
+"j0gzC1i10qgY gWkJipZw944 vXrtCR1Flz"
+],
+[
+"1481.24",
+"24",
+"lOIMRb04OUi,awgPMLALGQHHczc5OJEuApDS"
+],
+[
+"-809.22",
+"4",
+"X9UBzCPxGV9B0,XV5 Q6ngbps "
+],
+[
+"4349.73",
+"24",
+"yqoxLhVwieGzA0wSNW6V24I0"
+],
+[
+"8947.26",
+"20",
+"31upfqqApE5VXKYJQUzWy0eFhX4J4"
+],
+[
+"7505.33",
+"10",
+"rz2vUH0Dn6bOecBnvz"
+],
+[
+"91.53",
+"24",
+"xVxALNjfIf,imfMI6nDQL4AbVCg4QRgyCMEtIk5"
+],
+[
+"7944.22",
+"1",
+"7ejFF6Gxta7aXQf4o59uA3QyzuN,qfV3v"
+],
+[
+"8475.17",
+"21",
+"hdmUEC4URiL7H5d"
+],
+[
+"2333.96",
+"4",
+"qmFxjUIyTH7O4APsydfPfigH6SJ DfUg"
+],
+[
+"3652.29",
+"1",
+"XgUJ,C2j0PLYl8VP2f0ABMHJwCTmL7GpH9HN5bGA"
+],
+[
+"-181.63",
+"11",
+"wBwbPRbyuVbd"
+],
+[
+"4177.17",
+"19",
+"UaZTpROue0GI2YqwJDjka,bHL,ZS,zfsZ6"
+],
+[
+"2003.44",
+"12",
+"gcy5Hco0mx1,iYpaoA4L1g"
+],
+[
+"8404.90",
+"13",
+"eo tgjBkX41ln5Y"
+],
+[
+"3195.96",
+"21",
+"Boazlnf1X4sJFEI1scjpP1kC,c1FXHQlxZH IHAm"
+],
+[
+"3660.47",
+"7",
+"Ux Ec,s2TT5pbc4ETB3qscAoEYxBfRLcyfW6"
+],
+[
+"7307.55",
+"11",
+"GQ09cqbhWiZ2dsaw09BPq,z7cItwXls1pM4aIa"
+],
+[
+"1724.68",
+"14",
+"9OMIGutLL2gVc6iT lDqL 7Vm"
+],
+[
+"4517.33",
+"0",
+" zrqKd pV5mxPfGsPzE7LPvYNOhn"
+],
+[
+"4538.54",
+"2",
+"OnXYaTGfUg5"
+],
+[
+"3227.87",
+"21",
+"JOUAkAy,KIq0jnmJpg00m2kj3bBO"
+],
+[
+"235.53",
+"20",
+"vSVDO8r4WZhmO6apyum0gnrIeecUHWkJWu"
+],
+[
+"9566.15",
+"16",
+"0aGn3Vcf6ZKi82ogENfnso"
+],
+[
+"2614.79",
+"10",
+"wt3wuo0WHO"
+],
+[
+"4390.33",
+"6",
+"mCkOnyRFFBmIprfnflX OHQIvs9aMZ9"
+],
+[
+"8395.57",
+"2",
+"aFxQKyd9qhK23ED1o4uOdo0ftU"
+],
+[
+"9787.56",
+"8",
+"AQy5fOEB,T0"
+],
+[
+"8161.13",
+"19",
+"olqi4JtA1,lsxlUr4o13YnOnuuioPXn4umv"
+],
+[
+"2258.40",
+"24",
+"ut99CA1rjjt6ZthwdhvlUYNw66hrDeGsBgq4mP"
+],
+[
+"8184.21",
+"15",
+"coEv,AUgGfI31zFIQPFh"
+],
+[
+"4999.31",
+"21",
+"7h7oXs4yswDnXR ,kxCoc"
+],
+[
+"3998.42",
+"6",
+"LMZkm3yWMvl6I8MBpqW epVhJuaRYxhl"
+],
+[
+"2619.52",
+"21",
+"o7,DsHIHmfkti"
+],
+[
+"1353.24",
+"2",
+"nPHyQaQICGUMAPaW5hITB"
+],
+[
+"5872.94",
+"7",
+"rXqolD5Pb0LbMruHD5he5o0vEauPrdFKrL4m806b"
+],
+[
+"5826.68",
+"15",
+"yclsr1Ie2I0Zgz ,XaYDqom7oC8B"
+],
+[
+"5100.77",
+"12",
+"gM3kJ43ZElb,oA0UyQ4rAxw9j8BkXA1gG4"
+],
+[
+"3649.05",
+"24",
+"4qvX4AqQrEz,nDcytOPZVfkRsQ6w,Wo3z8"
+],
+[
+"3288.76",
+"6",
+"DaAMmp0cnR4oZh3uczjAPBw,Lc6NbRNGVggQT,ya"
+],
+[
+"7778.95",
+"18",
+"azASskiPA9apS5FLFNlF7VUH009dr"
+],
+[
+"3942.58",
+"4",
+"bY8RnD4UEaeVIa,rSnunV6udEc1Gt"
+],
+[
+"5527.61",
+"24",
+"ishDnsGqXg8H72F"
+],
+[
+"276.71",
+"19",
+"OU3mR K0rrwidwitSQ18sPSDr4xJqa7V"
+],
+[
+"6577.21",
+"1",
+"AVKDV964,y LGcvXYuSW"
+],
+[
+"3778.97",
+"22",
+"O2tHWRsd,mnrkAM2uw"
+],
+[
+"7412.12",
+"22",
+"dof81y3vZqngrdfxFCLeHxg02eM0PhoW,Q"
+],
+[
+"8510.94",
+"12",
+"8A4IZPrQdJOmubOonTga,S4"
+],
+[
+"4718.23",
+"2",
+"d9bUCM6vtn,"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.l_returnflag AS c0, a0.l_comment AS c1, a0.l_orderkey AS c2 FROM lineitem a0 WHERE ((a0.l_shipdate IS NULL AND a0.l_receiptdate BETWEEN DATE '1994-04-25' AND DATE '1995-06-13') OR NULLIF(a0.l_extendedprice, 30032.92) = 45451.82)",
+"rows": [
+[
+"N",
+"deposits. slyly even ideas a",
+"53094"
+],
+[
+"A",
+"final, regular theodolites integrate ",
+"32932"
+],
+[
+"N",
+" furiously after the blithely final ",
+"11778"
+]
+]
+},
+{
+"sql": "SELECT a0.l_shipmode AS g0, count(DISTINCT a0.l_linenumber) AS a0, min(a0.l_discount) AS a1 FROM lineitem a0 WHERE (a0.l_shipmode LIKE 'AIR%' AND (NOT a0.l_shipdate BETWEEN DATE '1998-03-27' AND DATE '1998-05-22')) GROUP BY a0.l_shipmode HAVING count(*) > 3",
+"rows": [
+[
+"AIR",
+"7",
+"0.00"
+]
+]
+},
+{
+"sql": "SELECT sum(a0.c_nationkey) AS a0, count(a0.c_custkey) AS a1 FROM customer a0 WHERE ((a0.c_name LIKE 'Cu%' OR a0.c_name > 'Customer#000000488') OR a0.c_name IN ('Customer#000000632', 'Customer#000000324', 'Customer#000001215'))",
+"rows": [
+[
+"17784",
+"1500"
+]
+]
+},
+{
+"sql": "SELECT a0.s_phone AS c0, CASE WHEN (a0.s_address IN ('iZLKKWaQADe', 'TRMhVHz3XiFuhapxucPo1', 'DGIIamGrSFFUm53Va,0PnOc') AND a0.s_phone <= '13-727-620-7813') THEN a0.s_phone END AS c1 FROM supplier a0 WHERE a0.s_suppkey IN (SELECT b0.ps_suppkey FROM partsupp b0 WHERE (b0.ps_comment IS NOT NULL AND b0.ps_suppkey BETWEEN 58 AND 99))",
+"rows": [
+[
+"14-563-538-1657",
+"NULL"
+],
+[
+"24-529-559-2461",
+"NULL"
+],
+[
+"13-604-986-9056",
+"NULL"
+],
+[
+"22-535-310-6971",
+"NULL"
+],
+[
+"12-701-432-8346",
+"NULL"
+],
+[
+"14-618-678-1789",
+"NULL"
+],
+[
+"29-603-653-2494",
+"NULL"
+],
+[
+"34-278-790-7004",
+"NULL"
+],
+[
+"17-167-806-8199",
+"NULL"
+],
+[
+"22-888-654-7193",
+"NULL"
+],
+[
+"32-444-835-2434",
+"NULL"
+],
+[
+"28-716-704-8686",
+"NULL"
+],
+[
+"24-402-227-9600",
+"NULL"
+],
+[
+"16-821-608-1166",
+"NULL"
+],
+[
+"30-166-486-1559",
+"NULL"
+],
+[
+"18-550-360-2464",
+"NULL"
+],
+[
+"15-781-401-3047",
+"NULL"
+],
+[
+"11-743-919-7272",
+"NULL"
+],
+[
+"21-191-938-9469",
+"NULL"
+],
+[
+"26-528-528-1157",
+"NULL"
+],
+[
+"27-249-395-9123",
+"NULL"
+],
+[
+"18-396-489-9719",
+"NULL"
+],
+[
+"33-300-836-9529",
+"NULL"
+],
+[
+"17-281-345-4863",
+"NULL"
+],
+[
+"31-646-289-1906",
+"NULL"
+],
+[
+"34-869-118-7803",
+"NULL"
+],
+[
+"29-903-665-7065",
+"NULL"
+],
+[
+"16-380-123-9217",
+"NULL"
+],
+[
+"34-860-229-1674",
+"NULL"
+],
+[
+"29-142-539-1403",
+"NULL"
+],
+[
+"28-272-909-1617",
+"NULL"
+],
+[
+"15-670-998-6860",
+"NULL"
+],
+[
+"28-113-898-6643",
+"NULL"
+],
+[
+"31-267-327-4328",
+"NULL"
+],
+[
+"14-491-707-8310",
+"NULL"
+],
+[
+"31-914-775-1978",
+"NULL"
+],
+[
+"26-659-969-5586",
+"NULL"
+],
+[
+"26-758-310-7496",
+"NULL"
+],
+[
+"24-228-763-7840",
+"NULL"
+],
+[
+"28-177-572-9691",
+"NULL"
+],
+[
+"19-259-876-1014",
+"NULL"
+],
+[
+"14-728-888-8882",
+"NULL"
+]
+]
+},
+{
+"sql": "SELECT a0.n_nationkey FROM nation a0 WHERE a0.n_name IN ('UNITED KINGDOM', 'RUSSIA', 'JORDAN') UNION ALL SELECT a0.n_nationkey FROM nation a0 WHERE a0.n_name BETWEEN 'KENYA' AND 'VIETNAM'",
+"rows": [
+[
+"13"
+],
+[
+"22"
+],
+[
+"23"
+],
+[
+"14"
+],
+[
+"15"
+],
+[
+"16"
+],
+[
+"17"
+],
+[
+"19"
+],
+[
+"20"
+],
+[
+"21"
+],
+[
+"22"
+],
+[
+"23"
+],
+[
+"24"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT count(DISTINCT a0.c_comment) AS a0 FROM customer a0 WHERE a0.c_comment IS NULL) SELECT * FROM q",
+"rows": [
+[
+"0"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN a0.o_totalprice BETWEEN 48533.66 AND 124729.84 THEN a0.o_shippriority END AS c0, a0.o_clerk AS c1, CASE WHEN a0.o_comment <> 'xpress deposits sleep' THEN a0.o_shippriority END AS c2 FROM orders a0 WHERE a0.o_totalprice = (SELECT max(o_totalprice) FROM orders s0 WHERE (NOT NULLIF(s0.o_totalprice, 193697.13) <> 143237.42))",
+"rows": [
+[
+"NULL",
+"Clerk#000000083",
+"0"
+]
+]
+},
+{
+"sql": "SELECT a0.r_comment AS g0, count(a0.r_regionkey) AS a0 FROM region a0 WHERE a0.r_name > 'AMERICA' GROUP BY a0.r_comment",
+"rows": [
+[
+"e dolphins are furiously about the carefully ",
+"1"
+],
+[
+" foxes boost furiously along the carefully dogged tithes. slyly regular orbits according to the special epit",
+"1"
+],
+[
+"c, special dependencies around ",
+"1"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.c_name AS g0, count(*) AS a0, count(DISTINCT a0.c_name) AS a1 FROM customer a0 WHERE a0.c_phone = '33-394-388-4375' GROUP BY a0.c_name) SELECT * FROM q",
+"rows": [
+[
+"Customer#000000438",
+"1",
+"1"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN (a0.ps_suppkey IN (99, 58, 33) OR NULLIF(a0.ps_partkey, 1845) = 908) THEN a0.ps_availqty END AS c0 FROM partsupp a0 WHERE a0.ps_suppkey = (SELECT min(ps_suppkey) FROM partsupp s0 WHERE (s0.ps_partkey <= 707 OR s0.ps_partkey BETWEEN 235 AND 892))",
+"rows": [
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.r_name AS c0 FROM region a0 WHERE a0.r_regionkey IS NOT NULL",
+"rows": [
+[
+"ASIA"
+],
+[
+"EUROPE"
+],
+[
+"AFRICA"
+],
+[
+"AMERICA"
+],
+[
+"MIDDLE EAST"
+]
+]
+},
+{
+"sql": "SELECT a0.n_name AS c0, a0.n_regionkey AS c1, CASE WHEN a0.n_name <> 'PERU' THEN a0.n_regionkey END AS c2 FROM nation a0 WHERE NOT EXISTS (SELECT 1 FROM supplier b0 WHERE b0.s_nationkey = a0.n_nationkey AND (b0.s_address >= 'lONEYAh9sFWAF75tO' OR b0.s_acctbal BETWEEN 1432.69 AND 2971.10))",
+"rows": [
+[
+"ARGENTINA",
+"1",
+"1"
+],
+[
+"CANADA",
+"1",
+"1"
+],
+[
+"ETHIOPIA",
+"0",
+"0"
+],
+[
+"FRANCE",
+"3",
+"3"
+],
+[
+"IRAN",
+"4",
+"4"
+],
+[
+"VIETNAM",
+"2",
+"2"
+]
+]
+},
+{
+"sql": "SELECT a0.c_nationkey AS c0, a0.c_comment AS c1 FROM customer a0 WHERE a0.c_address LIKE 'M%'",
+"rows": [
+[
+"20",
+"dazzle carefully furiously final foxes. express, ironic packages among the qui"
+],
+[
+"20",
+"xcuses. silent theodolites across the carefully bold excuses sleep ironic, final courts. regular excuses"
+],
+[
+"2",
+"gged foxes cajole quickly express acc"
+],
+[
+"22",
+"ously silent requests haggle carefully pending deposit"
+],
+[
+"12",
+"ccounts detect after the furiously ironic ideas. fu"
+],
+[
+"4",
+"ntegrate furiously carefully even accounts. blithely pending sentiments nag f"
+],
+[
+"4",
+"ackages after the accounts use blithely slyly quiet foxes: carefully silent accounts are slyly"
+],
+[
+"8",
+"unts sleep besides the furiously unusual "
+],
+[
+"16",
+"x slyly. slyly even ideas haggle slowly. slyly regular ideas affix carefully above the f"
+],
+[
+"13",
+"r asymptotes. fluffily regular accounts detect blithely about the quickly fin"
+],
+[
+"14",
+"r deposits are. carefully express packages impress furiously"
+],
+[
+"13",
+"e regular, regular asymptotes haggle daringly across the brave packages. bold, final requests hag"
+],
+[
+"5",
+"usly express accounts. requests after the ironic, silent requ"
+],
+[
+"0",
+"longside of the even theodolites boost across the slyly even dep"
+],
+[
+"3",
+"ly ironic ideas sleep furiously bold ideas. special deposits wake furiously. fluffily express frays nag "
+],
+[
+"11",
+"sly regular ideas haggle carefully regular deposits. regular packages use pending, final requests. regul"
+],
+[
+"17",
+"ly among the carefully bold excuses. slyly even ideas haggle furiously ironic foxes. quickly i"
+],
+[
+"8",
+"ly pending packages instead of the slyly"
+],
+[
+"14",
+"eposits. quickly even packages sleep carefully against the carefully regular platelets. "
+],
+[
+"21",
+"lithely after the quickly even multipliers. instructions sleep quickly. idly spe"
+],
+[
+"12",
+"es. packages use slyly. slyly unusual reque"
+],
+[
+"8",
+"nts. furiously final requests sleep sometimes. requests above the instruct"
+],
+[
+"14",
+"ng requests. regular accounts sleep slyly. "
+],
+[
+"3",
+" sentiments sleep idly express pinto beans. even, unusual packages "
+],
+[
+"10",
+"y among the furiously dogged theodolites. slyly final requests haggle final, ironic d"
+],
+[
+"3",
+"ording to the blithely dogged requests. furiously unusual dependencies affi"
+],
+[
+"13",
+"lar packages. slyly bold ideas boost quickl"
+],
+[
+"11",
+"nt packages. silent, bold accounts along the "
+]
+]
+},
+{
+"sql": "SELECT a0.l_returnflag AS g0, count(*) AS a0, max(a0.l_linenumber) AS a1, min(a1.o_totalprice) AS a2 FROM lineitem a0 LEFT JOIN orders a1 ON a0.l_orderkey = a1.o_orderkey WHERE (NOT a0.l_partkey BETWEEN 73 AND 309) GROUP BY a0.l_returnflag",
+"rows": [
+[
+"A",
+"13123",
+"7",
+"874.89"
+],
+[
+"N",
+"26879",
+"7",
+"986.63"
+],
+[
+"R",
+"13187",
+"7",
+"924.33"
+]
+]
+},
+{
+"sql": "SELECT a0.r_name, a0.r_comment, a0.r_name FROM region a0 WHERE (a0.r_name LIKE 'AM%' OR a0.r_name = 'ASIA') UNION SELECT a0.r_name, a0.r_comment, a0.r_name FROM region a0 WHERE ((a0.r_regionkey = 0 OR a0.r_comment IS NULL) AND (a0.r_regionkey BETWEEN 0 AND 3 AND a0.r_regionkey IN (0, 3, 2)))",
+"rows": [
+[
+"AFRICA",
+"ar packages. regular excuses among the ironic requests cajole fluffily blithely final requests. furiously express p",
+"AFRICA"
+],
+[
+"AMERICA",
+"s are. furiously even pinto bea",
+"AMERICA"
+],
+[
+"ASIA",
+"c, special dependencies around ",
+"ASIA"
+]
+]
+},
+{
+"sql": "SELECT a0.r_name AS g0, a0.r_regionkey AS g1, count(DISTINCT a0.r_name) AS a0, sum(a0.r_regionkey) AS a1, count(DISTINCT a0.r_comment) AS a2 FROM region a0 WHERE ((a0.r_name BETWEEN 'AFRICA' AND 'MIDDLE EAST' OR a0.r_comment IS NULL) AND (a0.r_name IS NULL OR a0.r_regionkey > 0)) GROUP BY a0.r_name, a0.r_regionkey HAVING count(*) > 1",
+"rows": []
+},
+{
+"sql": "SELECT count(DISTINCT a0.n_regionkey) AS a0 FROM nation a0 LEFT JOIN region a1 ON a0.n_regionkey = a1.r_regionkey AND (a1.r_comment IS NOT NULL AND a1.r_comment IS NOT NULL) JOIN customer a2 ON a0.n_nationkey = a2.c_nationkey JOIN orders a3 ON a2.c_custkey = a3.o_custkey WHERE ((a2.c_nationkey > 23 OR a1.r_comment IS NULL) AND (a2.c_phone IN ('32-771-279-8154', '10-566-282-8705', '18-290-794-6133') OR a1.r_regionkey >= 1))",
+"rows": [
+[
+"1"
+]
+]
+},
+{
+"sql": "SELECT a0.l_linenumber AS g0, min(a0.l_discount) AS a0, count(a1.s_name) AS a1 FROM lineitem a0 JOIN supplier a1 ON a0.l_suppkey = a1.s_suppkey LEFT JOIN partsupp a2 ON a1.s_suppkey = a2.ps_suppkey AND (a2.ps_availqty IS NULL OR a2.ps_partkey BETWEEN 790 AND 1620) GROUP BY a0.l_linenumber",
+"rows": [
+[
+"1",
+"0.00",
+"498561"
+],
+[
+"2",
+"0.00",
+"428713"
+],
+[
+"3",
+"0.00",
+"356332"
+],
+[
+"4",
+"0.00",
+"286787"
+],
+[
+"5",
+"0.00",
+"214080"
+],
+[
+"6",
+"0.00",
+"143596"
+],
+[
+"7",
+"0.00",
+"72195"
+]
+]
+},
+{
+"sql": "SELECT a0.p_retailprice AS c0, a0.p_partkey AS c1, CASE WHEN (a0.p_mfgr LIKE 'Man%' AND a0.p_container <= 'WRAP BAG') THEN a0.p_name END AS c2, a0.p_retailprice AS c3 FROM part a0 WHERE (a0.p_mfgr IN ('Manufacturer#3', 'Manufacturer#5', 'Manufacturer#2') AND a0.p_size BETWEEN 2 AND 4)",
+"rows": [
+[
+"906.00",
+"6",
+"bisque cornflower lawn forest magenta",
+"906.00"
+],
+[
+"916.01",
+"16",
+"deep sky turquoise drab peach",
+"916.01"
+],
+[
+"925.02",
+"25",
+"aquamarine steel firebrick light turquoise",
+"925.02"
+],
+[
+"936.03",
+"36",
+"chiffon tan forest moccasin dark",
+"936.03"
+],
+[
+"959.05",
+"59",
+"misty brown medium mint salmon",
+"959.05"
+],
+[
+"965.06",
+"65",
+"slate drab medium puff gainsboro",
+"965.06"
+],
+[
+"969.06",
+"69",
+"lace burnished rosy antique metallic",
+"969.06"
+],
+[
+"993.09",
+"93",
+"NULL",
+"993.09"
+],
+[
+"1000.10",
+"100",
+"cyan orchid indian cornflower saddle",
+"1000.10"
+],
+[
+"1036.13",
+"136",
+"cornsilk maroon blanched thistle rosy",
+"1036.13"
+],
+[
+"1066.16",
+"166",
+"linen bisque tomato gainsboro goldenrod",
+"1066.16"
+],
+[
+"1096.19",
+"196",
+"pale peru linen hot maroon",
+"1096.19"
+],
+[
+"1105.20",
+"205",
+"navajo bisque gainsboro forest coral",
+"1105.20"
+],
+[
+"1135.23",
+"235",
+"sky mint aquamarine dark cornsilk",
+"1135.23"
+],
+[
+"1141.24",
+"241",
+"NULL",
+"1141.24"
+],
+[
+"1147.24",
+"247",
+"medium gainsboro lawn coral peach",
+"1147.24"
+],
+[
+"1156.25",
+"256",
+"royal cream lawn purple powder",
+"1156.25"
+],
+[
+"1235.33",
+"335",
+"dark cream plum goldenrod smoke",
+"1235.33"
+],
+[
+"1236.33",
+"336",
+"NULL",
+"1236.33"
+],
+[
+"1240.34",
+"340",
+"sienna purple lawn coral navy",
+"1240.34"
+],
+[
+"1267.36",
+"367",
+"black lavender dark cornflower grey",
+"1267.36"
+],
+[
+"1308.40",
+"408",
+"indian metallic peach gainsboro pale",
+"1308.40"
+],
+[
+"1323.42",
+"423",
+"bisque misty dark hot blush",
+"1323.42"
+],
+[
+"1439.53",
+"539",
+"dodger midnight salmon drab saddle",
+"1439.53"
+],
+[
+"1443.54",
+"543",
+"sky powder saddle metallic moccasin",
+"1443.54"
+],
+[
+"1520.62",
+"620",
+"frosted tomato almond salmon powder",
+"1520.62"
+],
+[
+"1532.63",
+"632",
+"blush floral tan thistle chiffon",
+"1532.63"
+],
+[
+"1548.64",
+"648",
+"NULL",
+"1548.64"
+],
+[
+"1551.65",
+"651",
+"bisque floral dim burlywood moccasin",
+"1551.65"
+],
+[
+"1554.65",
+"654",
+"cyan burnished tomato chiffon navy",
+"1554.65"
+],
+[
+"1591.69",
+"691",
+"burnished dim gainsboro thistle blue",
+"1591.69"
+],
+[
+"1596.69",
+"696",
+"forest lemon cream black pink",
+"1596.69"
+],
+[
+"1665.76",
+"765",
+"thistle red smoke chartreuse orange",
+"1665.76"
+],
+[
+"1767.86",
+"867",
+"snow spring black white burnished",
+"1767.86"
+],
+[
+"1792.89",
+"892",
+"thistle chocolate sandy powder drab",
+"1792.89"
+],
+[
+"1817.91",
+"917",
+"midnight khaki medium linen peru",
+"1817.91"
+],
+[
+"1837.93",
+"937",
+"drab peru royal pink peach",
+"1837.93"
+],
+[
+"1852.95",
+"952",
+"frosted purple sky steel papaya",
+"1852.95"
+],
+[
+"1877.97",
+"977",
+"frosted tomato deep burnished indian",
+"1877.97"
+],
+[
+"1893.99",
+"993",
+"chiffon papaya lavender tomato spring",
+"1893.99"
+],
+[
+"1898.99",
+"998",
+"ivory maroon cream red peru",
+"1898.99"
+],
+[
+"925.02",
+"1024",
+"maroon sienna puff ghost chiffon",
+"925.02"
+],
+[
+"950.04",
+"1049",
+"goldenrod dodger cyan orchid bisque",
+"950.04"
+],
+[
+"951.05",
+"1050",
+"purple cornsilk navajo firebrick burlywood",
+"951.05"
+],
+[
+"965.06",
+"1064",
+"frosted orchid blanched seashell steel",
+"965.06"
+],
+[
+"1061.16",
+"1160",
+"spring linen antique papaya yellow",
+"1061.16"
+],
+[
+"1129.22",
+"1228",
+"blanched drab deep spring orange",
+"1129.22"
+],
+[
+"1146.24",
+"1245",
+"NULL",
+"1146.24"
+],
+[
+"1172.27",
+"1271",
+"metallic wheat pale slate chartreuse",
+"1172.27"
+],
+[
+"1205.30",
+"1304",
+"firebrick cyan ghost lawn chartreuse",
+"1205.30"
+],
+[
+"1312.41",
+"1411",
+"firebrick pink grey saddle peach",
+"1312.41"
+],
+[
+"1373.47",
+"1472",
+"NULL",
+"1373.47"
+],
+[
+"1380.47",
+"1479",
+"snow gainsboro royal brown misty",
+"1380.47"
+],
+[
+"1401.50",
+"1500",
+"navajo wheat burnished moccasin spring",
+"1401.50"
+],
+[
+"1420.51",
+"1519",
+"coral magenta light floral tomato",
+"1420.51"
+],
+[
+"1426.52",
+"1525",
+"honeydew khaki brown lawn rose",
+"1426.52"
+],
+[
+"1441.54",
+"1540",
+"chiffon salmon beige pink yellow",
+"1441.54"
+],
+[
+"1458.55",
+"1557",
+"white burnished turquoise sky orange",
+"1458.55"
+],
+[
+"1463.56",
+"1562",
+"slate dark navy sandy khaki",
+"1463.56"
+],
+[
+"1509.60",
+"1608",
+"khaki deep brown grey peach",
+"1509.60"
+],
+[
+"1515.61",
+"1614",
+"papaya navy lawn burnished chocolate",
+"1515.61"
+],
+[
+"1541.64",
+"1640",
+"steel lavender cream peru brown",
+"1541.64"
+],
+[
+"1555.65",
+"1654",
+"turquoise lemon deep chiffon red",
+"1555.65"
+],
+[
+"1564.66",
+"1663",
+"NULL",
+"1564.66"
+],
+[
+"1583.68",
+"1682",
+"NULL",
+"1583.68"
+],
+[
+"1639.73",
+"1738",
+"NULL",
+"1639.73"
+],
+[
+"1661.76",
+"1760",
+"floral metallic lawn deep sky",
+"1661.76"
+],
+[
+"1713.81",
+"1812",
+"NULL",
+"1713.81"
+],
+[
+"1723.82",
+"1822",
+"smoke hot misty steel lavender",
+"1723.82"
+],
+[
+"1752.85",
+"1851",
+"honeydew thistle ivory pale magenta",
+"1752.85"
+],
+[
+"1775.87",
+"1874",
+"sky brown seashell papaya sandy",
+"1775.87"
+],
+[
+"1796.89",
+"1895",
+"NULL",
+"1796.89"
+],
+[
+"1817.91",
+"1916",
+"cream navy mint peru burlywood",
+"1817.91"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT sum(a0.s_acctbal) AS a0, avg(a0.s_suppkey) AS a1 FROM supplier a0 WHERE ((a0.s_nationkey IS NOT NULL AND a0.s_address BETWEEN '9QtKQKXK24fBTYIsb2' AND 'MJys1P8C JyNZ') OR (a0.s_address IN ('ULXKdX bZFJwii', 'dAN28JcaMkXMkIUYU7H', ',gJ6K2MKveYxQTN 2EMG3pzg') OR a0.s_address IS NULL))) SELECT * FROM q",
+"rows": [
+[
+"101246.28",
+"52.13333333333333"
+]
+]
+},
+{
+"sql": "SELECT avg(a0.p_size) AS a0 FROM part a0 WHERE a0.p_brand IS NOT NULL",
+"rows": [
+[
+"25.2555"
+]
+]
+},
+{
+"sql": "SELECT a0.r_regionkey FROM region a0 WHERE a0.r_name > 'EUROPE' UNION ALL SELECT a0.r_regionkey FROM region a0 WHERE NULLIF(a0.r_regionkey, 3) <> 4",
+"rows": [
+[
+"4"
+],
+[
+"0"
+],
+[
+"1"
+],
+[
+"2"
+]
+]
+},
+{
+"sql": "SELECT a0.p_mfgr AS g0, min(a0.p_name) AS a0, sum(a0.p_size) AS a1 FROM part a0 WHERE ((a0.p_comment > 'lar packag' OR a0.p_comment LIKE 'su%') OR a0.p_retailprice IS NULL) GROUP BY a0.p_mfgr",
+"rows": [
+[
+"Manufacturer#5",
+"almond azure drab ghost mint",
+"4232"
+],
+[
+"Manufacturer#2",
+"almond lemon olive smoke moccasin",
+"4138"
+],
+[
+"Manufacturer#4",
+"almond cornsilk antique light honeydew",
+"4915"
+],
+[
+"Manufacturer#3",
+"almond aquamarine mint misty red",
+"5030"
+],
+[
+"Manufacturer#1",
+"antique beige brown deep dodger",
+"4518"
+]
+]
+},
+{
+"sql": "SELECT count(DISTINCT a0.s_comment) AS a0, count(a0.s_suppkey) AS a1, min(a0.s_name) AS a2 FROM supplier a0 WHERE a0.s_suppkey IN (51, 24, 18)",
+"rows": [
+[
+"3",
+"3",
+"Supplier#000000018"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.l_shipinstruct AS g0, a0.l_returnflag AS g1, count(a0.l_tax) AS a0, min(a0.l_linenumber) AS a1 FROM lineitem a0 WHERE (a0.l_quantity IN (34.00, 48.00, 7.00) AND (a0.l_shipdate BETWEEN DATE '1992-09-25' AND DATE '1997-07-23' AND a0.l_quantity BETWEEN 12.00 AND 17.00)) GROUP BY a0.l_shipinstruct, a0.l_returnflag) SELECT * FROM q",
+"rows": []
+},
+{
+"sql": "SELECT avg(a1.s_suppkey) AS a0 FROM partsupp a0 LEFT JOIN supplier a1 ON a0.ps_suppkey = a1.s_suppkey",
+"rows": [
+[
+"50.5"
+]
+]
+},
+{
+"sql": "SELECT a0.r_name FROM region a0 WHERE a0.r_regionkey IN (4, 1, 2) UNION SELECT a0.r_name FROM region a0 WHERE a0.r_name LIKE 'M%'",
+"rows": [
+[
+"ASIA"
+],
+[
+"AMERICA"
+],
+[
+"MIDDLE EAST"
+]
+]
+},
+{
+"sql": "SELECT a0.s_acctbal AS g0, a0.s_comment AS g1, min(a0.s_address) AS a0, avg(a0.s_suppkey) AS a1 FROM supplier a0 WHERE a0.s_name IN ('Supplier#000000096', 'Supplier#000000022', 'Supplier#000000021') GROUP BY a0.s_acctbal, a0.s_comment",
+"rows": [
+[
+"9365.80",
+"thlessly bold accounts. slyly even accounts against the special requests boost slyly bl",
+"TZoQwNFFO i,baXpbpin02,hvuhE,GRVIKm ",
+"21.0"
+],
+[
+"-966.20",
+"oxes among the special pains cajole furiously",
+"DGIIamGrSFFUm53Va,0PnOc",
+"22.0"
+],
+[
+"3437.24",
+"ously quick deposits. furiously bold requests along",
+"gPuBX5iIBtNrCYv2EMZISIhu0v7yZeC",
+"96.0"
+]
+]
+},
+{
+"sql": "SELECT a0.o_orderstatus AS g0, count(DISTINCT a0.o_custkey) AS a0, count(a0.o_totalprice) AS a1 FROM orders a0 WHERE a0.o_comment IN (' slyly furiously speci', 'regular deposits use bli', 'xpress deposits sleep') GROUP BY a0.o_orderstatus",
+"rows": [
+[
+"O",
+"3",
+"3"
+]
+]
+},
+{
+"sql": "SELECT a0.s_name AS c0, a1.n_nationkey AS c1, a1.n_name AS c2, a0.s_phone AS c3 FROM supplier a0 JOIN nation a1 ON a0.s_nationkey = a1.n_nationkey WHERE a1.n_regionkey BETWEEN 1 AND 3",
+"rows": [
+[
+"Supplier#000000001",
+"17",
+"PERU",
+"27-918-335-1736"
+],
+[
+"Supplier#000000003",
+"1",
+"ARGENTINA",
+"11-383-516-1199"
+],
+[
+"Supplier#000000007",
+"23",
+"UNITED KINGDOM",
+"33-990-965-2201"
+],
+[
+"Supplier#000000008",
+"17",
+"PERU",
+"27-498-742-3860"
+],
+[
+"Supplier#000000010",
+"24",
+"UNITED STATES",
+"34-852-489-8585"
+],
+[
+"Supplier#000000011",
+"18",
+"CHINA",
+"28-613-996-1505"
+],
+[
+"Supplier#000000012",
+"8",
+"INDIA",
+"18-179-925-7181"
+],
+[
+"Supplier#000000013",
+"3",
+"CANADA",
+"13-727-620-7813"
+],
+[
+"Supplier#000000015",
+"8",
+"INDIA",
+"18-453-357-6394"
+],
+[
+"Supplier#000000016",
+"22",
+"RUSSIA",
+"32-822-502-4215"
+],
+[
+"Supplier#000000017",
+"19",
+"ROMANIA",
+"29-601-884-9219"
+],
+[
+"Supplier#000000019",
+"24",
+"UNITED STATES",
+"34-278-310-2731"
+],
+[
+"Supplier#000000020",
+"3",
+"CANADA",
+"13-715-945-6730"
+],
+[
+"Supplier#000000021",
+"2",
+"BRAZIL",
+"12-253-590-5816"
+],
+[
+"Supplier#000000023",
+"9",
+"INDONESIA",
+"19-559-422-5776"
+],
+[
+"Supplier#000000025",
+"22",
+"RUSSIA",
+"32-431-945-3541"
+],
+[
+"Supplier#000000026",
+"21",
+"VIETNAM",
+"31-758-894-4436"
+],
+[
+"Supplier#000000027",
+"18",
+"CHINA",
+"28-708-999-2028"
+],
+[
+"Supplier#000000029",
+"1",
+"ARGENTINA",
+"11-555-705-5922"
+],
+[
+"Supplier#000000032",
+"23",
+"UNITED KINGDOM",
+"33-484-637-7873"
+],
+[
+"Supplier#000000033",
+"7",
+"GERMANY",
+"17-138-897-9374"
+],
+[
+"Supplier#000000035",
+"21",
+"VIETNAM",
+"31-720-790-5245"
+],
+[
+"Supplier#000000039",
+"8",
+"INDIA",
+"18-851-856-5633"
+],
+[
+"Supplier#000000040",
+"22",
+"RUSSIA",
+"32-231-247-6991"
+],
+[
+"Supplier#000000041",
+"18",
+"CHINA",
+"28-739-447-2525"
+],
+[
+"Supplier#000000042",
+"22",
+"RUSSIA",
+"32-698-298-6317"
+],
+[
+"Supplier#000000043",
+"12",
+"JAPAN",
+"22-421-568-4862"
+],
+[
+"Supplier#000000044",
+"7",
+"GERMANY",
+"17-713-930-5667"
+],
+[
+"Supplier#000000045",
+"9",
+"INDONESIA",
+"19-189-635-8862"
+],
+[
+"Supplier#000000046",
+"24",
+"UNITED STATES",
+"34-748-308-3215"
+],
+[
+"Supplier#000000049",
+"24",
+"UNITED STATES",
+"34-211-567-6800"
+],
+[
+"Supplier#000000050",
+"9",
+"INDONESIA",
+"19-561-560-7437"
+],
+[
+"Supplier#000000051",
+"9",
+"INDONESIA",
+"19-475-537-1368"
+],
+[
+"Supplier#000000052",
+"19",
+"ROMANIA",
+"29-974-934-4713"
+],
+[
+"Supplier#000000053",
+"7",
+"GERMANY",
+"17-886-101-6083"
+],
+[
+"Supplier#000000054",
+"12",
+"JAPAN",
+"22-966-435-7200"
+],
+[
+"Supplier#000000055",
+"24",
+"UNITED STATES",
+"34-876-912-6007"
+],
+[
+"Supplier#000000057",
+"17",
+"PERU",
+"27-681-514-6892"
+],
+[
+"Supplier#000000059",
+"17",
+"PERU",
+"27-249-395-9123"
+],
+[
+"Supplier#000000060",
+"8",
+"INDIA",
+"18-550-360-2464"
+],
+[
+"Supplier#000000061",
+"8",
+"INDIA",
+"18-396-489-9719"
+],
+[
+"Supplier#000000062",
+"19",
+"ROMANIA",
+"29-603-653-2494"
+],
+[
+"Supplier#000000064",
+"24",
+"UNITED STATES",
+"34-278-790-7004"
+],
+[
+"Supplier#000000065",
+"22",
+"RUSSIA",
+"32-444-835-2434"
+],
+[
+"Supplier#000000066",
+"23",
+"UNITED KINGDOM",
+"33-300-836-9529"
+],
+[
+"Supplier#000000068",
+"21",
+"VIETNAM",
+"31-267-327-4328"
+],
+[
+"Supplier#000000070",
+"6",
+"FRANCE",
+"16-821-608-1166"
+],
+[
+"Supplier#000000071",
+"1",
+"ARGENTINA",
+"11-743-919-7272"
+],
+[
+"Supplier#000000072",
+"18",
+"CHINA",
+"28-113-898-6643"
+],
+[
+"Supplier#000000075",
+"18",
+"CHINA",
+"28-716-704-8686"
+],
+[
+"Supplier#000000077",
+"7",
+"GERMANY",
+"17-281-345-4863"
+],
+[
+"Supplier#000000080",
+"21",
+"VIETNAM",
+"31-646-289-1906"
+],
+[
+"Supplier#000000081",
+"12",
+"JAPAN",
+"22-535-310-6971"
+],
+[
+"Supplier#000000082",
+"18",
+"CHINA",
+"28-177-572-9691"
+],
+[
+"Supplier#000000084",
+"24",
+"UNITED STATES",
+"34-869-118-7803"
+],
+[
+"Supplier#000000085",
+"7",
+"GERMANY",
+"17-167-806-8199"
+],
+[
+"Supplier#000000086",
+"19",
+"ROMANIA",
+"29-903-665-7065"
+],
+[
+"Supplier#000000087",
+"24",
+"UNITED STATES",
+"34-860-229-1674"
+],
+[
+"Supplier#000000089",
+"9",
+"INDONESIA",
+"19-259-876-1014"
+],
+[
+"Supplier#000000090",
+"6",
+"FRANCE",
+"16-380-123-9217"
+],
+[
+"Supplier#000000091",
+"3",
+"CANADA",
+"13-604-986-9056"
+],
+[
+"Supplier#000000092",
+"2",
+"BRAZIL",
+"12-701-432-8346"
+],
+[
+"Supplier#000000095",
+"19",
+"ROMANIA",
+"29-142-539-1403"
+],
+[
+"Supplier#000000096",
+"12",
+"JAPAN",
+"22-888-654-7193"
+],
+[
+"Supplier#000000098",
+"21",
+"VIETNAM",
+"31-914-775-1978"
+],
+[
+"Supplier#000000099",
+"18",
+"CHINA",
+"28-272-909-1617"
+],
+[
+"Supplier#000000100",
+"21",
+"VIETNAM",
+"31-351-324-5062"
+]
+]
+},
+{
+"sql": "SELECT a0.s_name AS c0, a0.s_nationkey AS c1, a0.s_nationkey AS c2 FROM supplier a0 WHERE a0.s_acctbal < (SELECT max(s_acctbal) FROM supplier s0 WHERE s0.s_suppkey >= 29)",
+"rows": [
+[
+"Supplier#000000001",
+"17",
+"17"
+],
+[
+"Supplier#000000002",
+"5",
+"5"
+],
+[
+"Supplier#000000003",
+"1",
+"1"
+],
+[
+"Supplier#000000004",
+"15",
+"15"
+],
+[
+"Supplier#000000005",
+"11",
+"11"
+],
+[
+"Supplier#000000006",
+"14",
+"14"
+],
+[
+"Supplier#000000007",
+"23",
+"23"
+],
+[
+"Supplier#000000008",
+"17",
+"17"
+],
+[
+"Supplier#000000009",
+"10",
+"10"
+],
+[
+"Supplier#000000010",
+"24",
+"24"
+],
+[
+"Supplier#000000011",
+"18",
+"18"
+],
+[
+"Supplier#000000012",
+"8",
+"8"
+],
+[
+"Supplier#000000013",
+"3",
+"3"
+],
+[
+"Supplier#000000014",
+"15",
+"15"
+],
+[
+"Supplier#000000015",
+"8",
+"8"
+],
+[
+"Supplier#000000016",
+"22",
+"22"
+],
+[
+"Supplier#000000017",
+"19",
+"19"
+],
+[
+"Supplier#000000018",
+"16",
+"16"
+],
+[
+"Supplier#000000019",
+"24",
+"24"
+],
+[
+"Supplier#000000020",
+"3",
+"3"
+],
+[
+"Supplier#000000021",
+"2",
+"2"
+],
+[
+"Supplier#000000022",
+"4",
+"4"
+],
+[
+"Supplier#000000023",
+"9",
+"9"
+],
+[
+"Supplier#000000024",
+"0",
+"0"
+],
+[
+"Supplier#000000025",
+"22",
+"22"
+],
+[
+"Supplier#000000026",
+"21",
+"21"
+],
+[
+"Supplier#000000027",
+"18",
+"18"
+],
+[
+"Supplier#000000028",
+"0",
+"0"
+],
+[
+"Supplier#000000029",
+"1",
+"1"
+],
+[
+"Supplier#000000030",
+"16",
+"16"
+],
+[
+"Supplier#000000031",
+"16",
+"16"
+],
+[
+"Supplier#000000032",
+"23",
+"23"
+],
+[
+"Supplier#000000033",
+"7",
+"7"
+],
+[
+"Supplier#000000034",
+"10",
+"10"
+],
+[
+"Supplier#000000035",
+"21",
+"21"
+],
+[
+"Supplier#000000036",
+"13",
+"13"
+],
+[
+"Supplier#000000037",
+"0",
+"0"
+],
+[
+"Supplier#000000038",
+"4",
+"4"
+],
+[
+"Supplier#000000039",
+"8",
+"8"
+],
+[
+"Supplier#000000040",
+"22",
+"22"
+],
+[
+"Supplier#000000041",
+"18",
+"18"
+],
+[
+"Supplier#000000042",
+"22",
+"22"
+],
+[
+"Supplier#000000043",
+"12",
+"12"
+],
+[
+"Supplier#000000044",
+"7",
+"7"
+],
+[
+"Supplier#000000045",
+"9",
+"9"
+],
+[
+"Supplier#000000046",
+"24",
+"24"
+],
+[
+"Supplier#000000047",
+"14",
+"14"
+],
+[
+"Supplier#000000048",
+"14",
+"14"
+],
+[
+"Supplier#000000050",
+"9",
+"9"
+],
+[
+"Supplier#000000051",
+"9",
+"9"
+],
+[
+"Supplier#000000052",
+"19",
+"19"
+],
+[
+"Supplier#000000053",
+"7",
+"7"
+],
+[
+"Supplier#000000054",
+"12",
+"12"
+],
+[
+"Supplier#000000055",
+"24",
+"24"
+],
+[
+"Supplier#000000056",
+"16",
+"16"
+],
+[
+"Supplier#000000057",
+"17",
+"17"
+],
+[
+"Supplier#000000058",
+"16",
+"16"
+],
+[
+"Supplier#000000059",
+"17",
+"17"
+],
+[
+"Supplier#000000060",
+"8",
+"8"
+],
+[
+"Supplier#000000061",
+"8",
+"8"
+],
+[
+"Supplier#000000062",
+"19",
+"19"
+],
+[
+"Supplier#000000063",
+"5",
+"5"
+],
+[
+"Supplier#000000064",
+"24",
+"24"
+],
+[
+"Supplier#000000065",
+"22",
+"22"
+],
+[
+"Supplier#000000066",
+"23",
+"23"
+],
+[
+"Supplier#000000067",
+"4",
+"4"
+],
+[
+"Supplier#000000068",
+"21",
+"21"
+],
+[
+"Supplier#000000069",
+"4",
+"4"
+],
+[
+"Supplier#000000070",
+"6",
+"6"
+],
+[
+"Supplier#000000071",
+"1",
+"1"
+],
+[
+"Supplier#000000072",
+"18",
+"18"
+],
+[
+"Supplier#000000073",
+"16",
+"16"
+],
+[
+"Supplier#000000074",
+"20",
+"20"
+],
+[
+"Supplier#000000075",
+"18",
+"18"
+],
+[
+"Supplier#000000076",
+"14",
+"14"
+],
+[
+"Supplier#000000077",
+"7",
+"7"
+],
+[
+"Supplier#000000078",
+"5",
+"5"
+],
+[
+"Supplier#000000079",
+"14",
+"14"
+],
+[
+"Supplier#000000080",
+"21",
+"21"
+],
+[
+"Supplier#000000081",
+"12",
+"12"
+],
+[
+"Supplier#000000082",
+"18",
+"18"
+],
+[
+"Supplier#000000083",
+"14",
+"14"
+],
+[
+"Supplier#000000084",
+"24",
+"24"
+],
+[
+"Supplier#000000085",
+"7",
+"7"
+],
+[
+"Supplier#000000086",
+"19",
+"19"
+],
+[
+"Supplier#000000087",
+"24",
+"24"
+],
+[
+"Supplier#000000088",
+"11",
+"11"
+],
+[
+"Supplier#000000089",
+"9",
+"9"
+],
+[
+"Supplier#000000090",
+"6",
+"6"
+],
+[
+"Supplier#000000091",
+"3",
+"3"
+],
+[
+"Supplier#000000092",
+"2",
+"2"
+],
+[
+"Supplier#000000093",
+"16",
+"16"
+],
+[
+"Supplier#000000094",
+"4",
+"4"
+],
+[
+"Supplier#000000095",
+"19",
+"19"
+],
+[
+"Supplier#000000096",
+"12",
+"12"
+],
+[
+"Supplier#000000097",
+"4",
+"4"
+],
+[
+"Supplier#000000098",
+"21",
+"21"
+],
+[
+"Supplier#000000099",
+"18",
+"18"
+],
+[
+"Supplier#000000100",
+"21",
+"21"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT max(a0.c_phone) AS a0, min(a0.c_acctbal) AS a1 FROM customer a0 WHERE a0.c_acctbal BETWEEN 762.69 AND 7760.33) SELECT * FROM q",
+"rows": [
+[
+"34-973-735-5374",
+"762.69"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.n_name AS c0 FROM nation a0 WHERE a0.n_nationkey BETWEEN 4 AND 20",
+"rows": [
+[
+"MOROCCO"
+],
+[
+"EGYPT"
+],
+[
+"SAUDI ARABIA"
+],
+[
+"FRANCE"
+],
+[
+"JAPAN"
+],
+[
+"GERMANY"
+],
+[
+"INDONESIA"
+],
+[
+"JORDAN"
+],
+[
+"ROMANIA"
+],
+[
+"CHINA"
+],
+[
+"PERU"
+],
+[
+"INDIA"
+],
+[
+"IRAN"
+],
+[
+"ETHIOPIA"
+],
+[
+"IRAQ"
+],
+[
+"KENYA"
+],
+[
+"MOZAMBIQUE"
+]
+]
+},
+{
+"sql": "SELECT COALESCE(NULLIF(a0.o_shippriority, 0), a0.o_shippriority) AS c0 FROM orders a0 WHERE a0.o_custkey = (SELECT min(o_custkey) FROM orders s0 WHERE s0.o_comment < ' slyly furiously speci')",
+"rows": [
+[
+"0"
+],
+[
+"0"
+],
+[
+"0"
+],
+[
+"0"
+],
+[
+"0"
+],
+[
+"0"
+],
+[
+"0"
+],
+[
+"0"
+],
+[
+"0"
+]
+]
+},
+{
+"sql": "SELECT min(a0.r_name) AS a0 FROM region a0 WHERE ((NOT a0.r_name < 'AFRICA') OR a0.r_regionkey <= 1)",
+"rows": [
+[
+"AFRICA"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN (a0.n_name BETWEEN 'MOROCCO' AND 'ROMANIA' AND a0.n_regionkey <> 4) THEN a0.n_name END AS c0 FROM nation a0 WHERE a0.n_nationkey < (SELECT min(n_nationkey) FROM nation s0 WHERE s0.n_name LIKE 'PE%')",
+"rows": [
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"MOROCCO"
+],
+[
+"MOZAMBIQUE"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN a0.s_suppkey BETWEEN 27 AND 37 THEN a0.s_nationkey END AS c0 FROM supplier a0 WHERE a0.s_nationkey >= (SELECT min(s_nationkey) FROM supplier s0 WHERE s0.s_phone LIKE '1%')",
+"rows": [
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"18"
+],
+[
+"0"
+],
+[
+"1"
+],
+[
+"16"
+],
+[
+"16"
+],
+[
+"23"
+],
+[
+"7"
+],
+[
+"10"
+],
+[
+"21"
+],
+[
+"13"
+],
+[
+"0"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+]
+]
+},
+{
+"sql": "SELECT a0.s_comment AS c0 FROM supplier a0 WHERE EXISTS (SELECT 1 FROM partsupp b0 WHERE b0.ps_suppkey = a0.s_suppkey AND b0.ps_suppkey BETWEEN 1 AND 25)",
+"rows": [
+[
+"efully across the furiously regular requests. pending, regular instructions against the bold, expre"
+],
+[
+"platelets thrash against the slyly special req"
+],
+[
+"nently against the bravely bold deposits. carefully ironic platelets are. pendi"
+],
+[
+"oxes among the special pains cajole furiously"
+],
+[
+"accounts. instructions ha"
+],
+[
+"asymptotes cajole along the furiously bold deposits. iron"
+],
+[
+"leep despite the fluffily thin accounts. caref"
+],
+[
+"se slyly furiously even notornis. furiously regular packa"
+],
+[
+" the pending packages. furiously expres"
+],
+[
+"ronic pinto beans. slyly even i"
+],
+[
+"es wake above the slyly ironic pearls"
+],
+[
+"iously about the bold packages. "
+],
+[
+"against the quickly ironic packages. slyly regular excuses wake since"
+],
+[
+"g the carefully regular packages. blithely unusual instructions sl"
+],
+[
+"ke across the slyly ironic packages. carefully special pinto beans wake blithely. even deposits los"
+],
+[
+"thlessly bold accounts. slyly even accounts against the special requests boost slyly bl"
+],
+[
+"quickly pending accounts cajole blithely against the ironic, pending theodolites. even, silent reque"
+],
+[
+" instructions. slyly unusual"
+],
+[
+"al braids affix through the regular"
+],
+[
+"sual asymptotes affix quickly at the instructions. deposits "
+],
+[
+"olphins. unusual deposits nag along the fluffily"
+],
+[
+"ending deposits. carefully express dependencies detect. blithely regular pla"
+],
+[
+"es. fluffily ironic instructions nag slyly slyly pending realms. blithely final r"
+],
+[
+"ong the fluffily idle packages: bold foxes mold silent package"
+],
+[
+" sleep fluffily against the blithely special dugouts. furiously express th"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT COALESCE(NULLIF(a0.s_name, 'Supplier#000000087'), a0.s_name) AS c0 FROM supplier a0 WHERE (a0.s_address BETWEEN 'X8uG7kkYSD2 y7,1eD5lSj' AND 'ckk5mWb4qewgn1vs' OR a0.s_nationkey <= 2)",
+"rows": [
+[
+"Supplier#000000025"
+],
+[
+"Supplier#000000035"
+],
+[
+"Supplier#000000037"
+],
+[
+"Supplier#000000047"
+],
+[
+"Supplier#000000018"
+],
+[
+"Supplier#000000003"
+],
+[
+"Supplier#000000029"
+],
+[
+"Supplier#000000021"
+],
+[
+"Supplier#000000028"
+],
+[
+"Supplier#000000071"
+],
+[
+"Supplier#000000099"
+],
+[
+"Supplier#000000024"
+],
+[
+"Supplier#000000092"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.o_orderstatus AS g0, min(a0.o_comment) AS a0, count(DISTINCT a0.o_orderpriority) AS a1 FROM orders a0 WHERE a0.o_totalprice IN (117607.45, 105463.66, 47317.62) GROUP BY a0.o_orderstatus) SELECT * FROM q",
+"rows": [
+[
+"F",
+"eans: bold, pending instructions boost slyly iron",
+"1"
+],
+[
+"O",
+" bold pinto beans cajole caref",
+"1"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN (a0.o_comment LIKE 're%' OR a0.o_comment IN ('xpress deposits sleep', ' deposits lose. bli', ' slyly furiously speci')) THEN a0.o_custkey END AS c0 FROM orders a0 WHERE a0.o_totalprice < (SELECT min(o_totalprice) FROM orders s0 WHERE s0.o_comment BETWEEN ' deposits lose. bli' AND ' slyly furiously speci')",
+"rows": [
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"520"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"328"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+],
+[
+"NULL"
+]
+]
+},
+{
+"sql": "SELECT a1.p_mfgr AS g0, a1.p_type AS g1, count(*) AS a0, count(a0.l_suppkey) AS a1, avg(a0.l_suppkey) AS a2 FROM lineitem a0 LEFT JOIN part a1 ON a0.l_partkey = a1.p_partkey WHERE a1.p_partkey IN (400, 771, 908) GROUP BY a1.p_mfgr, a1.p_type",
+"rows": [
+[
+"Manufacturer#2",
+"ECONOMY POLISHED BRASS",
+"39",
+"39",
+"49.1025641025641"
+],
+[
+"Manufacturer#2",
+"MEDIUM BURNISHED TIN",
+"20",
+"20",
+"30.1"
+],
+[
+"Manufacturer#1",
+"SMALL BURNISHED TIN",
+"33",
+"33",
+"51.75757575757576"
+]
+]
+},
+{
+"sql": "SELECT a0.n_name, a0.n_regionkey FROM nation a0 WHERE a0.n_regionkey BETWEEN 0 AND 4 UNION ALL SELECT a0.n_name, a0.n_regionkey FROM nation a0 WHERE a0.n_regionkey BETWEEN 0 AND 2",
+"rows": [
+[
+"ALGERIA",
+"0"
+],
+[
+"ARGENTINA",
+"1"
+],
+[
+"BRAZIL",
+"1"
+],
+[
+"CANADA",
+"1"
+],
+[
+"EGYPT",
+"4"
+],
+[
+"ETHIOPIA",
+"0"
+],
+[
+"FRANCE",
+"3"
+],
+[
+"GERMANY",
+"3"
+],
+[
+"INDIA",
+"2"
+],
+[
+"INDONESIA",
+"2"
+],
+[
+"IRAN",
+"4"
+],
+[
+"IRAQ",
+"4"
+],
+[
+"JAPAN",
+"2"
+],
+[
+"JORDAN",
+"4"
+],
+[
+"KENYA",
+"0"
+],
+[
+"MOROCCO",
+"0"
+],
+[
+"MOZAMBIQUE",
+"0"
+],
+[
+"PERU",
+"1"
+],
+[
+"CHINA",
+"2"
+],
+[
+"ROMANIA",
+"3"
+],
+[
+"SAUDI ARABIA",
+"4"
+],
+[
+"VIETNAM",
+"2"
+],
+[
+"RUSSIA",
+"3"
+],
+[
+"UNITED KINGDOM",
+"3"
+],
+[
+"UNITED STATES",
+"1"
+],
+[
+"ALGERIA",
+"0"
+],
+[
+"ARGENTINA",
+"1"
+],
+[
+"BRAZIL",
+"1"
+],
+[
+"CANADA",
+"1"
+],
+[
+"ETHIOPIA",
+"0"
+],
+[
+"INDIA",
+"2"
+],
+[
+"INDONESIA",
+"2"
+],
+[
+"JAPAN",
+"2"
+],
+[
+"KENYA",
+"0"
+],
+[
+"MOROCCO",
+"0"
+],
+[
+"MOZAMBIQUE",
+"0"
+],
+[
+"PERU",
+"1"
+],
+[
+"CHINA",
+"2"
+],
+[
+"VIETNAM",
+"2"
+],
+[
+"UNITED STATES",
+"1"
+]
+]
+},
+{
+"sql": "SELECT max(a0.o_clerk) AS a0 FROM orders a0 WHERE a0.o_shippriority > 0",
+"rows": [
+[
+"NULL"
+]
+]
+},
+{
+"sql": "SELECT avg(a0.c_custkey) AS a0, count(*) AS a1 FROM customer a0 WHERE a0.c_mktsegment = 'BUILDING'",
+"rows": [
+[
+"780.4362017804154",
+"337"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT CASE WHEN a0.c_custkey > 1261 THEN a0.c_mktsegment END AS c0, CASE WHEN a0.c_nationkey >= 0 THEN a0.c_mktsegment END AS c1 FROM customer a0 WHERE (NOT (a0.c_comment IS NULL AND a0.c_mktsegment > 'BUILDING'))",
+"rows": [
+[
+"HOUSEHOLD",
+"HOUSEHOLD"
+],
+[
+"NULL",
+"HOUSEHOLD"
+],
+[
+"MACHINERY",
+"MACHINERY"
+],
+[
+"BUILDING",
+"BUILDING"
+],
+[
+"FURNITURE",
+"FURNITURE"
+],
+[
+"NULL",
+"FURNITURE"
+],
+[
+"AUTOMOBILE",
+"AUTOMOBILE"
+],
+[
+"NULL",
+"BUILDING"
+],
+[
+"NULL",
+"AUTOMOBILE"
+],
+[
+"NULL",
+"MACHINERY"
+]
+]
+},
+{
+"sql": "SELECT a0.n_regionkey AS g0, max(a0.n_nationkey) AS a0, sum(a0.n_nationkey) AS a1 FROM nation a0 WHERE (NOT (NULLIF(a0.n_regionkey, 1) = 2 AND a0.n_comment IS NOT NULL)) GROUP BY a0.n_regionkey",
+"rows": [
+[
+"0",
+"16",
+"50"
+],
+[
+"3",
+"23",
+"77"
+],
+[
+"4",
+"20",
+"58"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT avg(a0.s_nationkey) AS a0, avg(a0.s_suppkey) AS a1 FROM supplier a0 WHERE a0.s_nationkey BETWEEN 0 AND 12) SELECT * FROM q",
+"rows": [
+[
+"6.155555555555556",
+"50.355555555555554"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.ps_supplycost AS c0, COALESCE(NULLIF(a0.ps_partkey, 1614), a0.ps_partkey) AS c1 FROM partsupp a0 WHERE a0.ps_partkey BETWEEN 1117 AND 1117",
+"rows": [
+[
+"87.06",
+"1117"
+],
+[
+"915.17",
+"1117"
+],
+[
+"771.25",
+"1117"
+],
+[
+"440.44",
+"1117"
+]
+]
+},
+{
+"sql": "SELECT a0.n_comment AS g0, a0.n_nationkey AS g1, count(*) AS a0, count(a0.n_nationkey) AS a1, avg(a0.n_nationkey) AS a2 FROM nation a0 WHERE a0.n_comment IS NOT NULL GROUP BY a0.n_comment, a0.n_nationkey",
+"rows": [
+[
+"ong the regular requests: blithely silent pinto beans hagg",
+"7",
+"1",
+"1",
+"7.0"
+],
+[
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care",
+"19",
+"1",
+"1",
+"19.0"
+],
+[
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque",
+"9",
+"1",
+"1",
+"9.0"
+],
+[
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee",
+"14",
+"1",
+"1",
+"14.0"
+],
+[
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir",
+"17",
+"1",
+"1",
+"17.0"
+],
+[
+"ct blithely: blithely express accounts nag carefully. silent packages haggle carefully abo",
+"15",
+"1",
+"1",
+"15.0"
+],
+[
+" beans after the carefully regular accounts r",
+"16",
+"1",
+"1",
+"16.0"
+],
+[
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly ",
+"22",
+"1",
+"1",
+"22.0"
+],
+[
+"furiously regular requests. platelets affix furious",
+"0",
+"1",
+"1",
+"0.0"
+],
+[
+"ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+"3",
+"1",
+"1",
+"3.0"
+],
+[
+"oggedly. regular packages solve across",
+"6",
+"1",
+"1",
+"6.0"
+],
+[
+"instructions wake quickly. final deposits haggle. final, silent theodolites ",
+"1",
+"1",
+"1",
+"1.0"
+],
+[
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+"4",
+"1",
+"1",
+"4.0"
+],
+[
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts",
+"24",
+"1",
+"1",
+"24.0"
+],
+[
+"pendencies; slyly express foxes integrate carefully across the reg",
+"11",
+"1",
+"1",
+"11.0"
+],
+[
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile",
+"18",
+"1",
+"1",
+"18.0"
+],
+[
+"asymptotes use fluffily quickly bold instructions. slyly bold dependencies sleep carefully pending accounts",
+"2",
+"1",
+"1",
+"2.0"
+],
+[
+"regular requests sleep carefull",
+"5",
+"1",
+"1",
+"5.0"
+],
+[
+"lly across the quickly even pinto beans. caref",
+"21",
+"1",
+"1",
+"21.0"
+],
+[
+"furiously idle platelets nag. express asymptotes s",
+"10",
+"1",
+"1",
+"10.0"
+],
+[
+"the slyly regular ideas. silent Tiresias affix slyly fu",
+"13",
+"1",
+"1",
+"13.0"
+],
+[
+" quickly final packages. furiously i",
+"12",
+"1",
+"1",
+"12.0"
+],
+[
+"se slyly across the blithely regular deposits. deposits use carefully regular ",
+"20",
+"1",
+"1",
+"20.0"
+],
+[
+"carefully pending courts sleep above the ironic, regular theo",
+"23",
+"1",
+"1",
+"23.0"
+],
+[
+"uriously unusual deposits about the slyly final pinto beans could",
+"8",
+"1",
+"1",
+"8.0"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT count(DISTINCT a0.l_orderkey) AS a0 FROM lineitem a0 WHERE (a0.l_extendedprice BETWEEN 16384.68 AND 30032.92 OR (a0.l_linenumber BETWEEN 1 AND 4 OR a0.l_extendedprice BETWEEN 37392.04 AND 73918.90))) SELECT * FROM q",
+"rows": [
+[
+"15000"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT COALESCE(NULLIF(a0.l_linenumber, 5), a0.l_linenumber) AS c0, a0.l_returnflag AS c1 FROM lineitem a0 WHERE ((NOT a0.l_receiptdate <= DATE '1995-06-13') OR (a0.l_tax IS NULL OR a0.l_returnflag IN ('R', 'A', 'N')))",
+"rows": [
+[
+"3",
+"A"
+],
+[
+"6",
+"N"
+],
+[
+"4",
+"R"
+],
+[
+"1",
+"A"
+],
+[
+"3",
+"N"
+],
+[
+"6",
+"A"
+],
+[
+"2",
+"A"
+],
+[
+"5",
+"A"
+],
+[
+"4",
+"A"
+],
+[
+"3",
+"R"
+],
+[
+"1",
+"R"
+],
+[
+"7",
+"N"
+],
+[
+"4",
+"N"
+],
+[
+"6",
+"R"
+],
+[
+"7",
+"A"
+],
+[
+"1",
+"N"
+],
+[
+"7",
+"R"
+],
+[
+"2",
+"N"
+],
+[
+"5",
+"N"
+],
+[
+"2",
+"R"
+],
+[
+"5",
+"R"
+]
+]
+},
+{
+"sql": "SELECT a0.l_linestatus AS g0, avg(a0.l_linenumber) AS a0, count(*) AS a1 FROM lineitem a0 WHERE (NOT (a0.l_comment >= 'ake slyly even deposit' OR a0.l_commitdate IN (DATE '1992-07-19', DATE '1994-01-28', DATE '1993-09-17'))) GROUP BY a0.l_linestatus",
+"rows": [
+[
+"O",
+"3.04024594745668",
+"5367"
+],
+[
+"F",
+"2.994488333639537",
+"5443"
+]
+]
+},
+{
+"sql": "SELECT COALESCE(NULLIF(a0.n_nationkey, 14), a0.n_nationkey) AS c0, CASE WHEN (a0.n_nationkey BETWEEN 8 AND 16 OR a0.n_nationkey BETWEEN 5 AND 12) THEN a0.n_nationkey END AS c1, CASE WHEN (a0.n_regionkey IS NULL AND a0.n_comment IS NULL) THEN a0.n_comment END AS c2 FROM nation a0 WHERE a0.n_nationkey = (SELECT min(n_nationkey) FROM nation s0 WHERE (NOT s0.n_nationkey <= 15))",
+"rows": [
+[
+"16",
+"16",
+"NULL"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.n_regionkey AS g0, a0.n_name AS g1, count(*) AS a0, min(a0.n_regionkey) AS a1 FROM nation a0 WHERE a0.n_nationkey > 10 GROUP BY a0.n_regionkey, a0.n_name) SELECT * FROM q",
+"rows": [
+[
+"0",
+"MOROCCO",
+"1",
+"0"
+],
+[
+"3",
+"UNITED KINGDOM",
+"1",
+"3"
+],
+[
+"2",
+"JAPAN",
+"1",
+"2"
+],
+[
+"3",
+"RUSSIA",
+"1",
+"3"
+],
+[
+"4",
+"IRAQ",
+"1",
+"4"
+],
+[
+"2",
+"CHINA",
+"1",
+"2"
+],
+[
+"4",
+"JORDAN",
+"1",
+"4"
+],
+[
+"3",
+"ROMANIA",
+"1",
+"3"
+],
+[
+"0",
+"KENYA",
+"1",
+"0"
+],
+[
+"0",
+"MOZAMBIQUE",
+"1",
+"0"
+],
+[
+"4",
+"SAUDI ARABIA",
+"1",
+"4"
+],
+[
+"1",
+"UNITED STATES",
+"1",
+"1"
+],
+[
+"1",
+"PERU",
+"1",
+"1"
+],
+[
+"2",
+"VIETNAM",
+"1",
+"2"
+]
+]
+},
+{
+"sql": "SELECT min(a2.s_acctbal) AS a0, min(a0.l_commitdate) AS a1 FROM lineitem a0 JOIN orders a1 ON a0.l_orderkey = a1.o_orderkey JOIN supplier a2 ON a0.l_suppkey = a2.s_suppkey WHERE a2.s_address > 'iZz04vPVBK'",
+"rows": [
+[
+"-963.79",
+"1992-02-07"
+]
+]
+},
+{
+"sql": "SELECT max(a1.c_phone) AS a0, count(DISTINCT a1.c_nationkey) AS a1, count(DISTINCT a1.c_phone) AS a2 FROM orders a0 JOIN customer a1 ON a0.o_custkey = a1.c_custkey WHERE a1.c_address IN ('QBzcTUuIqEIvcuAjKqzsaxW2', 'LZu8W DN,LtFW90iEbjLns9n', 'ezOX521D5zw,EfqEAAs5t0')",
+"rows": [
+[
+"19-844-888-9800",
+"2",
+"2"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.o_totalprice AS g0, a0.o_orderpriority AS g1, avg(a0.o_orderkey) AS a0 FROM orders a0 WHERE NULLIF(a0.o_totalprice, 40222.53) = 90086.89 GROUP BY a0.o_totalprice, a0.o_orderpriority) SELECT * FROM q",
+"rows": [
+[
+"90086.89",
+"5-LOW",
+"52864.0"
+]
+]
+},
+{
+"sql": "SELECT a0.n_regionkey AS g0, a0.n_nationkey AS g1, avg(a0.n_nationkey) AS a0, max(a0.n_comment) AS a1, count(*) AS a2 FROM nation a0 WHERE a0.n_nationkey BETWEEN 14 AND 16 GROUP BY a0.n_regionkey, a0.n_nationkey HAVING count(*) > 2",
+"rows": []
+},
+{
+"sql": "WITH q AS (SELECT a0.l_shipinstruct AS g0, min(a0.l_commitdate) AS a0 FROM lineitem a0 WHERE a0.l_returnflag <= 'N' GROUP BY a0.l_shipinstruct) SELECT * FROM q",
+"rows": [
+[
+"TAKE BACK RETURN",
+"1992-02-04"
+],
+[
+"COLLECT COD",
+"1992-02-02"
+],
+[
+"NONE",
+"1992-02-05"
+],
+[
+"DELIVER IN PERSON",
+"1992-02-05"
+]
+]
+},
+{
+"sql": "SELECT a0.n_nationkey AS c0, COALESCE(NULLIF(a0.n_name, 'JAPAN'), a0.n_name) AS c1, a1.r_regionkey AS c2 FROM nation a0 JOIN region a1 ON a0.n_regionkey = a1.r_regionkey WHERE ((a0.n_nationkey BETWEEN 6 AND 24 AND a0.n_name < 'ALGERIA') OR a1.r_name > 'AFRICA')",
+"rows": [
+[
+"1",
+"ARGENTINA",
+"1"
+],
+[
+"2",
+"BRAZIL",
+"1"
+],
+[
+"3",
+"CANADA",
+"1"
+],
+[
+"4",
+"EGYPT",
+"4"
+],
+[
+"6",
+"FRANCE",
+"3"
+],
+[
+"7",
+"GERMANY",
+"3"
+],
+[
+"8",
+"INDIA",
+"2"
+],
+[
+"9",
+"INDONESIA",
+"2"
+],
+[
+"10",
+"IRAN",
+"4"
+],
+[
+"11",
+"IRAQ",
+"4"
+],
+[
+"12",
+"JAPAN",
+"2"
+],
+[
+"13",
+"JORDAN",
+"4"
+],
+[
+"17",
+"PERU",
+"1"
+],
+[
+"18",
+"CHINA",
+"2"
+],
+[
+"19",
+"ROMANIA",
+"3"
+],
+[
+"20",
+"SAUDI ARABIA",
+"4"
+],
+[
+"21",
+"VIETNAM",
+"2"
+],
+[
+"22",
+"RUSSIA",
+"3"
+],
+[
+"23",
+"UNITED KINGDOM",
+"3"
+],
+[
+"24",
+"UNITED STATES",
+"1"
+]
+]
+},
+{
+"sql": "SELECT a1.n_regionkey AS g0, a0.s_suppkey AS g1, min(a1.n_regionkey) AS a0 FROM supplier a0 JOIN nation a1 ON a0.s_nationkey = a1.n_nationkey JOIN customer a2 ON a1.n_nationkey = a2.c_nationkey WHERE (NOT a1.n_regionkey IN (3, 2, 4)) GROUP BY a1.n_regionkey, a0.s_suppkey",
+"rows": [
+[
+"0",
+"2",
+"0"
+],
+[
+"0",
+"4",
+"0"
+],
+[
+"0",
+"6",
+"0"
+],
+[
+"0",
+"14",
+"0"
+],
+[
+"0",
+"18",
+"0"
+],
+[
+"0",
+"24",
+"0"
+],
+[
+"0",
+"28",
+"0"
+],
+[
+"0",
+"30",
+"0"
+],
+[
+"0",
+"31",
+"0"
+],
+[
+"0",
+"37",
+"0"
+],
+[
+"0",
+"47",
+"0"
+],
+[
+"0",
+"48",
+"0"
+],
+[
+"0",
+"56",
+"0"
+],
+[
+"0",
+"58",
+"0"
+],
+[
+"0",
+"63",
+"0"
+],
+[
+"0",
+"73",
+"0"
+],
+[
+"0",
+"76",
+"0"
+],
+[
+"0",
+"78",
+"0"
+],
+[
+"0",
+"79",
+"0"
+],
+[
+"0",
+"83",
+"0"
+],
+[
+"0",
+"93",
+"0"
+],
+[
+"1",
+"1",
+"1"
+],
+[
+"1",
+"3",
+"1"
+],
+[
+"1",
+"8",
+"1"
+],
+[
+"1",
+"10",
+"1"
+],
+[
+"1",
+"13",
+"1"
+],
+[
+"1",
+"19",
+"1"
+],
+[
+"1",
+"20",
+"1"
+],
+[
+"1",
+"21",
+"1"
+],
+[
+"1",
+"29",
+"1"
+],
+[
+"1",
+"46",
+"1"
+],
+[
+"1",
+"49",
+"1"
+],
+[
+"1",
+"55",
+"1"
+],
+[
+"1",
+"57",
+"1"
+],
+[
+"1",
+"59",
+"1"
+],
+[
+"1",
+"64",
+"1"
+],
+[
+"1",
+"71",
+"1"
+],
+[
+"1",
+"84",
+"1"
+],
+[
+"1",
+"87",
+"1"
+],
+[
+"1",
+"91",
+"1"
+],
+[
+"1",
+"92",
+"1"
+]
+]
+},
+{
+"sql": "SELECT a0.s_suppkey AS c0, COALESCE(NULLIF(a0.s_comment, NULL), a0.s_comment) AS c1 FROM supplier a0 WHERE a0.s_address LIKE 'dA%'",
+"rows": [
+[
+"55",
+"al requests after the blithely express ideas affix carefully above the express, ironic "
+]
+]
+},
+{
+"sql": "SELECT sum(a0.n_regionkey) AS a0 FROM nation a0 JOIN region a1 ON a0.n_regionkey = a1.r_regionkey",
+"rows": [
+[
+"50"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT count(DISTINCT a0.l_quantity) AS a0, sum(a0.l_extendedprice) AS a1 FROM lineitem a0 WHERE (NOT a0.l_shipmode BETWEEN 'MAIL' AND 'RAIL')) SELECT * FROM q",
+"rows": [
+[
+"50",
+"1536517175.39"
+]
+]
+},
+{
+"sql": "SELECT a0.p_mfgr AS c0, a0.p_type AS c1 FROM part a0 WHERE NOT EXISTS (SELECT 1 FROM partsupp b0 WHERE b0.ps_partkey = a0.p_partkey AND b0.ps_comment IS NOT NULL)",
+"rows": []
+},
+{
+"sql": "WITH q AS (SELECT a0.s_comment AS g0, a0.s_acctbal AS g1, avg(a0.s_nationkey) AS a0 FROM supplier a0 WHERE a0.s_name IN ('Supplier#000000084', 'Supplier#000000093', 'Supplier#000000079') GROUP BY a0.s_comment, a0.s_acctbal) SELECT * FROM q",
+"rows": [
+[
+"instructions mold slyly special dolphins. quickly regular instru",
+"368.76",
+"16.0"
+],
+[
+" slyly. quietly slow instructions around the furiously ironic theodolites are am",
+"1191.94",
+"14.0"
+],
+[
+"ironic warthogs. carefully final dependenci",
+"4780.93",
+"24.0"
+]
+]
+},
+{
+"sql": "SELECT max(a0.s_address) AS a0, sum(a1.n_nationkey) AS a1, count(*) AS a2 FROM supplier a0 LEFT JOIN nation a1 ON a0.s_nationkey = a1.n_nationkey WHERE a0.s_nationkey BETWEEN 10 AND 16",
+"rows": [
+[
+"zaux5FTzToEg",
+"329",
+"24"
+]
+]
+},
+{
+"sql": "SELECT a0.l_partkey AS c0, a1.p_comment AS c1, a0.l_quantity * a0.l_quantity AS c2, a0.l_discount AS c3 FROM lineitem a0 JOIN part a1 ON a0.l_partkey = a1.p_partkey WHERE a0.l_shipdate IN (DATE '1993-11-03', DATE '1998-03-02', DATE '1998-03-27')",
+"rows": [
+[
+"190",
+"uriously regular ",
+"64.0000",
+"0.09"
+],
+[
+"1724",
+"posits b",
+"1849.0000",
+"0.03"
+],
+[
+"1267",
+" bold accounts. regula",
+"1.0000",
+"0.05"
+],
+[
+"1576",
+". quickly pen",
+"2500.0000",
+"0.05"
+],
+[
+"666",
+"out the never regula",
+"16.0000",
+"0.07"
+],
+[
+"1515",
+"arefully. furiou",
+"289.0000",
+"0.03"
+],
+[
+"1776",
+"wake bli",
+"1024.0000",
+"0.08"
+],
+[
+"1714",
+"y pending dep",
+"169.0000",
+"0.10"
+],
+[
+"1699",
+"ole. ca",
+"1849.0000",
+"0.05"
+],
+[
+"734",
+" ironic",
+"1296.0000",
+"0.09"
+],
+[
+"714",
+"ounts sleep theodolit",
+"1444.0000",
+"0.09"
+],
+[
+"579",
+"accounts among t",
+"196.0000",
+"0.07"
+],
+[
+"1507",
+"kages c",
+"484.0000",
+"0.08"
+],
+[
+"1075",
+"even packages",
+"841.0000",
+"0.09"
+],
+[
+"499",
+"nts: carefully da",
+"576.0000",
+"0.01"
+],
+[
+"753",
+"ss packages. theodol",
+"361.0000",
+"0.08"
+],
+[
+"926",
+"busy foxes x-ray bl",
+"2304.0000",
+"0.06"
+],
+[
+"1528",
+" pinto beans aft",
+"1225.0000",
+"0.08"
+],
+[
+"1775",
+"ackages. spec",
+"64.0000",
+"0.06"
+],
+[
+"1777",
+"y. pending reque",
+"25.0000",
+"0.01"
+],
+[
+"294",
+"bove ",
+"2401.0000",
+"0.08"
+],
+[
+"1214",
+" furiously ironic",
+"324.0000",
+"0.10"
+],
+[
+"283",
+"above the ev",
+"1024.0000",
+"0.10"
+],
+[
+"899",
+" integrate silent excu",
+"121.0000",
+"0.09"
+],
+[
+"203",
+"ut the furiously",
+"324.0000",
+"0.03"
+],
+[
+"1109",
+"ct about the furiously",
+"576.0000",
+"0.09"
+],
+[
+"497",
+"rding to the ",
+"784.0000",
+"0.00"
+],
+[
+"731",
+"final requests. ",
+"1521.0000",
+"0.03"
+],
+[
+"761",
+"ng, ironic pack",
+"625.0000",
+"0.10"
+],
+[
+"1158",
+"accounts.",
+"324.0000",
+"0.09"
+],
+[
+"1931",
+"ructio",
+"64.0000",
+"0.05"
+],
+[
+"1991",
+"l pinto beans slee",
+"1.0000",
+"0.10"
+],
+[
+"212",
+"affix fluf",
+"1089.0000",
+"0.02"
+],
+[
+"1531",
+" should ",
+"4.0000",
+"0.03"
+],
+[
+"540",
+"xcuses. packages wake",
+"676.0000",
+"0.01"
+],
+[
+"667",
+" deposits. regular, s",
+"576.0000",
+"0.04"
+],
+[
+"727",
+"sly special acco",
+"1024.0000",
+"0.09"
+],
+[
+"1256",
+"ironic reque",
+"1296.0000",
+"0.10"
+],
+[
+"1728",
+"bout the even, pe",
+"36.0000",
+"0.07"
+],
+[
+"648",
+" furiously e",
+"484.0000",
+"0.10"
+],
+[
+"923",
+"ily above",
+"1936.0000",
+"0.05"
+],
+[
+"1027",
+"beans use slyly about",
+"225.0000",
+"0.07"
+],
+[
+"1935",
+"cuses wake fluff",
+"1600.0000",
+"0.10"
+],
+[
+"1177",
+"wake blithely bold de",
+"1681.0000",
+"0.10"
+],
+[
+"1277",
+"express foxes det",
+"324.0000",
+"0.00"
+],
+[
+"1334",
+"egular deposits ag",
+"16.0000",
+"0.05"
+],
+[
+"1724",
+"posits b",
+"1849.0000",
+"0.04"
+],
+[
+"1751",
+"le frets.",
+"1089.0000",
+"0.09"
+],
+[
+"747",
+"y along th",
+"1089.0000",
+"0.09"
+],
+[
+"763",
+"the furiousl",
+"2209.0000",
+"0.02"
+],
+[
+"857",
+"ronic pl",
+"784.0000",
+"0.10"
+],
+[
+"752",
+"uriously eve",
+"1681.0000",
+"0.07"
+],
+[
+"1885",
+" use. ne",
+"4.0000",
+"0.06"
+],
+[
+"725",
+"riousl",
+"1849.0000",
+"0.01"
+],
+[
+"1618",
+"ckly ",
+"2209.0000",
+"0.08"
+],
+[
+"576",
+"lithely regular the",
+"576.0000",
+"0.09"
+],
+[
+"634",
+"silen",
+"961.0000",
+"0.08"
+],
+[
+"1852",
+"itaphs nod even",
+"529.0000",
+"0.01"
+],
+[
+"1087",
+"final ideas. slyly ex",
+"144.0000",
+"0.05"
+],
+[
+"1896",
+"ithely pen",
+"1225.0000",
+"0.03"
+],
+[
+"1787",
+" engage blithely. ",
+"196.0000",
+"0.01"
+],
+[
+"659",
+"wake slyly.",
+"441.0000",
+"0.07"
+],
+[
+"683",
+"eep acc",
+"196.0000",
+"0.01"
+],
+[
+"877",
+"ven packa",
+"36.0000",
+"0.03"
+],
+[
+"1344",
+"cross th",
+"25.0000",
+"0.10"
+],
+[
+"1636",
+"xpress sheave",
+"400.0000",
+"0.01"
+],
+[
+"1983",
+"ggle quickly at the",
+"1296.0000",
+"0.05"
+],
+[
+"1214",
+" furiously ironic",
+"49.0000",
+"0.01"
+],
+[
+"594",
+" beans are ",
+"1521.0000",
+"0.04"
+],
+[
+"544",
+", final i",
+"900.0000",
+"0.09"
+],
+[
+"205",
+"unusual deposits.",
+"1.0000",
+"0.04"
+],
+[
+"1164",
+"the slyly regular ac",
+"121.0000",
+"0.04"
+],
+[
+"1365",
+"sts against th",
+"1600.0000",
+"0.04"
+],
+[
+"490",
+"ckly. carefully quiet ",
+"16.0000",
+"0.07"
+],
+[
+"1231",
+"carefully fi",
+"16.0000",
+"0.07"
+],
+[
+"1183",
+"ely regular inst",
+"529.0000",
+"0.08"
+],
+[
+"1786",
+"furiously even, fi",
+"2116.0000",
+"0.08"
+],
+[
+"1824",
+"o the requ",
+"625.0000",
+"0.04"
+],
+[
+"1056",
+"requests cajole caref",
+"225.0000",
+"0.08"
+],
+[
+"1411",
+"ess id",
+"1849.0000",
+"0.01"
+],
+[
+"1523",
+" ironic requests",
+"49.0000",
+"0.07"
+],
+[
+"690",
+"arefully eve",
+"25.0000",
+"0.10"
+],
+[
+"1072",
+"lly above the bo",
+"16.0000",
+"0.09"
+],
+[
+"154",
+" sleep ",
+"961.0000",
+"0.08"
+],
+[
+"451",
+"ntiments use furiou",
+"1156.0000",
+"0.04"
+],
+[
+"1433",
+"ickly ruthles",
+"1225.0000",
+"0.04"
+],
+[
+"439",
+"its. blithely bold fox",
+"2500.0000",
+"0.05"
+]
+]
+},
+{
+"sql": "SELECT a0.p_container AS g0, count(*) AS a0 FROM part a0 WHERE (a0.p_type BETWEEN 'MEDIUM POLISHED COPPER' AND 'SMALL BRUSHED NICKEL' AND a0.p_partkey BETWEEN 1785 AND 1832) GROUP BY a0.p_container",
+"rows": [
+[
+"WRAP DRUM",
+"1"
+],
+[
+"WRAP CAN",
+"1"
+],
+[
+"LG CASE",
+"1"
+],
+[
+"LG PACK",
+"1"
+],
+[
+"SM CASE",
+"1"
+],
+[
+"LG DRUM",
+"1"
+],
+[
+"MED DRUM",
+"1"
+],
+[
+"SM CAN",
+"2"
+],
+[
+"SM PACK",
+"2"
+],
+[
+"JUMBO BOX",
+"1"
+],
+[
+"WRAP PKG",
+"1"
+]
+]
+},
+{
+"sql": "SELECT a0.p_partkey AS c0, a0.p_name AS c1 FROM part a0 WHERE a0.p_partkey >= (SELECT max(p_partkey) FROM part s0 WHERE (s0.p_retailprice BETWEEN 1090.18 AND 1394.49 OR s0.p_size BETWEEN 30 AND 49))",
+"rows": [
+[
+"2000",
+"wheat blush green puff tan"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN (a0.n_nationkey BETWEEN 5 AND 13 OR a0.n_nationkey BETWEEN 18 AND 21) THEN a0.n_regionkey END AS c0, a0.n_name AS c1 FROM nation a0 WHERE EXISTS (SELECT 1 FROM customer b0 WHERE b0.c_nationkey = a0.n_nationkey AND (b0.c_mktsegment <> 'HOUSEHOLD' OR b0.c_comment IS NOT NULL))",
+"rows": [
+[
+"NULL",
+"ALGERIA"
+],
+[
+"4",
+"IRAQ"
+],
+[
+"NULL",
+"MOZAMBIQUE"
+],
+[
+"NULL",
+"MOROCCO"
+],
+[
+"NULL",
+"RUSSIA"
+],
+[
+"0",
+"ETHIOPIA"
+],
+[
+"2",
+"INDONESIA"
+],
+[
+"NULL",
+"KENYA"
+],
+[
+"NULL",
+"PERU"
+],
+[
+"NULL",
+"BRAZIL"
+],
+[
+"4",
+"IRAN"
+],
+[
+"2",
+"CHINA"
+],
+[
+"2",
+"INDIA"
+],
+[
+"4",
+"JORDAN"
+],
+[
+"3",
+"ROMANIA"
+],
+[
+"3",
+"GERMANY"
+],
+[
+"2",
+"VIETNAM"
+],
+[
+"NULL",
+"ARGENTINA"
+],
+[
+"NULL",
+"EGYPT"
+],
+[
+"NULL",
+"UNITED KINGDOM"
+],
+[
+"NULL",
+"UNITED STATES"
+],
+[
+"2",
+"JAPAN"
+],
+[
+"4",
+"SAUDI ARABIA"
+],
+[
+"NULL",
+"CANADA"
+],
+[
+"3",
+"FRANCE"
+]
+]
+},
+{
+"sql": "SELECT a0.o_totalprice AS g0, a0.o_shippriority AS g1, count(*) AS a0, avg(a0.o_custkey) AS a1, count(*) AS a2 FROM orders a0 WHERE NULLIF(a0.o_orderkey, 55649) = 48967 GROUP BY a0.o_totalprice, a0.o_shippriority",
+"rows": [
+[
+"33138.84",
+"0",
+"1",
+"718.0",
+"1"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.l_returnflag AS g0, min(a0.l_linenumber) AS a0, max(a0.l_linestatus) AS a1 FROM lineitem a0 WHERE ((a0.l_suppkey BETWEEN 50 AND 65 OR a0.l_linenumber IN (2, 5, 4)) OR (a0.l_orderkey BETWEEN 20418 AND 32065 AND a0.l_returnflag LIKE 'R%')) GROUP BY a0.l_returnflag) SELECT * FROM q",
+"rows": [
+[
+"A",
+"1",
+"F"
+],
+[
+"R",
+"1",
+"F"
+],
+[
+"N",
+"1",
+"O"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN (NULLIF(a1.o_totalprice, 317103.71) = 114622.54 AND a3.s_name IS NULL) THEN a3.s_nationkey END AS c0, CASE WHEN (a2.p_mfgr = 'Manufacturer#3' AND a2.p_comment LIKE 'i%') THEN a3.s_name END AS c1, CASE WHEN (a2.p_comment > 'atelets boost quickly' AND a2.p_name IS NOT NULL) THEN a0.l_tax END AS c2, a1.o_comment AS c3 FROM lineitem a0 JOIN orders a1 ON a0.l_orderkey = a1.o_orderkey JOIN part a2 ON a0.l_partkey = a2.p_partkey LEFT JOIN supplier a3 ON a0.l_suppkey = a3.s_suppkey AND (a3.s_name LIKE 'Sup%' OR a3.s_acctbal BETWEEN 4032.68 AND 6150.38) WHERE NULLIF(a1.o_orderkey, 14306) = 54789",
+"rows": [
+[
+"NULL",
+"NULL",
+"0.07",
+"quickly brave foxes. packages are slyly. regular i"
+],
+[
+"NULL",
+"NULL",
+"0.08",
+"quickly brave foxes. packages are slyly. regular i"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.n_comment AS c0 FROM nation a0 WHERE a0.n_name >= 'IRAQ'",
+"rows": [
+[
+"pendencies; slyly express foxes integrate carefully across the reg"
+],
+[
+" quickly final packages. furiously i"
+],
+[
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts"
+],
+[
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee"
+],
+[
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care"
+],
+[
+"se slyly across the blithely regular deposits. deposits use carefully regular "
+],
+[
+" beans after the carefully regular accounts r"
+],
+[
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir"
+],
+[
+"the slyly regular ideas. silent Tiresias affix slyly fu"
+],
+[
+"ct blithely: blithely express accounts nag carefully. silent packages haggle carefully abo"
+],
+[
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly "
+],
+[
+"lly across the quickly even pinto beans. caref"
+],
+[
+"carefully pending courts sleep above the ironic, regular theo"
+]
+]
+},
+{
+"sql": "SELECT CASE WHEN a0.s_nationkey > 16 THEN a0.s_comment END AS c0, a0.s_nationkey AS c1 FROM supplier a0 WHERE a0.s_name IN ('Supplier#000000071', 'Supplier#000000004', 'Supplier#000000063')",
+"rows": [
+[
+"NULL",
+"15"
+],
+[
+"NULL",
+"5"
+],
+[
+"NULL",
+"1"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT CASE WHEN a0.o_orderpriority LIKE '3-M%' THEN a0.o_orderstatus END AS c0 FROM orders a0 WHERE (NOT a0.o_orderkey BETWEEN 6720 AND 14306)",
+"rows": [
+[
+"F"
+],
+[
+"P"
+],
+[
+"O"
+],
+[
+"NULL"
+]
+]
+},
+{
+"sql": "SELECT a0.n_comment FROM nation a0 WHERE a0.n_name IS NULL UNION ALL SELECT a0.n_comment FROM nation a0 WHERE ((NOT a0.n_name BETWEEN 'ETHIOPIA' AND 'VIETNAM') OR (a0.n_comment IS NOT NULL OR a0.n_regionkey BETWEEN 2 AND 4))",
+"rows": [
+[
+"furiously regular requests. platelets affix furious"
+],
+[
+"instructions wake quickly. final deposits haggle. final, silent theodolites "
+],
+[
+"asymptotes use fluffily quickly bold instructions. slyly bold dependencies sleep carefully pending accounts"
+],
+[
+"ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref"
+],
+[
+"usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily "
+],
+[
+"regular requests sleep carefull"
+],
+[
+"oggedly. regular packages solve across"
+],
+[
+"ong the regular requests: blithely silent pinto beans hagg"
+],
+[
+"uriously unusual deposits about the slyly final pinto beans could"
+],
+[
+"d deposits sleep quickly according to the dogged, regular dolphins. special excuses haggle furiously special reque"
+],
+[
+"furiously idle platelets nag. express asymptotes s"
+],
+[
+"pendencies; slyly express foxes integrate carefully across the reg"
+],
+[
+" quickly final packages. furiously i"
+],
+[
+"the slyly regular ideas. silent Tiresias affix slyly fu"
+],
+[
+"lyly special foxes. slyly regular deposits sleep carefully. carefully permanent accounts slee"
+],
+[
+"ct blithely: blithely express accounts nag carefully. silent packages haggle carefully abo"
+],
+[
+" beans after the carefully regular accounts r"
+],
+[
+"ly final foxes. blithely ironic accounts haggle. regular foxes about the regular deposits are furiously ir"
+],
+[
+"ckly special packages cajole slyly. unusual, unusual theodolites mold furiously. slyly sile"
+],
+[
+"sly blithe requests. thinly bold deposits above the blithely regular accounts nag special, final requests. care"
+],
+[
+"se slyly across the blithely regular deposits. deposits use carefully regular "
+],
+[
+"lly across the quickly even pinto beans. caref"
+],
+[
+"uctions. furiously unusual instructions sleep furiously ironic packages. slyly "
+],
+[
+"carefully pending courts sleep above the ironic, regular theo"
+],
+[
+"ly ironic requests along the slyly bold ideas hang after the blithely special notornis; blithely even accounts"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT COALESCE(NULLIF(a0.o_shippriority, 0), a0.o_shippriority) AS c0 FROM orders a0 WHERE a0.o_orderkey >= 18854",
+"rows": [
+[
+"0"
+]
+]
+},
+{
+"sql": "SELECT a0.s_comment AS c0 FROM supplier a0 WHERE a0.s_name IS NOT NULL",
+"rows": [
+[
+" instructions. slyly unusual"
+],
+[
+" the pending packages. furiously expres"
+],
+[
+"ong the fluffily idle packages: bold foxes mold silent package"
+],
+[
+"al braids affix through the regular"
+],
+[
+"accounts. instructions ha"
+],
+[
+" sleep fluffily against the blithely special dugouts. furiously express th"
+],
+[
+"ke across the slyly ironic packages. carefully special pinto beans wake blithely. even deposits los"
+],
+[
+"iously about the bold packages. "
+],
+[
+"asymptotes cajole along the furiously bold deposits. iron"
+],
+[
+"ronic pinto beans. slyly even i"
+],
+[
+"efully across the furiously regular requests. pending, regular instructions against the bold, expre"
+],
+[
+"ending deposits. carefully express dependencies detect. blithely regular pla"
+],
+[
+"against the quickly ironic packages. slyly regular excuses wake since"
+],
+[
+"leep despite the fluffily thin accounts. caref"
+],
+[
+"nently against the bravely bold deposits. carefully ironic platelets are. pendi"
+],
+[
+"platelets thrash against the slyly special req"
+],
+[
+"se slyly furiously even notornis. furiously regular packa"
+],
+[
+"es wake above the slyly ironic pearls"
+],
+[
+"g the carefully regular packages. blithely unusual instructions sl"
+],
+[
+"es. fluffily ironic instructions nag slyly slyly pending realms. blithely final r"
+],
+[
+"thlessly bold accounts. slyly even accounts against the special requests boost slyly bl"
+],
+[
+"oxes among the special pains cajole furiously"
+],
+[
+"sual asymptotes affix quickly at the instructions. deposits "
+],
+[
+"olphins. unusual deposits nag along the fluffily"
+],
+[
+"quickly pending accounts cajole blithely against the ironic, pending theodolites. even, silent reque"
+],
+[
+" from the foxes. special deposits cajole blithely special theodolites-- quickly bold "
+],
+[
+"permanently bold gifts. unusual instructions af"
+],
+[
+"ng the packages. even, regular asymptotes hang carefully. quietly express epitaphs are about the f"
+],
+[
+" across the furiously final theodolites are against the quickly thin requests. instructio"
+],
+[
+"lyly pending requests run slyly furiously slow deposits. carefully regular deposits use. packages ar"
+],
+[
+"s use carefully according to the slyly regular accounts. packages among the st"
+],
+[
+"inments. silently final pinto beans among the "
+],
+[
+"l packages cajole unusual, final packages. slyly express requests"
+],
+[
+"al packages wake blithely. quickly express accounts cajole packages. final ideas haggle "
+],
+[
+"lyly above the furiously ironic attainments. pending dugouts was quic"
+],
+[
+"ithely even pinto beans. bold, express pinto beans according to the carefully r"
+],
+[
+"deposits. furiously ironic dolphins after the slyly even accounts haggle against the excuses. "
+],
+[
+"inst the slyly final pinto beans. carefully un"
+],
+[
+"ts. special, final requests along the thinly regular accounts are across the bold pac"
+],
+[
+"ress deposits affix blithely ideas. final"
+],
+[
+"ss courts: blithely ironic excuses might haggl"
+],
+[
+"egular ideas haggle. furiously ironic acco"
+],
+[
+"y regular deposits-- requests in"
+],
+[
+"even deposits. furiously e"
+],
+[
+"ndencies detect quickly unusual foxes. special, "
+],
+[
+"d somas use around the furious"
+],
+[
+"nd the packages; final, pending dependencie"
+],
+[
+"ecial excuses detect blithely. slyly regular requests "
+],
+[
+"thely bold packages. final, pending instructions nod? even requests above the regular, "
+],
+[
+" furiously special ideas; regular dependencies wake furiously someti"
+],
+[
+"ording to the ironic accounts: express deposits nag daringly. slyly ironic packages grow daringly q"
+],
+[
+"arefully silent pinto beans use furiously furiously even deposits. regular packages are furious"
+],
+[
+"fully pending accounts. packages "
+],
+[
+"ake quickly foxes. deposits boost furiously. carefully final packag"
+],
+[
+"al requests after the blithely express ideas affix carefully above the express, ironic "
+],
+[
+"fully final accounts. even accounts across the thin, final notornis are slyly"
+],
+[
+"entiments boost. blithely regular fo"
+],
+[
+"d the fluffily even ideas. slyly final requests are quickly furi"
+],
+[
+"s impress furiously along the blithely ironic deposi"
+],
+[
+"y regular requests. final ideas a"
+],
+[
+"the quickly bold foxes. slyly ev"
+],
+[
+"egular packages. fluffily regular dolphins along the furiously sly packages integrate aro"
+],
+[
+"y. regular, special deposits integrate furiously unusual deposits. unusual, ironic dolphins"
+],
+[
+" furiously ironic accounts wake against "
+],
+[
+"regular asymptotes wake furiously furiously ironic packages. ideas sleep above t"
+],
+[
+"uests cajole blithely across t"
+],
+[
+"arefully pending accounts sl"
+],
+[
+"ronic notornis: furiously silent theodolites sno"
+],
+[
+"nusual packages wake furiously. furiously ironic frays along the quickly regular deposits bo"
+],
+[
+"n instructions are about the ironic, ironic excuses. instructions cajol"
+],
+[
+" the quickly even ideas. accounts alongside of the even dependencies detect ruthlessly acr"
+],
+[
+"ccounts. blithely bold deposits use carefully ironic"
+],
+[
+" along the instructions. dep"
+],
+[
+"ully about the even packages. blithely regular dependencies across the even platelets play daring"
+],
+[
+"platelets cajole. sentiments "
+],
+[
+"ending foxes wake carefully blithely express accounts. final accounts u"
+],
+[
+"ainst the blithely ironic packages poach at the regul"
+],
+[
+"ccounts. evenly express deposits between the blithely pending instructions unwind regular ideas. bl"
+],
+[
+" slyly. quietly slow instructions around the furiously ironic theodolites are am"
+],
+[
+"ring, even sentiments are. evenly even ideas wake fluffily blithely ironic packages. even platelets"
+],
+[
+"ven pinto beans run furiously. deposits use carefully across the slyly blithe packages. car"
+],
+[
+"e ironic accounts. furiously even accounts inside the reque"
+],
+[
+"ccounts are fluffily? blithely pending packages should haggle furiousl"
+],
+[
+"ironic warthogs. carefully final dependenci"
+],
+[
+"ckages. express requests haggle busy, regu"
+],
+[
+" foxes boost after the carefully silent asymptotes. slyl"
+],
+[
+" beans are silently idle requests. regular deposits above the requests slee"
+],
+[
+"dugouts haggle slyly deposits"
+],
+[
+"gular theodolites. deposits after the regular deposits "
+],
+[
+"pinto beans. blithely final re"
+],
+[
+"pending pinto beans after the silent accounts boost fluffily quickly regular i"
+],
+[
+"sits unwind blithely. even, final gifts wake furiously of t"
+],
+[
+"instructions mold slyly special dolphins. quickly regular instru"
+],
+[
+"s are fluffily. bold accounts dazzle blithely regular packag"
+],
+[
+"iously special packages integrate. finally pendi"
+],
+[
+"ously quick deposits. furiously bold requests along"
+],
+[
+"riously even pains. quickly special depende"
+],
+[
+" to the unusual accounts. carefully ironic"
+],
+[
+" deposits sleep. quickly sp"
+],
+[
+"refully final, regular accounts. permanently ironic platelets wake blithely along the f"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT a0.s_acctbal AS g0, sum(a0.s_nationkey) AS a0, min(a0.s_suppkey) AS a1 FROM supplier a0 WHERE a0.s_comment IS NOT NULL GROUP BY a0.s_acctbal) SELECT * FROM q",
+"rows": [
+[
+"4032.68",
+"5",
+"2"
+],
+[
+"2958.09",
+"14",
+"47"
+],
+[
+"2733.69",
+"12",
+"54"
+],
+[
+"-963.79",
+"22",
+"65"
+],
+[
+"1883.37",
+"19",
+"86"
+],
+[
+"2588.83",
+"19",
+"95"
+],
+[
+"5873.07",
+"21",
+"98"
+],
+[
+"9107.22",
+"3",
+"13"
+],
+[
+"7040.82",
+"16",
+"18"
+],
+[
+"7162.15",
+"24",
+"55"
+],
+[
+"3191.70",
+"21",
+"100"
+],
+[
+"4641.08",
+"15",
+"4"
+],
+[
+"7627.85",
+"17",
+"8"
+],
+[
+"3891.91",
+"24",
+"10"
+],
+[
+"8564.12",
+"7",
+"33"
+],
+[
+"6115.65",
+"8",
+"39"
+],
+[
+"-831.07",
+"17",
+"57"
+],
+[
+"9508.37",
+"6",
+"70"
+],
+[
+"-283.84",
+"11",
+"5"
+],
+[
+"2512.41",
+"4",
+"38"
+],
+[
+"1638.02",
+"9",
+"89"
+],
+[
+"1432.69",
+"8",
+"12"
+],
+[
+"-966.20",
+"4",
+"22"
+],
+[
+"237.31",
+"10",
+"34"
+],
+[
+"4515.80",
+"8",
+"60"
+],
+[
+"5742.03",
+"5",
+"63"
+],
+[
+"8080.14",
+"16",
+"30"
+],
+[
+"3556.47",
+"23",
+"32"
+],
+[
+"287.16",
+"19",
+"52"
+],
+[
+"3576.55",
+"4",
+"67"
+],
+[
+"3086.13",
+"11",
+"88"
+],
+[
+"368.76",
+"16",
+"93"
+],
+[
+"2766.80",
+"4",
+"94"
+],
+[
+"7773.41",
+"12",
+"43"
+],
+[
+"586.16",
+"17",
+"59"
+],
+[
+"5119.38",
+"21",
+"68"
+],
+[
+"1044.10",
+"5",
+"78"
+],
+[
+"1191.94",
+"14",
+"79"
+],
+[
+"-724.31",
+"18",
+"82"
+],
+[
+"4780.93",
+"24",
+"84"
+],
+[
+"4746.66",
+"24",
+"87"
+],
+[
+"5755.94",
+"17",
+"1"
+],
+[
+"-891.99",
+"0",
+"28"
+],
+[
+"-290.06",
+"22",
+"40"
+],
+[
+"2944.23",
+"9",
+"45"
+],
+[
+"9915.24",
+"24",
+"49"
+],
+[
+"8179.68",
+"1",
+"71"
+],
+[
+"-224.84",
+"18",
+"75"
+],
+[
+"-40.45",
+"21",
+"80"
+],
+[
+"6201.77",
+"6",
+"90"
+],
+[
+"2470.84",
+"2",
+"92"
+],
+[
+"6642.22",
+"4",
+"97"
+],
+[
+"5302.37",
+"10",
+"9"
+],
+[
+"9189.82",
+"15",
+"14"
+],
+[
+"3580.35",
+"24",
+"46"
+],
+[
+"5630.62",
+"14",
+"48"
+],
+[
+"7241.40",
+"9",
+"51"
+],
+[
+"92.44",
+"16",
+"58"
+],
+[
+"2455.98",
+"23",
+"66"
+],
+[
+"4186.95",
+"7",
+"77"
+],
+[
+"9170.71",
+"0",
+"24"
+],
+[
+"1887.62",
+"18",
+"27"
+],
+[
+"4381.41",
+"21",
+"35"
+],
+[
+"6565.11",
+"22",
+"42"
+],
+[
+"6096.58",
+"8",
+"61"
+],
+[
+"3793.13",
+"16",
+"73"
+],
+[
+"6255.87",
+"3",
+"91"
+],
+[
+"4192.40",
+"1",
+"3"
+],
+[
+"1687.81",
+"19",
+"17"
+],
+[
+"5916.91",
+"16",
+"31"
+],
+[
+"1309.70",
+"24",
+"64"
+],
+[
+"3671.34",
+"18",
+"99"
+],
+[
+"9365.80",
+"2",
+"21"
+],
+[
+"4515.87",
+"9",
+"50"
+],
+[
+"6177.35",
+"7",
+"53"
+],
+[
+"4170.51",
+"20",
+"74"
+],
+[
+"2971.10",
+"14",
+"76"
+],
+[
+"7174.74",
+"7",
+"85"
+],
+[
+"2972.26",
+"22",
+"16"
+],
+[
+"5926.41",
+"9",
+"23"
+],
+[
+"9198.31",
+"22",
+"25"
+],
+[
+"9759.38",
+"7",
+"44"
+],
+[
+"8466.50",
+"4",
+"69"
+],
+[
+"166.32",
+"12",
+"81"
+],
+[
+"1467.77",
+"14",
+"83"
+],
+[
+"1365.79",
+"14",
+"6"
+],
+[
+"6150.38",
+"24",
+"19"
+],
+[
+"-811.62",
+"1",
+"29"
+],
+[
+"2371.51",
+"13",
+"36"
+],
+[
+"3017.47",
+"0",
+"37"
+],
+[
+"6942.67",
+"18",
+"41"
+],
+[
+"7014.50",
+"18",
+"72"
+],
+[
+"530.82",
+"3",
+"20"
+],
+[
+"9202.57",
+"19",
+"62"
+],
+[
+"6820.35",
+"23",
+"7"
+],
+[
+"3393.08",
+"18",
+"11"
+],
+[
+"308.56",
+"8",
+"15"
+],
+[
+"21.18",
+"21",
+"26"
+],
+[
+"-632.16",
+"16",
+"56"
+],
+[
+"3437.24",
+"12",
+"96"
+]
+]
+},
+{
+"sql": "SELECT DISTINCT a0.o_totalprice AS c0, a0.o_orderstatus AS c1, COALESCE(NULLIF(a0.o_orderpriority, '1-URGENT'), a0.o_orderpriority) AS c2 FROM orders a0 WHERE ((a0.o_orderpriority < '3-MEDIUM' OR a0.o_orderdate IS NOT NULL) AND a0.o_comment LIKE 'xp%')",
+"rows": [
+[
+"59513.57",
+"F",
+"1-URGENT"
+],
+[
+"258298.22",
+"F",
+"5-LOW"
+],
+[
+"197320.15",
+"O",
+"2-HIGH"
+],
+[
+"31082.23",
+"F",
+"5-LOW"
+],
+[
+"40831.09",
+"F",
+"5-LOW"
+],
+[
+"197627.24",
+"O",
+"4-NOT SPECIFIED"
+],
+[
+"182026.46",
+"O",
+"4-NOT SPECIFIED"
+],
+[
+"207736.74",
+"F",
+"2-HIGH"
+],
+[
+"118128.06",
+"O",
+"1-URGENT"
+],
+[
+"132507.03",
+"F",
+"3-MEDIUM"
+],
+[
+"57433.85",
+"O",
+"2-HIGH"
+],
+[
+"88983.27",
+"O",
+"1-URGENT"
+],
+[
+"144660.03",
+"O",
+"5-LOW"
+],
+[
+"8031.62",
+"O",
+"2-HIGH"
+],
+[
+"263868.51",
+"F",
+"2-HIGH"
+],
+[
+"67920.87",
+"F",
+"4-NOT SPECIFIED"
+],
+[
+"178304.32",
+"P",
+"5-LOW"
+],
+[
+"219431.33",
+"O",
+"1-URGENT"
+],
+[
+"166346.90",
+"O",
+"1-URGENT"
+],
+[
+"149112.99",
+"F",
+"1-URGENT"
+],
+[
+"166573.92",
+"F",
+"3-MEDIUM"
+],
+[
+"121309.88",
+"F",
+"1-URGENT"
+],
+[
+"157980.71",
+"F",
+"5-LOW"
+],
+[
+"166342.74",
+"F",
+"4-NOT SPECIFIED"
+],
+[
+"237649.23",
+"O",
+"4-NOT SPECIFIED"
+],
+[
+"72578.65",
+"F",
+"2-HIGH"
+],
+[
+"155327.97",
+"O",
+"1-URGENT"
+],
+[
+"44262.24",
+"F",
+"3-MEDIUM"
+],
+[
+"79124.61",
+"O",
+"2-HIGH"
+],
+[
+"43453.24",
+"F",
+"3-MEDIUM"
+],
+[
+"199667.80",
+"O",
+"2-HIGH"
+],
+[
+"108774.24",
+"O",
+"5-LOW"
+],
+[
+"254968.37",
+"O",
+"4-NOT SPECIFIED"
+],
+[
+"46315.58",
+"O",
+"2-HIGH"
+],
+[
+"114690.70",
+"O",
+"5-LOW"
+]
+]
+},
+{
+"sql": "SELECT a0.c_mktsegment AS c0, a1.n_nationkey AS c1, a0.c_acctbal AS c2, a1.n_name AS c3 FROM customer a0 JOIN nation a1 ON a0.c_nationkey = a1.n_nationkey JOIN region a2 ON a1.n_regionkey = a2.r_regionkey WHERE ((a1.n_name = 'VIETNAM' OR a0.c_address IN ('YXWHoaI6P0LuX', 'uox5ujKz1X1AtgYAFC7JuXx', 'e2elLHdFokD7MQnAdcRDE')) AND a0.c_address LIKE 'u%')",
+"rows": [
+[
+"BUILDING",
+"16",
+"8403.99",
+"MOZAMBIQUE"
+],
+[
+"MACHINERY",
+"21",
+"1663.28",
+"VIETNAM"
+]
+]
+},
+{
+"sql": "SELECT a0.r_comment AS c0 FROM region a0 WHERE a0.r_regionkey IN (SELECT b0.n_regionkey FROM nation b0 WHERE (b0.n_regionkey = 0 OR b0.n_regionkey BETWEEN 3 AND 4))",
+"rows": [
+[
+"ar packages. regular excuses among the ironic requests cajole fluffily blithely final requests. furiously express p"
+],
+[
+"e dolphins are furiously about the carefully "
+],
+[
+" foxes boost furiously along the carefully dogged tithes. slyly regular orbits according to the special epit"
+]
+]
+},
+{
+"sql": "WITH q AS (SELECT count(*) AS a0 FROM lineitem a0 WHERE (a0.l_shipinstruct LIKE 'CO%' OR (NOT a0.l_shipinstruct LIKE 'DEL%'))) SELECT * FROM q",
+"rows": [
+[
+"45152"
+]
+]
+}
+]
+}

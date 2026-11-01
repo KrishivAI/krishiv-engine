@@ -1,0 +1,3 @@
+[
+  "SELECT a0.r_name AS g0, a0.r_regionkey AS g1, count(DISTINCT a0.r_name) AS a0, sum(a0.r_regionkey) AS a1, count(DISTINCT a0.r_comment) AS a2 FROM region a0 WHERE ((a0.r_name BETWEEN 'AFRICA' AND 'MIDDLE EAST' OR a0.r_comment IS NULL) AND (a0.r_name IS NULL OR a0.r_regionkey > 0)) GROUP BY a0.r_name, a0.r_regionkey HAVING count(*) > 1"
+]
