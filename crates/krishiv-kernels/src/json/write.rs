@@ -19,7 +19,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Int64Type, Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, StringArray};
 use arrow_schema::{DataType as ArrowType, TimeUnit};
@@ -73,6 +73,8 @@ struct Output {
     timestamp: DateTimePattern,
     /// `timestampNTZFormat`, or Spark's default.
     timestamp_ntz: DateTimePattern,
+    /// `timeFormat`; `None` writes `HH:mm:ss[.fraction]`.
+    time: Option<DateTimePattern>,
     /// `sortKeys`.
     sort_keys: bool,
     /// `ignoreNullFields` (Spark's default): struct fields that are `NULL`
@@ -97,6 +99,7 @@ impl Output {
             date: compile(opts.date_output.as_ref(), DATE_DEFAULT)?,
             timestamp: compile(opts.timestamp_output.as_ref(), TIMESTAMP_DEFAULT)?,
             timestamp_ntz: compile(opts.timestamp_ntz_output.as_ref(), TIMESTAMP_NTZ_DEFAULT)?,
+            time: opts.time_output.clone(),
             sort_keys: opts.sort_keys,
             ignore_null_fields: opts.ignore_null_fields,
         })
@@ -174,6 +177,16 @@ fn write_value(
                 .date
                 .format_date(days)
                 .map_err(|e| internal(format!("a to_json date pattern: {e}")))?;
+            push_quoted(&rendered, text);
+        }
+        ArrowType::Time64(TimeUnit::Nanosecond) => {
+            let nanos = col.as_primitive::<Time64NanosecondType>().value(row);
+            let rendered = match &ctx.out.time {
+                Some(pattern) => pattern
+                    .format_local(nanos.div_euclid(1_000))
+                    .map_err(|e| internal(format!("a to_json time pattern: {e}")))?,
+                None => crate::cast::time::format_time(nanos),
+            };
             push_quoted(&rendered, text);
         }
         ArrowType::Timestamp(TimeUnit::Microsecond, tz) => {
