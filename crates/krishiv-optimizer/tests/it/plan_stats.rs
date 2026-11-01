@@ -645,11 +645,36 @@ fn only_plans_over_tables_with_statistics_are_measured() {
     assert!(!stats.has_statistics(other.root()));
     assert!(stats.get(other.root()).is_none());
     assert_eq!(stats.rows(other.root()), krishiv_optimizer::DEFAULT_ROWS);
-    // A `WITH` reference counts as default-sized.
-    let plan = resolve("WITH c AS (SELECT a FROM t) SELECT * FROM c");
+}
+
+/// A `WITH` reference holds what its definition holds, under its own
+/// attributes: the physical planner picks a join's build side from it.
+#[test]
+fn a_with_reference_reads_its_definition() {
+    let plan = resolve("WITH c AS (SELECT a FROM t WHERE a > 0) SELECT * FROM c");
     let stats = PlanStats::compute(plan.root(), &fixture());
     let reference = find(plan.root(), |p| matches!(p.node, PlanNode::CteRef(_)));
-    assert!(!stats.has_statistics(&reference));
+    let PlanNode::CteRef(r) = &reference.node else {
+        unreachable!("found by its node");
+    };
+    assert!(stats.has_statistics(&reference));
+    let PlanNode::WithCte { ctes, .. } =
+        &find(plan.root(), |p| matches!(p.node, PlanNode::WithCte { .. })).node
+    else {
+        unreachable!("found by its node");
+    };
+    let definition = stats.get(&ctes[0].plan).unwrap();
+    let read = stats.get(&reference).unwrap();
+    assert!(read.rows < krishiv_optimizer::DEFAULT_ROWS);
+    assert_eq!(read.rows, definition.rows);
+    assert_eq!(
+        read.cols[&r.output[0].id].ndv,
+        definition.cols[&r.source[0]].ndv
+    );
+    // Outside the plan that defines it, it is default-sized.
+    let alone = PlanStats::compute(&reference, &fixture());
+    assert!(!alone.has_statistics(&reference));
+    assert_eq!(alone.rows(&reference), krishiv_optimizer::DEFAULT_ROWS);
 }
 
 /// Every relation is estimated once, shared subtrees and subquery plans
