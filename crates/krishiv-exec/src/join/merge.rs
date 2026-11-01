@@ -68,6 +68,8 @@ const WRITE_SCRATCH: usize = super::SPILL_SCRATCH;
 const UNLIMITED_POOL_GROUP_BYTES: usize = 1 << 30;
 /// The least group bound a pool share gives.
 const MIN_GROUP_BYTES: usize = 64 << 10;
+/// What a merge keeps reserved between groups.
+const RETAINED_GROUP_BYTES: usize = 64 << 10;
 
 /// The bytes a group may hold before it spills: `configured`, or (0) a
 /// quarter of the pool's limit shared by the drivers.
@@ -220,7 +222,10 @@ impl Stream {
             let rows = self.keys.encode(batch.data())?;
             let mut matchable: Option<NullBuffer> = None;
             for &c in self.strict.iter() {
-                matchable = NullBuffer::union(matchable.as_ref(), batch.data().column(c).nulls());
+                matchable = NullBuffer::union(
+                    matchable.as_ref(),
+                    batch.data().column(c).logical_nulls().as_ref(),
+                );
             }
             self.serial += 1;
             let row_bytes = data_bytes(&batch).div_ceil(batch.num_rows().max(1));
@@ -653,17 +658,42 @@ impl Merge {
         }
         let spills = self.shared.spill.is_some();
         let over = spills && self.group.bytes.saturating_add(bytes) > self.group_limit;
-        if over || (spills && self.memory.try_grow(bytes).is_err()) {
+        if over || (spills && !self.try_reserve(bytes)) {
             let mut all = std::mem::take(&mut self.group.chunks);
             all.push(chunk);
             return self.write_chunks(all).await;
         }
-        if !spills {
-            self.memory.grow(bytes).await.map_err(KrishivError::from)?;
+        if !spills && !self.try_reserve(bytes) {
+            let missing = self.missing(bytes);
+            self.memory
+                .grow(missing)
+                .await
+                .map_err(KrishivError::from)?;
         }
         self.group.bytes += bytes;
         self.group.chunks.push(chunk);
         Ok(())
+    }
+
+    /// What the reservation lacks for the group to hold `bytes` more.
+    fn missing(&self, bytes: usize) -> usize {
+        self.group
+            .bytes
+            .saturating_add(bytes)
+            .saturating_sub(self.memory.size())
+    }
+
+    /// Makes the reservation cover `bytes` more of the group, taking
+    /// [`RETAINED_GROUP_BYTES`] at once when it can: most groups are a few rows,
+    /// and a pool call per key is a lock all the drivers share per key.
+    fn try_reserve(&mut self, bytes: usize) -> bool {
+        let missing = self.missing(bytes);
+        missing == 0
+            || self
+                .memory
+                .try_grow(missing.max(RETAINED_GROUP_BYTES))
+                .is_ok()
+            || self.memory.try_grow(missing).is_ok()
     }
 
     /// Writes `chunks` to the group's spill file, opening it first.
@@ -678,8 +708,8 @@ impl Merge {
                     .ok_or_else(|| internal("a group spilled without a scope".to_owned()))?;
                 // The group's own bytes fund the writer first: they leave
                 // memory once written.
-                let held = std::mem::take(&mut self.group.bytes);
-                self.memory.shrink_to_credit(held.min(self.memory.size()));
+                self.group.bytes = 0;
+                self.memory.shrink_to_credit(self.memory.size());
                 let missing = WRITE_SCRATCH.saturating_sub(self.handle.credit());
                 let mut lent = self.handle.reservation();
                 lent.grow(missing).await.map_err(KrishivError::from)?;
@@ -724,10 +754,13 @@ impl Merge {
         if self.shared.join_type.builds_preserved() && self.shared.filter.is_some() {
             let words = usize::try_from(self.group.rows.div_ceil(64))
                 .map_err(|_| internal("a join group too large to mark".to_owned()))?;
-            self.memory
-                .grow(words * 8)
-                .await
-                .map_err(KrishivError::from)?;
+            if !self.try_reserve(words * 8) {
+                let missing = self.missing(words * 8);
+                self.memory
+                    .grow(missing)
+                    .await
+                    .map_err(KrishivError::from)?;
+            }
             self.group.bytes += words * 8;
             self.group.marks.clear();
             self.group.marks.resize(words, 0);
@@ -1026,8 +1059,9 @@ impl Merge {
     }
 
     fn end_group(&mut self) {
-        let held = std::mem::take(&mut self.group.bytes);
-        self.memory.shrink(held.min(self.memory.size()));
+        self.group.bytes = 0;
+        self.memory
+            .shrink(self.memory.size().saturating_sub(RETAINED_GROUP_BYTES));
         let g = &mut self.group;
         // Keeps their buffers for the next group.
         g.chunks.clear();
@@ -1359,6 +1393,12 @@ impl SortMergeJoin {
                 let need = Sort::bucket_need(&g.left, b, batch_rows)?
                     .saturating_add(Sort::bucket_need(&g.right, b, batch_rows)?);
                 let pool = env.handle.pool();
+                // A merge of spilled runs also writes or reads a group.
+                let need = if need == 0 {
+                    0
+                } else {
+                    need.saturating_add(2 * WRITE_SCRATCH)
+                };
                 let spare = need == 0
                     || pool
                         .effective_limit()

@@ -536,6 +536,12 @@ fn tpch_sf0_01_matches_spark_with_sort_merge_joins() {
         assert_eq!(got, want, "q{q:02}\n{plan}");
     }
     assert!(merges >= 22, "{merges} sort-merge joins");
+    // Unforced, the planner never chooses one for these unsorted inputs.
+    let default = parquet_tables(&dir, &rt);
+    for q in 1..=22 {
+        let plan = default.plan(q).to_string();
+        assert!(!plan.contains("SortMergeJoin"), "q{q:02}\n{plan}");
+    }
 }
 
 #[test]

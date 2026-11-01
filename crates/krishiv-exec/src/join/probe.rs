@@ -617,6 +617,9 @@ impl Operator for ProbeOp {
             let Some(scope) = &self.0.spill else {
                 return Ok(0);
             };
+            if let Some(freed) = l.flush.spill_merge(target, ctx).await? {
+                return Ok(freed);
+            }
             let chosen = choose(&l.parts, 0, target);
             if chosen.is_empty() {
                 // Nothing in memory (the grace phase): leave the consumer's

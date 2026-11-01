@@ -818,6 +818,21 @@ pub(crate) struct Flush {
     merge: Option<(Box<super::fallback::Fallback>, Claim)>,
 }
 
+impl Flush {
+    /// Serves a spill request from a partition joining by sort-merge, whose
+    /// sorts buffer on this driver's consumer; `None` without one.
+    pub(crate) async fn spill_merge(
+        &mut self,
+        target: usize,
+        ctx: &TaskContext,
+    ) -> Result<Option<usize>> {
+        match &mut self.merge {
+            Some((merge, _)) => merge.spill(target, ctx).await.map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
 /// One flush step: emit a batch of the partition being joined, read its
 /// next probe batch, or claim, load or split the next partition.
 pub(crate) async fn step(
@@ -999,11 +1014,11 @@ pub(crate) async fn step(
             if (task.depth >= MAX_DEPTH || task.no_shrink)
                 && super::fallback::possible(shared, hashing)
             {
-                shared.counters.add(Counter::MergeFallbacks, 1);
-                shared.counters.add(Counter::GracePartitions, 1);
                 let fallback =
                     super::fallback::Fallback::start(shared, hashing, task.build, task.probe, ctx)
                         .await?;
+                shared.counters.add(Counter::MergeFallbacks, 1);
+                shared.counters.add(Counter::GracePartitions, 1);
                 st.merge = Some((Box::new(fallback), held));
                 return Ok(FlushOutput::Continue);
             }

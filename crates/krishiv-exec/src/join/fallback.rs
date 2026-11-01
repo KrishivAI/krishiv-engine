@@ -53,8 +53,8 @@ struct Rows {
     part: VecDeque<Batch>,
     files: VecDeque<SpillFile>,
     reader: Option<SpillReader>,
-    /// Holds the in-memory rows' reservations until they are read.
-    _memory: Part,
+    /// The reservations of the in-memory rows, until they are all read.
+    memory: Option<Part>,
 }
 
 impl Rows {
@@ -64,7 +64,7 @@ impl Rows {
             part: std::mem::take(&mut part.chunks).into(),
             files: std::mem::take(&mut part.files).into(),
             reader: None,
-            _memory: part,
+            memory: Some(part),
         }
     }
 
@@ -72,6 +72,7 @@ impl Rows {
         if let Some(b) = self.part.pop_front() {
             return Ok(Some(b));
         }
+        self.memory = None;
         loop {
             let reader = match self.reader.take() {
                 Some(r) => r,
@@ -157,6 +158,14 @@ impl Side {
         Ok(())
     }
 
+    /// Spills what this side's sort buffers, if it still takes rows.
+    async fn spill(&mut self, target: usize, ctx: &TaskContext) -> Result<usize> {
+        match self.local.as_mut() {
+            Some(local) => Sink::spill(&*self.sort, local, target, ctx).await,
+            None => Ok(0),
+        }
+    }
+
     async fn finish(&mut self, ctx: &TaskContext) -> Result<()> {
         let local = self
             .local
@@ -234,6 +243,15 @@ impl Fallback {
             merge: None,
             fed_build: false,
         })
+    }
+
+    /// A spill request: the sorts buffer on the probe driver's consumer.
+    pub(super) async fn spill(&mut self, target: usize, ctx: &TaskContext) -> Result<usize> {
+        let freed = self.right.spill(target, ctx).await?;
+        if freed > 0 {
+            return Ok(freed);
+        }
+        self.left.spill(target, ctx).await
     }
 
     /// One step; `None` once the partition is joined.
