@@ -151,7 +151,6 @@ fn interval_arguments_not_built_yet_are_named_as_unsupported() -> R {
         "SELECT avg(i) FROM VALUES (interval '1' month) AS t(i)",
         "SELECT try_sum(i) FROM VALUES (interval '1' day) AS t(i)",
         "SELECT try_avg(i) FROM VALUES (interval '1' day) AS t(i)",
-        "SELECT abs(interval '1' day)",
     ] {
         let e = block_on(session.sql(q)).err().ok_or(q)?;
         assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{q}");
@@ -190,6 +189,31 @@ fn rows(session: &Session, sql: &str) -> R<Vec<String>> {
         }
         Ok(out)
     })
+}
+
+/// Columns with a NULL, not literals; answers from Spark 4.2.0.
+#[test]
+fn interval_functions_read_columns() -> R {
+    let session = Session::new()?;
+    block_on(session.sql(
+        "CREATE TEMPORARY VIEW iv AS SELECT * FROM VALUES \
+         (INTERVAL '-1 02:03:04.5' DAY TO SECOND, INTERVAL '-14' MONTH, 1), \
+         (NULL, NULL, 2) AS t(d, m, k)",
+    ))?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT abs(d) = INTERVAL '1 02:03:04.5' DAY TO SECOND, abs(m) = INTERVAL '14' MONTH, \
+             sign(d), signum(m), extract(day FROM d), extract(hour FROM d), \
+             extract(minute FROM d), extract(second FROM d), extract(month FROM m), \
+             date_part('hour', CAST(d AS INTERVAL HOUR)) FROM iv ORDER BY k"
+        )?,
+        [
+            "true|true|-1.0|-1.0|-1|-2|-3|-4.500000|-2|-2",
+            "NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL"
+        ]
+    );
+    Ok(())
 }
 
 /// Spark 4.2.0 sorts these to `[INTERVAL '1' DAY, INTERVAL '2' DAY]`.

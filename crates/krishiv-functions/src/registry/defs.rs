@@ -11,7 +11,7 @@ use krishiv_common::error::{
     NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
-use krishiv_types::{ArrayType, DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DayTimeField, DecimalType, YearMonthField};
 
 use super::{Aggregate, Execution};
 use crate::signature::{
@@ -411,24 +411,91 @@ fn strings() -> Vec<Spec> {
 
 /// The field of `extract`/`date_part`: `Ok(None)` for a NULL field.
 fn extract_field(c: &CallTypes<'_>) -> Result<Option<DatePart>, KrishivError> {
-    let name = match c.constant(0) {
-        Some(Constant::String(s)) => s,
-        Some(Constant::Null) => return Ok(None),
-        _ => {
-            return Err(NonFoldableArgument {
-                func_name: "`date_part`".to_owned(),
-                param_name: "`field`".to_owned(),
-                param_type: "\"STRING\"".to_owned(),
-            }
-            .into());
-        }
+    let Some(name) = extract_name(c)? else {
+        return Ok(None);
     };
-    DatePart::parse(name).map(Some).ok_or_else(|| {
-        InvalidExtractField {
-            field: format!("`{name}`"),
-            expr: format!("\"{}\"", c.sql(1).unwrap_or_default()),
+    DatePart::parse(name)
+        .map(Some)
+        .ok_or_else(|| invalid_extract_field(c, name))
+}
+
+fn invalid_extract_field(c: &CallTypes<'_>, name: &str) -> KrishivError {
+    InvalidExtractField {
+        field: format!("`{name}`"),
+        expr: format!("\"{}\"", c.sql(1).unwrap_or_default()),
+    }
+    .into()
+}
+
+/// The literal field of `extract`/`date_part`; `None` for a NULL one.
+fn extract_name<'a>(c: &CallTypes<'a>) -> Result<Option<&'a str>, KrishivError> {
+    match c.constant(0) {
+        Some(Constant::String(s)) => Ok(Some(s)),
+        Some(Constant::Null) => Ok(None),
+        _ => Err(NonFoldableArgument {
+            func_name: "`date_part`".to_owned(),
+            param_name: "`field`".to_owned(),
+            param_type: "\"STRING\"".to_owned(),
         }
-        .into()
+        .into()),
+    }
+}
+
+/// Spark's `ExtractIntervalPart.parseExtractField`: the names an interval
+/// takes, fewer than a date's, and only the fields its type holds.
+fn interval_field(name: &str, t: &DataType) -> Option<DatePart> {
+    use DayTimeField as D;
+    use YearMonthField as Y;
+    let part = match name.to_ascii_uppercase().as_str() {
+        "YEAR" | "Y" | "YEARS" | "YR" | "YRS" => DatePart::Year,
+        "MONTH" | "MON" | "MONS" | "MONTHS" => DatePart::Month,
+        "DAY" | "D" | "DAYS" => DatePart::Day,
+        "HOUR" | "H" | "HOURS" | "HR" | "HRS" => DatePart::Hour,
+        "MINUTE" | "M" | "MIN" | "MINS" | "MINUTES" => DatePart::Minute,
+        "SECOND" | "S" | "SEC" | "SECONDS" | "SECS" => DatePart::Second,
+        _ => return None,
+    };
+    let holds = match (t, part) {
+        (DataType::CalendarInterval, _) => true,
+        (DataType::YearMonthInterval { start, .. }, DatePart::Year) => *start == Y::Year,
+        (DataType::YearMonthInterval { end, .. }, DatePart::Month) => *end == Y::Month,
+        (DataType::DayTimeInterval { start, end }, _) => {
+            let field = match part {
+                DatePart::Day => D::Day,
+                DatePart::Hour => D::Hour,
+                DatePart::Minute => D::Minute,
+                DatePart::Second => D::Second,
+                _ => return None,
+            };
+            (*start..=*end).contains(&field)
+        }
+        _ => false,
+    };
+    holds.then_some(part)
+}
+
+const fn is_interval(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::YearMonthInterval { .. }
+            | DataType::DayTimeInterval { .. }
+            | DataType::CalendarInterval
+    )
+}
+
+/// `extract`/`date_part` of an interval: a month, hour or minute is a `TINYINT`.
+fn interval_extract_result(c: &CallTypes<'_>, t: &DataType) -> Result<ArgType, KrishivError> {
+    let nullable = c.args().get(1).is_some_and(|a| a.nullable);
+    let Some(name) = extract_name(c)? else {
+        return Ok(ArgType::new(DataType::Double, true));
+    };
+    let part = interval_field(name, t).ok_or_else(|| invalid_extract_field(c, name))?;
+    Ok(match part {
+        DatePart::Month | DatePart::Hour | DatePart::Minute => {
+            ArgType::new(DataType::Byte, nullable)
+        }
+        DatePart::Second => ArgType::new(DataType::Decimal(DecimalType::try_new(8, 6)?), nullable),
+        _ => ArgType::new(DataType::Integer, nullable),
     })
 }
 
@@ -439,6 +506,9 @@ fn is_time_field(part: DatePart) -> bool {
 /// `extract(field FROM source)`: the date fields read a `DATE` (a
 /// timestamp is cast), the time fields a timestamp (a date is cast).
 fn extract_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.data_type(1).is_some_and(is_interval) {
+        return vec![exact(DataType::String), InputType::Any];
+    }
     let source = match extract_field(c) {
         Ok(Some(part)) if is_time_field(part) => InputType::OneOf(
             [DataType::Timestamp, DataType::TimestampNtz]
@@ -454,6 +524,9 @@ fn extract_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 }
 
 fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if let Some(t) = c.data_type(1).filter(|t| is_interval(t)) {
+        return interval_extract_result(c, t);
+    }
     let nullable = c.args().get(1).is_some_and(|a| a.nullable);
     Ok(match extract_field(c)? {
         // `date_part(NULL, x)` is a NULL `double`.
@@ -607,7 +680,7 @@ fn timestamp_ntz_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// Whether `t` is a numeric type (Spark's `NumericType`).
-fn is_numeric_type(t: &DataType) -> bool {
+pub(super) fn is_numeric_type(t: &DataType) -> bool {
     matches!(
         t,
         DataType::Byte

@@ -490,53 +490,52 @@ impl IntervalCast {
             to: &to_name,
             text: &render,
         };
-        let out: ArrayRef =
-            match (&self.from, &self.to) {
-                (Some(DataType::YearMonthInterval { .. }), DataType::YearMonthInterval { .. })
-                | (Some(DataType::DayTimeInterval { .. }), DataType::DayTimeInterval { .. }) => {
-                    truncate_interval(&self.to, a.as_ref())?
-                }
-                (Some(from), to) => {
-                    let unit = match from {
-                        DataType::YearMonthInterval { end, .. } => month_unit(*end),
-                        DataType::DayTimeInterval { end, .. } => micro_unit(*end),
-                        other => return Err(internal(&format!("an interval cast of {other:?}"))),
-                    };
-                    match to {
-                        DataType::Decimal(_) => {
-                            let ArrowType::Decimal128(p, s) = self.arrow else {
-                                return Err(internal("a decimal cast without a decimal carrier"));
-                            };
-                            k::interval_to_decimal(a.as_ref(), unit, (p, s), self.try_cast, names)?
-                        }
-                        _ => k::interval_to_integral(
-                            a.as_ref(),
-                            unit,
-                            &self.arrow,
-                            self.try_cast,
-                            names,
-                        )?,
+        let out: ArrayRef = match (&self.from, &self.to) {
+            (Some(DataType::YearMonthInterval { .. }), DataType::YearMonthInterval { .. })
+            | (Some(DataType::DayTimeInterval { .. }), DataType::DayTimeInterval { .. }) => {
+                truncate_interval(&self.to, a.as_ref())?
+            }
+            (Some(from), to) => {
+                let unit = match from {
+                    DataType::YearMonthInterval { end, .. } => month_unit(*end),
+                    DataType::DayTimeInterval { end, .. } => micro_unit(*end),
+                    other => return Err(internal(&format!("an interval cast of {other:?}"))),
+                };
+                match to {
+                    DataType::Decimal(_) => {
+                        k::interval_to_decimal(a.as_ref(), unit, &self.arrow, self.try_cast, names)?
                     }
+                    _ => k::interval_to_integral(
+                        a.as_ref(),
+                        unit,
+                        &self.arrow,
+                        self.try_cast,
+                        names,
+                    )?,
                 }
-                (None, to)
-                    if matches!(
-                        a.data_type(),
-                        ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::LargeUtf8
-                    ) =>
-                {
-                    string_to_interval(a, to, self.try_cast)?
-                }
-                (None, DataType::YearMonthInterval { end, .. }) => Arc::new(
-                    k::number_to_year_month(a.as_ref(), month_unit(*end), self.try_cast, names)?,
-                ),
-                (None, DataType::DayTimeInterval { end, .. }) => Arc::new(k::number_to_day_time(
-                    a.as_ref(),
-                    micro_unit(*end),
-                    self.try_cast,
-                    names,
-                )?),
-                (None, other) => return Err(internal(&format!("an interval cast to {other:?}"))),
-            };
+            }
+            (None, to)
+                if matches!(
+                    a.data_type(),
+                    ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::LargeUtf8
+                ) =>
+            {
+                string_to_interval(a, to, self.try_cast)?
+            }
+            (None, DataType::YearMonthInterval { end, .. }) => Arc::new(k::number_to_year_month(
+                a.as_ref(),
+                month_unit(*end),
+                self.try_cast,
+                names,
+            )?),
+            (None, DataType::DayTimeInterval { end, .. }) => Arc::new(k::number_to_day_time(
+                a.as_ref(),
+                micro_unit(*end),
+                self.try_cast,
+                names,
+            )?),
+            (None, other) => return Err(internal(&format!("an interval cast to {other:?}"))),
+        };
         Ok(out)
     }
 }

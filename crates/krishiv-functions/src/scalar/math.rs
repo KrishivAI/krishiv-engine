@@ -11,16 +11,16 @@
 use std::sync::Arc;
 
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, Float64Array, Int64Array, new_null_array};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use krishiv_common::error::KrishivError;
-use krishiv_kernels::OverflowMode;
 use krishiv_kernels::math::{
     self, BinaryFn, DecimalRounding, Extremum, RoundMode, UnaryFn, round_decimal_type,
 };
+use krishiv_kernels::{OverflowMode, interval};
 
 use super::args::{Inputs, internal, is_binary, is_string, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -400,6 +400,18 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let f = unary_fn(n).unwrap_or(UnaryFn::Ln);
             Binding::new(double, move |x: &Inputs<'_>| {
                 Ok(Arc::new(math::unary(f, &x.array::<Float64Type>(0)?, &ctx)) as ArrayRef)
+            })
+        }
+        ("sign" | "signum", [DataType::Interval(IntervalUnit::YearMonth)]) => {
+            Binding::new(double, |x: &Inputs<'_>| {
+                let a = x.array::<IntervalYearMonthType>(0)?;
+                Ok(Arc::new(interval::sign_year_month(&a)) as ArrayRef)
+            })
+        }
+        ("sign" | "signum", [DataType::Duration(TimeUnit::Microsecond)]) => {
+            Binding::new(double, |x: &Inputs<'_>| {
+                let a = x.array::<DurationMicrosecondType>(0)?;
+                Ok(Arc::new(interval::sign_day_time(&a)) as ArrayRef)
             })
         }
         ("pow" | "power" | "atan2" | "hypot" | "log", [DataType::Float64, DataType::Float64]) => {

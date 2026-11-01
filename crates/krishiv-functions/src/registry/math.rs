@@ -7,9 +7,9 @@
 use krishiv_common::error::{DatatypeMismatchNonFoldableInput, KrishivError, NonFoldableArgument};
 use krishiv_kernels::decimal::{DecimalOp, result_type};
 use krishiv_kernels::math::round_decimal_type;
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DayTimeField, DecimalType, YearMonthField};
 
-use super::defs::{Spec, exact, scalar, typed};
+use super::defs::{Spec, exact, is_numeric_type, scalar, typed};
 use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs, Operator};
 
 // ---- the `double` functions ----
@@ -264,17 +264,59 @@ arithmetic!(try_multiply, Operator::Multiply);
 arithmetic!(try_divide, Operator::Divide);
 arithmetic!(remainder, Operator::Remainder);
 
+const fn is_ansi_interval(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }
+    )
+}
+
+/// `abs`, `positive`, `negative`: an ANSI interval stays as it is.
+fn abs_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![match c.data_type(0) {
+        Some(t) if is_ansi_interval(t) => InputType::Any,
+        _ => InputType::Numeric { intervals: true },
+    }]
+}
+
+/// `sign`: Spark's `TypeCollection(DoubleType, YearMonthIntervalType,
+/// DayTimeIntervalType)`. A number or a string casts to `DOUBLE`; any other type
+/// is refused naming the collection.
+fn sign_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![match c.data_type(0) {
+        Some(t) if is_ansi_interval(t) => InputType::Any,
+        None | Some(DataType::String | DataType::Null) => exact(DataType::Double),
+        Some(t) if is_numeric_type(t) => exact(DataType::Double),
+        Some(_) => InputType::StrictOneOf(vec![
+            DataType::Double,
+            DataType::YearMonthInterval {
+                start: YearMonthField::Year,
+                end: YearMonthField::Month,
+            },
+            DataType::DayTimeInterval {
+                start: DayTimeField::Day,
+                end: DayTimeField::Second,
+            },
+        ]),
+    }]
+}
+
 pub(super) fn specs() -> Vec<Spec> {
     let double = Inputs::Expects(vec![exact(DataType::Double)]);
     let mut out = scalar(
         &[
             "sqrt", "cbrt", "exp", "expm1", "ln", "log10", "log2", "log1p", "sin", "cos", "tan",
             "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cot",
-            "csc", "sec", "degrees", "radians", "rint", "sign", "signum", "log",
+            "csc", "sec", "degrees", "radians", "rint", "log",
         ],
         &double,
         unary,
     );
+    out.extend(scalar(
+        &["sign", "signum"],
+        &Inputs::Built(InputBuilder(sign_inputs)),
+        unary,
+    ));
     // `log(base, x)` is NULL outside its domain too.
     out.extend(scalar(&["pow", "power", "atan2", "hypot"], &double, binary));
     let width = Inputs::Expects(vec![
@@ -309,10 +351,9 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::CommonNoStrings,
         extremum,
     ));
-    let numeric_or_interval = Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     out.extend(scalar(
         &["abs", "positive", "negative"],
-        &numeric_or_interval,
+        &Inputs::Built(InputBuilder(abs_inputs)),
         same_type,
     ));
     let op = Inputs::Operator;

@@ -1013,6 +1013,506 @@
    "value": "1.500000"
   },
   {
+   "expr": "extract(hour from cast('25 hours 3 minutes 4.5 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hour FROM CAST(25 hours 3 minutes 4.5 seconds AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(minute from cast('25 hours 3 minutes 4.5 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(minute FROM CAST(25 hours 3 minutes 4.5 seconds AS INTERVAL))",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(hour from cast('-200 hours' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hour FROM CAST(-200 hours AS INTERVAL))",
+   "type": "tinyint",
+   "value": "-8"
+  },
+  {
+   "expr": "extract(second from cast('-61.5 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(second FROM CAST(-61.5 seconds AS INTERVAL))",
+   "type": "decimal(8,6)",
+   "value": "-1.500000"
+  },
+  {
+   "expr": "extract(day from cast('40 days' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(day FROM CAST(40 days AS INTERVAL))",
+   "type": "int",
+   "value": "40"
+  },
+  {
+   "expr": "extract(month from cast('-14 months' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(month FROM CAST(-14 months AS INTERVAL))",
+   "type": "tinyint",
+   "value": "-2"
+  },
+  {
+   "expr": "extract(year from cast('-14 months' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(year FROM CAST(-14 months AS INTERVAL))",
+   "type": "int",
+   "value": "-1"
+  },
+  {
+   "expr": "extract(month from interval '1' year)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(year from interval '14' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(hour from interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(day from interval '25' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(second from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(hour from interval '25' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hour FROM INTERVAL '25' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(minute from interval '61' minute)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(minute FROM INTERVAL '61' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(second from interval '61.5' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(second FROM INTERVAL '61.5' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.500000"
+  },
+  {
+   "expr": "extract(day from interval '-25' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(hour from interval '-1 02' day to hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hour FROM INTERVAL '-1 02' DAY TO HOUR)",
+   "type": "tinyint",
+   "value": "-2"
+  },
+  {
+   "expr": "extract(y from interval '1' year)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(y FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(mons from interval '1-2' year to month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(mons FROM INTERVAL '1-2' YEAR TO MONTH)",
+   "type": "tinyint",
+   "value": "2"
+  },
+  {
+   "expr": "extract(days from interval '3' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(days FROM INTERVAL '3' DAY)",
+   "type": "int",
+   "value": "3"
+  },
+  {
+   "expr": "extract(hrs from interval '3' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hrs FROM INTERVAL '03' HOUR)",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(mins from interval '3' minute)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(mins FROM INTERVAL '03' MINUTE)",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(secs from interval '3' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(secs FROM INTERVAL '03' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "3.000000"
+  },
+  {
+   "expr": "extract(HOUR from interval '3' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(HOUR FROM INTERVAL '03' HOUR)",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(dayofmonth from interval '3' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(dow from interval '3' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(week from cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(doy from cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(quarter from interval '3' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(yr from interval '1' year)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(yr FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(yrs from interval '1' year)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(yrs FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(years from interval '1' year)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(years FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(Y from interval '1' year)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(Y FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(mon from interval '1' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(mon FROM INTERVAL '1' MONTH)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(months from interval '1' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(months FROM INTERVAL '1' MONTH)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(d from interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(d FROM INTERVAL '1' DAY)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(h from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(h FROM INTERVAL '01' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(hr from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hr FROM INTERVAL '01' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(hours from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hours FROM INTERVAL '01' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(m from interval '1' minute)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(m FROM INTERVAL '01' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(min from interval '1' minute)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(min FROM INTERVAL '01' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(minutes from interval '1' minute)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(minutes FROM INTERVAL '01' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(s from interval '1' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(s FROM INTERVAL '01' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "extract(sec from interval '1' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(sec FROM INTERVAL '01' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "extract(seconds from interval '1' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(seconds FROM INTERVAL '01' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "extract(yr from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(yr FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(mons from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(mons FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(d from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(d FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(hrs from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(hrs FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(min from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(min FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(secs from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(secs FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "date_part('foo', interval '3' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "date_part(null, interval '3' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "date_part(NULL, INTERVAL '3' DAY)",
+   "type": "double",
+   "value": null
+  },
+  {
+   "expr": "date_part('SECONDS', interval '3' second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "date_part(SECONDS, INTERVAL '03' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "3.000000"
+  },
+  {
+   "expr": "extract(day from cast(null as interval day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(day FROM CAST(NULL AS INTERVAL DAY))",
+   "type": "int",
+   "value": null
+  },
+  {
+   "expr": "extract(month from cast(null as interval year to month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(month FROM CAST(NULL AS INTERVAL YEAR TO MONTH))",
+   "type": "tinyint",
+   "value": null
+  },
+  {
+   "expr": "extract(day from cast(null as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "extract(day FROM CAST(NULL AS INTERVAL))",
+   "type": "int",
+   "value": null
+  },
+  {
+   "expr": "abs(cast(null as interval day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "abs(CAST(NULL AS INTERVAL DAY))",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "sign(cast(null as interval month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sign(CAST(NULL AS INTERVAL MONTH))",
+   "type": "double",
+   "value": null
+  },
+  {
+   "expr": "abs(interval '-106751991 04:00:54.775808' day to second)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "abs(INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND)",
+   "type": "interval day to second",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "abs(cast('-1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "sign(cast('-1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "try_add(abs(interval '-1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(abs(INTERVAL '-1' DAY), INTERVAL '1' DAY)",
+   "type": "interval day",
+   "value": "INTERVAL '2' DAY"
+  },
+  {
+   "expr": "positive(interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(+ INTERVAL '1' DAY)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "negative(interval '1' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "negative(INTERVAL '1' MONTH)",
+   "type": "interval month",
+   "value": "INTERVAL '-1' MONTH"
+  },
+  {
+   "expr": "negative(interval '-178956970-8' year to month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "negative(INTERVAL '-178956970-8' YEAR TO MONTH)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
+  },
+  {
    "expr": "make_ym_interval(1, 2)",
    "zone": "UTC",
    "ansi": true,
@@ -2399,6 +2899,506 @@
    "name": "extract(second FROM CAST(1.5 seconds AS INTERVAL))",
    "type": "decimal(8,6)",
    "value": "1.500000"
+  },
+  {
+   "expr": "extract(hour from cast('25 hours 3 minutes 4.5 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hour FROM CAST(25 hours 3 minutes 4.5 seconds AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(minute from cast('25 hours 3 minutes 4.5 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(minute FROM CAST(25 hours 3 minutes 4.5 seconds AS INTERVAL))",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(hour from cast('-200 hours' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hour FROM CAST(-200 hours AS INTERVAL))",
+   "type": "tinyint",
+   "value": "-8"
+  },
+  {
+   "expr": "extract(second from cast('-61.5 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(second FROM CAST(-61.5 seconds AS INTERVAL))",
+   "type": "decimal(8,6)",
+   "value": "-1.500000"
+  },
+  {
+   "expr": "extract(day from cast('40 days' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(day FROM CAST(40 days AS INTERVAL))",
+   "type": "int",
+   "value": "40"
+  },
+  {
+   "expr": "extract(month from cast('-14 months' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(month FROM CAST(-14 months AS INTERVAL))",
+   "type": "tinyint",
+   "value": "-2"
+  },
+  {
+   "expr": "extract(year from cast('-14 months' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(year FROM CAST(-14 months AS INTERVAL))",
+   "type": "int",
+   "value": "-1"
+  },
+  {
+   "expr": "extract(month from interval '1' year)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(year from interval '14' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(hour from interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(day from interval '25' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(second from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(hour from interval '25' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hour FROM INTERVAL '25' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(minute from interval '61' minute)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(minute FROM INTERVAL '61' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(second from interval '61.5' second)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(second FROM INTERVAL '61.5' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.500000"
+  },
+  {
+   "expr": "extract(day from interval '-25' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(hour from interval '-1 02' day to hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hour FROM INTERVAL '-1 02' DAY TO HOUR)",
+   "type": "tinyint",
+   "value": "-2"
+  },
+  {
+   "expr": "extract(y from interval '1' year)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(y FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(mons from interval '1-2' year to month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(mons FROM INTERVAL '1-2' YEAR TO MONTH)",
+   "type": "tinyint",
+   "value": "2"
+  },
+  {
+   "expr": "extract(days from interval '3' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(days FROM INTERVAL '3' DAY)",
+   "type": "int",
+   "value": "3"
+  },
+  {
+   "expr": "extract(hrs from interval '3' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hrs FROM INTERVAL '03' HOUR)",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(mins from interval '3' minute)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(mins FROM INTERVAL '03' MINUTE)",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(secs from interval '3' second)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(secs FROM INTERVAL '03' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "3.000000"
+  },
+  {
+   "expr": "extract(HOUR from interval '3' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(HOUR FROM INTERVAL '03' HOUR)",
+   "type": "tinyint",
+   "value": "3"
+  },
+  {
+   "expr": "extract(dayofmonth from interval '3' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(dow from interval '3' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(week from cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(doy from cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(quarter from interval '3' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "extract(yr from interval '1' year)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(yr FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(yrs from interval '1' year)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(yrs FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(years from interval '1' year)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(years FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(Y from interval '1' year)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(Y FROM INTERVAL '1' YEAR)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(mon from interval '1' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(mon FROM INTERVAL '1' MONTH)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(months from interval '1' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(months FROM INTERVAL '1' MONTH)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(d from interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(d FROM INTERVAL '1' DAY)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(h from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(h FROM INTERVAL '01' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(hr from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hr FROM INTERVAL '01' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(hours from interval '1' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hours FROM INTERVAL '01' HOUR)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(m from interval '1' minute)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(m FROM INTERVAL '01' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(min from interval '1' minute)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(min FROM INTERVAL '01' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(minutes from interval '1' minute)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(minutes FROM INTERVAL '01' MINUTE)",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(s from interval '1' second)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(s FROM INTERVAL '01' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "extract(sec from interval '1' second)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(sec FROM INTERVAL '01' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "extract(seconds from interval '1' second)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(seconds FROM INTERVAL '01' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "extract(yr from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(yr FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(mons from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(mons FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(d from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(d FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "extract(hrs from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(hrs FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(min from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(min FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "tinyint",
+   "value": "1"
+  },
+  {
+   "expr": "extract(secs from cast('1 year 1 month 1 day 1 hour 1 minute 1 second' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(secs FROM CAST(1 year 1 month 1 day 1 hour 1 minute 1 second AS INTERVAL))",
+   "type": "decimal(8,6)",
+   "value": "1.000000"
+  },
+  {
+   "expr": "date_part('foo', interval '3' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "INVALID_EXTRACT_FIELD"
+  },
+  {
+   "expr": "date_part(null, interval '3' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "date_part(NULL, INTERVAL '3' DAY)",
+   "type": "double",
+   "value": null
+  },
+  {
+   "expr": "date_part('SECONDS', interval '3' second)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "date_part(SECONDS, INTERVAL '03' SECOND)",
+   "type": "decimal(8,6)",
+   "value": "3.000000"
+  },
+  {
+   "expr": "extract(day from cast(null as interval day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(day FROM CAST(NULL AS INTERVAL DAY))",
+   "type": "int",
+   "value": null
+  },
+  {
+   "expr": "extract(month from cast(null as interval year to month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(month FROM CAST(NULL AS INTERVAL YEAR TO MONTH))",
+   "type": "tinyint",
+   "value": null
+  },
+  {
+   "expr": "extract(day from cast(null as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "extract(day FROM CAST(NULL AS INTERVAL))",
+   "type": "int",
+   "value": null
+  },
+  {
+   "expr": "abs(cast(null as interval day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "abs(CAST(NULL AS INTERVAL DAY))",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "sign(cast(null as interval month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sign(CAST(NULL AS INTERVAL MONTH))",
+   "type": "double",
+   "value": null
+  },
+  {
+   "expr": "abs(interval '-106751991 04:00:54.775808' day to second)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "abs(INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND)",
+   "type": "interval day to second",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "abs(cast('-1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "sign(cast('-1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "try_add(abs(interval '-1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(abs(INTERVAL '-1' DAY), INTERVAL '1' DAY)",
+   "type": "interval day",
+   "value": "INTERVAL '2' DAY"
+  },
+  {
+   "expr": "positive(interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(+ INTERVAL '1' DAY)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "negative(interval '1' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "negative(INTERVAL '1' MONTH)",
+   "type": "interval month",
+   "value": "INTERVAL '-1' MONTH"
+  },
+  {
+   "expr": "negative(interval '-178956970-8' year to month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "negative(INTERVAL '-178956970-8' YEAR TO MONTH)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION"
   },
   {
    "expr": "make_ym_interval(1, 2)",

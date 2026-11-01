@@ -11,8 +11,8 @@ use std::sync::Arc;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray as _;
 use arrow_array::types::{
-    ArrowPrimitiveType, Decimal128Type, DurationMicrosecondType, Int8Type, Int16Type, Int32Type,
-    Int64Type, IntervalYearMonthType,
+    ArrowPrimitiveType, Decimal64Type, Decimal128Type, DurationMicrosecondType, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalYearMonthType,
 };
 use arrow_array::{
     Array, ArrayRef, DurationMicrosecondArray, IntervalYearMonthArray, PrimitiveArray,
@@ -153,10 +153,14 @@ fn rescale(unscaled: i128, from: i8, precision: u8, to: i8) -> Option<i128> {
 pub fn interval_to_decimal(
     a: &dyn Array,
     unit: i64,
-    (precision, scale): (u8, i8),
+    to: &DataType,
     null_on_overflow: bool,
     names: CastNames<'_>,
 ) -> Result<ArrayRef, KernelError> {
+    let (DataType::Decimal64(precision, scale) | DataType::Decimal128(precision, scale)) = *to
+    else {
+        return Err(KernelError::internal(format!("an interval cast to {to}")));
+    };
     let v = carrier(a)?;
     let seconds = matches!(a.data_type(), DataType::Duration(_)) && unit == MICROS_PER_SECOND;
     let out = map_values::<Decimal128Type>(&v, null_on_overflow, names, |x| {
@@ -169,6 +173,16 @@ pub fn interval_to_decimal(
     let out = out
         .with_precision_and_scale(precision, scale)
         .map_err(|e| KernelError::internal(e.to_string()))?;
+    if matches!(to, DataType::Decimal128(..)) {
+        return Ok(Arc::new(out));
+    }
+    // `rescale` kept the value within a precision that fits this carrier.
+    let out = out
+        .try_unary::<_, Decimal64Type, _>(|v| {
+            i64::try_from(v).map_err(|e| arrow_schema::ArrowError::CastError(e.to_string()))
+        })
+        .and_then(|d| d.with_precision_and_scale(precision, scale))
+        .map_err(|e| KernelError::internal(e.to_string()))?;
     Ok(Arc::new(out))
 }
 
@@ -179,6 +193,7 @@ fn number_values(a: &dyn Array) -> Result<(PrimitiveArray<Decimal128Type>, i8), 
         DataType::Int16 => (a.as_primitive::<Int16Type>().unary(i128::from), 0),
         DataType::Int32 => (a.as_primitive::<Int32Type>().unary(i128::from), 0),
         DataType::Int64 => (a.as_primitive::<Int64Type>().unary(i128::from), 0),
+        DataType::Decimal64(_, s) => (a.as_primitive::<Decimal64Type>().unary(i128::from), *s),
         DataType::Decimal128(_, s) => (a.as_primitive::<Decimal128Type>().clone(), *s),
         other => {
             return Err(KernelError::internal(format!(
@@ -204,7 +219,7 @@ fn number_text(unscaled: i128, a: &dyn Array) -> String {
         DataType::Int8 => format!("{unscaled}Y"),
         DataType::Int16 => format!("{unscaled}S"),
         DataType::Int64 => format!("{unscaled}L"),
-        DataType::Decimal128(_, s) => {
+        DataType::Decimal64(_, s) | DataType::Decimal128(_, s) => {
             let digits = unscaled.unsigned_abs().to_string();
             let sign = if unscaled < 0 { "-" } else { "" };
             let scale = usize::from(s.unsigned_abs());
@@ -317,12 +332,43 @@ mod tests {
     #[test]
     fn decimal_keeps_a_seconds_fraction_and_rounds_half_up() {
         let a = DurationMicrosecondArray::from(vec![1_500_000, -1_500_000]);
-        let out = interval_to_decimal(&a, MICROS_PER_SECOND, (10, 0), false, names()).unwrap();
+        let out = interval_to_decimal(
+            &a,
+            MICROS_PER_SECOND,
+            &DataType::Decimal128(10, 0),
+            false,
+            names(),
+        )
+        .unwrap();
         let out = out.as_primitive::<Decimal128Type>();
         assert_eq!((out.value(0), out.value(1)), (2, -2));
-        let out = interval_to_decimal(&a, MICROS_PER_SECOND, (10, 3), false, names()).unwrap();
+        let out = interval_to_decimal(
+            &a,
+            MICROS_PER_SECOND,
+            &DataType::Decimal128(10, 3),
+            false,
+            names(),
+        )
+        .unwrap();
         assert_eq!(out.as_primitive::<Decimal128Type>().value(0), 1_500);
-        let e = interval_to_decimal(&a, MICROS_PER_SECOND, (2, 2), false, names()).unwrap_err();
+        let out = interval_to_decimal(
+            &a,
+            MICROS_PER_SECOND,
+            &DataType::Decimal64(10, 3),
+            false,
+            names(),
+        )
+        .unwrap();
+        assert_eq!(out.data_type(), &DataType::Decimal64(10, 3));
+        assert_eq!(out.as_primitive::<Decimal64Type>().value(1), -1_500);
+        let e = interval_to_decimal(
+            &a,
+            MICROS_PER_SECOND,
+            &DataType::Decimal128(2, 2),
+            false,
+            names(),
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("CAST_OVERFLOW"), "{e}");
     }
 
@@ -346,6 +392,11 @@ mod tests {
 
     #[test]
     fn number_text_reads_as_sql() {
+        let short = arrow_array::Decimal64Array::from(vec![15])
+            .with_precision_and_scale(2, 1)
+            .unwrap();
+        let out = number_to_year_month(&short, 1, false, names()).unwrap();
+        assert_eq!(out.value(0), 2);
         let d = Decimal128Array::from(vec![5])
             .with_precision_and_scale(3, 2)
             .unwrap();
