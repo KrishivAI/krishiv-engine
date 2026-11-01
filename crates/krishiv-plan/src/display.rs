@@ -721,6 +721,13 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                     s.except.iter().map(|path| Name(path).to_string()).collect();
                 text.push_str(&format!(" EXCEPT ({})", cols.join(", ")));
             }
+            if let Some(n) = s.position {
+                text.push_str(&format!(" @{n}"));
+            }
+            if !s.replace.is_empty() {
+                let cols: Vec<&str> = s.replace.iter().map(|(n, _)| n.as_str()).collect();
+                text.push_str(&format!(" REPLACE ({})", cols.join(", ")));
+            }
             out.push(Piece::Owned(text));
         }
         ExprNode::Function(FunctionCall {

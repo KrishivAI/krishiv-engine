@@ -341,7 +341,7 @@ fn strings() -> Vec<Spec> {
             exact(DataType::String),
             exact(DataType::Integer),
         ]),
-        super::collection::split_result,
+        super::collection::extract_all_result,
     ));
     out.extend(scalar(
         &["regexp_substr"],
@@ -1760,6 +1760,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::vector::specs());
     out.extend(super::element::specs());
     out.extend(super::array_edit::specs());
+    out.extend(super::array_scan::specs());
     out.extend(super::array_set::specs());
     out.extend(super::text::specs());
     out.extend(super::hof::specs());

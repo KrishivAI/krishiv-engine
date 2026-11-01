@@ -251,6 +251,16 @@ impl Encoder {
         self.out.extend_from_slice(&digest.to_le_bytes());
     }
 
+    /// A star's `|> SET` assignments (out of line: `expr_body` recurses,
+    /// and its frame must stay small).
+    #[inline(never)]
+    fn replacements(&mut self, replace: &[(String, Arc<Expr>)], bias: u64) {
+        for (name, expr) in replace {
+            self.text(name);
+            self.expr(expr, bias);
+        }
+    }
+
     fn expr_body(&mut self, e: &Expr, bias: u64) {
         match &e.node {
             ExprNode::Column(c) => {
@@ -287,6 +297,8 @@ impl Encoder {
                     }
                 }
                 self.flag(s.plan_id.is_some());
+                self.replacements(&s.replace, bias);
+                self.num(s.position.map_or(0, |n| n as u64));
             }
             ExprNode::Function(f) => {
                 self.tag("function");
@@ -1204,6 +1216,8 @@ mod tests {
             (
                 "star",
                 unresolved(ExprNode::Star(Star {
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: vec!["t".into()],
                     except: vec![vec!["a".into()]],
                     plan_id: Some(PlanId(1)),

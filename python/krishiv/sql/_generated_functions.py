@@ -37,10 +37,18 @@ __all__ = [
     "array_compact",
     "array_contains",
     "array_distinct",
+    "array_except",
     "array_insert",
+    "array_intersect",
+    "array_max",
+    "array_min",
+    "array_position",
     "array_prepend",
+    "array_remove",
+    "array_repeat",
     "array_size",
     "array_union",
+    "arrays_overlap",
     "arrays_zip",
     "ascii",
     "asin",
@@ -64,6 +72,7 @@ __all__ = [
     "bool_or",
     "bround",
     "btrim",
+    "cardinality",
     "cbrt",
     "ceil",
     "ceiling",
@@ -412,14 +421,49 @@ def array_distinct(col: ColumnOrName) -> Column:
     return _call("array_distinct", _named(col, "col"))
 
 
+def array_except(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``array_except``."""
+    return _call("array_except", _named(col1, "col1"), _named(col2, "col2"))
+
+
 def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column:
     """Calls the registry function ``array_insert``."""
     return _call("array_insert", _named(arr, "arr"), _int_or_col(pos, "pos"), _lit(value, "value"))
 
 
+def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``array_intersect``."""
+    return _call("array_intersect", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def array_max(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_max``."""
+    return _call("array_max", _named(col, "col"))
+
+
+def array_min(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_min``."""
+    return _call("array_min", _named(col, "col"))
+
+
+def array_position(col: ColumnOrName, value: Any) -> Column:
+    """Calls the registry function ``array_position``."""
+    return _call("array_position", _named(col, "col"), _lit(value, "value"))
+
+
 def array_prepend(col: ColumnOrName, value: Any) -> Column:
     """Calls the registry function ``array_prepend``."""
     return _call("array_prepend", _named(col, "col"), _lit(value, "value"))
+
+
+def array_remove(col: ColumnOrName, element: Any) -> Column:
+    """Calls the registry function ``array_remove``."""
+    return _call("array_remove", _named(col, "col"), _lit(element, "element"))
+
+
+def array_repeat(col: ColumnOrName, count: ColumnOrName | int) -> Column:
+    """Calls the registry function ``array_repeat``."""
+    return _call("array_repeat", _named(col, "col"), _int_or_col(count, "count"))
 
 
 def array_size(col: ColumnOrName) -> Column:
@@ -430,6 +474,11 @@ def array_size(col: ColumnOrName) -> Column:
 def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``array_union``."""
     return _call("array_union", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def arrays_overlap(a1: ColumnOrName, a2: ColumnOrName) -> Column:
+    """Calls the registry function ``arrays_overlap``."""
+    return _call("arrays_overlap", _named(a1, "a1"), _named(a2, "a2"))
 
 
 def arrays_zip(*cols: ColumnOrName) -> Column:
@@ -546,6 +595,11 @@ def bround(col: ColumnOrName, scale: Column | int | None = None) -> Column:
 def btrim(str: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``btrim``."""
     return _call("btrim", _named(str, "str"), *_opt(_named, trim, "trim"))
+
+
+def cardinality(col: ColumnOrName) -> Column:
+    """Calls the registry function ``cardinality``."""
+    return _call("cardinality", _named(col, "col"))
 
 
 def cbrt(col: ColumnOrName) -> Column:

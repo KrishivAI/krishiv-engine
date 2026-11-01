@@ -147,17 +147,46 @@ fn an_array_index_must_be_integral() {
 }
 
 #[test]
-fn a_field_of_an_array_of_structs_is_refused_not_misread() {
+fn a_field_of_an_array_of_structs_is_the_field_of_every_element() {
     let s = Session::new().unwrap();
-    for expr in [
-        "array(named_struct('a', 1))['a']",
-        "arrays_zip(array(1, 2), array('x', 'y'))['1']",
+    // Spark 4.2.0 (GetArrayStructFields): a NULL element gives NULL, a name
+    // matches case-insensitively, and `arrays_zip` fields are named by position.
+    for (expr, want) in [
+        (
+            "CAST(array(named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y'))['a'] AS STRING)",
+            "[1, 2]",
+        ),
+        (
+            "CAST(array(named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y'))['b'] AS STRING)",
+            "[x, y]",
+        ),
+        (
+            "CAST(array(named_struct('a', 1), CAST(NULL AS STRUCT<a: INT>))['a'] AS STRING)",
+            "[1, null]",
+        ),
+        ("CAST(array(named_struct('a', 1))['A'] AS STRING)", "[1]"),
+        (
+            "CAST(arrays_zip(array(1, 2), array('x', 'y'))['1'] AS STRING)",
+            "[x, y]",
+        ),
+        (
+            "typeof(arrays_zip(array(1, 2), array('x', 'y'))['1'])",
+            "array<string>",
+        ),
     ] {
-        let err = run(&s, &format!("SELECT {expr}")).unwrap_err();
-        assert_eq!(
-            err.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{expr}"
-        );
+        let got = run(&s, &format!("SELECT {expr}")).unwrap_or_else(|e| panic!("{expr}: {e}"));
+        assert_eq!(got, [want], "{expr}");
     }
+    let err = run(&s, "SELECT array(named_struct('a', 1))['zz']").unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::FieldNotFound);
+}
+
+/// Spark 4.2.0 names the field of an array of structs `x.a`.
+#[test]
+fn a_field_of_an_array_of_structs_is_named_like_a_field() {
+    let s = Session::new().unwrap();
+    let df =
+        block_on(s.sql("SELECT x['a'] FROM VALUES (array(named_struct('a', 1))) t(x)")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "x.a");
 }

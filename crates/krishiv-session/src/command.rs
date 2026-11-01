@@ -841,6 +841,7 @@ impl Session {
         if let Some(namespace) = &namespace {
             entry.def = Arc::new(SqlFunction {
                 qualifier: vec![crate::catalog::CATALOG.to_owned(), namespace.clone()],
+                path: self.query_env().catalog.sql_path_snapshot(),
                 ..(*entry.def).clone()
             });
             return self
@@ -1052,6 +1053,7 @@ impl Session {
         let def = SqlFunction {
             name: name.to_owned(),
             qualifier: Vec::new(),
+            path: Vec::new(),
             returns_table,
             params: out_params,
             returns,

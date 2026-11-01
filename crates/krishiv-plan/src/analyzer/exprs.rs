@@ -21,8 +21,9 @@ use krishiv_common::error::{
     DatatypeMismatchValueOutOfRange, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, DuplicatedMapKey,
     ExceptOverlappingColumns, FailedFunctionCall, FailedToParseTooComplex, FieldNotFound,
-    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
-    InvalidExtractFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
+    GroupByPosOutOfRange, InternalError, InvalidAggregateFilterNotBoolean,
+    InvalidExtractBaseFieldType, InvalidExtractFieldType,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount,
     InvalidWithinGroupExpressionDistinctUnsupported,
@@ -1258,6 +1259,19 @@ impl Resolver<'_> {
                 .cloned()
                 .collect(),
         };
+        let out = match s.position {
+            Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
+            Some(n) => {
+                return Err(AnalysisError::new(
+                    GroupByPosOutOfRange {
+                        index: n.to_string(),
+                        size: out.len().to_string(),
+                    },
+                    origin,
+                ));
+            }
+            None => out,
+        };
         if out.is_empty() && !s.qualifier.is_empty() {
             return Err(AnalysisError::new(
                 CannotResolveStarExpand {
@@ -2183,24 +2197,56 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
-                // `array_of_structs['a']` is Spark's `GetArrayStructFields` (the
-                // field of every element); not built yet, so it is refused
-                // rather than read as a position.
+                // `array_of_structs['a']` is Spark's `GetArrayStructFields`: the
+                // field of every element, a NULL element giving NULL. It is
+                // built as `transform(arr, x -> x.a)` once the field is known.
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "__subscript"
                     && n == 2
-                    && matches!(
-                        &kids[0].ty.data_type,
-                        Some(DataType::Array(a)) if matches!(a.element_type(), DataType::Struct(_))
-                    )
-                    && matches!(&kids[1].expr.node, ExprNode::Literal(Literal::String(_)))
+                    && let Some(DataType::Array(arr)) = &kids[0].ty.data_type
+                    && let DataType::Struct(st) = arr.element_type()
+                    && let ExprNode::Literal(Literal::String(name)) = &kids[1].expr.node
                 {
-                    return Err(AnalysisError::new(
-                        KrishivUnsupportedFeature {
-                            feature: "subscripts of an array of structs by field name".to_owned(),
-                        },
-                        e.origin,
+                    let cs = self.ctx.conf.case_sensitive;
+                    let Some(field) = st.fields().iter().find(|f| same(f.name(), name, cs)) else {
+                        return Err(unresolved_field(
+                            &[
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone),
+                                name.clone(),
+                            ],
+                            st,
+                            e.origin,
+                        ));
+                    };
+                    let element = Expr::new(ExprNode::Column(ColumnRef {
+                        name: vec!["__subscript_element".to_owned()],
+                        plan_id: None,
+                    }))
+                    .with_origin(e.origin);
+                    let body = Expr::new(ExprNode::Field {
+                        base: Arc::new(element),
+                        name: field.name().to_owned(),
+                    })
+                    .with_origin(e.origin);
+                    let call = Expr::function(
+                        "transform",
+                        vec![
+                            Expr::clone(&kids[0].expr),
+                            Expr::lambda(vec!["__subscript_element".to_owned()], body),
+                        ],
+                    )
+                    .with_origin(e.origin);
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..n]);
+                    // Spark names it as the field of the array (`x.a`).
+                    b.shown = Some(Arc::new(
+                        Expr::new(ExprNode::Field {
+                            base: Arc::new(Expr::clone(&kids[0].shown())),
+                            name: field.name().to_owned(),
+                        })
+                        .with_origin(e.origin),
                     ));
+                    return Ok(b);
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `arrays_zip(a, b)` names its struct fields after columns,
@@ -2271,8 +2317,12 @@ impl Resolver<'_> {
                 // Only for the built-in: a qualified session UDF of the
                 // same name runs the UDF.
                 let is_schema_of_csv = is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "schema_of_csv" | "schema_of_xml");
+                    && matches!(
+                        entry.id.name(),
+                        "schema_of_csv" | "schema_of_xml" | "schema_of_json"
+                    );
                 let of_xml = entry.id.name() == "schema_of_xml";
+                let of_json = entry.id.name() == "schema_of_json";
                 // `from_csv` and `to_csv` show only their first argument.
                 let is_csv = is_builtin_entry(&entry)
                     && matches!(
@@ -2369,7 +2419,7 @@ impl Resolver<'_> {
                 // `SchemaOfCsv` evaluates its foldable child): the DDL
                 // literal, shown as the call.
                 if is_schema_of_csv {
-                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml)?;
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound, of_xml, of_json)?;
                 }
                 // `from_csv` and `to_csv` show only their first argument
                 // (Spark's `toPrettySQL` drops the schema and options).
@@ -3235,6 +3285,7 @@ impl Resolver<'_> {
         kids: &[Bound],
         bound: &mut Bound,
         xml: bool,
+        json: bool,
     ) -> Result<(), AnalysisError> {
         if kids.is_empty() || kids.len() > 2 {
             return Ok(());
@@ -3245,7 +3296,23 @@ impl Resolver<'_> {
         let Some(Constant::String(csv)) = csv else {
             return Ok(());
         };
-        let ddl = if xml {
+        let ddl = if json {
+            // `schema_of_json`: only a `map(...)` literal of options folds;
+            // anything else keeps the call.
+            let pairs = match kids.get(1) {
+                None => Vec::new(),
+                Some(opts) => match &opts.expr.node {
+                    ExprNode::Literal(Literal::Map(pairs)) => pairs.clone(),
+                    _ => return Ok(()),
+                },
+            };
+            match krishiv_functions::scalar::schema_of_json_ddl(&csv, &pairs)
+                .map_err(|err| AnalysisError::new(err, e.origin))?
+            {
+                Some(ddl) => ddl,
+                None => return Ok(()),
+            }
+        } else if xml {
             // `schema_of_xml`: the document under the written options.
             let pairs = match kids.get(1) {
                 None => Vec::new(),
@@ -5048,9 +5115,11 @@ impl Resolver<'_> {
         let mut names = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             let name = match &k.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
-                    c.name.clone()
-                }
+                ExprNode::Resolved(
+                    ResolvedExpr::Column(c)
+                    | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::LambdaVar(c),
+                ) => c.name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
                 _ => format!("col{}", i + 1),
@@ -6387,30 +6456,41 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         names
     }
     let mut names = collect(Node::Plan(plan));
-    // Spark lists each reference of a union's branches, not once per column.
+    // Spark lists each reference of a set operation's branches, not once per
+    // column. `INTERSECT` and `EXCEPT` are a semi or an anti join by now.
     let mut union = None;
     let _ = visit_distinct(Node::Plan(plan), |n| {
-        if let Node::Plan(p) = n
-            && let crate::PlanNode::Union { inputs, .. } = &p.node
-        {
-            union = Some(inputs.clone());
-            return std::ops::ControlFlow::Break(());
+        let Node::Plan(p) = n else {
+            return std::ops::ControlFlow::Continue(());
+        };
+        match &p.node {
+            crate::PlanNode::Union { inputs, .. } => union = Some(inputs.clone()),
+            crate::PlanNode::Join {
+                left,
+                right,
+                kind: crate::JoinKind::LeftSemi | crate::JoinKind::LeftAnti,
+                ..
+            } => union = Some(vec![Arc::clone(left), Arc::clone(right)]),
+            _ => return std::ops::ControlFlow::Continue(()),
         }
-        std::ops::ControlFlow::Continue(())
+        std::ops::ControlFlow::Break(())
     });
-    if let Some(inputs) = union {
-        // Under a union, once per reference of each branch.
+    // Only when a branch reads the outer query: over an uncorrelated set
+    // operation, the references above it are listed as anywhere else.
+    if union.is_some_and(|inputs: Vec<_>| {
+        inputs
+            .iter()
+            .any(|input| !collect(Node::Plan(input)).is_empty())
+    }) {
         names = Vec::new();
-        for input in &inputs {
-            let _ = visit_distinct(Node::Plan(input), |n| {
-                if let Node::Expr(e) = n
-                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-                {
-                    names.push((c.id, c.name.clone()));
-                }
-                std::ops::ControlFlow::Continue(())
-            });
-        }
+        let _ = visit_distinct(Node::Plan(plan), |n| {
+            if let Node::Expr(e) = n
+                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+            {
+                names.push((c.id, c.name.clone()));
+            }
+            std::ops::ControlFlow::Continue(())
+        });
     }
     names
         .into_iter()
@@ -6927,6 +7007,17 @@ fn call(
         }
         // `JsonToStructs` has the JSON text as its only child: the schema and
         // the options are not shown.
+        // A map schema is the exception: Spark 4.2 names the column `entries`.
+        _ if name.eq_ignore_ascii_case("from_json")
+            && k.get(1).is_some_and(|schema| {
+                let text = schema.trim_matches('\'').trim_start();
+                text.get(..3)
+                    .is_some_and(|head| head.eq_ignore_ascii_case("map"))
+                    && text[3..].trim_start().starts_with('<')
+            }) =>
+        {
+            "entries".to_owned()
+        }
         _ if name.eq_ignore_ascii_case("from_json") && !k.is_empty() => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("from_json({d}{})", k[0])
@@ -7456,6 +7547,8 @@ mod tests {
     #[test]
     fn stars_print_as_sql() {
         let star = Expr::new(ExprNode::Star(crate::Star {
+            replace: Vec::new(),
+            position: None,
             qualifier: Vec::new(),
             except: Vec::new(),
             plan_id: None,

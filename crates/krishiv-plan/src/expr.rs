@@ -181,6 +181,13 @@ pub struct Star {
     /// top-level column like `id`, or qualified like `t.id`; longer paths
     /// name nested struct fields and are rejected by the analyzer).
     pub except: Vec<Vec<String>>,
+    /// `|> SET name = expr`: the column called `name` is replaced in its
+    /// position by `expr` (the expansion of the star, in order); the
+    /// replacements are applied one after the other.
+    pub replace: Vec<(String, Arc<Expr>)>,
+    /// `|> AGGREGATE ... GROUP BY n`: the star stands for the `n`-th
+    /// column (from 1) of the input only.
+    pub position: Option<usize>,
     /// The DataFrame the star expands, for PySpark's `df["*"]`; resolved
     /// as for [`ColumnRef::plan_id`].
     pub plan_id: Option<PlanId>,
@@ -612,7 +619,6 @@ impl Expr {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
-            | ExprNode::Star(_)
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
@@ -634,6 +640,7 @@ impl Expr {
                 }
                 within_group.iter().for_each(|o| f(&o.expr));
             }
+            ExprNode::Star(s) => s.replace.iter().for_each(|(_, e)| f(e)),
             ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
                 columns.iter().for_each(&mut *f);
             }
@@ -673,7 +680,6 @@ impl Expr {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
-            | ExprNode::Star(_)
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
@@ -695,6 +701,7 @@ impl Expr {
                 }
                 within_group.iter_mut().for_each(|o| f(&mut o.expr));
             }
+            ExprNode::Star(s) => s.replace.iter_mut().for_each(|(_, e)| f(e)),
             ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
                 columns.iter_mut().for_each(&mut *f);
             }

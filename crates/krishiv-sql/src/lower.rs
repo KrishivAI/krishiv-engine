@@ -716,6 +716,8 @@ impl Lowerer {
         let star = |l: &Self, except: Vec<Vec<String>>| {
             arc(l.ex(
                 ExprNode::Star(Star {
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: Vec::new(),
                     except,
                     plan_id: None,
@@ -725,22 +727,34 @@ impl Lowerer {
         };
         Ok(match &op.kind {
             PipeOpKind::Select(s) => {
-                if let Some(g) = &s.group_by {
-                    return Err(unsupported("GROUP BY in a pipe SELECT", g.span));
-                }
                 let exprs = self.with_windows(&s.windows, |l| {
                     s.projection
                         .iter()
                         .map(|i| l.select_item(i))
                         .collect::<R<Vec<_>>>()
                 })?;
-                let plan = self.node(
-                    PlanNode::Project {
-                        input: arc(plan),
-                        exprs,
-                    },
-                    s.span,
-                );
+                // `|> SELECT items GROUP BY keys` is an aggregate whose
+                // select list is the items.
+                let plan = match &s.group_by {
+                    Some(g) => {
+                        let grouping = self.grouping(g)?;
+                        self.node(
+                            PlanNode::Aggregate {
+                                input: arc(plan),
+                                grouping,
+                                aggregates: exprs,
+                            },
+                            s.span,
+                        )
+                    }
+                    None => self.node(
+                        PlanNode::Project {
+                            input: arc(plan),
+                            exprs,
+                        },
+                        s.span,
+                    ),
+                };
                 self.wrap_distinct_hints(plan, s.quantifier, &s.hints, s.span)?
             }
             PipeOpKind::Extend(items) => {
@@ -819,12 +833,53 @@ impl Lowerer {
                 )?
             }
             PipeOpKind::Aggregate(a) => self.pipe_aggregate(plan, a)?,
-            PipeOpKind::Set(_) => return Err(unsupported("pipe SET", op.span)),
+            PipeOpKind::Set(assignments) => {
+                // One projection per assignment, so a later one reads the
+                // value an earlier one set (`SET z = 1, zz = z + 1`).
+                let mut plan = plan;
+                for a in assignments {
+                    // Validation rejects multi-part keys.
+                    let Some(name) = a.key.last() else { continue };
+                    let value = arc(self.expr(&a.value)?);
+                    let star = self.ex(
+                        ExprNode::Star(Star {
+                            qualifier: Vec::new(),
+                            except: Vec::new(),
+                            replace: vec![(name.value.clone(), value)],
+                            position: None,
+                            plan_id: None,
+                        }),
+                        a.span,
+                    );
+                    plan = self.node(
+                        PlanNode::Project {
+                            input: arc(plan),
+                            exprs: vec![arc(star)],
+                        },
+                        a.span,
+                    );
+                }
+                plan
+            }
             PipeOpKind::Sample(t) => return Err(unsupported("TABLESAMPLE", t.span)),
             PipeOpKind::Pivot(_, Some(_)) | PipeOpKind::Unpivot(_, Some(_)) => {
                 return Err(unsupported("PIVOT with UNPIVOT", op.span));
             }
         })
+    }
+
+    /// The input column a pipe `GROUP BY` number names.
+    fn position(&self, e: &Expr) -> Option<usize> {
+        match &e.kind {
+            ExprKind::Literal(Literal::Number {
+                text,
+                kind: NumKind::Int,
+            }) => text
+                .parse::<i32>()
+                .ok()
+                .and_then(|n| usize::try_from(n).ok()),
+            _ => None,
+        }
     }
 
     /// `AGGREGATE [aggregates] [GROUP BY keys]`: the result is the keys,
@@ -835,13 +890,21 @@ impl Lowerer {
         for g in a.group_by.iter().flat_map(|g| &g.items) {
             match &g.kind {
                 GroupItemKind::Expr(e) => {
-                    if matches!(e.kind, ExprKind::Literal(Literal::Number { .. })) {
-                        return Err(unsupported(
-                            "a position in a pipe AGGREGATE GROUP BY",
-                            g.span,
-                        ));
-                    }
-                    let key = arc(self.expr(e)?);
+                    // A number names an input column, unlike `GROUP BY n`
+                    // of a query, which names a select item.
+                    let key = match self.position(e) {
+                        Some(position) => arc(self.ex(
+                            ExprNode::Star(Star {
+                                qualifier: Vec::new(),
+                                except: Vec::new(),
+                                replace: Vec::new(),
+                                position: Some(position),
+                                plan_id: None,
+                            }),
+                            e.span,
+                        )),
+                        None => arc(self.expr(e)?),
+                    };
                     items.push(Arc::clone(&key));
                     keys.push(key);
                 }
@@ -1196,6 +1259,8 @@ impl Lowerer {
         );
         let star = self.ex(
             ExprNode::Star(Star {
+                replace: Vec::new(),
+                position: None,
                 qualifier: vec![qualifier],
                 except: Vec::new(),
                 plan_id: None,
@@ -1960,6 +2025,8 @@ impl Lowerer {
             }
             ExprKind::Wildcard { qualifier, except } => self.ex(
                 ExprNode::Star(Star {
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: qualifier.iter().map(|p| p.value.clone()).collect(),
                     except: except
                         .iter()
@@ -2376,10 +2443,8 @@ impl Lowerer {
                     sp,
                 )
             }
-            ExprKind::Row(_) => {
-                return Err(unsupported("row and struct constructors", sp));
-            }
-            ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
+            // `(a, b)` is `struct(a, b)` to Spark's `AstBuilder`.
+            ExprKind::Row(items) | ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
             // Every variant is lowered above; the wildcard stays because
             // `ExprKind` is non-exhaustive.
             #[expect(unreachable_patterns, reason = "every ExprKind variant is lowered")]

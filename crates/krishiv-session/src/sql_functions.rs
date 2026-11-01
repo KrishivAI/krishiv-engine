@@ -242,7 +242,11 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
-                    path: self.path.clone(),
+                    path: if def.path.is_empty() {
+                        self.path.clone()
+                    } else {
+                        def.path.clone()
+                    },
                     next_source: &|| next_source(views),
                     namespace: stored_in
                         .clone()
@@ -254,9 +258,17 @@ impl QueryFunctions {
                     self.case_sensitive,
                     Some(&stored),
                     stored_in,
+                    (!def.path.is_empty()).then(|| def.path.clone()),
                 )
             }
-            None => expand_views_in(&self.catalog, &wrapper, self.case_sensitive, None, None),
+            None => expand_views_in(
+                &self.catalog,
+                &wrapper,
+                self.case_sensitive,
+                None,
+                None,
+                None,
+            ),
         };
         // A body no view expansion can read (a snapshot name, a cycle)
         // stays as written: the analyzer then reports the table missing.
@@ -502,6 +514,7 @@ mod tests {
             def: Arc::new(SqlFunction {
                 name: name.to_owned(),
                 qualifier: Vec::new(),
+                path: Vec::new(),
                 returns_table: None,
                 params: Vec::new(),
                 returns: None,

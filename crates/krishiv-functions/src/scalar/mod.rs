@@ -27,6 +27,7 @@ mod args;
 mod arith;
 mod array;
 mod array_edit;
+mod array_scan;
 mod array_set;
 mod bitwise;
 mod chars;
@@ -54,6 +55,7 @@ mod url;
 mod vector;
 mod xml;
 
+pub use json::schema_of_json_ddl;
 pub use regex::{extract_all_pieces, split_regex};
 pub use xml::schema_of_xml_ddl;
 
@@ -458,7 +460,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 28] = [
+const FAMILIES: [(&[&str], Binder); 29] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -486,6 +488,7 @@ const FAMILIES: [(&[&str], Binder); 28] = [
     (vector::NAMES, vector::bind),
     (element::NAMES, element::bind),
     (array_edit::NAMES, array_edit::bind),
+    (array_scan::NAMES, array_scan::bind),
     (array_set::NAMES, array_set::bind),
 ];
 

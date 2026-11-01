@@ -372,6 +372,18 @@ fn fold_on_stack(
     folded
 }
 
+/// Whether `t` is, or holds as an element, key, value or field, a `time(p)`
+/// below `time(6)`.
+fn has_narrow_time(t: &DataType) -> bool {
+    match t {
+        DataType::Time { precision } => *precision < 6,
+        DataType::Array(a) => has_narrow_time(a.element_type()),
+        DataType::Map(m) => has_narrow_time(m.key_type()) || has_narrow_time(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| has_narrow_time(f.data_type())),
+        _ => false,
+    }
+}
+
 fn fold_cast(
     expr: &Arc<Expr>,
     to: &DataType,
@@ -388,6 +400,12 @@ fn fold_cast(
     // A NULL of any type casts to a NULL of the target type.
     if inner.null_count() > 0 || inner.data_type() == &ArrowType::Null {
         return Some(Ok(new_null_array(&to.to_arrow(), 1)));
+    }
+    // A cast to `time(p)` drops the digits below `p`, but every `TIME` has
+    // the same Arrow carrier, so the shortcut below would keep them: the
+    // executor truncates, so a cast to a narrower time stays unfolded.
+    if has_narrow_time(to) {
+        return None;
     }
     // A cast to the value's own type is the value (the kernels below do
     // not cover every target, e.g. arrays of literals).

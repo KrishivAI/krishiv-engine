@@ -1197,17 +1197,18 @@ pub(crate) fn expand_views(
     case_sensitive: bool,
     stored: Option<&StoredViews<'_>>,
 ) -> Result<Expansion, KrishivError> {
-    expand_views_in(catalog, plan, case_sensitive, stored, None)
+    expand_views_in(catalog, plan, case_sensitive, stored, None, None)
 }
 
 /// [`expand_views`] for `plan` written inside `namespace`: its bare table names belong to that namespace, never
-/// to a temporary view (the body of a stored function).
+/// to a temporary view (the body of a stored function), resolved through `view_path` when it has one.
 pub(crate) fn expand_views_in(
     catalog: &SessionCatalog,
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
     stored: Option<&StoredViews<'_>>,
     namespace: Option<String>,
+    view_path: Option<Vec<Vec<String>>>,
 ) -> Result<Expansion, KrishivError> {
     let mut expander = Expander {
         catalog,
@@ -1215,6 +1216,7 @@ pub(crate) fn expand_views_in(
         path: Vec::new(),
         stored,
         view_namespace: namespace,
+        view_path,
         reads: Vec::new(),
         deferred: None,
         stored_reads: Vec::new(),
@@ -1262,6 +1264,8 @@ struct Expander<'a> {
     stored: Option<&'a StoredViews<'a>>,
     /// Inside a stored view: the namespace its bare table names belong to.
     view_namespace: Option<String>,
+    /// Inside a stored view: the SQL path frozen with it.
+    view_path: Option<Vec<Vec<String>>>,
     /// The catalog-store lookups so far, in plan order, without repeats.
     reads: Vec<ReadCandidate>,
     /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
@@ -1304,8 +1308,24 @@ impl Expander<'_> {
                 .iter()
                 .any(|c| same_name(c, bare, self.case_sensitive))
         {
+            // The first schema of the view's frozen path holding the name. A name no schema of a
+            // non-empty frozen path holds stays missing (the first schema reports it), never
+            // read from a namespace the path left out; a view without a catalog schema in its
+            // path reads its own namespace.
+            let namespace = self
+                .view_path
+                .as_deref()
+                .and_then(|path| {
+                    self.path_schema_of(path, bare).or_else(|| {
+                        path.iter().find_map(|entry| match entry.as_slice() {
+                            [c, n] if c.eq_ignore_ascii_case(CATALOG) => Some(n.clone()),
+                            _ => None,
+                        })
+                    })
+                })
+                .unwrap_or_else(|| namespace.clone());
             let qualified = ReadSource::Table {
-                name: vec![namespace.clone(), bare.clone()],
+                name: vec![namespace, bare.clone()],
                 options: options.clone(),
             };
             let plan =
@@ -1358,6 +1378,21 @@ impl Expander<'_> {
         self.expand_stored(plan, scope)
     }
 
+    /// The first schema of `path` (in the catalog store) holding the table or view `table`.
+    fn path_schema_of(&self, path: &[Vec<String>], table: &str) -> Option<String> {
+        path.iter().find_map(|entry| match entry.as_slice() {
+            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
+                let (n_key, t_key) = if self.case_sensitive {
+                    (n.clone(), table.to_owned())
+                } else {
+                    (n.to_lowercase(), table.to_lowercase())
+                };
+                self.catalog.store.table(&n_key, &t_key).map(|_| n.clone())
+            }
+            _ => None,
+        })
+    }
+
     /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.
     fn expand_stored(
         &mut self,
@@ -1388,22 +1423,9 @@ impl Expander<'_> {
             [table] => {
                 // Outside a stored view, the first schema of the path holding the name; inside one,
                 // the view's own namespace.
-                let from_path = self
-                    .view_namespace
-                    .is_none()
-                    .then(|| {
-                        stored.path.iter().find_map(|entry| match entry.as_slice() {
-                            [c, n] if c.eq_ignore_ascii_case(CATALOG) => {
-                                let key = if self.case_sensitive {
-                                    (n.clone(), table.clone())
-                                } else {
-                                    (n.to_lowercase(), table.to_lowercase())
-                                };
-                                self.catalog.store.table(&key.0, &key.1).map(|_| n.clone())
-                            }
-                            _ => None,
-                        })
-                    })
+                let path = self.view_path.as_deref().unwrap_or(&stored.path);
+                let from_path = (self.view_namespace.is_none() || self.view_path.is_some())
+                    .then(|| self.path_schema_of(path, table))
                     .flatten();
                 match (from_path, &self.view_namespace) {
                     (Some(namespace), _) => (namespace, table),
@@ -1487,8 +1509,10 @@ impl Expander<'_> {
         let lowered = krishiv_sql::lower(&query, (stored.next_source)()).map_err(|e| e.error)?;
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
+        let previous_path = self.view_path.replace(view.path.clone());
         let input = self.go(Arc::clone(lowered.root()), &mut Vec::new());
         self.view_namespace = previous;
+        self.view_path = previous_path;
         self.path.pop();
         let mut input = input?;
         let mode = crate::view_schema::effective_mode(view.schema_mode, stored.binding_enabled);

@@ -69,7 +69,7 @@ SELECT f(a).b FROM t
 SELECT transform(a, x -> x) FROM t
   => Project [transform(a, (x) -> x)] | +- Read t | 
 SELECT (a, b) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature row and struct constructors is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..13
+  => Project [struct(a, b)] | +- Read t | 
 SELECT a LIKE ANY ('x', 'y') FROM t
   => Project [a LIKE ANY ('x', 'y')] | +- Read t | 
 SELECT ? FROM t
