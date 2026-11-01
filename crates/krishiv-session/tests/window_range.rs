@@ -311,3 +311,13 @@ fn a_tinyint_bound_of_128_preceding_fits() {
     );
     assert_eq!(got, ["1"]);
 }
+
+/// A descending order negates the bound in the key's type (Spark's `UnaryMinus`): under ANSI the negation of
+/// the type's minimum raises even though adding it to the key would fit.
+#[test]
+fn a_descending_bound_is_negated_in_the_key_type() {
+    let s = session();
+    let sql = "SELECT count(*) OVER (ORDER BY x DESC RANGE BETWEEN 128 PRECEDING AND CURRENT ROW) \
+               FROM VALUES (CAST(-1 AS TINYINT)) AS t(x)";
+    assert_eq!(class(&s, sql), "ARITHMETIC_OVERFLOW");
+}

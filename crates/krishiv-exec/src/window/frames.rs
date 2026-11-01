@@ -40,7 +40,7 @@ use super::eval::{
 };
 use super::{FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan};
 use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction};
-use krishiv_common::error::BinaryArithmeticOverflow;
+use krishiv_common::error::{ArithmeticOverflow, BinaryArithmeticOverflow};
 
 use crate::aggregate::long_overflow;
 use crate::error::{Result, internal};
@@ -235,9 +235,28 @@ impl RangeKeys {
         let sign: i128 = if self.descending { -1 } else { 1 };
         match (&self.keys, bound) {
             (Keys::Int(k), FrameBound::RangeInt(off)) => {
+                let limits = self.limits;
+                // A descending order negates the bound in the key's type (Spark's `UnaryMinus`),
+                // which under ANSI raises for the type's minimum even if the sum would fit.
+                if let (true, true, Some((min, max))) = (self.descending, self.ansi, limits)
+                    && off == min
+                {
+                    let message = match max {
+                        m if m == i128::from(i8::MAX) => "byte overflow",
+                        m if m == i128::from(i16::MAX) => "short overflow",
+                        m if m == i128::from(i32::MAX) => "integer overflow",
+                        _ => "long overflow",
+                    };
+                    return Err(ArithmeticOverflow {
+                        message: message.to_owned(),
+                        alternative: String::new(),
+                        config: "\"spark.sql.ansi.enabled\"".to_owned(),
+                    }
+                    .into());
+                }
                 let off = off.saturating_mul(sign);
                 let sum = k[i].saturating_add(off);
-                let Some((min, max)) = self.limits else {
+                let Some((min, max)) = limits else {
                     return Ok(Some(Target::Int(sum)));
                 };
                 if (min..=max).contains(&sum) {
