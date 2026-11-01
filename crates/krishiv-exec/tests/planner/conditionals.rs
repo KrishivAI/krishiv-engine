@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal128Type, Float32Type, Float64Type};
+use arrow_array::types::{Decimal64Type, Decimal128Type, Float32Type, Float64Type};
 use arrow_array::{Array, Float64Array, Int32Array, RecordBatch, StringViewArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use krishiv_common::config::Config;
@@ -158,6 +158,10 @@ fn cell(a: &dyn Array, row: usize) -> String {
             float_cell(f64::from(v))
         }
         ArrowType::Float64 => float_cell(a.as_primitive::<Float64Type>().value(row)),
+        ArrowType::Decimal64(_, scale) => decimal_cell(
+            i128::from(a.as_primitive::<Decimal64Type>().value(row)),
+            *scale,
+        ),
         ArrowType::Decimal128(..) => {
             let v = a.as_primitive::<Decimal128Type>().value(row);
             let ArrowType::Decimal128(_, scale) = a.data_type() else {

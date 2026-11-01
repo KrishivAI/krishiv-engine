@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 
+use crate::collation::Collation;
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, StructType};
 
@@ -40,6 +41,10 @@ pub enum DataType {
     Double,
     /// `STRING`: binary-safe, may hold bytes that are not valid UTF-8.
     String,
+    /// `STRING COLLATE x`: a string compared under a collation other than
+    /// `UTF8_BINARY` (which is plain [`Self::String`]). The values are the
+    /// same UTF-8 text; the collation is part of the type (ADR 0043).
+    CollatedString(Collation),
     /// `BINARY`.
     Binary,
     /// `DECIMAL(p, s)`.
@@ -260,6 +265,51 @@ impl DataType {
         Ok(Self::DayTimeInterval { start, end })
     }
 
+    /// Whether a collated string occurs in this type, at any depth.
+    #[must_use]
+    pub fn contains_collation(&self) -> bool {
+        match self {
+            Self::CollatedString(_) => true,
+            Self::Array(a) => a.element_type().contains_collation(),
+            Self::Map(m) => {
+                m.key_type().contains_collation() || m.value_type().contains_collation()
+            }
+            Self::Struct(s) => s
+                .fields()
+                .iter()
+                .any(|f| f.data_type().contains_collation()),
+            _ => false,
+        }
+    }
+
+    /// `self`, or `KRISHIV_UNSUPPORTED_FEATURE` if it holds a collated
+    /// string. The analyzer does not take collated types yet (ADR 0043,
+    /// unit 2a): a user-facing entry point that cannot honour a collation
+    /// refuses it here, so no operator compares such a column as bytes.
+    ///
+    /// # Errors
+    /// As above.
+    pub fn refuse_collations(self) -> Result<Self> {
+        if self.contains_collation() {
+            return Err(error::unsupported(format!(
+                "collated strings (\"{}\")",
+                self.sql()
+            )));
+        }
+        Ok(self)
+    }
+
+    /// `STRING COLLATE collation`: [`Self::String`] for `UTF8_BINARY`, else
+    /// [`Self::CollatedString`].
+    #[must_use]
+    pub fn collated_string(collation: Collation) -> Self {
+        if collation.is_utf8_binary() {
+            Self::String
+        } else {
+            Self::CollatedString(collation)
+        }
+    }
+
     /// `TIME(precision)`.
     ///
     /// # Errors
@@ -316,6 +366,7 @@ impl DataType {
             Self::Integer => "integer".to_owned(),
             Self::Long => "long".to_owned(),
             Self::Decimal(_)
+            | Self::CollatedString(_)
             | Self::Time { .. }
             | Self::Geometry { .. }
             | Self::Geography { .. }
@@ -329,6 +380,7 @@ impl DataType {
     fn atomic_simple_string(&self) -> String {
         match self {
             Self::Decimal(d) => format!("decimal({},{})", d.precision, d.scale),
+            Self::CollatedString(c) => format!("string collate {c}"),
             Self::Time { precision } => format!("time({precision})"),
             Self::Geometry { srid } => format!("geometry({srid})"),
             Self::Geography { srid } => format!("geography({srid})"),
@@ -401,6 +453,14 @@ impl DataType {
                 }
                 out.push('>');
             }
+            Self::CollatedString(c) => {
+                out.push_str(if sql {
+                    "STRING COLLATE "
+                } else {
+                    "string collate "
+                });
+                out.push_str(&c.to_string());
+            }
             atomic if sql => out.push_str(&atomic.atomic_simple_string().to_ascii_uppercase()),
             atomic => out.push_str(&atomic.atomic_simple_string()),
         }
@@ -417,7 +477,7 @@ impl DataType {
             Self::Long => "bigint",
             Self::Float => "float",
             Self::Double => "double",
-            Self::String => "string",
+            Self::String | Self::CollatedString(_) => "string",
             Self::Binary => "binary",
             Self::Decimal(_) => "decimal",
             Self::Date => "date",
