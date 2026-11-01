@@ -2478,7 +2478,7 @@ fn multipart_identifier(text: &str) -> Option<Vec<String>> {
             }
         } else {
             while let Some(&c) = chars.peek() {
-                if c == '.' {
+                if !(c.is_ascii_alphanumeric() || c == '_') {
                     break;
                 }
                 part.push(c);
@@ -2511,7 +2511,7 @@ mod identifier_tests {
             Some(vec!["a.b".to_owned(), "c".to_owned()])
         );
         assert_eq!(parts("`a``b`"), Some(vec!["a`b".to_owned()]));
-        for bad in ["", ".a", "a.", "a..b", "`a", "`a`b"] {
+        for bad in ["", ".a", "a.", "a..b", "`a", "`a`b", "c 1", "a-b"] {
             assert_eq!(parts(bad), None, "{bad}");
         }
     }
