@@ -2095,6 +2095,24 @@ impl Lowerer {
                     }
                     [] => return Err(unsupported("a function name", f.name.span)),
                 };
+                // With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('a.b')`
+                // is an ordinary call (the parser builds `dynamic_name` only
+                // otherwise): Spark resolves a constant string argument to the
+                // column it names.
+                if qualifier.is_empty()
+                    && !name.quoted
+                    && name.value.eq_ignore_ascii_case("identifier")
+                    && f.args.len() == 1
+                    && f.quantifier.is_none()
+                    && f.within_group.is_empty()
+                    && f.filter.is_none()
+                    && f.null_treatment.is_none()
+                    && f.over.is_none()
+                    && let ExprKind::Literal(Literal::String(text)) = &f.args[0].expr.kind
+                    && let Some(parts) = multipart_identifier(text)
+                {
+                    return Ok(self.column(parts, sp));
+                }
                 // `WITHIN GROUP (ORDER BY ...)` rides along for the analyzer:
                 // the ordered-set aggregates lower it into their arguments,
                 // any other function keeps Spark's
@@ -2184,7 +2202,7 @@ impl Lowerer {
                     && matches!(f.args[0].expr.kind, ExprKind::Keyword(_));
                 let function_name = match (unit_form, lname.as_str()) {
                     (true, "timestampadd" | "dateadd" | "date_add") => "timestampadd".to_owned(),
-                    (true, "timestampdiff" | "datediff" | "date_diff") => {
+                    (true, "timestampdiff" | "datediff" | "date_diff" | "timediff") => {
                         "timestampdiff".to_owned()
                     }
                     _ => name.value.clone(),
@@ -2441,4 +2459,65 @@ fn number(text: &str, kind: NumKind, sp: Span) -> R<IrLiteral> {
             data_type: DecimalType::try_new(precision, scale).map_err(|e| err(e, sp))?,
         },
     })
+}
+
+/// Spark's `parseMultipartIdentifier`: dot-separated parts, each bare or in
+/// backticks (a doubled backtick is one). `None` for an empty or malformed
+/// string, which stays an unresolved call.
+fn multipart_identifier(text: &str) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut chars = text.chars().peekable();
+    loop {
+        let mut part = String::new();
+        if chars.peek() == Some(&'`') {
+            chars.next();
+            loop {
+                match chars.next()? {
+                    '`' if chars.peek() == Some(&'`') => {
+                        chars.next();
+                        part.push('`');
+                    }
+                    '`' => break,
+                    c => part.push(c),
+                }
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if !(c.is_ascii_alphanumeric() || c == '_') {
+                    break;
+                }
+                part.push(c);
+                chars.next();
+            }
+            if part.is_empty() {
+                return None;
+            }
+        }
+        parts.push(part);
+        match chars.next() {
+            None => return Some(parts),
+            Some('.') => {}
+            Some(_) => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::multipart_identifier;
+
+    #[test]
+    fn multipart_identifiers_split_like_spark() {
+        let parts = |t| multipart_identifier(t);
+        assert_eq!(parts("a"), Some(vec!["a".to_owned()]));
+        assert_eq!(parts("t.c1"), Some(vec!["t".to_owned(), "c1".to_owned()]));
+        assert_eq!(
+            parts("`a.b`.c"),
+            Some(vec!["a.b".to_owned(), "c".to_owned()])
+        );
+        assert_eq!(parts("`a``b`"), Some(vec!["a`b".to_owned()]));
+        for bad in ["", ".a", "a.", "a..b", "`a", "`a`b", "c 1", "a-b"] {
+            assert_eq!(parts(bad), None, "{bad}");
+        }
+    }
 }

@@ -135,6 +135,24 @@ fn timestampadd_overflow_names_the_operation() {
 }
 
 #[test]
+fn timediff_is_timestampdiff() {
+    let s = session();
+    for (expr, want) in [
+        (
+            "timediff(HOUR, TIMESTAMP '2022-02-14 01:02:03', TIMESTAMP '2022-02-14 12:00:03')",
+            "10",
+        ),
+        (
+            "timediff(QUARTER, TIMESTAMP '2023-08-10 01:02:03', TIMESTAMP '2022-01-14 01:02:03')",
+            "-6",
+        ),
+        ("timediff(DAY, DATE '2022-02-15', DATE '2023-02-15')", "365"),
+    ] {
+        assert_eq!(one(&s, expr).as_deref(), Some(want), "{expr}");
+    }
+}
+
+#[test]
 fn timestampdiff_counts_whole_units_on_the_wall_clock() {
     let s = session();
     for (expr, want) in [
@@ -450,4 +468,36 @@ fn make_timestamp_ntz_without_ansi_gives_null_for_a_bad_field() {
         one(&s, "try_make_timestamp_ntz(2021, 2, 28, 6, 30, 45)").as_deref(),
         Some("2021-02-28 06:30:45")
     );
+}
+
+/// With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('c1')` is a
+/// column reference, qualified and backquoted forms included.
+#[test]
+fn legacy_identifier_function_names_a_column() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    for (expr, want) in [
+        ("IDENTIFIER('c1')", "1"),
+        ("IDENTIFIER('t.c1')", "1"),
+        ("IDENTIFIER('`c1`')", "1"),
+        ("IDENTIFIER('c1') + 1", "2"),
+    ] {
+        let got = column(&s, expr, "FROM VALUES(1) AS T(c1)");
+        assert_eq!(got, vec![Some(want.to_owned())], "{expr}");
+    }
+}
+
+/// A modifier on the legacy `IDENTIFIER('c1')` call is not dropped: the call
+/// stays a function call, which does not resolve.
+#[test]
+fn legacy_identifier_call_with_a_modifier_is_not_a_column() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    let r = block_on(async {
+        s.sql("SELECT IDENTIFIER('c1') FILTER (WHERE missing) FROM VALUES(1) AS T(c1)")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(r.is_err(), "{r:?}");
 }
