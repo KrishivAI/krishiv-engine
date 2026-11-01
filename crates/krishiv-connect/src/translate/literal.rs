@@ -111,8 +111,12 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
                 end,
             }
         }
-        LiteralType::CalendarInterval(_)
-        | LiteralType::Array(_)
+        LiteralType::CalendarInterval(i) => Literal::CalendarInterval {
+            months: i.months,
+            days: i.days,
+            micros: i.microseconds,
+        },
+        LiteralType::Array(_)
         | LiteralType::Map(_)
         | LiteralType::Struct(_)
         | LiteralType::SpecializedArray(_)

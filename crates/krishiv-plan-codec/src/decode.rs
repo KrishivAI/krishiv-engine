@@ -1242,6 +1242,9 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
             .map_err(|_| corrupt("an invalid geometry type"))?,
         Geography => DataType::geography(Srid::from_i32(t.srid))
             .map_err(|_| corrupt("an invalid geography type"))?,
+        YearMonthInterval => interval_year_month(t)?,
+        DayTimeInterval => interval_day_time(t)?,
+        CalendarInterval => DataType::CalendarInterval,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1249,13 +1252,33 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         DataType::Geometry { .. } | DataType::Geography { .. } => (false, false, true),
         _ => (false, false, false),
     };
-    if (!precision && t.precision != 0) || (!scale && t.scale != 0) || (!srid && t.srid != 0) {
+    let (year_month, day_time) = match data_type {
+        DataType::YearMonthInterval { .. } => (true, false),
+        DataType::DayTimeInterval { .. } => (false, true),
+        _ => (false, false),
+    };
+    if (!precision && t.precision != 0)
+        || (!scale && t.scale != 0)
+        || (!srid && t.srid != 0)
+        || (!year_month && (t.ym_start != 0 || t.ym_end != 0))
+        || (!day_time && (t.dt_start != 0 || t.dt_end != 0))
+    {
         return Err(corrupt("a type parameter on a type that has none"));
     }
     if !data_type.is_nested() && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
     Ok(data_type)
+}
+
+fn interval_year_month(t: &pb::DataType) -> Result<DataType> {
+    DataType::year_month_interval(year_month_field(t.ym_start)?, year_month_field(t.ym_end)?)
+        .map_err(|_| corrupt("an invalid interval type"))
+}
+
+fn interval_day_time(t: &pb::DataType) -> Result<DataType> {
+    DataType::day_time_interval(day_time_field(t.dt_start)?, day_time_field(t.dt_end)?)
+        .map_err(|_| corrupt("an invalid interval type"))
 }
 
 /// A nested type from its Spark JSON (depth-bounded by `from_json`).
@@ -1318,6 +1341,11 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
             micros: v.micros,
             start: day_time_field(v.start)?,
             end: day_time_field(v.end)?,
+        },
+        Kind::Calendar(v) => Literal::CalendarInterval {
+            months: v.months,
+            days: v.days,
+            micros: v.micros,
         },
     })
 }

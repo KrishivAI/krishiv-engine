@@ -1623,7 +1623,60 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    let ym = |months, start, end| lit(Literal::YearMonthInterval { months, start, end });
+    let dt = |micros, start, end| lit(Literal::DayTimeInterval { micros, start, end });
+    let interval_literals = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: [
+            ym(14, YearMonthField::Year, YearMonthField::Month),
+            dt(5_000_000, DayTimeField::Hour, DayTimeField::Second),
+            lit(Literal::CalendarInterval {
+                months: 14,
+                days: 3,
+                micros: 4,
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| ProjectItemPlan::Expr {
+            name: format!("i{i}"),
+            expr,
+        })
+        .collect(),
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    let mut interval_columns = file_scan();
+    interval_columns.scan.output = vec![
+        column(
+            3,
+            "ym",
+            DataType::YearMonthInterval {
+                start: YearMonthField::Month,
+                end: YearMonthField::Month,
+            },
+            true,
+        ),
+        column(4, "dt", DataType::DEFAULT_DAY_TIME_INTERVAL, true),
+        column(5, "cal", DataType::CalendarInterval, true),
+    ];
+    let nested_intervals = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "intervals".to_owned(),
+            expr: lit(Literal::Null(Some(DataType::Array(
+                krishiv_types::ArrayType::new(DataType::DEFAULT_YEAR_MONTH_INTERVAL, true).into(),
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
     vec![
+        ("interval_literals", interval_literals),
+        ("interval_scan", PhysNode::Scan(interval_columns)),
+        ("interval_nested", nested_intervals),
         ("time_nested", nested_times),
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),

@@ -481,7 +481,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_percentiles" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
-            n if n.starts_with("time_") || n.starts_with("geo_") => 6,
+            n if n.starts_with("time_") || n.starts_with("geo_") || n.starts_with("interval_") => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "hash_join_full_outer"

@@ -1148,6 +1148,23 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Time { precision } => (Kind::Time, u32::from(*precision), 0, 0),
         DataType::Geometry { srid } => (Kind::Geometry, 0, 0, srid.to_i32()),
         DataType::Geography { srid } => (Kind::Geography, 0, 0, srid.to_i32()),
+        DataType::YearMonthInterval { start, end } => {
+            return Ok(pb::DataType {
+                kind: Kind::YearMonthInterval as i32,
+                ym_start: year_month_field(*start) as i32,
+                ym_end: year_month_field(*end) as i32,
+                ..pb::DataType::default()
+            });
+        }
+        DataType::DayTimeInterval { start, end } => {
+            return Ok(pb::DataType {
+                kind: Kind::DayTimeInterval as i32,
+                dt_start: day_time_field(*start) as i32,
+                dt_end: day_time_field(*end) as i32,
+                ..pb::DataType::default()
+            });
+        }
+        DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
         _ => {
             return Err(CodecError::Unsupported(
                 "a Spark type this version does not know".to_owned(),
@@ -1159,7 +1176,7 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         precision,
         scale,
         srid,
-        json: String::new(),
+        ..pb::DataType::default()
     })
 }
 
@@ -1199,6 +1216,15 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
             micros: *micros,
             start: day_time_field(*start) as i32,
             end: day_time_field(*end) as i32,
+        }),
+        Literal::CalendarInterval {
+            months,
+            days,
+            micros,
+        } => Kind::Calendar(pb::CalendarLiteral {
+            months: *months,
+            days: *days,
+            micros: *micros,
         }),
         _ => {
             return Err(CodecError::Unsupported(

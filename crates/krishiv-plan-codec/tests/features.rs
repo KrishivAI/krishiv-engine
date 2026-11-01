@@ -1130,6 +1130,116 @@ fn type_parameters_are_checked_on_decode() {
     corrupt(&srid_on_int, "a type parameter on a type that has none");
 }
 
+#[test]
+fn interval_types_and_literals_need_their_feature() {
+    use krishiv_plan::{Expr, ExprNode, Literal, YearMonthField};
+    use krishiv_types::DataType;
+    assert_eq!(message("interval_literals").features, ["interval_types"]);
+    assert_eq!(message("interval_scan").features, ["interval_types"]);
+    assert_eq!(
+        message("interval_nested").features,
+        ["interval_types", "nested_types"]
+    );
+    for t in [
+        DataType::DEFAULT_YEAR_MONTH_INTERVAL,
+        DataType::DEFAULT_DAY_TIME_INTERVAL,
+        DataType::CalendarInterval,
+    ] {
+        assert_eq!(
+            feature_of(Construct::Type(&t)),
+            Some(Feature::IntervalTypes)
+        );
+        let arrow = t.to_arrow();
+        assert_eq!(
+            feature_of(Construct::ArrowType(&arrow)),
+            Some(Feature::IntervalTypes)
+        );
+    }
+    // The bare literal predates the feature (`base/expressions` holds one);
+    // as an argument it needs it, since nothing else then names the type.
+    let literal = std::sync::Arc::new(Expr::new(ExprNode::Literal(Literal::YearMonthInterval {
+        months: 1,
+        start: YearMonthField::Month,
+        end: YearMonthField::Month,
+    })));
+    assert_eq!(feature_of(Construct::Expr(&literal)), None);
+    let cast = Expr::new(ExprNode::Cast {
+        expr: std::sync::Arc::clone(&literal),
+        to: DataType::String,
+        mode: krishiv_plan::CastMode::Ansi,
+    });
+    assert_eq!(
+        feature_of(Construct::Expr(&cast)),
+        Some(Feature::IntervalTypes)
+    );
+    assert_eq!(Feature::IntervalTypes.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::IntervalTypes.legacy_level(), 6);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::IntervalTypes),
+    );
+    for case in ["interval_literals", "interval_scan", "interval_nested"] {
+        let bytes = message(case).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["interval_types".to_owned()]
+            },
+            "{case}"
+        );
+        assert!(decode(&bytes).is_ok(), "{case}");
+    }
+}
+
+/// An interval type's fields are external input: a missing field, fields
+/// that do not increase and fields on another type are corrupt.
+#[test]
+fn a_decoded_interval_type_is_checked() {
+    use pb::data_type::Kind;
+    let edit = |change: &dyn Fn(&mut pb::DataType)| {
+        let mut m = message("interval_scan");
+        let Some(pb::node::Kind::Scan(scan)) = m.nodes[0].kind.as_mut() else {
+            panic!("not a scan");
+        };
+        change(scan.output[0].data_type.as_mut().unwrap());
+        m
+    };
+    let ym = |start: pb::YearMonthField, end: pb::YearMonthField| {
+        edit(&move |t: &mut pb::DataType| {
+            t.kind = Kind::YearMonthInterval as i32;
+            t.ym_start = start as i32;
+            t.ym_end = end as i32;
+        })
+    };
+    assert!(
+        decode(&ym(pb::YearMonthField::Year, pb::YearMonthField::Month).encode_to_vec()).is_ok()
+    );
+    corrupt(
+        &ym(pb::YearMonthField::Month, pb::YearMonthField::Year),
+        "an invalid interval type",
+    );
+    let dt = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::DayTimeInterval as i32;
+        t.ym_start = 0;
+        t.ym_end = 0;
+        t.dt_start = pb::DayTimeField::Second as i32;
+        t.dt_end = pb::DayTimeField::Hour as i32;
+    });
+    corrupt(&dt, "an invalid interval type");
+    let on_calendar = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::CalendarInterval as i32;
+        t.dt_start = pb::DayTimeField::Hour as i32;
+    });
+    corrupt(&on_calendar, "a type parameter on a type that has none");
+    let on_int = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::Integer as i32;
+        t.ym_start = pb::YearMonthField::Month as i32;
+    });
+    corrupt(&on_int, "a type parameter on a type that has none");
+}
+
 /// A time inside an array is a time plan: the header names `time_type`
 /// (beside `nested_types`), so a reader without it refuses the plan as
 /// unsupported rather than misreading the nested type as corrupt.

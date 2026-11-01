@@ -361,6 +361,19 @@ fn timestamp_literals_are_named_as_spark_sql() {
     );
 }
 
+/// Spark Connect can send a calendar literal, which the analyzer does not type
+/// yet: it says so, rather than resolving a value of no type.
+#[test]
+fn a_calendar_interval_literal_is_refused_until_it_has_a_type() {
+    let calendar = Expr::from(Literal::CalendarInterval {
+        months: 14,
+        days: 3,
+        micros: 4,
+    });
+    let r = run(LogicalPlan::table(["t"]).project(vec![calendar]), &ctx());
+    assert_eq!(class(&r), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
 /// The select list of the generated-names statement of the corpus.
 fn names_query() -> Vec<Expr> {
     use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Remainder, Subtract};

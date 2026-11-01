@@ -559,7 +559,9 @@ pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
         Literal::Date(_) => DataType::Date,
         Literal::Timestamp(_) => DataType::Timestamp,
         Literal::TimestampNtz(_) => DataType::TimestampNtz,
-        Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. } => return None,
+        Literal::YearMonthInterval { .. }
+        | Literal::DayTimeInterval { .. }
+        | Literal::CalendarInterval { .. } => return None,
     })
 }
 
@@ -1467,7 +1469,9 @@ impl Resolver<'_> {
         let mut b = match &e.node {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
             ExprNode::Literal(
-                Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. },
+                Literal::YearMonthInterval { .. }
+                | Literal::DayTimeInterval { .. }
+                | Literal::CalendarInterval { .. },
             ) => return Err(unsupported("interval values", e.origin)),
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
