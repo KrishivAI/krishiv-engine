@@ -795,7 +795,8 @@ fn bytes(
         passes(masks[k].as_ref(), i) && (!skip_nulls || sources[k].is_valid(i))
     };
     let picked: Vec<Option<u32>> = match function {
-        F::First { ignore_nulls } => {
+        // `any_value` is `first` (the same pick, as `replaces` reads it).
+        F::First { ignore_nulls } | F::AnyValue { ignore_nulls } => {
             // The first row at or after each row that counts.
             let mut next = vec![u32::MAX; n + 1];
             for j in (0..n).rev() {
