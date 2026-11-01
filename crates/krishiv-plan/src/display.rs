@@ -977,12 +977,12 @@ fn call<'a>(
     match (op, args.len()) {
         // The key of `aes_encrypt`/`aes_decrypt` never reaches a plan, an
         // error message or a log (ADR 0042).
-        _ if crate::analyzer::is_aes_function(name) && args.len() >= 2 && !distinct => {
-            out.extend([
-                Piece::Owned(format!("{name}(")),
-                arg(0),
-                Piece::Str(", ***"),
-            ]);
+        _ if crate::analyzer::is_aes_function(name) && args.len() >= 2 => {
+            out.push(Piece::Owned(format!("{name}(")));
+            if distinct {
+                out.push(Piece::Str("DISTINCT "));
+            }
+            out.extend([arg(0), Piece::Str(", ***")]);
             for a in &args[2..] {
                 out.extend([Piece::Str(", "), Piece::Expr(a)]);
             }

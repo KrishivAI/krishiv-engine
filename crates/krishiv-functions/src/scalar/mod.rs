@@ -526,6 +526,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         "json_array_length",
         "json_object_keys",
         "get_json_object",
+        "factorial",
     ]
     .contains(&lower.as_str())
     {
