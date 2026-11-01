@@ -352,7 +352,7 @@ impl Session {
                 pins: Vec::new(),
             },
         );
-        self.state.cache.invalidate_table(&key);
+        self.state.cache.invalidate_table(&v.name.value);
         self.empty_frame().await
     }
 

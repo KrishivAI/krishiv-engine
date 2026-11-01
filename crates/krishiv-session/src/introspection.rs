@@ -531,7 +531,15 @@ impl Session {
             } => {
                 let name = self.table_name(table, &env)?;
                 let columns = self.columns_of_relation(&name).await?;
-                let temp = self.temp_entry_of(&name, &env);
+                let temp = self.temp_entry_of(&name, &env)
+                    || (!name.bare
+                        && name
+                            .namespace
+                            .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+                        && self.state.catalog.exists(
+                            &crate::catalog::global_key(&name.name),
+                            env.analysis.conf.case_sensitive,
+                        ));
                 let described = match partition {
                     Some(spec) => Some(
                         self.described_partition(&name, temp, spec, original)

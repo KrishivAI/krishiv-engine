@@ -268,3 +268,38 @@ fn global_views_qualify_columns_and_refuse_cycles() {
         "RECURSIVE_VIEW"
     );
 }
+
+/// `global_temp` is reserved, a global view describes like a table, and dropping a cached global view
+/// evicts what was cached from it.
+#[test]
+fn global_temp_is_reserved_and_global_views_describe_and_uncache() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    assert_eq!(
+        class(&s, "CREATE DATABASE global_temp"),
+        "SCHEMA_ALREADY_EXISTS"
+    );
+    run(&s, "CREATE DATABASE IF NOT EXISTS global_temp");
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 1 AS x");
+    assert_eq!(
+        rows(&s, "DESCRIBE global_temp.gv")[0][..2],
+        ["x".to_owned(), "int".to_owned()]
+    );
+    run(&s, "CACHE TABLE c AS SELECT x FROM global_temp.gv");
+    run(&s, "DROP VIEW global_temp.gv");
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 2 AS x");
+    assert_eq!(
+        rows(&s, "SELECT x FROM global_temp.gv"),
+        vec![vec!["2".to_owned()]]
+    );
+}
+
+/// Statement introspection reads the statement the session would run, after `${name}` substitution.
+#[test]
+fn statement_info_substitutes_variables() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET value = 5");
+    let info = block_on(s.statement_info("SELECT ${value}"));
+    assert!(info.is_ok(), "{info:?}");
+}

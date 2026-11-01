@@ -254,6 +254,16 @@ impl Session {
         let env = self.query_env();
         let name = self.namespace_name(&n.name, &env)?;
         check_new_name(&name)?;
+        // `global_temp` is the reserved home of global temporary views: it always exists.
+        if name.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+            if n.if_not_exists {
+                return self.empty_frame().await;
+            }
+            return Err(SchemaAlreadyExists {
+                schema_name: format!("`{name}`"),
+            }
+            .into());
+        }
         let meta = NamespaceMeta {
             comment: n.comment.clone(),
             location: n.location.clone(),
@@ -596,7 +606,7 @@ impl Session {
         let cs = self.query_env().analysis.conf.case_sensitive;
         if self.state.catalog.exists(&key, cs) {
             self.state.catalog.drop_table(&key);
-            self.state.cache.invalidate_table(&key);
+            self.state.cache.invalidate_table(name);
             return Some(Ok(()));
         }
         Some(if if_exists {
