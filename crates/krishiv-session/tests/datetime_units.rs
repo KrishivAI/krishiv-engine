@@ -501,3 +501,32 @@ fn legacy_identifier_call_with_a_modifier_is_not_a_column() {
     });
     assert!(r.is_err(), "{r:?}");
 }
+
+/// A SQL function is refused in `ORDER BY`, `LIMIT` and a generator
+/// (`UNSUPPORTED_SQL_UDF_USAGE`), as Spark's `ResolveSQLFunctions` does.
+#[test]
+fn a_sql_function_is_refused_in_sort_limit_and_generate() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION udf_id(x INT) RETURNS INT RETURN x")).unwrap();
+    for (sql, node) in [
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) ORDER BY udf_id(c1)",
+            "Sort",
+        ),
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) LIMIT udf_id(1)",
+            "GlobalLimit",
+        ),
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) LATERAL VIEW EXPLODE(ARRAY(udf_id(c1))) AS e",
+            "Generate",
+        ),
+    ] {
+        let r = block_on(async { s.sql(sql).await?.collect().await });
+        let e = format!("{:?}", r.expect_err(sql));
+        assert!(
+            e.contains("UnsupportedSqlUdfUsage") && e.contains(node),
+            "{sql}: {e}"
+        );
+    }
+}
