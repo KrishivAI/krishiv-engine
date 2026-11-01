@@ -371,6 +371,9 @@ impl Session {
             .first()
             .cloned()
             .unwrap_or_else(|| self.state.catalog.current_namespace());
+        if v.temporary && !v.global && v.using.is_some() && v.query.is_none() {
+            return self.create_datasource_temp_view(v, &env, original).await;
+        }
         if v.temporary || v.global {
             return Err(unsupported("qualified and datasource temporary views"));
         }
@@ -589,6 +592,100 @@ impl Session {
             span: v.span,
         };
         self.create_temp_view(&view, true).await
+    }
+
+    /// `CREATE TEMPORARY VIEW name (col type, ...) USING format [OPTIONS (...)]`: a read of the
+    /// format's files (the `path` option), typed by the declared columns. Nothing is read until a
+    /// query uses the view.
+    async fn create_datasource_temp_view(
+        &self,
+        v: &CreatePermanentView,
+        env: &QueryEnv,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let parts = crate::access::ddl_parts(&v.name, env)?;
+        let [name] = parts.as_slice() else {
+            return Err(unsupported("qualified datasource temporary views"));
+        };
+        if crate::catalog::is_reserved_view_name(name) {
+            return Err(crate::catalog::reserved_temp_view_name(name));
+        }
+        if v.or_replace && v.if_not_exists {
+            return Err(krishiv_common::error::CreateViewWithIfNotExistsAndReplace {
+                view_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        let exists = self
+            .state
+            .catalog
+            .exists(name, env.analysis.conf.case_sensitive);
+        if exists && v.if_not_exists {
+            return self.empty_frame().await;
+        }
+        if exists && !v.or_replace {
+            return Err(krishiv_common::error::TempTableOrViewAlreadyExists {
+                relation_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        let columns = v
+            .columns
+            .iter()
+            .map(|c| {
+                let (ColumnName::Ident(ident), Some(spec)) = (&c.name, &c.data_type) else {
+                    return Err(unsupported(
+                        "datasource views without declared column types",
+                    ));
+                };
+                Ok(TableColumn {
+                    name: ident.value.clone(),
+                    data_type: spec.to_data_type()?,
+                    nullable: !c.not_null,
+                })
+            })
+            .collect::<Result<Vec<_>, KrishivError>>()?;
+        if columns.is_empty() {
+            return Err(unsupported(
+                "datasource views without declared column types",
+            ));
+        }
+        let mut options = options_of(&v.options, original);
+        let paths = options
+            .remove("path")
+            .map(|p| vec![OptionValue::from_user("path", p)])
+            .unwrap_or_default();
+        let provider = v
+            .using
+            .as_ref()
+            .map(|u| {
+                u.parts
+                    .iter()
+                    .map(|p| p.value.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .unwrap_or_default();
+        let source = krishiv_plan::ReadSource::Files {
+            format: provider,
+            paths,
+            options: options
+                .into_iter()
+                .map(|(k, val)| {
+                    let val = OptionValue::from_user(&k, val);
+                    (k, val)
+                })
+                .collect(),
+        };
+        self.state.catalog.put(
+            name,
+            crate::catalog::TempTable::Files {
+                source,
+                columns,
+                known: true,
+            },
+        );
+        self.empty_frame().await
     }
 
     /// `DROP VIEW global_temp.name`: the global temporary view, when the name is one.

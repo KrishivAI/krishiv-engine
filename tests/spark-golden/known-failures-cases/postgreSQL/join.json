@@ -1,10 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      120,
-      122,
-      126
-    ],
     "query-features": [
       141,
       142,
@@ -25,11 +20,6 @@
       184,
       185,
       186
-    ],
-    "sql-commands": [
-      119,
-      124,
-      125
     ]
   },
   "file": "postgreSQL/join",
