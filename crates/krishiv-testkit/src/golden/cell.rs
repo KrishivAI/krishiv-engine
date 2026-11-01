@@ -259,6 +259,7 @@ impl CellFormat {
             Cell::Str(s) => format!("\"{s}\""),
             Cell::Binary(b) => binary_text(b, self.binary),
             Cell::Date(d) => date(i64::from(*d)),
+            Cell::Time(ns) => krishiv_kernels::cast::format_time(*ns),
             Cell::Timestamp(us) => {
                 let secs = us.div_euclid(1_000_000);
                 let offset = zone_offset(&self.zone, secs);
@@ -314,6 +315,8 @@ pub enum Cell {
     Binary(Vec<u8>),
     /// DATE as days since the epoch.
     Date(i32),
+    /// TIME as nanoseconds since midnight.
+    Time(i64),
     /// TIMESTAMP as microseconds since the epoch (an instant; shown in the session time zone).
     Timestamp(i64),
     /// TIMESTAMP_NTZ as microseconds of local time since the epoch.
