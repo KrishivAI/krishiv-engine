@@ -177,6 +177,8 @@ pub(super) fn when(cond: Expr, then: Expr, otherwise: Expr) -> Expr {
 
 pub(super) fn star() -> Expr {
     Expr::new(ExprNode::Star(Star {
+        replace: Vec::new(),
+        position: None,
         qualifier: Vec::new(),
         except: Vec::new(),
         plan_id: None,

@@ -508,6 +508,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
         self.dig.extend_from_slice(&digest.to_le_bytes());
     }
 
+    /// A star's `|> SET` assignments (out of line: `expr_fields` recurses,
+    /// and its frame must stay small).
+    #[inline(never)]
+    fn replacements(&mut self, replace: &'a [(String, Arc<Expr>)]) {
+        for (name, expr) in replace {
+            self.str(name);
+            self.expr(expr);
+        }
+    }
+
     /// A child expression, as a reference to its record.
     fn expr(&mut self, e: &'a Expr) {
         let key = self.keys.expr(e, self.op);
@@ -1101,6 +1111,8 @@ impl<'k, 'a> Encoder<'k, 'a> {
             ExprNode::Star(Star {
                 qualifier,
                 except,
+                replace,
+                position,
                 plan_id,
             }) => {
                 self.u8(3);
@@ -1108,6 +1120,15 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.len(except.len());
                 except.iter().for_each(|path| self.strs(path));
                 self.plan_ref(*plan_id);
+                // Only a replacing star writes more, so the encoding of
+                // every other plan is unchanged.
+                if !replace.is_empty() {
+                    self.len(replace.len());
+                    self.replacements(replace);
+                }
+                if let Some(n) = position {
+                    self.len(*n);
+                }
             }
             ExprNode::Function(FunctionCall {
                 name,

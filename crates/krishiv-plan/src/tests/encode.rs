@@ -532,3 +532,26 @@ fn qualifier_and_arg_names_enter_the_key() {
         assert_ne!(l.structural_hash(), r.structural_hash());
     }
 }
+
+/// A `|> SET` value is part of the star's identity.
+#[test]
+fn star_replacement_values_enter_the_key() {
+    let with = |v: i32| {
+        Plan::try_new(
+            LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Star(crate::Star {
+                qualifier: Vec::new(),
+                except: Vec::new(),
+                replace: vec![(
+                    "x".to_owned(),
+                    Arc::new(Expr::literal(crate::Literal::Integer(v))),
+                )],
+                position: None,
+                plan_id: None,
+            }))]),
+        )
+        .unwrap()
+    };
+    assert!(with(1).structurally_eq(&with(1)));
+    assert!(!with(1).structurally_eq(&with(2)));
+    assert_ne!(with(1).structural_hash(), with(2).structural_hash());
+}

@@ -403,10 +403,10 @@ impl Teardown {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
-            | ExprNode::Star(_)
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
+            ExprNode::Star(s) => self.exprs.extend(s.replace.into_iter().map(|(_, e)| e)),
             ExprNode::Function(FunctionCall {
                 args,
                 filter,
