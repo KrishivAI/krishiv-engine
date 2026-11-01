@@ -882,7 +882,12 @@ impl Prefix {
                     k += 1;
                 }
             }
-            parts.push(fold_batch(env, j, &mut self.fold, &b.slice(r, m), &snap)?);
+            let kept = fold_batch(env, j, &mut self.fold, &b.slice(r, m), &snap)?;
+            // A long frame end reads many batches for one output batch: only
+            // those holding a wanted end stay, as many as the output has rows.
+            if k > 0 {
+                parts.push(kept);
+            }
             self.folded = to;
         }
         if locs.len() != n {
@@ -907,9 +912,9 @@ impl Held {
         let a = aggregate_of(f)?;
         let frames = self.edges.frames(c)?;
         let live = || frames.iter().filter(|(s, e)| s < e);
-        // With no frame to read, one row gives the evaluation its input.
-        let lo = live().map(|f| f.0).min().unwrap_or(c.at);
-        let hi = live().map(|f| f.1).max().unwrap_or(c.at + 1);
+        let (Some(lo), Some(hi)) = (live().map(|f| f.0).min(), live().map(|f| f.1).max()) else {
+            return self.no_frames(env, j, c, &frames, a, file, consumer, query);
+        };
         // Results per frame, inputs per row held.
         let eval = frames::cost(a, f, (hi - lo).max(frames.len()))?;
         if self.hold(lo, hi, eval)? {
@@ -930,5 +935,38 @@ impl Held {
         self.release();
         c.counters.file_folds.fetch_add(1, Ordering::Relaxed);
         fold_from_file(env, j, &frames, file, consumer, query)
+    }
+
+    /// A batch whose frames are all empty: nothing held moves, because later
+    /// frames may still read those rows (`ROWS BETWEEN 1000 PRECEDING AND 900
+    /// PRECEDING` reads the first rows only after 900 empty frames). A row of
+    /// the current batch gives the evaluation its input.
+    #[expect(clippy::too_many_arguments, reason = "`column`'s context, passed on")]
+    fn no_frames(
+        &mut self,
+        env: &Env,
+        j: usize,
+        c: &Current<'_>,
+        frames: &[(usize, usize)],
+        a: &AggregateExpr,
+        file: &SpillFile,
+        consumer: &Arc<ConsumerHandle>,
+        query: &QueryContext,
+    ) -> Result<ArrayRef> {
+        let f = &env.plan.functions[j];
+        let eval = frames::cost(a, f, frames.len().max(1))?;
+        if self.charge.try_grow(eval).is_err() {
+            return fold_from_file(env, j, frames, file, consumer, query);
+        }
+        let row = Slice {
+            batch: c.batch,
+            offset: 0,
+            len: 1,
+            part_start: &[],
+            peer_start: &[],
+        };
+        let out = frames::aggregate(a, f, &[row], &vec![(0, 0); frames.len()], env.ansi);
+        self.charge.shrink(eval);
+        out
     }
 }

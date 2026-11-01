@@ -2526,6 +2526,8 @@ fn disk_frames() -> Vec<WindowFrame> {
         between(Rows, Offset(-1), CurrentRow),
         between(Rows, Offset(2), Offset(1)),
         between(Rows, Offset(40), Offset(60)),
+        // Whole batches of empty frames come before the first row a frame reads.
+        between(Rows, Offset(-1000), Offset(-900)),
         between(Rows, CurrentRow, UnboundedFollowing),
         between(Rows, Offset(-3), UnboundedFollowing),
         between(Rows, UnboundedPreceding, Offset(-1)),
@@ -2856,6 +2858,73 @@ async fn float_and_decimal_keys_and_filters_on_disk_match_memory() {
             .await
             .unwrap();
         assert_eq!(concat(&got), want, "{frame:?}");
+        assert!(
+            op.counters
+                .external
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 1,
+            "{frame:?}"
+        );
+        drop((got, ctx));
+        assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    }
+}
+
+/// A row `FILTER` drops adds nothing, so it can't overflow an ANSI `sum`,
+/// from disk as in memory. Frames from the partition's start fold (`Prefix`)
+/// and frames that don't fit fold from the file.
+#[tokio::test]
+async fn rows_a_filter_drops_do_not_overflow_on_disk() {
+    use FrameBound::{Offset, UnboundedPreceding};
+    use arrow_array::BooleanArray;
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Int64, true),
+        Field::new("b", DataType::Boolean, true),
+    ]));
+    let n = 3_000_i64;
+    let ids: Vec<i64> = (0..n).collect();
+    let input: Vec<Batch> = ids
+        .chunks(250)
+        .map(|c| {
+            let k = Int64Array::from_iter_values(c.iter().copied());
+            let v = Int64Array::from_iter_values(c.iter().map(|_| i64::MAX));
+            let b = BooleanArray::from_iter(c.iter().map(|_| Some(false)));
+            let columns: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v), Arc::new(b)];
+            Batch::new(RecordBatch::try_new(Arc::clone(&schema), columns).unwrap())
+        })
+        .collect();
+    for frame in [
+        between(FrameUnits::Rows, UnboundedPreceding, Offset(-1)),
+        between(FrameUnits::Rows, Offset(-2), Offset(3)),
+    ] {
+        let window = WindowPlan {
+            partition_by: Vec::new(),
+            order_by: vec![SortKey::asc(0)],
+            functions: vec![WindowFunctionPlan {
+                function: agg(AggregateFunction::Sum, Some(1)),
+                frame,
+                filter: Some(2),
+                name: "w".to_owned(),
+            }],
+        };
+        let (_manager, scope) = spill_scope();
+        let op = Window::new(Arc::clone(&schema), window, true, Some(scope)).unwrap();
+        let limit = 1 << 30;
+        let (root, ctx) = task(limit);
+        let spills = Spills {
+            every: 1,
+            slack: Some(256 << 10),
+        };
+        let got = drive_spilling(&op, &ctx, limit, &root, &input, spills)
+            .await
+            .unwrap();
+        let rows: usize = got.iter().map(Batch::num_rows).sum();
+        assert_eq!(rows, 3_000, "{frame:?}");
+        for b in &got {
+            let w = b.data().columns().last().unwrap();
+            assert_eq!(w.null_count(), b.num_rows(), "{frame:?}");
+        }
         assert!(
             op.counters
                 .external

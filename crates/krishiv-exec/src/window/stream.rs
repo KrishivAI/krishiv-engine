@@ -47,8 +47,8 @@ use crate::operators::KeyEncoder;
 /// An aggregate's state over a frame that grows row by row.
 pub(super) enum Fold {
     /// Through the aggregate's [`Accumulator`]: group 0 holds the state,
-    /// group 1 takes rows the filter drops, groups from 2 on take
-    /// snapshots. An exact percentile's value map grows with the rows:
+    /// group 1 takes rows the filter drops (with NULL arguments, so they add
+    /// nothing and can't overflow), groups from 2 on take snapshots. An exact percentile's value map grows with the rows:
     /// `charge` covers it, refusing rows past the memory left.
     Rows {
         acc: Box<Accumulator>,
@@ -149,9 +149,10 @@ impl Fold {
                 }
                 acc.resize(next as usize);
                 if rows > 0 {
+                    let kept = without_dropped(args, &groups)?;
                     acc.update_running(
                         &groups,
-                        args,
+                        kept.as_deref().unwrap_or(args),
                         &Running {
                             parts: &parts,
                             snapshots: &slots,
@@ -298,6 +299,19 @@ pub(super) fn whole_batch(b: &RecordBatch) -> Slice<'_> {
         part_start: &[],
         peer_start: &[],
     }
+}
+
+/// `args` with the rows in group 1 (those the filter drops) NULL, or `None`
+/// when there are none.
+fn without_dropped(args: &[ArrayRef], groups: &[u32]) -> Result<Option<Vec<ArrayRef>>> {
+    if !groups.contains(&1) {
+        return Ok(None);
+    }
+    let dropped = BooleanArray::from_iter(groups.iter().map(|&g| Some(g == 1)));
+    args.iter()
+        .map(|a| arrow_select::nullif::nullif(a, &dropped).map_err(|e| internal(e.to_string())))
+        .collect::<Result<_>>()
+        .map(Some)
 }
 
 /// Folds `b`'s rows into `fold` (the aggregate of function `j`), keeping
