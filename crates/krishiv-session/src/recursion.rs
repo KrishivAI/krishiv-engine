@@ -111,9 +111,6 @@ fn pushed_limit(root: &Arc<LogicalPlan>) -> Option<(u32, usize)> {
                 p = input;
             }
             PlanNode::CteRef(r) => {
-                if count_refs(root, &r.name) != 1 {
-                    return None;
-                }
                 let def = defs
                     .iter()
                     .rev()
@@ -127,6 +124,9 @@ fn pushed_limit(root: &Arc<LogicalPlan>) -> Option<(u32, usize)> {
                 let PlanNode::UnionLoop { id, .. } = &d.node else {
                     return None;
                 };
+                if count_refs(root, &r.name, *id) != 1 {
+                    return None;
+                }
                 return Some((*id, limit?));
             }
             _ => return None,
@@ -135,8 +135,8 @@ fn pushed_limit(root: &Arc<LogicalPlan>) -> Option<(u32, usize)> {
 }
 
 /// How many reads of the CTE `name` the plan holds (subqueries included).
-fn count_refs(root: &Arc<LogicalPlan>, name: &str) -> usize {
-    fn plan(p: &Arc<LogicalPlan>, name: &str, seen: &mut HashSet<usize>) -> usize {
+fn count_refs(root: &Arc<LogicalPlan>, name: &str, own: u32) -> usize {
+    fn plan(p: &Arc<LogicalPlan>, name: &str, own: u32, seen: &mut HashSet<usize>) -> usize {
         // A shared read (a reference reached again through a `Shift` in a
         // subquery) counts every time it is reached.
         let read = usize::from(
@@ -147,21 +147,21 @@ fn count_refs(root: &Arc<LogicalPlan>, name: &str) -> usize {
         }
         let mut n = read;
         // The loop's own terms read the name too: not outside readers.
-        if !matches!(p.node, PlanNode::UnionLoop { .. }) {
-            p.for_each_child(&mut |c| n += plan(c, name, seen));
+        if !matches!(&p.node, PlanNode::UnionLoop { id, .. } if *id == own) {
+            p.for_each_child(&mut |c| n += plan(c, name, own, seen));
         }
-        p.for_each_expr(&mut |e| n += expr(e, name, seen));
+        p.for_each_expr(&mut |e| n += expr(e, name, own, seen));
         n
     }
-    fn expr(e: &Arc<krishiv_plan::Expr>, name: &str, seen: &mut HashSet<usize>) -> usize {
+    fn expr(e: &Arc<krishiv_plan::Expr>, name: &str, own: u32, seen: &mut HashSet<usize>) -> usize {
         let mut n = match &e.node {
-            krishiv_plan::ExprNode::Subquery { plan: p, .. } => plan(p, name, seen),
+            krishiv_plan::ExprNode::Subquery { plan: p, .. } => plan(p, name, own, seen),
             _ => 0,
         };
-        e.for_each_child(&mut |c| n += expr(c, name, seen));
+        e.for_each_child(&mut |c| n += expr(c, name, own, seen));
         n
     }
-    plan(root, name, &mut HashSet::new())
+    plan(root, name, own, &mut HashSet::new())
 }
 
 impl Session {
@@ -249,9 +249,11 @@ impl Session {
                 .collect::<Vec<_>>(),
         ));
         let level_limit = max_level.unwrap_or(LEVEL_LIMIT);
-        let hidden = |tables: &mut u32| {
-            *tables += 1;
-            format!("{CACHE_PREFIX}loop{tables}")
+        // Process-wide: concurrent actions on one analysis share its catalog.
+        let hidden = |_: &mut u32| {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!("{CACHE_PREFIX}loop{n}")
         };
         let round_name = hidden(tables);
         let mut last = self

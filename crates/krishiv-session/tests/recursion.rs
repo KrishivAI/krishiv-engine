@@ -126,6 +126,18 @@ fn an_outer_limit_ends_an_unbounded_recursion() {
 }
 
 #[test]
+fn a_limit_is_not_pushed_when_another_recursive_cte_reads_the_cte() {
+    let s = Session::new().unwrap();
+    let got = column(rows(
+        &s,
+        "WITH RECURSIVE a(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM a WHERE n < 5), \
+         b(m) AS (SELECT 1 UNION ALL SELECT m + 1 FROM b WHERE m < (SELECT max(n) FROM a)) \
+         SELECT * FROM a LIMIT 2",
+    ));
+    assert_eq!(got.len(), 2);
+}
+
+#[test]
 fn a_reference_in_a_forbidden_place_is_refused() {
     let s = Session::new().unwrap();
     for body in [
