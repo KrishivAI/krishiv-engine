@@ -44,7 +44,8 @@ pub struct ExplainVerbose {
     pub parsed: String,
     /// The analyzed plan.
     pub analyzed: String,
-    /// The optimizer's steps that changed the plan, in order.
+    /// The optimizer's steps that changed the plan, and the decisions of the
+    /// rules that state them (`rule: decision`), in order.
     pub steps: Vec<OptimizerStep>,
     /// The optimized plan.
     pub optimized: String,
@@ -382,13 +383,17 @@ impl DataFrame {
         let mut steps = Vec::new();
         for r in rules {
             let plan = r.plan.to_string();
-            if plan == before {
+            if plan == before && r.note.is_empty() {
                 continue;
             }
             steps.push(OptimizerStep {
                 batch: r.batch.to_owned(),
                 round: r.round as u64,
-                rule: r.rule.to_owned(),
+                rule: if r.note.is_empty() {
+                    r.rule.to_owned()
+                } else {
+                    format!("{}: {}", r.rule, r.note)
+                },
                 diff: line_diff(&before, &plan),
                 plan: plan.clone(),
             });

@@ -212,7 +212,11 @@ fn verbose_steps_lead_to_the_optimized_plan() {
         Some(v.optimized.as_str())
     );
     for step in &v.steps {
-        assert!(!step.diff.is_empty(), "{step:?}");
+        // Only a rule's stated decision leaves the plan as it was.
+        assert!(
+            !step.diff.is_empty() || step.rule.contains(": "),
+            "{step:?}"
+        );
         assert!(
             step.diff
                 .lines()
