@@ -43,8 +43,8 @@ pub use epoch::{
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
 };
 pub use format::{
-    ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,
-    parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
+    ParsePolicy, TimePattern, format_timestamps, parse_date_one, parse_dates, parse_ntz,
+    parse_ntz_one, parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
 };
 pub use make::{TimestampFields, make_timestamp};
 pub use unit::{TimestampUnit, timestamp_add, timestamp_diff};
