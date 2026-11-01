@@ -10,11 +10,11 @@
     },
     {
       "id": "aes_encrypt#0911fa9cbec3/ansi_on",
-      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND)) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#0911fa9cbec3/ansi_off",
-      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND)) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#0d2e03f53cae/ansi_on",
@@ -26,19 +26,19 @@
     },
     {
       "id": "aes_encrypt#11e04c5dccc8/ansi_on",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#11e04c5dccc8/ansi_off",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#19193d4f5038/ansi_on",
-      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#19193d4f5038/ansi_off",
-      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#1be70025b814/ansi_on",
@@ -58,11 +58,11 @@
     },
     {
       "id": "aes_encrypt#2fe5aeafab7c/ansi_on",
-      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH)) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#2fe5aeafab7c/ansi_off",
-      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH)) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#3bebd5240c12/ansi_on",
@@ -130,11 +130,11 @@
     },
     {
       "id": "aes_encrypt#67dd3efe2c8e/ansi_on",
-      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#67dd3efe2c8e/ansi_off",
-      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#6d2ff2193fbb/ansi_on",
@@ -202,11 +202,11 @@
     },
     {
       "id": "aes_encrypt#b0f0d13aba00/ansi_on",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#b0f0d13aba00/ansi_off",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#b9cffcbbb9e5/ansi_on",
@@ -218,11 +218,11 @@
     },
     {
       "id": "aes_encrypt#bc52f634942b/ansi_on",
-      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#bc52f634942b/ansi_off",
-      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#bdaefa6f948c/ansi_on",
@@ -242,11 +242,11 @@
     },
     {
       "id": "aes_encrypt#c804d972e19a/ansi_on",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#c804d972e19a/ansi_off",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000'))) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#d11fb466b34c/ansi_on",
@@ -258,11 +258,11 @@
     },
     {
       "id": "aes_encrypt#d446db4f7f7d/ansi_on",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#d446db4f7f7d/ansi_off",
-      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT base64(aes_encrypt('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#db52b971193d/ansi_on",
@@ -298,11 +298,11 @@
     },
     {
       "id": "aes_encrypt#f91d793692c8/ansi_on",
-      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#f91d793692c8/ansi_off",
-      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT hex(aes_encrypt('Spark SQL', INTERVAL '1-2' YEAR TO MONTH, 'GCM')) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_encrypt#fc6d8e75d222/ansi_on",

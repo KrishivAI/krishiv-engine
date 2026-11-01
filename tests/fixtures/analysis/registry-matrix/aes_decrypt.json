@@ -2,19 +2,19 @@
   "entries": [
     {
       "id": "aes_decrypt#03cea49f9751/ansi_on",
-      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#03cea49f9751/ansi_off",
-      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#0946680bf284/ansi_on",
-      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#0946680bf284/ansi_off",
-      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1-2' YEAR TO MONTH, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#0d1a9f659bb3/ansi_on",
@@ -34,11 +34,11 @@
     },
     {
       "id": "aes_decrypt#18acd432fea8/ansi_on",
-      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#18acd432fea8/ansi_off",
-      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1-2' YEAR TO MONTH, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#1c798494ad34/ansi_on",
@@ -58,11 +58,11 @@
     },
     {
       "id": "aes_decrypt#28c45d378dc8/ansi_on",
-      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1-2' YEAR TO MONTH, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1-2' YEAR TO MONTH, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#28c45d378dc8/ansi_off",
-      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1-2' YEAR TO MONTH, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), INTERVAL '1-2' YEAR TO MONTH, 'GCM') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#375a421adcc0/ansi_on",
@@ -74,11 +74,11 @@
     },
     {
       "id": "aes_decrypt#4a779da7c938/ansi_on",
-      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#4a779da7c938/ansi_off",
-      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), INTERVAL '1 02:03:04' DAY TO SECOND, 'GCM', 'DEFAULT', 'This is an AAD mixed into the input') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#54392acc0749/ansi_on",
@@ -138,11 +138,11 @@
     },
     {
       "id": "aes_decrypt#86e8944ea070/ansi_on",
-      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#86e8944ea070/ansi_off",
-      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), INTERVAL '1 02:03:04' DAY TO SECOND, 'ECB', 'PKCS') | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#a624580f48ae/ansi_on",
@@ -162,11 +162,11 @@
     },
     {
       "id": "aes_decrypt#b1df932b24af/ansi_on",
-      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#b1df932b24af/ansi_off",
-      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#b2041c7b27eb/ansi_on",
@@ -202,11 +202,11 @@
     },
     {
       "id": "aes_decrypt#ce22031e4349/ansi_on",
-      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#ce22031e4349/ansi_off",
-      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: *********(redacted) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "aes_decrypt#f1ea2b92b849/ansi_on",
