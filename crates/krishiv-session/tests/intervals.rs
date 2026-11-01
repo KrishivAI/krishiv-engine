@@ -192,6 +192,20 @@ fn rows(session: &Session, sql: &str) -> R<Vec<String>> {
     })
 }
 
+/// Spark 4.2.0 sorts these to `[INTERVAL '1' DAY, INTERVAL '2' DAY]`.
+#[test]
+fn array_sort_orders_intervals() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT element_at(array_sort(array(INTERVAL '2' DAY, INTERVAL '1' DAY)), 1)"
+        )?,
+        ["INTERVAL '1' DAY"]
+    );
+    Ok(())
+}
+
 /// Columns, not literals: `try_*` goes row by row only past a failure, and
 /// intervals sort, group and join as their values.
 #[test]
