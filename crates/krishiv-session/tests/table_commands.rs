@@ -656,7 +656,7 @@ fn existing_locations_and_names() {
     );
     assert_eq!(
         class(&s, "CREATE TABLE other_catalog.default.t (a INT)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "REQUIRES_SINGLE_PART_NAMESPACE"
     );
     run(&s, "CREATE TABLE spark_catalog.default.q (a INT)");
     run(&s, "INSERT INTO spark_catalog.default.q VALUES (1)");

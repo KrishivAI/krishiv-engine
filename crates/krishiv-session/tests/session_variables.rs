@@ -1631,3 +1631,13 @@ fn a_variable_in_a_name_is_a_variablereference() {
         ]
     );
 }
+
+/// `var` and `variable` are not reserved: `DECLARE var = 'x'` names a variable `var`.
+#[test]
+fn a_variable_may_be_named_var() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE var = 'sometable'")).unwrap();
+    block_on(s.sql("SET VAR var = 'c1'")).unwrap();
+    let df = block_on(s.sql("SELECT IDENTIFIER(var) FROM VALUES(1) AS T(c1)")).unwrap();
+    assert_eq!(block_on(df.collect()).unwrap()[0].num_rows(), 1);
+}

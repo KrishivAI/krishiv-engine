@@ -1905,7 +1905,10 @@ impl<'s> Parser<'s> {
             };
             // One keyword at most: `DECLARE VAR variable INT` declares
             // a variable named `variable`.
-            if !p.eat_kw("VARIABLE") {
+            // A `VAR` or `VARIABLE` followed by `=` or `,` is the variable's name
+            // (`DECLARE var = 'x'`), as ANTLR's prediction reads it.
+            let named_var = p.sym_at(1, Sym::Eq) || p.sym_at(1, Sym::Comma);
+            if !named_var && !p.eat_kw("VARIABLE") {
                 p.eat_kw("VAR");
             }
             if p.kw_at(0, "IF") && p.kw_at(1, "NOT") && p.kw_at(2, "EXISTS") {

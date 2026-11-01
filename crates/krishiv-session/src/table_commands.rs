@@ -174,9 +174,8 @@ impl TableName {
             [catalog, ns, name] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                 (fold(ns), fold(name), false)
             }
-            [catalog, _, _] => {
-                return Err(unsupported(&format!("tables in the catalog `{catalog}`")));
-            }
+            // No other catalog is registered, so a longer name is a namespace of several parts in
+            // the session catalog, which takes one.
             _ => {
                 return Err(KrishivError::from(RequiresSinglePartNamespace {
                     session_catalog: crate::catalog::CATALOG.to_owned(),
