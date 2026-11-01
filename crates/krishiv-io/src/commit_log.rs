@@ -219,7 +219,7 @@ impl<'a> CommitLog<'a> {
     ///
     /// # Errors
     /// `KRISHIV_CONCURRENT_COMMIT` for an overwrite that lost a race, or an
-    /// append that lost [`MAX_RACES`] times; storage failures.
+    /// append that lost `MAX_RACES` times; storage failures.
     pub async fn commit(&self, base: Option<u64>, entry: &LogEntry) -> Result<u64> {
         let bytes = Bytes::from(encode_entry(entry));
         let mut version = base.map_or(0, |b| b + 1);
