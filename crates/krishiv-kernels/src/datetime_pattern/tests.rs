@@ -329,4 +329,13 @@ fn region_zone_names_use_historical_and_out_of_range_daylight_time() {
         name("Europe/Berlin", 1_010_786_126_400_000_000, 7200),
         "Central European Summer Time"
     );
+    // Java calls Windhoek's +02:00 daylight time from March 1990 (1991-07-15T12:00Z), standard before.
+    assert_eq!(
+        name("Africa/Windhoek", 679_579_200_000_000, 7200),
+        "Western African Time"
+    );
+    assert_eq!(
+        name("Africa/Windhoek", 15_000_000_000_000, 7200),
+        "Central Africa Time"
+    );
 }
