@@ -260,7 +260,9 @@ pub fn make_time(
             return Err(bad("MinuteOfHour", 59, i128::from(m)));
         }
         let whole = micros.checked_div(1_000_000).unwrap_or(0);
-        if !(0..60).contains(&whole) {
+        // A negative value is out of range even when its whole seconds are 0
+        // (`-0.5`): Spark shows the truncated whole seconds.
+        if micros < 0 || !(0..60).contains(&whole) {
             return Err(bad("SecondOfMinute", 59, whole));
         }
         let nanos = h

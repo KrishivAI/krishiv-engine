@@ -51,6 +51,8 @@ fn make_time_builds_a_time_or_names_the_bad_field() {
         "make_time(-1, 18, 19.87)",
         "make_time(1, 60, 19.87)",
         "make_time(1, 18, 60.0)",
+        "make_time(1, 0, -0.5)",
+        "make_time(0, 0, -0.000001)",
         "make_time(1, 18, 9999999999.999999)",
     ] {
         assert_eq!(
