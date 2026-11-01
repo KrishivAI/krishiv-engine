@@ -486,6 +486,12 @@ impl Resolver<'_> {
         for e in exprs {
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
+                if let Some(outer) = self.outer_star(s, &cx, e.origin)? {
+                    for b in outer {
+                        items.push(self.named(b)?);
+                    }
+                    continue;
+                }
                 let expanded = self.expand(s, &cx, e.origin)?;
                 let replaced = self.replacements(s, &expanded, e.origin)?;
                 for (a, with) in expanded.iter().zip(replaced) {

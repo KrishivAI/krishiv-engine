@@ -1233,6 +1233,52 @@ impl Resolver<'_> {
             .collect())
     }
 
+    /// `t.*` in a subquery where `t` is no relation of its own scope but
+    /// the enclosing query's: the outer references to that relation's
+    /// columns (Spark 4.2 expands an outer star). `None` when the star
+    /// is anything else.
+    pub(super) fn outer_star(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Option<Vec<Bound>>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        if s.plan_id.is_some()
+            || s.qualifier.is_empty()
+            || s.position.is_some()
+            || !s.except.is_empty()
+            || !s.replace.is_empty()
+            || !cx.outer
+            || cx
+                .scope
+                .iter()
+                .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+        {
+            return Ok(None);
+        }
+        // Only the immediately enclosing query, as for a column.
+        let Some(level) = cx.env.outer.len().checked_sub(1) else {
+            return Ok(None);
+        };
+        let attrs: Vec<Attr> = cx.env.outer[level]
+            .scope
+            .iter()
+            .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            .cloned()
+            .collect();
+        if attrs.is_empty() {
+            return Ok(None);
+        }
+        let mut out = Vec::with_capacity(attrs.len());
+        for a in &attrs {
+            self.used(a);
+            let parts = [a.col.name.clone()];
+            out.push(self.resolve_attr(a, 1, &parts, origin, Some(level))?);
+        }
+        Ok(Some(out))
+    }
+
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
     pub(super) fn expand(
         &mut self,
@@ -5506,7 +5552,7 @@ impl Resolver<'_> {
     /// or the struct fields the leftover parts name below it (Spark's
     /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
     /// `outer` is `Some` for a column of the enclosing query.
-    fn resolve_attr(
+    pub(super) fn resolve_attr(
         &mut self,
         a: &Attr,
         used: usize,
