@@ -240,7 +240,7 @@ fn a_correlated_side_of_a_join() -> R {
             ),
         );
         assert!(
-            e.contains("ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED"),
+            e.contains("UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED"),
             "{join}: {e}"
         );
     }
@@ -304,7 +304,7 @@ fn a_written_semi_join_is_no_set_operation() -> R {
                 ),
             );
             assert!(
-                e.contains("ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED"),
+                e.contains("UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED"),
                 "{join} {select}: {e}"
             );
         }
