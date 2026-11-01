@@ -393,10 +393,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             }
             _ => {
                 let mut child = compile(expr, input)?;
-                if let Some(from) = expr.nested_interval_type()
-                    && nested_cast::intervals_become_strings(&from, to)
+                if let Some(part) = expr
+                    .nested_interval_type()
+                    .and_then(|from| nested_cast::rendered_part(&from, to))
                 {
-                    child = nested_cast::interval_leaves(child, from);
+                    child = nested_cast::interval_leaves(child, part);
                 }
                 Ok(nested_cast::narrowed(
                     cast::compile(child, to, *mode, input)?,

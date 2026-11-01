@@ -18,7 +18,9 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType as ArrowType, Field, FieldRef, Fields};
-use krishiv_types::{DataType, DayTimeField, MapType, StructField, YearMonthField};
+use krishiv_types::{
+    ArrayType, DataType, DayTimeField, MapType, StructField, StructType, YearMonthField,
+};
 
 use super::cast::{CastParts, Precision, apply};
 use super::{PhysExpr, Value};
@@ -115,31 +117,63 @@ impl PhysExpr for IntervalLeaves {
     }
 }
 
-/// Whether casting `from` to `to` takes each interval of `from` to a string.
-pub(super) fn intervals_become_strings(from: &DataType, to: &DataType) -> bool {
-    match (from, to) {
-        (_, DataType::String) => true,
-        (
-            DataType::YearMonthInterval { .. }
-            | DataType::DayTimeInterval { .. }
-            | DataType::CalendarInterval,
-            _,
-        ) => false,
-        (DataType::Array(a), DataType::Array(b)) => {
-            intervals_become_strings(a.element_type(), b.element_type())
+/// `from` as far as casting it to `to` takes its intervals to strings, for
+/// [`interval_leaves`]: an interval the cast keeps, or a part holding no such
+/// interval, reads `NULL` here, and those leaves pass through unchanged.
+/// `None` when no interval becomes a string.
+pub(super) fn rendered_part(from: &DataType, to: &DataType) -> Option<DataType> {
+    match from {
+        DataType::YearMonthInterval { .. }
+        | DataType::DayTimeInterval { .. }
+        | DataType::CalendarInterval => (*to == DataType::String).then(|| from.clone()),
+        DataType::Array(a) => {
+            let to = match to {
+                DataType::Array(b) => b.element_type(),
+                DataType::String => to,
+                _ => return None,
+            };
+            let element = rendered_part(a.element_type(), to)?;
+            Some(ArrayType::new(element, a.contains_null()).into())
         }
-        (DataType::Map(a), DataType::Map(b)) => {
-            intervals_become_strings(a.key_type(), b.key_type())
-                && intervals_become_strings(a.value_type(), b.value_type())
+        DataType::Map(a) => {
+            let (key, value) = match to {
+                DataType::Map(b) => (b.key_type(), b.value_type()),
+                DataType::String => (to, to),
+                _ => return None,
+            };
+            let key = rendered_part(a.key_type(), key);
+            let value = rendered_part(a.value_type(), value);
+            (key.is_some() || value.is_some()).then(|| {
+                MapType::new(
+                    key.unwrap_or(DataType::Null),
+                    value.unwrap_or(DataType::Null),
+                    a.value_contains_null(),
+                )
+                .into()
+            })
         }
-        (DataType::Struct(a), DataType::Struct(b)) => {
-            a.fields().len() == b.fields().len()
-                && a.fields()
-                    .iter()
-                    .zip(b.fields())
-                    .all(|(x, y)| intervals_become_strings(x.data_type(), y.data_type()))
+        DataType::Struct(a) => {
+            let targets: Vec<&DataType> = match to {
+                DataType::Struct(b) if b.fields().len() == a.fields().len() => {
+                    b.fields().iter().map(StructField::data_type).collect()
+                }
+                DataType::String => vec![to; a.fields().len()],
+                _ => return None,
+            };
+            let parts: Vec<Option<DataType>> = a
+                .fields()
+                .iter()
+                .zip(targets)
+                .map(|(f, t)| rendered_part(f.data_type(), t))
+                .collect();
+            parts.iter().any(Option::is_some).then(|| {
+                StructType::new(a.fields().iter().zip(parts).map(|(f, part)| {
+                    StructField::new(f.name(), part.unwrap_or(DataType::Null), f.nullable())
+                }))
+                .into()
+            })
         }
-        _ => true,
+        _ => None,
     }
 }
 
@@ -477,4 +511,65 @@ fn texts(p: &CastParts, a: &ArrayRef) -> Result<Vec<Option<String>>> {
                 .collect()
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY: DataType = DataType::DayTimeInterval {
+        start: DayTimeField::Day,
+        end: DayTimeField::Day,
+    };
+
+    fn pair(a: DataType, b: DataType) -> DataType {
+        StructType::new([
+            StructField::new("a", a, true),
+            StructField::new("b", b, true),
+        ])
+        .into()
+    }
+
+    fn array(t: DataType) -> DataType {
+        ArrayType::new(t, true).into()
+    }
+
+    fn map(k: DataType, v: DataType) -> DataType {
+        MapType::new(k, v, true).into()
+    }
+
+    #[test]
+    fn only_the_intervals_going_to_strings_are_rendered() {
+        let from = pair(DAY, DAY);
+        assert_eq!(
+            rendered_part(&from, &pair(DataType::String, DAY)),
+            Some(pair(DAY, DataType::Null))
+        );
+        assert_eq!(rendered_part(&from, &DataType::String), Some(from.clone()));
+        assert_eq!(rendered_part(&from, &from), None);
+        assert_eq!(
+            rendered_part(&array(from), &array(pair(DAY, DataType::String))),
+            Some(array(pair(DataType::Null, DAY)))
+        );
+        assert_eq!(
+            rendered_part(&map(DAY, DAY), &map(DAY, DataType::String)),
+            Some(map(DataType::Null, DAY))
+        );
+        assert_eq!(
+            rendered_part(&map(DAY, DAY), &DataType::String),
+            Some(map(DAY, DAY))
+        );
+        assert_eq!(rendered_part(&map(DAY, DAY), &map(DAY, DAY)), None);
+    }
+
+    #[test]
+    fn a_shape_the_cast_cannot_take_renders_nothing() {
+        let int = DataType::Integer;
+        assert_eq!(rendered_part(&array(DAY), &int), None);
+        assert_eq!(rendered_part(&map(DAY, DAY), &int), None);
+        assert_eq!(rendered_part(&pair(DAY, DAY), &int), None);
+        let one: DataType = StructType::new([StructField::new("a", DataType::String, true)]).into();
+        assert_eq!(rendered_part(&pair(DAY, DAY), &one), None);
+        assert_eq!(rendered_part(&int, &DataType::String), None);
+    }
 }

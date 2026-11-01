@@ -427,6 +427,41 @@ fn a_nested_interval_cast_to_strings_renders_each_value() -> R {
 }
 
 #[test]
+fn a_nested_cast_renders_only_the_intervals_going_to_strings() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT CAST(CAST(named_struct('a', INTERVAL '1' DAY, 'b', INTERVAL '25' HOUR) \
+               AS STRUCT<a: STRING, b: INTERVAL DAY>) AS STRING), \
+             CAST(CAST(array(named_struct('a', INTERVAL '13' MONTH, 'b', INTERVAL '13' MONTH)) \
+               AS ARRAY<STRUCT<a: STRING, b: INTERVAL YEAR>>) AS STRING)"
+        )?,
+        ["{INTERVAL '1' DAY, INTERVAL '1' DAY}|[{INTERVAL '13' MONTH, INTERVAL '1' YEAR}]"]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_lambda_variable_keeps_its_interval_fields() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT transform(array(INTERVAL '1' DAY), x -> CAST(x AS STRING)), \
+             transform(array(INTERVAL '13' MONTH), x -> CAST(x AS STRING)), \
+             transform(array(array(INTERVAL '1' DAY)), x -> CAST(x AS ARRAY<STRING>)), \
+             transform(array(INTERVAL '1' DAY), x -> concat(x, 'a')), \
+             transform(array(named_struct('a', INTERVAL '1' DAY)), x -> to_json(x))"
+        )?,
+        [
+            "[INTERVAL '1' DAY]|[INTERVAL '13' MONTH]|[[INTERVAL '1' DAY]]|[INTERVAL '1' DAYa]|[{\"a\":\"INTERVAL '1' DAY\"}]"
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn legacy_interval_differences_are_refused_by_name() -> R {
     let session = Session::new()?;
     block_on(session.sql("SET spark.sql.legacy.interval.enabled = true"))?;
