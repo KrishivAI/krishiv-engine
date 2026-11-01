@@ -1962,6 +1962,14 @@ impl Resolver<'_> {
     /// counting each distinct argument where the id is its set's (and the
     /// filter passed) and taking the other aggregates' values where the
     /// id is the plain one.
+    /// Whether argument `n` of a `DISTINCT` call is a constant that
+    /// `RewriteDistinctAggregates` leaves in place (Spark skips foldable
+    /// children): any argument after the first, so a one-argument
+    /// `count(DISTINCT 0.8)` still distincts its argument.
+    fn constant_distinct_arg(&self, n: usize, a: &Arc<Expr>) -> bool {
+        n >= 1 && self.fold(a, self.ctx.conf.ansi).is_some()
+    }
+
     fn rewrite_distinct(
         &mut self,
         origin: Origin,
@@ -2000,7 +2008,13 @@ impl Resolver<'_> {
                 regular.push(i);
                 continue;
             }
-            let mut key: Vec<u128> = f.args.iter().map(|a| semantic_key(a, &mut memo)).collect();
+            let mut key: Vec<u128> = f
+                .args
+                .iter()
+                .enumerate()
+                .filter(|(n, a)| !self.constant_distinct_arg(*n, a))
+                .map(|(_, a)| semantic_key(a, &mut memo))
+                .collect();
             key.sort_unstable();
             match sets.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, v)) => v.push(i),
@@ -2015,7 +2029,10 @@ impl Resolver<'_> {
         let mut child_keys: Vec<u128> = Vec::new();
         for (_, members) in &sets {
             for &i in members {
-                for a in &calls[i].1.args {
+                for (n, a) in calls[i].1.args.iter().enumerate() {
+                    if self.constant_distinct_arg(n, a) {
+                        continue;
+                    }
                     let k = semantic_key(a, &mut memo);
                     if !child_keys.contains(&k) {
                         child_keys.push(k);
@@ -2196,8 +2213,10 @@ impl Resolver<'_> {
         for (s, (_, members)) in sets.iter().enumerate() {
             let mut here: HashSet<u128> = HashSet::new();
             for &i in members {
-                for a in &calls[i].1.args {
-                    here.insert(semantic_key(a, &mut memo));
+                for (n, a) in calls[i].1.args.iter().enumerate() {
+                    if !self.constant_distinct_arg(n, a) {
+                        here.insert(semantic_key(a, &mut memo));
+                    }
                 }
             }
             let mut row: Vec<Arc<Expr>> = e0
@@ -2317,7 +2336,13 @@ impl Resolver<'_> {
             for &i in members {
                 let f = &calls[i].1;
                 let mut args = Vec::with_capacity(f.args.len());
-                for a in &f.args {
+                for (n, a) in f.args.iter().enumerate() {
+                    // A constant stays as written (a quantile's percentage
+                    // must stay foldable).
+                    if self.constant_distinct_arg(n, a) {
+                        args.push(Arc::clone(a));
+                        continue;
+                    }
                     let k = semantic_key(a, &mut memo);
                     let pos = child_keys.iter().position(|j| *j == k).ok_or_else(|| {
                         unsupported("a distinct argument the expansion lacks", origin)
