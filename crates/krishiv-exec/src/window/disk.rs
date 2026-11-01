@@ -563,11 +563,12 @@ fn fold_from_file(
             let (b, r) = stream.at(pos)?;
             let to = hi.min(stream.end);
             let part = b.slice(r, to - pos);
+            let none = vec![false; to - pos];
             for (&(s, e), fold) in frames.iter().zip(&mut folds) {
                 let (from, until) = (s.max(pos), e.min(to));
                 if from < until {
                     let rows = part.slice(from - pos, until - from);
-                    fold_batch(env, j, fold, &rows, &vec![false; until - from])?;
+                    fold_batch(env, j, fold, &rows, &none[..until - from])?;
                 }
             }
             pos = to;
@@ -640,15 +641,19 @@ fn framed(f: &WindowFunctionPlan) -> Result<bool> {
 
 /// The bytes evaluating a batch of `rows` rows holds out of the flush phase's
 /// headroom: the functions `stream.rs` evaluates, and for each of the others
-/// its output and the current rows' keys. What they hold beyond that is
+/// its output and the keys it reads. What they hold beyond that is
 /// charged as they go (see the [module docs](self)).
 pub(super) fn headroom(plan: &WindowPlan, rows: usize) -> Result<usize> {
     let mut own = plan.clone();
     own.functions.clear();
     let mut others = 0_usize;
+    // The current rows' keys, and a batch's per key reader.
+    let mut key_copies = 1_usize;
     for f in &plan.functions {
         if framed(f)? {
             others += 1;
+            let (lower, upper) = key_readers(f);
+            key_copies += usize::from(lower) + usize::from(upper);
         } else {
             own.functions.push(f.clone());
         }
@@ -662,7 +667,7 @@ pub(super) fn headroom(plan: &WindowPlan, rows: usize) -> Result<usize> {
     )?;
     Ok(cost
         .saturating_add(rows.saturating_mul(others.saturating_mul(OUTPUT_BYTES)))
-        .saturating_add(rows.saturating_mul(frames::RANGE_KEY_BYTES)))
+        .saturating_add(rows.saturating_mul(key_copies.saturating_mul(frames::RANGE_KEY_BYTES))))
 }
 
 /// The readers `f` opens beyond the partition's own.
@@ -905,7 +910,8 @@ impl Held {
         // With no frame to read, one row gives the evaluation its input.
         let lo = live().map(|f| f.0).min().unwrap_or(c.at);
         let hi = live().map(|f| f.1).max().unwrap_or(c.at + 1);
-        let eval = frames::cost(a, f, hi - lo)?;
+        // Results per frame, inputs per row held.
+        let eval = frames::cost(a, f, (hi - lo).max(frames.len()))?;
         if self.hold(lo, hi, eval)? {
             let rebased: Vec<(u32, u32)> = frames
                 .iter()

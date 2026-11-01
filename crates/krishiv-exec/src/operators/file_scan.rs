@@ -447,6 +447,18 @@ fn reads_partition_column(scan: &FileScan, filter: &PushedFilter) -> bool {
     })
 }
 
+/// The runtime filter that no row of a file with these partition values
+/// passes, if any.
+fn dropping_filter<'a>(
+    filters: &'a [(usize, ScanFilter)],
+    values: &[ArrayRef],
+) -> Option<&'a ScanFilter> {
+    filters.iter().find_map(|(k, filter)| {
+        let mask = filter.evaluate(values.get(*k)?.as_ref())?;
+        (mask.is_valid(0) && !mask.value(0)).then_some(filter)
+    })
+}
+
 /// Where a column of a partitioned scan's output comes from.
 #[derive(Clone, Copy, Debug)]
 enum Slot {
@@ -712,7 +724,13 @@ impl FileScanSource {
 
     /// Starts reading the footer of the file after piece `next` of
     /// `morsel` if it is another file and none is in flight for it.
-    fn read_ahead(&self, local: &mut FileScanLocal, morsel: &[MorselSplit], next: usize) {
+    fn read_ahead(
+        &self,
+        local: &mut FileScanLocal,
+        partition_filters: &[(usize, ScanFilter)],
+        morsel: &[MorselSplit],
+        next: usize,
+    ) {
         let Some(piece) = morsel.get(next + 1) else {
             return;
         };
@@ -722,6 +740,15 @@ impl FileScanSource {
             return;
         }
         if let Some(file) = self.files.get(wanted) {
+            // A file its partition's filter drops is never opened. (An error
+            // reading its path is reported by the open.)
+            let dropped = !partition_filters.is_empty()
+                && self
+                    .partition_values(file)
+                    .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
+            if dropped {
+                return;
+            }
             let fut = self.io.prefetch_metadata(
                 Arc::clone(&self.format),
                 file.clone(),
@@ -745,24 +772,19 @@ impl FileScanSource {
             f.filter().stats().add_split(range.len());
             return Ok(());
         }
+        let f = self.file(file)?.clone();
+        let partition_values = self.partition_values(&f)?;
+        // Dynamic partition pruning: no row of the file passes.
+        if let Some(filter) = dropping_filter(partition_filters, &partition_values) {
+            filter.filter().stats().add_split(range.len());
+            return Ok(());
+        }
         if let Some((f, _)) = &local.ahead
             && *f == file
             && let Some((_, fut)) = local.ahead.take()
         {
             // The read's own error (if any) is reported by the open below.
             drop(fut.await);
-        }
-        let f = self.file(file)?.clone();
-        let partition_values = self.partition_values(&f)?;
-        // Dynamic partition pruning: no row of the file passes.
-        for (k, filter) in partition_filters {
-            let drops = partition_values
-                .get(*k)
-                .and_then(|v| filter.evaluate(v.as_ref()));
-            if drops.is_some_and(|m| Array::is_valid(&m, 0) && !m.value(0)) {
-                filter.filter().stats().add_split(range.len());
-                return Ok(());
-            }
         }
         let row_filter_start = local
             .row_filter
@@ -840,7 +862,7 @@ impl FileScanSource {
                 && let Some(piece) = g.morsels[m].get(next).copied()
             {
                 local.morsel = Some((m, next + 1));
-                self.read_ahead(local, &g.morsels[m], next);
+                self.read_ahead(local, &g.partition_filters, &g.morsels[m], next);
                 self.open(local, &g.request, &g.partition_filters, piece)
                     .await?;
                 continue;

@@ -1442,10 +1442,16 @@ async fn compared_spilling(
                 r.0
             }
         };
+        let key = window.order_by.first().copied().unwrap_or(SortKey::asc(1));
         v.sort_by_key(|r| {
             (
                 p(r).map(|x| x + 1).unwrap_or(0),
-                r.1.map(|x| x + 1).unwrap_or(0),
+                match r.1 {
+                    None if key.nulls_first => i64::MIN,
+                    None => i64::MAX,
+                    Some(x) if key.descending => -x,
+                    Some(x) => x,
+                },
                 r.2,
             )
         });
@@ -2732,6 +2738,132 @@ async fn an_exact_percentile_on_disk_is_charged() {
             .unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
         drop(ctx);
+        assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    }
+}
+
+/// `RANGE` frames from disk over a descending key with NULLs last, as in
+/// memory: both edges move the other way through the keys.
+#[tokio::test]
+async fn range_frames_on_disk_over_a_descending_key_match_memory() {
+    use FrameBound::{CurrentRow, RangeInt, UnboundedFollowing, UnboundedPreceding};
+    let rows = skewed_rows(3_000);
+    let spills = Spills {
+        every: 1,
+        slack: Some(4 << 20),
+    };
+    for frame in [
+        between(FrameUnits::Range, RangeInt(-3), RangeInt(2)),
+        between(FrameUnits::Range, CurrentRow, RangeInt(4)),
+        between(FrameUnits::Range, UnboundedPreceding, RangeInt(1)),
+        between(FrameUnits::Range, RangeInt(-2), UnboundedFollowing),
+    ] {
+        for (descending, nulls_first) in [(true, false), (true, true), (false, false)] {
+            let mut window = plan(over(frame), true);
+            window.order_by = vec![SortKey {
+                column: 1,
+                descending,
+                nulls_first,
+            }];
+            let (_, external) = compare_spilling(&rows, 250, &window, spills).await;
+            assert!(external >= 1, "{frame:?} {descending} {nulls_first}");
+        }
+    }
+}
+
+/// Float and decimal `RANGE` keys and `FILTER` from disk, as in memory.
+#[tokio::test]
+async fn float_and_decimal_keys_and_filters_on_disk_match_memory() {
+    use FrameBound::{Offset, RangeFloat, RangeInt, UnboundedFollowing};
+    use arrow_array::{BooleanArray, Decimal128Array, Float64Array};
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("f", DataType::Float64, true),
+        Field::new("d", DataType::Decimal128(12, 2), true),
+        Field::new("v", DataType::Int64, true),
+        Field::new("b", DataType::Boolean, true),
+    ]));
+    let n = 3_000_i64;
+    let sorted_batches = || -> Vec<Batch> {
+        // Ascending in both keys, NULLs first, NaN largest for the float.
+        let ids: Vec<i64> = (0..n).collect();
+        ids.chunks(250)
+            .map(|c| {
+                let f = Float64Array::from_iter(c.iter().map(|&i| match i {
+                    i if i < 20 => None,
+                    i if i >= n - 20 => Some(f64::NAN),
+                    #[expect(clippy::cast_precision_loss, reason = "small test keys")]
+                    i => Some((i / 4) as f64 / 2.0),
+                }));
+                let d = Decimal128Array::from_iter(
+                    c.iter()
+                        .map(|&i| (i >= 20).then_some(i128::from(i / 4) * 25)),
+                )
+                .with_data_type(DataType::Decimal128(12, 2));
+                let v = Int64Array::from_iter(c.iter().map(|&i| (i % 13 != 0).then_some(i % 17)));
+                let b =
+                    BooleanArray::from_iter(c.iter().map(|&i| (i % 11 != 0).then_some(i % 3 != 0)));
+                let columns: Vec<ArrayRef> =
+                    vec![Arc::new(f), Arc::new(d), Arc::new(v), Arc::new(b)];
+                Batch::new(RecordBatch::try_new(Arc::clone(&schema), columns).unwrap())
+            })
+            .collect()
+    };
+    let sum = || agg(AggregateFunction::Sum, Some(2));
+    let filtered = |frame| WindowFunctionPlan {
+        function: sum(),
+        frame,
+        filter: Some(3),
+        name: "w".to_owned(),
+    };
+    let float = between(
+        FrameUnits::Range,
+        RangeFloat((-1.5_f64).to_bits()),
+        RangeFloat(1.0_f64.to_bits()),
+    );
+    let cases = [
+        (0, float),
+        (1, between(FrameUnits::Range, RangeInt(-50), RangeInt(75))),
+        (1, between(FrameUnits::Rows, Offset(-2), Offset(3))),
+        (1, between(FrameUnits::Rows, Offset(-1), UnboundedFollowing)),
+        (
+            1,
+            between(FrameUnits::Rows, FrameBound::UnboundedPreceding, Offset(-1)),
+        ),
+    ];
+    for (column, frame) in cases {
+        let window = WindowPlan {
+            partition_by: Vec::new(),
+            order_by: vec![SortKey::asc(column)],
+            functions: vec![filtered(frame)],
+        };
+        let concat = |batches: &[Batch]| {
+            let data: Vec<RecordBatch> = batches.iter().map(|b| b.data().clone()).collect();
+            arrow_select::concat::concat_batches(&data[0].schema(), &data).unwrap()
+        };
+        let input = sorted_batches();
+        let plain = Window::new(Arc::clone(&schema), window.clone(), true, None).unwrap();
+        let (_r, ctx) = task(1 << 30);
+        let want = concat(&drive(&plain, &ctx, &input).unwrap());
+        let (_manager, scope) = spill_scope();
+        let op = Window::new(Arc::clone(&schema), window, true, Some(scope)).unwrap();
+        let limit = 1 << 30;
+        let (root, ctx) = task(limit);
+        let spills = Spills {
+            every: 1,
+            slack: Some(256 << 10),
+        };
+        let got = drive_spilling(&op, &ctx, limit, &root, &input, spills)
+            .await
+            .unwrap();
+        assert_eq!(concat(&got), want, "{frame:?}");
+        assert!(
+            op.counters
+                .external
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 1,
+            "{frame:?}"
+        );
+        drop((got, ctx));
         assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
     }
 }

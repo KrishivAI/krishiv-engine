@@ -104,6 +104,10 @@ fn pruning_leaves_results_unchanged() {
         "sparse",
         "SELECT id, CASE WHEN id % 7 = 0 THEN NULL ELSE id % 5 END AS p FROM range(5000)",
     );
+    run(
+        &s,
+        "CREATE TEMPORARY VIEW nulls AS SELECT * FROM VALUES (CAST(NULL AS BIGINT)), (1) AS t(k)",
+    );
     let queries = [
         JOIN,
         "SELECT count(*) FROM fact f JOIN dim d ON f.p = d.k WHERE d.tag = 99",
@@ -112,6 +116,11 @@ fn pruning_leaves_results_unchanged() {
         "SELECT count(*) FROM fact f LEFT JOIN dim d ON f.p = d.k AND d.tag = 1",
         "SELECT count(*) FROM sparse f JOIN dim d ON f.p = d.k WHERE d.tag < 3",
         "SELECT count(*) FROM sparse f LEFT JOIN dim d ON f.p <=> d.k WHERE d.tag IS NULL",
+        // A NULL partition value: a null-safe key keeps it, a plain one doesn't.
+        "SELECT count(*) FROM sparse f JOIN nulls d ON f.p <=> d.k",
+        "SELECT count(*) FROM sparse f JOIN nulls d ON f.p = d.k",
+        // A key that doesn't read the column as it is gets no filter.
+        "SELECT count(*) FROM sparse f JOIN dim d ON CAST(f.p AS STRING) = CAST(d.k AS STRING)",
     ];
     for q in queries {
         s.conf()
