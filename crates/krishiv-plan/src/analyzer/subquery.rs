@@ -324,7 +324,7 @@ fn negated_in(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
 }
 
 /// Whether `e` is a NULL literal or a cast of one.
-fn null_literal(e: &Expr) -> bool {
+pub(super) fn null_literal(e: &Expr) -> bool {
     match &e.node {
         ExprNode::Literal(v) => matches!(v, Literal::Null(_)),
         ExprNode::Cast { expr, .. } | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {

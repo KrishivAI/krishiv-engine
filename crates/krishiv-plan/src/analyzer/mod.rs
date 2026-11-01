@@ -328,6 +328,9 @@ pub struct ResolutionConf {
     /// Spark 4.2 defaults it to false; Krishiv refuses a `TIME` anywhere
     /// while it is off (stricter than Spark, design P2-T181 section 2).
     pub time_type: bool,
+    /// `spark.sql.legacy.nullInEmptyListBehavior`: `NULL IN (empty
+    /// subquery)` is NULL instead of false.
+    pub legacy_null_in_empty_list: bool,
 }
 
 impl Default for ResolutionConf {
@@ -355,13 +358,14 @@ impl Default for ResolutionConf {
             udf_parameter_shadows_function: false,
             legacy_time_parser: false,
             time_type: false,
+            legacy_null_in_empty_list: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 21] = [
+    pub const KEYS: [&'static str; 22] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -383,6 +387,7 @@ impl ResolutionConf {
         "spark.sql.legacy.codingErrorAction",
         "spark.sql.legacy.negativeIndexInArrayInsert",
         "spark.sql.timeType.enabled",
+        "spark.sql.legacy.nullInEmptyListBehavior",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -438,6 +443,7 @@ impl ResolutionConf {
             legacy_coding_error_action: on(Self::KEYS[18]),
             legacy_negative_index_in_array_insert: on(Self::KEYS[19]),
             time_type: on(Self::KEYS[20]),
+            legacy_null_in_empty_list: on(Self::KEYS[21]),
         }
     }
 }
@@ -535,6 +541,7 @@ impl ContextFingerprint {
             c.udf_parameter_shadows_function,
             c.legacy_negative_index_in_array_insert,
             c.time_type,
+            c.legacy_null_in_empty_list,
         ];
         num(
             &mut b,

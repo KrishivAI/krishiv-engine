@@ -2548,8 +2548,10 @@ impl Resolver<'_> {
                 };
                 let level = cx.env.outer.len();
                 let expr = rebuilt(ExprNode::Subquery { kind, plan });
+                let shown = shown_call(&expr, kids, &values);
+                let expr = self.null_in_subquery(expr);
                 Bound {
-                    shown: shown_call(&expr, kids, &values),
+                    shown,
                     expr,
                     outer: [outer, rel.outer.filter(|&l| l < level)]
                         .into_iter()
@@ -2584,6 +2586,54 @@ impl Resolver<'_> {
             ));
         }
         Ok(b)
+    }
+
+    /// `NULL IN (subquery)`: Spark folds it by whether the subquery has
+    /// rows. It is `exists(subquery) AND NULL`: NULL over rows, false over
+    /// none (NULL either way under
+    /// `spark.sql.legacy.nullInEmptyListBehavior`). Any other `IN` is
+    /// returned as it came.
+    fn null_in_subquery(&self, e: Arc<Expr>) -> Arc<Expr> {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &e.node
+        else {
+            return e;
+        };
+        let [value] = &values[..] else { return e };
+        if !super::subquery::null_literal(value) {
+            return e;
+        }
+        let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
+            DataType::Boolean,
+        )))));
+        if self.ctx.conf.legacy_null_in_empty_list {
+            return null;
+        }
+        let exists = Arc::new(
+            Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::Exists,
+                plan: Arc::clone(plan),
+            })
+            .with_origin(e.origin),
+        );
+        Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::And),
+                    kind: FunctionKind::Scalar,
+                    args: vec![exists, null],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: DataType::Boolean,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(e.origin),
+        )
     }
 
     /// `b` implicitly cast to `to`, if given (named and shown as `b`).
