@@ -1318,6 +1318,20 @@ impl Resolver<'_> {
                     let k = semantic_key(&x, &mut memo);
                     let a = match known.iter().find(|(kk, _)| *kk == k) {
                         Some((_, a)) => a.clone(),
+                        None if info.distinct_rewritten
+                            && !f.distinct
+                            && !matches!(f.id.name(), "min" | "max") =>
+                        {
+                            // Spark rewrites this call with the select list's. Planned over the
+                            // rewrite's own rows (one per distinct set) it would count each group
+                            // once per set (`HAVING count(*) > 1` kept every group), so it is
+                            // refused until the rewrite takes calls from `HAVING` and `ORDER BY`.
+                            // A `DISTINCT` call, `min` and `max` do not read a row twice.
+                            return Err(unsupported(
+                                "an aggregate in HAVING or ORDER BY that the select list does not hold, over DISTINCT aggregates of different arguments",
+                                x.origin,
+                            ));
+                        }
                         None => {
                             let ty = ArgType {
                                 data_type: Some(f.data_type.clone()),
@@ -1873,6 +1887,7 @@ impl Resolver<'_> {
             top: None,
             analytics,
             having: None,
+            distinct_rewritten: false,
         };
         if base.len() == items.len() {
             return self.aggregate_rel(origin, info, &[]);
@@ -2418,9 +2433,11 @@ impl Resolver<'_> {
                 ..b.clone()
             });
         }
-        Ok(Some(self.build_aggregate(
-            origin, &r1, group2, &items2, global, None, env,
-        )?))
+        let mut r = self.build_aggregate(origin, &r1, group2, &items2, global, None, env)?;
+        if let Some(info) = r.agg.as_mut() {
+            Arc::make_mut(info).distinct_rewritten = true;
+        }
+        Ok(Some(r))
     }
 
     /// A select item that reads lateral aliases, bound over the
