@@ -113,7 +113,7 @@ pub use executor::{
 };
 pub use join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
-    NestedLoopJoinNode, NestedLoopSpec,
+    NestedLoopJoinNode, NestedLoopSpec, SkewSplit, skew_split_sides,
 };
 pub use metrics::prometheus;
 pub use metrics::registry::{

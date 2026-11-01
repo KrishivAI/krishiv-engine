@@ -5,6 +5,7 @@
 //! partitions after the input ends ([`super::grace`]).
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_array::{Array, ArrayRef, BooleanArray, Int64Array, UInt32Array, new_null_array};
 use futures::future::BoxFuture;
@@ -12,7 +13,7 @@ use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooM
 use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
-use super::build::BuildGlobal;
+use super::build::{BuildGlobal, nanos};
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
 use super::keys::{Hashing, MAX_RADIX_BITS};
 use super::table::{JoinTable, NONE, RowArena};
@@ -143,6 +144,7 @@ impl Cursor {
                 deferred[p].push(row);
             }
         }
+        let started = Instant::now();
         let mut heads = vec![NONE; n];
         let mut found = Vec::new();
         let mut count = ProbeCount::default();
@@ -159,6 +161,9 @@ impl Cursor {
                 }
             }
         }
+        shared
+            .counters
+            .add(Counter::ProbeTableNs, nanos(started.elapsed()));
         if count.lookups > 0 {
             shared.counters.add(Counter::Lookups, count.lookups);
             shared.counters.add(Counter::KeyCompares, count.compares);
@@ -202,6 +207,7 @@ impl Cursor {
         let room = limit.min(self.matches);
         let mut probe = Vec::with_capacity(room);
         let mut build = Vec::with_capacity(room);
+        let started = Instant::now();
         while probe.len() < limit && self.pos < n {
             let i = self.pos;
             if self.chain == NONE {
@@ -229,6 +235,9 @@ impl Cursor {
                 self.pos += 1;
             }
         }
+        shared
+            .counters
+            .add(Counter::ProbeTableNs, nanos(started.elapsed()));
         if !probe.is_empty() {
             return Ok((
                 self.pairs(shared, tables, &probe, &build, partition)?,

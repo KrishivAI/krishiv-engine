@@ -123,6 +123,10 @@ pub struct DriverStats {
     pub max_slice: Duration,
     /// Polls longer than the stall threshold.
     pub stalls: u64,
+    /// Time the drivers spent in polls, summed: their busy time, the
+    /// denominator of [`QueryMetrics::hash_probe_share`]. Wall time of each
+    /// poll, so a thread descheduled mid-poll counts as busy.
+    pub busy: Duration,
 }
 
 impl DriverStats {
@@ -133,6 +137,7 @@ impl DriverStats {
         self.yields = self.yields.saturating_add(o.yields);
         self.max_slice = self.max_slice.max(o.max_slice);
         self.stalls = self.stalls.saturating_add(o.stalls);
+        self.busy = self.busy.saturating_add(o.busy);
     }
 }
 
@@ -389,6 +394,28 @@ impl QueryMetrics {
         }
         self.wall_time = self.wall_time.max(o.wall_time);
         self.workers = self.workers.saturating_add(o.workers);
+    }
+
+    /// The share of the drivers' busy time spent in hash-join table work:
+    /// the sum of the joins' `probe_table_ns` over [`DriverStats::busy`]
+    /// (ADR 0011's E02 tripwire reads it). `None` for a query that probed
+    /// no hash table, or whose drivers report no busy time.
+    #[must_use]
+    pub fn hash_probe_share(&self) -> Option<f64> {
+        let mut table = None;
+        for e in self.operators.values() {
+            if let Some(&Metric::Count(n)) = e.extra("probe_table_ns") {
+                table = Some(table.unwrap_or(0_u64).saturating_add(n));
+            }
+        }
+        let busy = self.drivers.busy.as_nanos();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a ratio for a report: nanoseconds past 2^53 lose only digits it does not show"
+        )]
+        table
+            .filter(|&t| t > 0 && busy > 0)
+            .map(|t| t as f64 / busy as f64)
     }
 }
 

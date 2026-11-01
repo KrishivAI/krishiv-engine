@@ -43,6 +43,8 @@ impl QueryProfile {
                 "yields": d.yields,
                 "max_slice_ns": ns(d.max_slice),
                 "stalls": d.stalls,
+                "busy_ns": ns(d.busy),
+                "hash_probe_share": m.hash_probe_share(),
                 "memory": {
                     "limit_bytes": m.memory.limit,
                     "peak_reserved_bytes": m.memory.peak_reserved,
@@ -97,6 +99,12 @@ impl QueryProfile {
                 yields: u64_of(q, "yields")?,
                 max_slice: dur_of(q, "max_slice_ns")?,
                 stalls: u64_of(q, "stalls")?,
+                // Absent in a profile written before the field existed.
+                busy: if q.contains_key("busy_ns") {
+                    dur_of(q, "busy_ns")?
+                } else {
+                    Duration::ZERO
+                },
             },
             memory: memory_of(q)?,
             ..QueryMetrics::default()
