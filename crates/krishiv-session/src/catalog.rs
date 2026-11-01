@@ -1551,7 +1551,9 @@ impl Expander<'_> {
             }
             .into());
         };
-        let lowered = krishiv_sql::lower(&query, (stored.next_source)()).map_err(|e| e.error)?;
+        let lowered =
+            krishiv_sql::lower_with(&query, (stored.next_source)(), stored.parser.case_sensitive)
+                .map_err(|e| e.error)?;
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
         let previous_path = self.view_path.replace(view.path.clone());

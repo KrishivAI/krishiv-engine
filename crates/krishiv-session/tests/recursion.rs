@@ -598,3 +598,17 @@ fn recursive_term_types_follow_the_anchor() {
         );
     }
 }
+
+#[test]
+fn a_stored_view_keeps_the_case_sensitive_cte_names_it_was_created_with() {
+    let s = Session::new().unwrap();
+    for stmt in [
+        "SET spark.sql.caseSensitive=true",
+        "CREATE VIEW v_case AS WITH RECURSIVE R AS (SELECT 1 AS n), r AS (SELECT * FROM R) SELECT * FROM r",
+    ] {
+        block_on(s.sql(stmt))
+            .and_then(|d| block_on(d.collect()))
+            .unwrap_or_else(|e| panic!("{stmt}: {e}"));
+    }
+    assert_eq!(rows(&s, "SELECT * FROM v_case"), vec![vec!["1".to_owned()]]);
+}
