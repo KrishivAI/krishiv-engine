@@ -1059,7 +1059,9 @@ fn describe_as_json_lists_the_keys_in_spark_order() {
         &s,
         "CREATE TABLE j (a STRING, b DECIMAL(5,2)) USING parquet COMMENT 'c' TBLPROPERTIES (password 'x')",
     );
-    let json = rows(&s, "DESCRIBE EXTENDED j AS JSON").join("");
+    let lines = rows(&s, "DESCRIBE EXTENDED j AS JSON");
+    assert_eq!(lines.len(), 1);
+    let json = lines.join("");
     let keys = [
         "table_name",
         "catalog_name",
@@ -1093,4 +1095,37 @@ fn describe_as_json_lists_the_keys_in_spark_order() {
         class(&s, "DESCRIBE EXTENDED n AS JSON"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
+}
+
+#[test]
+fn describe_as_json_values_follow_spark() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE jp (a INT COMMENT 'first' DEFAULT 1, token STRING, v VOID) USING parquet \
+         PARTITIONED BY (token) COMMENT 'tbl'",
+    );
+    run(&s, "ALTER TABLE jp ADD PARTITION (token='t1')");
+    let one = |sql: &str| -> serde_json::Value {
+        let lines = rows(&s, sql);
+        assert_eq!(lines.len(), 1, "{sql}");
+        serde_json::from_str(&lines[0]).unwrap_or_else(|e| panic!("{sql}: {e}: {}", lines[0]))
+    };
+    let t = one("DESCRIBE EXTENDED jp AS JSON");
+    assert_eq!(
+        t["columns"][0],
+        serde_json::json!({"name":"a","type":{"name":"int"},"nullable":true,
+                           "comment":"first","default":"1"})
+    );
+    assert_eq!(t["columns"][1]["type"], serde_json::json!({"name":"void"}));
+    let created = t["created_time"].as_str().unwrap();
+    assert!(
+        created.len() == 20 && created.as_bytes()[10] == b'T' && created.ends_with('Z'),
+        "{created}"
+    );
+    let p = one("DESCRIBE EXTENDED jp PARTITION (token='t1') AS JSON");
+    assert_eq!(p["partition_values"], serde_json::json!({"token":"t1"}));
+    assert_eq!(p["comment"], "tbl");
+    assert!(p["created_time"].as_str().unwrap().ends_with('Z'));
 }

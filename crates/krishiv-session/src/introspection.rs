@@ -95,6 +95,28 @@ fn created_time(ms: i64) -> String {
     )
 }
 
+/// `Created Time` as the JSON command writes it: `yyyy-MM-dd'T'HH:mm:ss'Z'` in UTC.
+fn created_time_iso(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60,
+    )
+}
+
 /// Spark's `spark.redaction.regex` default, `(?i)secret|password|token|access[.]key`, applied to the key.
 fn redact<'a>(key: &str, value: &'a str) -> &'a str {
     let k = key.to_lowercase();
@@ -821,14 +843,22 @@ fn json_type(t: &DataType) -> Result<String, KrishivError> {
                 d.scale()
             ));
         }
-        _ => return Err(unsupported("DESCRIBE ... AS JSON of a nested column type")),
+        DataType::Array(_) | DataType::Map(_) | DataType::Struct(_) => {
+            return Err(unsupported("DESCRIBE ... AS JSON of a nested column type"));
+        }
+        other => {
+            return Ok(format!(
+                r#"{{"name":{}}}"#,
+                json_str(&other.catalog_string())
+            ));
+        }
     };
     Ok(format!(r#"{{"name":"{name}"}}"#))
 }
 
 /// `DESCRIBE EXTENDED [... PARTITION] ... AS JSON` of a stored table: one JSON object whose keys come in
-/// the order Spark's `DescribeTableJsonCommand` writes them (a partition's differ: its location, no table
-/// comment, and the bucket keys after `provider`).
+/// the order Spark's `DescribeTableJsonCommand` writes them (a partition's differ: its values and location
+/// come first, its statistics follow `last_access`, and the bucket keys sit after `provider`, before the comment).
 fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<String, KrishivError> {
     if t.view.is_some() {
         return Err(unsupported("DESCRIBE ... AS JSON of a view"));
@@ -837,12 +867,20 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
         .columns
         .iter()
         .map(|c| {
-            Ok(format!(
-                r#"{{"name":{},"type":{},"nullable":{}}}"#,
+            let mut col = format!(
+                r#"{{"name":{},"type":{},"nullable":{}"#,
                 json_str(&c.name),
                 json_type(&c.data_type)?,
                 c.nullable
-            ))
+            );
+            if let Some(comment) = &c.comment {
+                col.push_str(&format!(r#","comment":{}"#, json_str(comment)));
+            }
+            if let Some(default) = &c.default {
+                col.push_str(&format!(r#","default":{}"#, json_str(default)));
+            }
+            col.push('}');
+            Ok(col)
         })
         .collect::<Result<Vec<_>, KrishivError>>()?;
     let mut f: Vec<String> = vec![
@@ -867,10 +905,13 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
     });
     let location = match p {
         Some(p) => {
-            f.push(format!(
-                r#""partition_values":{}"#,
-                json_map(p.spec.iter().map(|(k, v)| (k, v)))
-            ));
+            let values = p
+                .spec
+                .iter()
+                .map(|(k, v)| format!("{}:{}", json_str(k), json_str(v)))
+                .collect::<Vec<_>>()
+                .join(",");
+            f.push(format!(r#""partition_values":{{{values}}}"#));
             &p.location
         }
         None => {
@@ -898,9 +939,15 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
     let created = p.map_or(t.created_ms, |p| p.created_ms);
     f.push(format!(
         r#""created_time":{}"#,
-        json_str(&created_time(created))
+        json_str(&created_time_iso(created))
     ));
     f.push(r#""last_access":"UNKNOWN""#.to_owned());
+    if let Some(stats) = p.and_then(|p| p.stats) {
+        f.push(format!(
+            r#""partition_statistics":{}"#,
+            json_str(&crate::partitions::stats_text(stats))
+        ));
+    }
     f.push(format!(r#""created_by":{}"#, json_str("Spark 4.2.0")));
     f.push(format!(
         r#""type":"{}""#,
@@ -909,7 +956,8 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
     f.push(format!(r#""provider":{}"#, json_str(&t.provider)));
     if p.is_some() {
         f.extend(buckets.iter().flatten().cloned());
-    } else if let Some(c) = &t.comment {
+    }
+    if let Some(c) = &t.comment {
         f.push(format!(r#""comment":{}"#, json_str(c)));
     }
     if !t.properties.is_empty() {
