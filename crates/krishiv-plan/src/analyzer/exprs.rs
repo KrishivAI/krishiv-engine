@@ -5048,9 +5048,11 @@ impl Resolver<'_> {
         let mut names = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             let name = match &k.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
-                    c.name.clone()
-                }
+                ExprNode::Resolved(
+                    ResolvedExpr::Column(c)
+                    | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::LambdaVar(c),
+                ) => c.name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
                 _ => format!("col{}", i + 1),
