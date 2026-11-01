@@ -45,9 +45,7 @@ def main() -> None:
             f" date_format(timestamp_seconds({dst}), 'z'), date_format(timestamp_seconds({dst}), 'zzzz')"
         ).first()
         zones[zid] = {"std_at": std, "dst_at": dst, "names": list(row)}
-    json.dump(
-        {"spark_version": spark.version, "zones": zones}, sys.stdout, sort_keys=True, separators=(",", ":")
-    )
+    json.dump({"spark_version": spark.version, "zones": zones}, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
 
 
