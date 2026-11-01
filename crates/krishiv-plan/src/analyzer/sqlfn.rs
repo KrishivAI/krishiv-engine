@@ -122,6 +122,10 @@ pub struct SqlFunction {
     /// that does. A function declared `CONTAINS SQL` may call none that
     /// does (Spark: `INVALID_SQL_FUNCTION_DATA_ACCESS`).
     pub reads_data: bool,
+    /// `spark.sql.ansi.enabled` when the function was created: Spark
+    /// resolves the body under the configuration captured then, whatever the
+    /// caller's. `None` follows the caller's.
+    pub ansi: Option<bool>,
 }
 
 impl SqlFunction {
@@ -325,7 +329,15 @@ impl Resolver<'_> {
         // The body sees no lambda variable of the calling query.
         let outer_lambdas = std::mem::take(&mut self.lambdas);
         let outer = self.frame.replace(Arc::clone(&frame));
+        // The body resolves under the ANSI mode captured at creation.
+        let flip = def.ansi.is_some_and(|a| a != self.ctx.conf.ansi);
+        if flip {
+            std::mem::swap(&mut self.ctx, &mut self.flipped);
+        }
         let resolved = self.body(def, e);
+        if flip {
+            std::mem::swap(&mut self.ctx, &mut self.flipped);
+        }
         self.frame = outer;
         self.lambdas = outer_lambdas;
         let body = resolved?;

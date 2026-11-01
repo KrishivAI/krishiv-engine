@@ -546,3 +546,26 @@ fn legacy_identifier_function_names_a_table() {
     });
     assert!(routine.is_err());
 }
+
+/// A SQL function resolves its body under the ANSI mode captured when it was
+/// created, whatever the caller's (Spark's `sql-udf` 3.3).
+#[test]
+fn a_sql_function_keeps_the_ansi_mode_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "SET spark.sql.ansi.enabled = true",
+        "CREATE FUNCTION cast_ansi(x INT) RETURNS INT RETURN CAST('abc' AS INT) + x",
+        "CREATE TEMPORARY FUNCTION cast_ansi_t(x INT) RETURNS INT RETURN CAST('abc' AS INT) + x",
+        "SET spark.sql.ansi.enabled = false",
+        "CREATE FUNCTION cast_plain(x INT) RETURNS INT RETURN CAST('abc' AS INT) + x",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    for f in ["cast_ansi", "cast_ansi_t"] {
+        let r = block_on(async { s.sql(&format!("SELECT {f}(0)")).await?.collect().await });
+        let e = format!("{:?}", r.expect_err(f));
+        assert!(e.contains("CastInvalidInput"), "{f}: {e}");
+    }
+    let r = block_on(async { s.sql("SELECT cast_plain(0)").await?.collect().await });
+    assert!(r.is_ok(), "{r:?}");
+}
