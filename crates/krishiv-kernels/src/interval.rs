@@ -123,6 +123,20 @@ where
     Ok(out.finish())
 }
 
+/// A year-month column in a type whose end field is `unit` months: what is
+/// below it is dropped.
+#[must_use]
+pub fn truncate_year_month(a: &IntervalYearMonthArray, unit: i32) -> IntervalYearMonthArray {
+    a.unary(|v| v.checked_div(unit).map_or(v, |q| q.saturating_mul(unit)))
+}
+
+/// A day-time column in a type whose end field is `unit` microseconds: what is
+/// below it is dropped.
+#[must_use]
+pub fn truncate_day_time(a: &DurationMicrosecondArray, unit: i64) -> DurationMicrosecondArray {
+    a.unary(|v| v.checked_div(unit).map_or(v, |q| q.saturating_mul(unit)))
+}
+
 /// Unary `-` of a year-month interval.
 ///
 /// # Errors
@@ -563,5 +577,21 @@ mod tests {
         assert_eq!(r.value(0), 7);
         assert_eq!(extract_days(&micros(3 * MICROS_PER_DAY)).value(0), 3);
         assert_eq!(extract_days(&micros(-MICROS_PER_DAY)).value(0), -1);
+    }
+
+    #[test]
+    fn a_coarser_end_field_drops_what_is_below_it() {
+        let m = IntervalYearMonthArray::from(vec![Some(13), Some(-13), None]);
+        let out = truncate_year_month(&m, 12);
+        assert_eq!(
+            (out.value(0), out.value(1), out.is_null(2)),
+            (12, -12, true)
+        );
+        let d = DurationMicrosecondArray::from(vec![Some(90), Some(-90), None]);
+        let out = truncate_day_time(&d, 60);
+        assert_eq!(
+            (out.value(0), out.value(1), out.is_null(2)),
+            (60, -60, true)
+        );
     }
 }
