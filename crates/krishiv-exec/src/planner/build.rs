@@ -272,6 +272,9 @@ impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &Arc<LogicalPlan>) -> Self {
         let next_id = max_id(root).saturating_add(1).max(1 << 62);
         let mut env = EvalEnv::new(&cx.config, Arc::clone(&cx.user));
+        if let Some(micros) = cx.query_start_micros {
+            env.set_query_start_micros(micros);
+        }
         // Planning validates UDF calls against the session's library; the
         // implementation a plan runs comes from its worker.
         env.udfs = cx.udfs.clone();

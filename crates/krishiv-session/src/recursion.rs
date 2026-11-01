@@ -52,11 +52,19 @@ fn hidden_name() -> String {
     format!("{CACHE_PREFIX}loop{n}")
 }
 
+/// The name column `i` of a loop's hidden table carries: unique, whatever
+/// the loop's output names (a CTE may repeat one), since scans read tables
+/// by name. Parents read the scan's columns by attribute id.
+fn internal_name(i: usize) -> String {
+    format!("__loop_c{i}")
+}
+
 fn loop_schema(output: &[BoundColumn]) -> SchemaRef {
     Arc::new(Schema::new(
         output
             .iter()
-            .map(|c| c.data_type.to_arrow_field(c.name.clone(), true))
+            .enumerate()
+            .map(|(i, c)| c.data_type.to_arrow_field(internal_name(i), true))
             .collect::<Vec<_>>(),
     ))
 }
@@ -253,7 +261,14 @@ fn scan_of(
                 name: vec![name],
                 options: BTreeMap::new(),
             },
-            output,
+            output: output
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| BoundColumn {
+                    name: internal_name(i),
+                    ..c
+                })
+                .collect(),
             version: None,
         }))
         .with_origin(origin),

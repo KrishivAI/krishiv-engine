@@ -68,6 +68,21 @@ use crate::variables::SessionVariables;
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
 
+tokio::task_local! {
+    /// The query-start instant (microseconds since the epoch) of the
+    /// physical planning in progress on this task.
+    static QUERY_START: i64;
+}
+
+/// Now, as microseconds since the epoch.
+fn query_start_micros() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_micros()).ok())
+        .unwrap_or_default()
+}
+
 /// Unpins a run's per-execution tables when dropped: the run's stream ends
 /// or is dropped, or starting it failed.
 struct Release {
@@ -1341,9 +1356,18 @@ impl Session {
         trace: bool,
         run_loops: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
+        // One query-start instant for the plan and every recursion round it
+        // plans (`current_timestamp()` is constant within a query): the
+        // outermost call takes it, nested ones read it.
+        let start = QUERY_START
+            .try_with(|s| *s)
+            .unwrap_or_else(|_| query_start_micros());
         let mut pins = Vec::new();
-        let planned = self
-            .physical_pinned(analyzed, env, trace, run_loops, &mut pins)
+        let planned = QUERY_START
+            .scope(
+                start,
+                self.physical_pinned(analyzed, env, trace, run_loops, &mut pins, start),
+            )
             .await;
         match planned {
             // The plan reads the loops' tables when it runs: whoever runs it
@@ -1367,6 +1391,7 @@ impl Session {
         trace: bool,
         run_loops: bool,
         pins: &mut Vec<String>,
+        start: i64,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         // Planning makes no spill directory: a query gets its scope when
         // its plan is instantiated (`Self::worker`), so a plan that is only
@@ -1403,6 +1428,7 @@ impl Session {
             )
         };
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
+            .with_query_start(start)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;

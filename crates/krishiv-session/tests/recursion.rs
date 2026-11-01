@@ -465,3 +465,37 @@ fn a_recursive_result_can_be_transformed_and_read_again() {
         vec![vec!["3".to_owned()]]
     );
 }
+
+#[test]
+fn a_recursive_cte_may_repeat_an_output_name() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(
+        "WITH RECURSIVE r AS (SELECT 1 AS a, 2 AS a, 0 AS n UNION ALL \
+         SELECT 3, 4, n + 1 FROM r WHERE n < 1) SELECT * FROM r",
+    ))
+    .unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["a", "a", "n"]);
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    assert_eq!(batches[0].num_columns(), 3);
+}
+
+#[test]
+fn current_timestamp_is_one_instant_across_rounds() {
+    let s = Session::new().unwrap();
+    let got = rows(
+        &s,
+        "WITH RECURSIVE r(n, t) AS (SELECT 1, current_timestamp() UNION ALL \
+         SELECT n + 1, current_timestamp() FROM r WHERE n < 3) \
+         SELECT count(DISTINCT t) FROM r",
+    );
+    assert_eq!(got, vec![vec!["1".to_owned()]]);
+}
