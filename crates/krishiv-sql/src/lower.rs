@@ -169,9 +169,6 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
     )
 }
 
-/// The most rows `stack` lowers: its rows become expressions.
-const STACK_MAX_ROWS: usize = 4096;
-
 struct Lowerer {
     source: SourceId,
     depth: usize,
@@ -935,6 +932,21 @@ impl Lowerer {
         ))
     }
 
+    /// Whether `e` calls a built-in aggregate function outside a window
+    /// (so a select list holding it aggregates even without `GROUP BY`).
+    fn has_aggregate_call(e: &Expr) -> bool {
+        if let ExprKind::Function(f) = &e.kind
+            && f.over.is_none()
+            && let [name] = &f.name.parts[..]
+            && krishiv_plan::analyzer::BuiltinFunctions::is_aggregate(&name.value)
+        {
+            return true;
+        }
+        let mut found = false;
+        e.for_each_child(&mut |c| found = found || Self::has_aggregate_call(c));
+        found
+    }
+
     /// The one argument a generator call reads: the argument of `explode`,
     /// `posexplode` and `inline`, or for `stack(n, e1, ..., ek)` the array
     /// of `n` structs `inline` generates the rows from (`col0`, `col1`, ...
@@ -963,51 +975,15 @@ impl Lowerer {
             };
             return self.arg(&arg.expr);
         }
-        let Some((first, values)) = args.split_first().filter(|(_, v)| !v.is_empty()) else {
+        if args.len() < 2 {
             return Err(wrong("> 1", args.len()));
-        };
-        // The row count is an INT literal (Spark requires an integer
-        // foldable); the rows are built here, so it is bounded.
-        let rows = match &first.expr.kind {
-            ExprKind::Literal(Literal::Number {
-                text,
-                kind: crate::ast::NumKind::Int,
-            }) => text
-                .parse::<usize>()
-                .ok()
-                .filter(|n| (1..=STACK_MAX_ROWS).contains(n)),
-            _ => None,
-        };
-        let Some(rows) = rows else {
-            return Err(unsupported(
-                "stack with a row count that is no INT literal from 1 to 4096",
-                first.span,
-            ));
-        };
-        let width = values.len().div_ceil(rows);
-        let lowered = values
+        }
+        // The analyzer types the call and generates the rows from it.
+        let call_args = args
             .iter()
             .map(|a| self.arg(&a.expr))
             .collect::<R<Vec<_>>>()?;
-        let mut structs = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let mut fields = Vec::with_capacity(2 * width);
-            for col in 0..width {
-                let name = self.ex(
-                    ExprNode::Literal(krishiv_plan::Literal::String(format!("col{col}"))),
-                    span,
-                );
-                fields.push(arc(name));
-                fields.push(match lowered.get(row * width + col) {
-                    Some(v) => Arc::clone(v),
-                    None => {
-                        arc(self.ex(ExprNode::Literal(krishiv_plan::Literal::Null(None)), span))
-                    }
-                });
-            }
-            structs.push(arc(self.call("named_struct", fields, span)));
-        }
-        Ok(arc(self.call("array", structs, span)))
+        Ok(arc(self.call("stack", call_args, span)))
     }
 
     /// `generator(arg)` over `plan` (a [`PlanNode::Generate`]) and the
@@ -1067,11 +1043,22 @@ impl Lowerer {
             );
         }
         let mut items = Vec::new();
+        // A select list with an aggregate call is an aggregate even without
+        // `GROUP BY`: its generators run above it, in the analyzer.
+        let aggregates = s
+            .projection
+            .iter()
+            .any(|i| Self::has_aggregate_call(&i.expr));
+        let has_generator = s
+            .projection
+            .iter()
+            .any(|i| Self::generator_of(&i.expr).is_some());
         for (index, item) in s.projection.iter().enumerate() {
             // With GROUP BY or HAVING the analyzer extracts the generator
             // from the aggregate (Spark's `ExtractGenerator`).
             if s.group_by.is_none()
                 && s.having.is_none()
+                && !(aggregates && has_generator)
                 && Self::generator_of(&item.expr).is_some()
             {
                 let taken =
@@ -1083,7 +1070,7 @@ impl Lowerer {
             }
             items.push(self.select_item(item)?);
         }
-        if s.group_by.is_none() && s.having.is_none() {
+        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
             plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
