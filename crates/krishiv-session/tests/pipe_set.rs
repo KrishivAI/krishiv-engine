@@ -128,9 +128,9 @@ fn plans_differing_only_in_a_set_value_are_different() {
 }
 
 #[test]
-fn pipe_group_by_position_out_of_range_and_huge_are_refused() {
+fn pipe_group_by_position_out_of_range_is_refused() {
     let s = Session::new().unwrap();
-    for n in ["5", "0", "99999999999999999999"] {
+    for n in ["5", "0"] {
         let sql = format!("values (1), (2) as t(x) |> aggregate count(*) group by {n}");
         let err = match block_on(s.sql(&sql)) {
             Ok(df) => block_on(df.collect()).err(),
@@ -138,4 +138,14 @@ fn pipe_group_by_position_out_of_range_and_huge_are_refused() {
         };
         assert!(err.is_some(), "{sql} should fail");
     }
+}
+
+#[test]
+fn a_group_by_number_beyond_int_is_a_constant_key() {
+    let s = Session::new().unwrap();
+    let got = rows(
+        &s,
+        "values (1), (2) as t(x) |> aggregate count(*) as c group by 2147483648",
+    );
+    assert_eq!(got, ["2147483648,2"]);
 }

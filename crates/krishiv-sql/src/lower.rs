@@ -702,7 +702,10 @@ impl Lowerer {
             ExprKind::Literal(Literal::Number {
                 text,
                 kind: NumKind::Int,
-            }) => text.parse().ok(),
+            }) => text
+                .parse::<i32>()
+                .ok()
+                .and_then(|n| usize::try_from(n).ok()),
             _ => None,
         }
     }
@@ -717,28 +720,18 @@ impl Lowerer {
                 GroupItemKind::Expr(e) => {
                     // A number names an input column, unlike `GROUP BY n`
                     // of a query, which names a select item.
-                    let key = match &e.kind {
-                        ExprKind::Literal(Literal::Number {
-                            kind: NumKind::Int, ..
-                        }) => {
-                            let Some(position) = self.position(e) else {
-                                return Err(unsupported(
-                                    "a position in a pipe AGGREGATE GROUP BY",
-                                    g.span,
-                                ));
-                            };
-                            arc(self.ex(
-                                ExprNode::Star(Star {
-                                    qualifier: Vec::new(),
-                                    except: Vec::new(),
-                                    replace: Vec::new(),
-                                    position: Some(position),
-                                    plan_id: None,
-                                }),
-                                e.span,
-                            ))
-                        }
-                        _ => arc(self.expr(e)?),
+                    let key = match self.position(e) {
+                        Some(position) => arc(self.ex(
+                            ExprNode::Star(Star {
+                                qualifier: Vec::new(),
+                                except: Vec::new(),
+                                replace: Vec::new(),
+                                position: Some(position),
+                                plan_id: None,
+                            }),
+                            e.span,
+                        )),
+                        None => arc(self.expr(e)?),
                     };
                     items.push(Arc::clone(&key));
                     keys.push(key);
