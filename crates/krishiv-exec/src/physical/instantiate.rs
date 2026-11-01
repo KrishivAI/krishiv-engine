@@ -1477,6 +1477,7 @@ mod tests {
                 map_key_dedup_last_win: false,
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
+                legacy_time_parser: false,
             },
         );
         let worker = super::WorkerContext::new(Arc::new(crate::planner::MemoryTables::new()));

@@ -474,6 +474,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "lambda_functions"
             | "map_key_dedup_policy"
             | "legacy_charset_switches"
+            | "legacy_time_parser"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"

@@ -77,6 +77,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &LEGACY_TIME_PARSER_POLICY,
     &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     &LEGACY_VIEW_SCHEMA_COMPENSATION,
     &METRICS_ENABLED,
@@ -187,6 +188,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &FILES_MAX_PARTITION_BYTES,
     ),
     (
+        "spark.sql.legacy.timeParserPolicy",
+        &LEGACY_TIME_PARSER_POLICY,
+    ),
+    (
         "krishiv.memory.abortReleaseTimeout",
         &MEMORY_ABORT_RELEASE_TIMEOUT,
     ),
@@ -213,6 +218,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
+    ),
+    (
+        "krishiv.sql.legacy.timeParserPolicy",
+        &LEGACY_TIME_PARSER_POLICY,
     ),
     (
         "krishiv.runtimeFilter.bloom.maxBytes",
@@ -1164,6 +1173,20 @@ pub static LEGACY_JAVA_CHARSETS: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.javaCharsets"),
+};
+
+/// `spark.sql.legacy.timeParserPolicy`.
+pub static LEGACY_TIME_PARSER_POLICY: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.timeParserPolicy",
+    value_type: ValueType::Enum(&["EXCEPTION", "CORRECTED", "LEGACY"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("EXCEPTION"))),
+    doc: "How the datetime pattern functions (`date_format`, `to_date`, `to_timestamp`, \
+          `unix_timestamp`, `from_unixtime`) read and print patterns. `LEGACY` is the pre-3.0 \
+          `SimpleDateFormat`/`FastDateFormat` behaviour; `CORRECTED` and `EXCEPTION` use the \
+          `DateTimeFormatter` patterns.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.timeParserPolicy"),
 };
 
 /// `spark.sql.legacy.statisticalAggregate`.

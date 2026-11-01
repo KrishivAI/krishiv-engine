@@ -41,6 +41,7 @@ pub(crate) fn env() -> ExprEnv {
         map_key_dedup_last_win: false,
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
+        legacy_time_parser: false,
     }
 }
 
@@ -1490,6 +1491,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         "legacy_charset_switches".to_owned(),
         legacy_charset_switches(),
     ));
+    out.push(("legacy_time_parser".to_owned(), legacy_time_parser()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
@@ -1515,6 +1517,17 @@ fn legacy_charset_switches() -> PhysicalPlan {
     let env = ExprEnv {
         legacy_java_charsets: true,
         legacy_coding_error_action: true,
+        legacy_time_parser: false,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose environment selects the legacy time parser.
+fn legacy_time_parser() -> PhysicalPlan {
+    let env = ExprEnv {
+        legacy_time_parser: true,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);

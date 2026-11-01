@@ -119,6 +119,12 @@ pub struct ExprEnv {
     /// feature: legacy_charset_switches
     #[prost(bool, optional, tag = "9")]
     pub legacy_coding_error_action: ::core::option::Option<bool>,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`: the datetime pattern
+    /// functions use the SimpleDateFormat parser; a worker without the feature
+    /// would read the patterns as DateTimeFormatter ones.
+    /// feature: legacy_time_parser
+    #[prost(bool, optional, tag = "10")]
+    pub legacy_time_parser: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

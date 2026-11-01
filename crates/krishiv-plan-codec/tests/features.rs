@@ -68,6 +68,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("legacy_charset_switches").features,
         ["legacy_charset_switches"]
     );
+    assert_eq!(
+        message("legacy_time_parser").features,
+        ["legacy_time_parser"]
+    );
     // Every registered feature occurs in some inventory case, except
     // `legacy_statistical_aggregate`: it fires only around a moment
     // aggregate, and the encoder refuses every moment aggregate (pinned by

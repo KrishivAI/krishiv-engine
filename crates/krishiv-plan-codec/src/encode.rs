@@ -157,6 +157,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         map_key_dedup_last_win: env.map_key_dedup_last_win.then_some(true),
         legacy_java_charsets: env.legacy_java_charsets.then_some(true),
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
+        legacy_time_parser: env.legacy_time_parser.then_some(true),
     }
 }
 

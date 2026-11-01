@@ -680,3 +680,21 @@ fn cte_recursion_limits_default_and_alias() {
     assert_eq!(c.get(&CTE_RECURSION_ROW_LIMIT), Some(&ConfigValue::Int(-1)));
     assert!(c.set("krishiv.sql.cteRecursionLevelLimit", "many").is_err());
 }
+
+#[test]
+fn time_parser_policy_parses_and_defaults() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(ConfigValue::as_str),
+        Some("EXCEPTION")
+    );
+    c.set("spark.sql.legacy.timeParserPolicy", "legacy")
+        .unwrap();
+    assert_eq!(
+        c.get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(ConfigValue::as_str),
+        Some("LEGACY")
+    );
+    assert!(c.set("spark.sql.legacy.timeParserPolicy", "NEW").is_err());
+}

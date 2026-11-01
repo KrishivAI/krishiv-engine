@@ -158,6 +158,9 @@ pub struct BindOptions {
     /// `spark.sql.legacy.codingErrorAction`: what `encode` and `decode`
     /// accept and do with what they cannot map.
     pub charsets: CharsetOptions,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`: the pattern functions
+    /// use the `SimpleDateFormat` parser and `FastDateFormat` printer.
+    pub legacy_time_parser: bool,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
     /// Counts the unseeded random binds of one plan instantiation, in
@@ -185,6 +188,7 @@ impl BindOptions {
                 java_charsets: false,
                 replace_malformed: false,
             },
+            legacy_time_parser: false,
             user: Arc::from("unknown"),
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
@@ -237,6 +241,13 @@ impl BindOptions {
     #[must_use]
     pub const fn with_map_key_dedup_policy(mut self, policy: DedupPolicy) -> Self {
         self.map_key_dedup_policy = policy;
+        self
+    }
+
+    /// With `spark.sql.legacy.timeParserPolicy = LEGACY` when `on`.
+    #[must_use]
+    pub const fn with_legacy_time_parser(mut self, on: bool) -> Self {
+        self.legacy_time_parser = on;
         self
     }
 

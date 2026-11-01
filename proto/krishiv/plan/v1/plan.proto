@@ -114,6 +114,11 @@ message ExprEnv {
   // malformed input U+FFFD; a worker without the feature would raise.
   // feature: legacy_charset_switches
   optional bool legacy_coding_error_action = 9;
+  // `spark.sql.legacy.timeParserPolicy = LEGACY`: the datetime pattern
+  // functions use the SimpleDateFormat parser; a worker without the feature
+  // would read the patterns as DateTimeFormatter ones.
+  // feature: legacy_time_parser
+  optional bool legacy_time_parser = 10;
 }
 
 message ExplainNode {
