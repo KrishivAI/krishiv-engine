@@ -39,7 +39,8 @@ use arrow_schema::{FieldRef, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
+    CannotMergeIncompatibleDataType, KrishivError, KrishivUnsupportedFeature, PathNotFound,
+    UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
@@ -431,11 +432,7 @@ impl FileReads {
                 return Err(e);
             }
         };
-        if self.merges_schemas(format.name(), options) {
-            return Err(unsupported(
-                "merging the schemas of files (mergeSchema)".to_owned(),
-            ));
-        }
+        let merge = self.merges_schemas(format.name(), options);
         let (options, _) = format.options().parse(options, &self.session)?;
         let discovered: Vec<(String, Vec<Segment>)> = listed
             .iter()
@@ -463,10 +460,30 @@ impl FileReads {
             }
             .into());
         }
-        let schema = format
-            .infer_schema(&self.io, &files, &options)
-            .await
-            .map_err(|e| e.into_error(&files[0].display_path()))?;
+        let schema = if merge {
+            // Every file's own schema, merged by column name in first-seen order.
+            let mut merged: Option<SchemaRef> = None;
+            for file in &files {
+                let one = format
+                    .infer_schema(&self.io, std::slice::from_ref(file), &options)
+                    .await
+                    .map_err(|e| e.into_error(&file.display_path()))?;
+                merged = Some(match merged {
+                    None => one,
+                    Some(m) => merge_schemas(&m, &one)?,
+                });
+            }
+            merged.ok_or_else(|| {
+                KrishivError::from(UnableToInferSchema {
+                    format: display_name(format.name()),
+                })
+            })?
+        } else {
+            format
+                .infer_schema(&self.io, &files, &options)
+                .await
+                .map_err(|e| e.into_error(&files[0].display_path()))?
+        };
         let schema = with_partition_columns(schema, &partition_columns)?;
         Ok(FileListing {
             format,
@@ -658,6 +675,63 @@ impl FileReads {
         }
         Ok(())
     }
+}
+
+/// Spark's `StructType.merge`: the columns of `a`, then those only in `b`;
+/// a column in both keeps its type (structs merge field by field) and is
+/// nullable if either is.
+///
+/// # Errors
+/// `CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE` when a column has two types.
+fn merge_schemas(a: &SchemaRef, b: &SchemaRef) -> Result<SchemaRef> {
+    let fields = merge_fields(a.fields(), b.fields())?;
+    Ok(Arc::new(arrow_schema::Schema::new_with_metadata(
+        fields,
+        a.metadata().clone(),
+    )))
+}
+
+fn merge_fields(a: &arrow_schema::Fields, b: &arrow_schema::Fields) -> Result<Vec<FieldRef>> {
+    let mut out: Vec<FieldRef> = Vec::with_capacity(a.len());
+    for f in a {
+        match b.iter().find(|g| g.name() == f.name()) {
+            None => out.push(Arc::clone(f)),
+            Some(g) => out.push(merge_field(f, g)?),
+        }
+    }
+    out.extend(
+        b.iter()
+            .filter(|g| !a.iter().any(|f| f.name() == g.name()))
+            .cloned(),
+    );
+    Ok(out)
+}
+
+fn merge_field(a: &FieldRef, b: &FieldRef) -> Result<FieldRef> {
+    let nullable = a.is_nullable() || b.is_nullable();
+    let data_type = match (a.data_type(), b.data_type()) {
+        (x, y) if x == y => x.clone(),
+        (arrow_schema::DataType::Struct(x), arrow_schema::DataType::Struct(y)) => {
+            arrow_schema::DataType::Struct(merge_fields(x, y)?.into())
+        }
+        (x, y) => {
+            let sql = |f: &FieldRef, t: &arrow_schema::DataType| {
+                DataType::from_arrow_field(&arrow_schema::Field::new(f.name(), t.clone(), true))
+                    .map_or_else(|_| format!("{t}"), |d| d.sql())
+            };
+            return Err(CannotMergeIncompatibleDataType {
+                left: format!("\"{}\"", sql(a, x)),
+                right: format!("\"{}\"", sql(b, y)),
+            }
+            .into());
+        }
+    };
+    Ok(Arc::new(
+        a.as_ref()
+            .clone()
+            .with_data_type(data_type)
+            .with_nullable(nullable),
+    ))
 }
 
 /// How a read lists files: `recursiveFileLookup` (every file below the

@@ -322,3 +322,66 @@ fn a_glob_reads_each_match_as_its_own_root() {
     };
     assert_eq!(e.error_class().name(), "PATH_NOT_FOUND");
 }
+
+#[test]
+fn merge_schema_unions_the_columns_of_the_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let root = dir.path().join("merged");
+    let root = root.to_str().unwrap().to_owned();
+    let one = block_on(s.sql("SELECT 1 AS a, 'x' AS b")).unwrap();
+    block_on(one.write().parquet(&format!("{root}/p1"))).unwrap();
+    let two = block_on(s.sql("SELECT 2 AS a, 3.5D AS c")).unwrap();
+    block_on(two.write().parquet(&format!("{root}/p2"))).unwrap();
+    let df = s
+        .read()
+        .option("mergeSchema", "true")
+        .option("recursiveFileLookup", "true")
+        .parquet([root.as_str()]);
+    let mut names: Vec<String> = block_on(df.schema())
+        .unwrap()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a", "b", "c"]);
+    // A row reads the columns its file lacks as NULL.
+    let picked = df
+        .select_expr(["CAST(a AS STRING)", "b", "CAST(c AS STRING)"])
+        .unwrap();
+    let mut got = Vec::new();
+    for b in block_on(picked.collect()).unwrap() {
+        for r in 0..b.num_rows() {
+            got.push(
+                (0..3)
+                    .map(|c| {
+                        let col = b.column(c);
+                        if col.is_null(r) {
+                            "NULL".to_owned()
+                        } else if let Some(v) = col.as_string_opt::<i32>() {
+                            v.value(r).to_owned()
+                        } else {
+                            col.as_string_view().value(r).to_owned()
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+    got.sort();
+    assert_eq!(got, [["1", "x", "NULL"], ["2", "NULL", "3.5"]]);
+    // A column with two types cannot be merged.
+    let bad = block_on(s.sql("SELECT 'text' AS a")).unwrap();
+    block_on(bad.write().parquet(&format!("{root}/p3"))).unwrap();
+    let df = s
+        .read()
+        .option("mergeSchema", "true")
+        .option("recursiveFileLookup", "true")
+        .parquet([root.as_str()]);
+    let e = block_on(df.schema()).unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE"
+    );
+}
