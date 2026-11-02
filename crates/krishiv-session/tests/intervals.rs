@@ -525,6 +525,26 @@ fn a_string_past_the_nanosecond_field_is_refused_by_name() -> R {
     Ok(())
 }
 
+/// `CAST` and `TRY_CAST` of a VOID column are typed NULLs (Spark 4.2.0).
+#[test]
+fn a_cast_of_a_null_only_column_to_an_interval_is_null() -> R {
+    let s = Session::new()?;
+    for to in [
+        "interval day",
+        "interval month",
+        "interval year to month",
+        "interval",
+    ] {
+        for cast in ["cast", "try_cast"] {
+            let q = format!("SELECT {cast}(a AS {to}) FROM (SELECT NULL a)");
+            let batches = block_on(async { s.sql(&q).await?.collect().await })?;
+            assert_eq!(batches[0].num_rows(), 1, "{q}");
+            assert!(batches[0].column(0).is_null(0), "{q}");
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn an_interval_expression_over_no_rows_is_empty() -> R {
     let session = Session::new()?;

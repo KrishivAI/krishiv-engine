@@ -471,6 +471,9 @@ pub(super) fn interval_cast(
 impl IntervalCast {
     fn apply(&self, a: &ArrayRef) -> Result<ArrayRef> {
         use krishiv_kernels::interval_cast as k;
+        if a.data_type() == &ArrowType::Null {
+            return Ok(arrow_array::new_null_array(&self.arrow, a.len()));
+        }
         let render = |v: i64| match &self.from {
             Some(DataType::YearMonthInterval { start, end }) => {
                 let months = i32::try_from(v).unwrap_or_default();
