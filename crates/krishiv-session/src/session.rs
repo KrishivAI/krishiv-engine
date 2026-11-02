@@ -1603,6 +1603,13 @@ impl QueryStart {
                 wall_ns: i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX),
                 peak_memory_bytes: i64::try_from(metrics.memory.peak_reserved).unwrap_or(i64::MAX),
                 error_class: error_class.as_deref(),
+                // The most operators one query keeps.
+                operators: metrics
+                    .operators
+                    .iter()
+                    .take(500)
+                    .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e))
+                    .collect(),
             },
         );
         if !metrics_on {

@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
-    ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray,
+    ArrayRef, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
+    TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType as ArrowType, Field, Schema, TimeUnit};
 use krishiv_common::error::{InternalError, KrishivError};
@@ -41,7 +42,7 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 3] = ["capabilities", "memory", "queries"];
+const TABLES: [&str; 4] = ["capabilities", "memory", "operators", "queries"];
 
 /// Whether `name` is the reserved catalog name, in any letter case.
 pub(crate) fn is_system(name: &str) -> bool {
@@ -108,6 +109,8 @@ fn capability_rows() -> Vec<[String; 4]> {
 enum Kind {
     Text,
     Long,
+    /// `INT`.
+    Int,
     Flag,
     /// `TIMESTAMP` (microseconds since the epoch).
     Time,
@@ -115,7 +118,7 @@ enum Kind {
 
 /// A table's columns: `(name, kind, nullable)`.
 fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
-    use Kind::{Flag, Long, Text, Time};
+    use Kind::{Flag, Int, Long, Text, Time};
     Some(match table.to_ascii_lowercase().as_str() {
         "capabilities" => vec![
             ("worker_id", Text, false),
@@ -134,6 +137,28 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("peak_bytes", Long, false),
             ("limit_bytes", Long, true),
             ("spillable", Flag, false),
+        ],
+        "operators" => vec![
+            ("query_id", Text, false),
+            ("operator_id", Int, false),
+            ("node_id", Int, true),
+            ("name", Text, false),
+            ("role", Text, false),
+            ("drivers", Long, false),
+            ("rows_in", Long, false),
+            ("rows_out", Long, false),
+            ("batches_in", Long, false),
+            ("batches_out", Long, false),
+            ("compute_ns", Long, false),
+            ("max_driver_compute_ns", Long, false),
+            ("blocked_io_ns", Long, false),
+            ("blocked_memory_ns", Long, false),
+            ("blocked_sink_ns", Long, false),
+            ("peak_reserved_bytes", Long, false),
+            ("spills", Long, false),
+            ("spilled_bytes", Long, false),
+            ("spill_files", Long, false),
+            ("spill_write_bytes", Long, false),
         ],
         "queries" => vec![
             ("query_id", Text, false),
@@ -160,6 +185,7 @@ fn columns(table: &str) -> Option<Vec<TableColumn>> {
                 data_type: match kind {
                     Kind::Text => DataType::String,
                     Kind::Long => DataType::Long,
+                    Kind::Int => DataType::Integer,
                     Kind::Flag => DataType::Boolean,
                     Kind::Time => DataType::Timestamp,
                 },
@@ -212,6 +238,34 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(BooleanArray::from_iter(
                 entries.iter().map(|e| Some(e.spillable)),
             )),
+        ];
+    }
+    if table.eq_ignore_ascii_case("operators") {
+        let rows = sources.queries.operators();
+        let l = |f: fn(&OperatorRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
+        return vec![
+            text(rows.iter().map(|r| Some(r.query_id.as_str()))),
+            Arc::new(Int32Array::from_iter(
+                rows.iter().map(|r| Some(r.operator_id)),
+            )),
+            Arc::new(Int32Array::from_iter(rows.iter().map(|r| r.node_id))),
+            text(rows.iter().map(|r| Some(r.name.as_str()))),
+            text(rows.iter().map(|r| Some(r.role))),
+            l(|r| r.drivers),
+            l(|r| r.rows_in),
+            l(|r| r.rows_out),
+            l(|r| r.batches_in),
+            l(|r| r.batches_out),
+            l(|r| r.compute_ns),
+            l(|r| r.max_driver_compute_ns),
+            l(|r| r.blocked_io_ns),
+            l(|r| r.blocked_memory_ns),
+            l(|r| r.blocked_sink_ns),
+            l(|r| r.peak_reserved_bytes),
+            l(|r| r.spills),
+            l(|r| r.spilled_bytes),
+            l(|r| r.spill_files),
+            l(|r| r.spill_write_bytes),
         ];
     }
     if table.eq_ignore_ascii_case("queries") {
@@ -276,6 +330,68 @@ pub(crate) struct QueryRow {
     pub(crate) wall_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
     pub(crate) error_class: Option<String>,
+    /// The operators it ran (a finished query only).
+    pub(crate) operators: Vec<OperatorRow>,
+}
+
+/// One operator of a finished query, as `system.operators` lists it.
+#[derive(Debug, Clone)]
+pub(crate) struct OperatorRow {
+    pub(crate) query_id: String,
+    pub(crate) operator_id: i32,
+    pub(crate) node_id: Option<i32>,
+    pub(crate) name: String,
+    pub(crate) role: &'static str,
+    pub(crate) drivers: i64,
+    pub(crate) rows_in: i64,
+    pub(crate) rows_out: i64,
+    pub(crate) batches_in: i64,
+    pub(crate) batches_out: i64,
+    pub(crate) compute_ns: i64,
+    pub(crate) max_driver_compute_ns: i64,
+    pub(crate) blocked_io_ns: i64,
+    pub(crate) blocked_memory_ns: i64,
+    pub(crate) blocked_sink_ns: i64,
+    pub(crate) peak_reserved_bytes: i64,
+    pub(crate) spills: i64,
+    pub(crate) spilled_bytes: i64,
+    pub(crate) spill_files: i64,
+    pub(crate) spill_write_bytes: i64,
+}
+
+impl OperatorRow {
+    /// The row of one operator entry of the query `query_id`.
+    pub(crate) fn of(
+        query_id: &str,
+        id: krishiv_exec::OperatorId,
+        e: &krishiv_exec::OperatorEntry,
+    ) -> Self {
+        let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+        let ns = |d: std::time::Duration| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX);
+        let m = &e.metrics;
+        Self {
+            query_id: query_id.to_owned(),
+            operator_id: i32::try_from(id.0).unwrap_or(i32::MAX),
+            node_id: e.node.map(|v| i32::try_from(v).unwrap_or(i32::MAX)),
+            name: e.name.to_string(),
+            role: e.role.as_str(),
+            drivers: n(m.drivers),
+            rows_in: n(m.rows_in),
+            rows_out: n(m.rows_out),
+            batches_in: n(m.batches_in),
+            batches_out: n(m.batches_out),
+            compute_ns: ns(m.compute_time),
+            max_driver_compute_ns: ns(m.max_driver_compute_time),
+            blocked_io_ns: ns(m.blocked_on_io),
+            blocked_memory_ns: ns(m.blocked_on_memory),
+            blocked_sink_ns: ns(m.blocked_on_sink),
+            peak_reserved_bytes: n(m.peak_reserved),
+            spills: n(m.spills),
+            spilled_bytes: n(m.spilled_bytes),
+            spill_files: n(m.spill_files),
+            spill_write_bytes: n(m.spill_write_bytes),
+        }
+    }
 }
 
 /// What a finished query adds to its row.
@@ -285,6 +401,7 @@ pub(crate) struct Finished<'a> {
     pub(crate) wall_ns: i64,
     pub(crate) peak_memory_bytes: i64,
     pub(crate) error_class: Option<&'a str>,
+    pub(crate) operators: Vec<OperatorRow>,
 }
 
 /// The queries of one session, bounded: live ones and the recent finished
@@ -357,6 +474,7 @@ impl QueryLog {
             wall_ns: None,
             peak_memory_bytes: None,
             error_class: None,
+            operators: Vec::new(),
         });
         id
     }
@@ -370,7 +488,18 @@ impl QueryLog {
             row.wall_ns = Some(done.wall_ns);
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
+            row.operators.clone_from(&done.operators);
         }
+    }
+
+    /// The operators of every remembered query, oldest query first.
+    pub(crate) fn operators(&self) -> Vec<OperatorRow> {
+        self.rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .flat_map(|r| r.operators.iter().cloned())
+            .collect()
     }
 
     /// The rows now, oldest first.
@@ -399,6 +528,7 @@ pub(crate) fn provider(
                 let ty = match kind {
                     Kind::Text => ArrowType::Utf8,
                     Kind::Long => ArrowType::Int64,
+                    Kind::Int => ArrowType::Int32,
                     Kind::Flag => ArrowType::Boolean,
                     Kind::Time => ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
                 };
@@ -494,6 +624,7 @@ mod tests {
                 wall_ns: 5,
                 peak_memory_bytes: 7,
                 error_class: None,
+                operators: Vec::new(),
             },
         );
         let rows = log.snapshot();
@@ -512,6 +643,7 @@ mod tests {
                     wall_ns: 1,
                     peak_memory_bytes: 0,
                     error_class: None,
+                    operators: Vec::new(),
                 },
             );
         }

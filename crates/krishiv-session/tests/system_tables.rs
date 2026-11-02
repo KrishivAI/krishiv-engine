@@ -167,3 +167,32 @@ fn queries_lists_finished_and_failed_statements_with_their_text() {
     );
     assert!(walls[0].parse::<u32>().unwrap() >= 1, "{walls:?}");
 }
+
+#[test]
+fn operators_lists_what_a_finished_query_ran() {
+    let s = Session::new().unwrap();
+    run_all(
+        &s,
+        "SELECT id % 3 AS k, count(*) FROM range(1000) GROUP BY id % 3",
+    )
+    .unwrap();
+    let n = strings_in(&s, "SELECT CAST(count(*) AS STRING) FROM system.operators");
+    assert!(n[0].parse::<u32>().unwrap() >= 2, "{n:?}");
+    // Rows join to their query, and an aggregate saw all 1,000 input rows.
+    let rows = strings_in(
+        &s,
+        "SELECT CAST(max(o.rows_in) AS STRING) FROM system.operators o JOIN system.queries q ON o.query_id = q.query_id \
+         WHERE q.query_text LIKE '%GROUP BY%'",
+    );
+    assert_eq!(rows, ["1000"], "{rows:?}");
+    let roles = strings_in(
+        &s,
+        "SELECT DISTINCT role FROM system.operators ORDER BY role",
+    );
+    assert!(
+        roles
+            .iter()
+            .all(|r| ["source", "operator", "sink"].contains(&r.as_str())),
+        "{roles:?}"
+    );
+}
