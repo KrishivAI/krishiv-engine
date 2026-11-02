@@ -2,15 +2,7 @@
   "cases": {
     "depends-on-command": [
       93,
-      124,
-      126,
-      130,
       148
-    ],
-    "sql-commands": [
-      123,
-      128,
-      129
     ],
     "test-udfs": [
       145,

@@ -528,6 +528,16 @@ fn path_prefix_policy_keeps_paths_under_its_roots() {
     assert_eq!(read(&format!("{r}/%2e%2e/outside/data")), DENIED);
     assert_eq!(read(&format!("file://{r}/data")), "OK");
 
+    // A datasource temporary view is checked when it is created, whether or not the path exists.
+    let view = |p: &str| {
+        class(block_on(s.sql(&format!(
+            "CREATE TEMPORARY VIEW v(a INT) USING parquet OPTIONS (PATH '{p}')"
+        ))))
+    };
+    assert_eq!(view(&format!("{}/data", outside.display())), DENIED);
+    assert_eq!(view("/etc/passwd-not-there"), DENIED);
+    assert_eq!(view(&format!("{r}/data")), "OK");
+
     // Writes: under the root only, nothing created outside it.
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
     block_on(df.write().parquet(root.join("new").to_str().unwrap())).unwrap();

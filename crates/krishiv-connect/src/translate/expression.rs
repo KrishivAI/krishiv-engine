@@ -220,6 +220,7 @@ impl Translator<'_> {
 fn star(s: &expression::UnresolvedStar) -> Result<Star> {
     match (&s.unparsed_target, s.plan_id) {
         (None, plan_id) => Ok(Star {
+            regex: None,
             replace: Vec::new(),
             position: None,
             qualifier: Vec::new(),
@@ -235,6 +236,7 @@ fn star(s: &expression::UnresolvedStar) -> Result<Star> {
                 ));
             };
             Ok(Star {
+                regex: None,
                 replace: Vec::new(),
                 position: None,
                 qualifier: parse_attribute_name(path)?,

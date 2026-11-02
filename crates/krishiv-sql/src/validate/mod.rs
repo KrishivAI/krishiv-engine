@@ -644,7 +644,9 @@ impl Checker<'_> {
             AlterTableAction::SetPartitionLocation { partition, .. } => {
                 self.partition_values(Some(partition))
             }
-            AlterTableAction::SetLocation(_) | AlterTableAction::RecoverPartitions => Ok(()),
+            AlterTableAction::SetLocation(_)
+            | AlterTableAction::SetComment(_)
+            | AlterTableAction::RecoverPartitions => Ok(()),
         }
     }
 
