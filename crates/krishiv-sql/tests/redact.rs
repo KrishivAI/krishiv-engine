@@ -153,6 +153,7 @@ fn an_aes_key_argument_is_redacted_in_query_text() {
         "SELECT aes_encrypt(x::STRUCT<\"a\": INT, \"b\": INT>.b, 'Canary7f3a9c')",
         "SELECT aes_encrypt(CASE WHEN map < 1 THEN 'a' ELSE 'b' END, 'Canary7f3a9c') FROM t",
         "SELECT aes_encrypt(CASE WHEN array < col THEN 'a' ELSE 'b' END, 'Canary7f3a9c') FROM t",
+        "SELECT aes_encrypt(CASE WHEN map < col THEN 'a' ELSE 'b' END, 'Canary7f3a9c', CASE WHEN x > 0 THEN 'GCM' ELSE 'CBC' END) FROM t",
     ] {
         let r = redact_sql(sql);
         for at in 0..sql.len() {
