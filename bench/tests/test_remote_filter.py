@@ -179,8 +179,8 @@ def test_child_rejects_bad_input(tiny, tmp_path):
     mirror, _, _ = tiny
     with pytest.raises(SystemExit, match="unknown remote-filter engine 'flink'"):
         main(["flink", str(mirror), str(tmp_path / "o"), str(tmp_path / "s")])
-    with pytest.raises(SystemExit, match="local mirror"):
-        main(["krishiv", '["https://example.com/a.parquet"]', str(tmp_path / "o"), str(tmp_path / "s")])
+    with pytest.raises(SystemExit, match="local mirror directory or a list of URLs"):
+        main(["krishiv", '["/tmp/a.parquet"]', str(tmp_path / "o"), str(tmp_path / "s")])
     with pytest.raises(SystemExit, match="non-empty list"):
         main(["duckdb", "[]", str(tmp_path / "o"), str(tmp_path / "s")])
     with pytest.raises(SystemExit, match="no Parquet files"):
@@ -919,7 +919,6 @@ def test_s3_mode_serves_the_mirror_to_duckdb_and_polars_through_the_environment(
     assert json.loads(f.read_text())["source"] == "s3"
     assert docker.calls[-1][:3] == ["docker", "rm", "-f"]
     for engines, mirror_arg, want in [
-        (["krishiv", "duckdb"], str(mirror), "drop it from --engines"),
         (["duckdb"], '["s3://fw/p.parquet"]', "part files of a local mirror"),
     ]:
         with pytest.raises(ValueError, match=want):
@@ -1027,3 +1026,74 @@ def test_remote_url_inputs_are_recorded_as_remote(monkeypatch, tmp_path):
     run = _scripted({"duckdb": _fin()})
     f = run_remote_filter('["https://example.invalid/a.parquet"]', ["duckdb"], None, 60, run=run, reps=1)
     assert json.loads(f.read_text())["source"] == "remote"
+
+
+def test_krishiv_reads_the_urls_through_table_arguments_and_the_s3_keys(monkeypatch, tmp_path):
+    from krishiv_bench import remote_filter_child as child
+    from krishiv_bench.adapters import krishiv as adapter
+
+    seen: dict = {}
+
+    class Fake:
+        memory_limit = "1g"
+
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def setup(self, dataset):
+            seen["dataset_root"] = dataset.root
+
+        def dump(self, query, out):
+            seen["sql"] = query.sql
+
+        def version(self):
+            return "x"
+
+        def teardown(self):
+            seen["torn_down"] = True
+
+    monkeypatch.setattr(adapter, "KrishivEngine", Fake)
+    monkeypatch.setenv("KRISHIV_BENCH_S3_ENDPOINT", "127.0.0.1:9")
+    monkeypatch.setenv("KRISHIV_BENCH_S3_KEY", "k")
+    monkeypatch.setenv("KRISHIV_BENCH_S3_SECRET", "s")
+    info = child.run_krishiv_urls(["s3://fw/a.parquet"], tmp_path / "o", tmp_path / "s", "2g")
+    assert info["version"] == "x"
+    assert seen["torn_down"]
+    assert seen["tables"] == {child.TABLE: ["s3://fw/a.parquet"]}
+    conf = dict(seen["conf"])
+    assert conf["fs.s3a.endpoint"] == "http://127.0.0.1:9"
+    assert (conf["fs.s3a.access.key"], conf["fs.s3a.secret.key"]) == ("k", "s")
+    assert conf["fs.s3a.path.style.access"] == "true"
+    # Without the server's endpoint an s3:// source is refused, as for the other engines.
+    monkeypatch.delenv("KRISHIV_BENCH_S3_ENDPOINT")
+    with pytest.raises(SystemExit, match="--s3"):
+        child.run_krishiv_urls(["s3://fw/a.parquet"], tmp_path / "o", tmp_path / "s")
+    # https:// needs no server.
+    seen.clear()
+    child.run_krishiv_urls(["https://example.com/a.parquet"], tmp_path / "o", tmp_path / "s")
+    assert not any(k.startswith("fs.s3a") for k, _ in seen["conf"])
+
+
+def test_the_runner_is_started_with_table_arguments_instead_of_data(monkeypatch, tmp_path):
+    from krishiv_bench.adapters import krishiv as adapter
+    from krishiv_bench.adapters.base import Dataset
+
+    binary = tmp_path / "runner"
+    binary.write_text("")
+    cmds: list[list[str]] = []
+
+    class Boom(Exception):
+        pass
+
+    def fake_popen(cmd, **kwargs):
+        cmds.append(list(cmd))
+        raise Boom
+
+    monkeypatch.setattr(adapter.subprocess, "Popen", fake_popen)
+    eng = adapter.KrishivEngine(binary=binary, threads=2, tables={"fw": ["s3://b/a.parquet", "s3://b/b.parquet"]})
+    with pytest.raises(Boom):
+        eng.setup(Dataset("remote-filter", 0, tmp_path, ["fw"]))
+    cmd = cmds[0]
+    assert "--data" not in cmd
+    pairs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--table"]
+    assert pairs == ["fw=s3://b/a.parquet", "fw=s3://b/b.parquet"]

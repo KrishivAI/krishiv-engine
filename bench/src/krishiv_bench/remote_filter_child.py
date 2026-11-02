@@ -194,6 +194,37 @@ def run_krishiv(data: Path, out: Path, scratch: Path, memory_limit: str | None =
         eng.teardown()
 
 
+def run_krishiv_urls(items: list[str], out: Path, scratch: Path, memory_limit: str | None = None) -> dict:
+    """Krishiv reading the same URLs the other engines read (``s3://`` through the throw-away server's
+    endpoint and keys, ``https://`` as is), registered as the ``--table`` view."""
+    from .adapters.base import Dataset, Query
+    from .adapters.krishiv import KrishivEngine
+
+    conf: list[tuple[str, str]] = [("krishiv.spill.dir", str(scratch))]
+    if any(x.startswith("s3://") for x in items):
+        s3 = s3_settings()
+        if s3 is None:
+            raise SystemExit("s3:// sources need KRISHIV_BENCH_S3_ENDPOINT (run with --s3)")
+        conf += [
+            ("fs.s3a.endpoint", f"http://{s3['endpoint']}"),
+            ("fs.s3a.access.key", s3["key"]),
+            ("fs.s3a.secret.key", s3["secret"]),
+            ("fs.s3a.path.style.access", "true"),
+            ("fs.s3a.endpoint.region", "us-east-1"),
+        ]
+    kwargs: dict = {"threads": THREADS, "conf": conf, "tables": {TABLE: items}}
+    if memory_limit is not None:
+        kwargs["memory_limit"] = memory_limit
+    eng = KrishivEngine(**kwargs)
+    try:
+        eng.setup(Dataset("remote-filter", 0, scratch, [TABLE]))
+        t1 = time.perf_counter()
+        eng.dump(Query("q1", f"SELECT * FROM {TABLE} WHERE {FILTER_SQL}", "remote-filter"), out / "krishiv")
+        return {"version": eng.version(), "t1": t1, "engine_memory_limit": eng.memory_limit}
+    finally:
+        eng.teardown()
+
+
 def main(argv: list[str]) -> int:
     if len(argv) == 4:
         engine, input_arg, out_s, scratch_s = argv
@@ -210,8 +241,12 @@ def main(argv: list[str]) -> int:
     scratch.chmod(0o700)  # Krishiv refuses a spill directory that group or others can write
     if engine == "krishiv":
         if input_arg.strip().startswith("["):
-            raise SystemExit("krishiv reads the local mirror directory, not a URL list")
-        info = run_krishiv(Path(input_arg), out, scratch, krishiv_limit)
+            kind, items = parse_input(input_arg)
+            if kind != "urls":
+                raise SystemExit("krishiv reads the local mirror directory or a list of URLs")
+            info = run_krishiv_urls(items, out, scratch, krishiv_limit)
+        else:
+            info = run_krishiv(Path(input_arg), out, scratch, krishiv_limit)
     else:
         _, items = parse_input(input_arg)
         if engine == "duckdb":
