@@ -1224,3 +1224,28 @@ fn having_subquery_over_a_non_grouping_column_is_a_correlated_reference() -> R {
         Ok(())
     })
 }
+
+/// DISTINCT aggregates over the same columns in a different order are one
+/// distinct set: `corr(DISTINCT x, y)` beside `corr(DISTINCT y, x)`.
+#[test]
+fn distinct_aggregates_over_the_same_columns_in_any_order() -> R {
+    let s = Session::new()?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT corr(DISTINCT x, y), corr(DISTINCT y, x), count(*) \
+             FROM (VALUES (1, 1), (2, 2), (2, 2)) t(x, y)",
+        ))?
+        .collect(),
+    )?;
+    let f = |i: usize| {
+        arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(b[0].column(i))
+            .value(0)
+    };
+    assert!((f(0) - 1.0).abs() < 1e-12 && (f(1) - 1.0).abs() < 1e-12);
+    assert_eq!(
+        arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int64Type>(b[0].column(2))
+            .value(0),
+        3
+    );
+    Ok(())
+}
