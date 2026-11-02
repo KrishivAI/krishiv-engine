@@ -546,6 +546,9 @@ impl Merge {
     async fn compare(&mut self) -> Result<bool> {
         self.left.fill(&self.query).await?;
         self.right.fill(&self.query).await?;
+        if self.joins_runs() && self.join_run() {
+            return Ok(true);
+        }
         let (lpos, rpos) = (self.left.pos, self.right.pos);
         let (left_end, right_end) = match (&self.left.current, &self.right.current) {
             (None, None) => return Ok(false),
@@ -578,6 +581,68 @@ impl Merge {
             self.right_unmatched(rpos, end);
         }
         Ok(true)
+    }
+
+    /// Whether [`Merge::join_run`] may join whole keys: without a residual
+    /// (or a scalar subquery's one-match check) a key's output is every pair
+    /// of its rows, and an outer join's other rows are those of keys with no
+    /// match.
+    fn joins_runs(&self) -> bool {
+        self.shared.filter.is_none()
+            && !self.shared.single_match
+            && matches!(
+                self.join_type(),
+                JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter | JoinType::FullOuter
+            )
+    }
+
+    /// Joins the streams' current batches key by key, in place: what the
+    /// phases do for a key, without their steps per key. Stops at a full
+    /// output, at a batch's end, and at a key whose rows reach the end of
+    /// either batch (they may go on in the next one) or whose pairs don't fit
+    /// the output, which the phases then take. `false` when it joined nothing.
+    fn join_run(&mut self) -> bool {
+        let (Some(l), Some(r)) = (self.left.current.clone(), self.right.current.clone()) else {
+            return false;
+        };
+        let (ln, rn) = (l.batch.num_rows(), r.batch.num_rows());
+        let from = (self.left.pos, self.right.pos);
+        while self.out.len() < self.batch_rows && self.left.pos < ln && self.right.pos < rn {
+            let (lpos, rpos) = (self.left.pos, self.right.pos);
+            let (lk, rk) = (l.key(lpos), r.key(rpos));
+            if !l.is_matchable(lpos) {
+                self.left_unmatched(lpos, l.upper_bound(lpos, lk));
+                continue;
+            }
+            if !r.is_matchable(rpos) {
+                self.right_unmatched(rpos, r.upper_bound(rpos, rk));
+                continue;
+            }
+            match lk.cmp(rk) {
+                std::cmp::Ordering::Less => self.left_unmatched(lpos, l.lower_bound(lpos, rk)),
+                std::cmp::Ordering::Greater => self.right_unmatched(rpos, r.lower_bound(rpos, lk)),
+                std::cmp::Ordering::Equal => {
+                    let (lend, rend) = (l.upper_bound(lpos, lk), r.upper_bound(rpos, rk));
+                    let room = self.batch_rows - self.out.len();
+                    if lend == ln || rend == rn || (lend - lpos).saturating_mul(rend - rpos) > room
+                    {
+                        break;
+                    }
+                    let left = self.out.left_source(&l.batch, l.serial);
+                    let right = self.out.right_source(&r.batch, r.serial);
+                    // In `product`'s order.
+                    for j in rpos..rend {
+                        for i in lpos..lend {
+                            self.out.left_rows.push((left, i));
+                            self.out.right_rows.push((right, j));
+                        }
+                    }
+                    self.left.pos = lend;
+                    self.right.pos = rend;
+                }
+            }
+        }
+        (self.left.pos, self.right.pos) != from
     }
 
     /// Left rows `start..end` of the current batch match nothing.

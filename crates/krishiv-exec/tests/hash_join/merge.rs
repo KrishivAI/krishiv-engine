@@ -134,6 +134,30 @@ proptest! {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+    /// Many keys of a few rows each in large batches: most keys end inside
+    /// both sides' batches, so the merge joins them in place, and the rest
+    /// (keys across a batch's end, products past the output's room) go
+    /// through its phases.
+    #[test]
+    fn many_short_keys_in_large_batches_match_the_oracle(
+        t in 0usize..4,
+        keys in 1usize..3,
+        safe in any::<bool>(),
+        probe in prop::collection::vec(row(400, 30), 1_000..1_400),
+        build in prop::collection::vec(row(400, 30), 300..700),
+        batch_rows in 100usize..600,
+        threads in 1usize..4,
+    ) {
+        let jt = [JoinType::Inner, JoinType::LeftOuter, JoinType::RightOuter, JoinType::FullOuter][t];
+        let c = case(jt, keys, safe, false);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (got, _) = rt.block_on(run_merge(&c, &probe, &build, batch_rows, threads, 64 * MIB, 0));
+        prop_assert_eq!(got, c.oracle(&probe, &build));
+    }
+}
+
+proptest! {
     #![proptest_config(ProptestConfig { cases: 12, max_shrink_iters: 0, ..ProptestConfig::default() })]
     /// Larger inputs under a budget that makes both sorts and the groups
     /// spill: the hash join's answer in memory.
