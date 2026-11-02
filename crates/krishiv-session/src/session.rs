@@ -2,7 +2,7 @@
 //! [`Session`] and [`SessionBuilder`], and the query pipeline every
 //! action runs: analyze → optimize → physical plan → run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -196,6 +196,9 @@ pub(crate) struct SessionState {
     /// The spill directory, opened by the first query that plans for
     /// execution (`krishiv.spill.*` are build-time keys).
     spill: Arc<Mutex<Option<SpillManager>>>,
+    /// Whether a store creates objects only if absent (the commit log's
+    /// probe), by store id; per session, never process-wide.
+    commit_log_probes: Mutex<HashMap<String, bool>>,
     io: Arc<IoScheduler>,
     formats: Arc<FormatRegistry>,
     /// The session's content-addressed relations: every memory table's
@@ -396,6 +399,7 @@ impl SessionBuilder {
                 functions,
                 udfs,
                 sql_functions: SqlFunctions::default(),
+                commit_log_probes: Mutex::new(HashMap::new()),
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
@@ -1897,7 +1901,16 @@ impl Session {
             };
             // Boxed: the statement futures are on the recursion of nested
             // scripts, so a larger write future would overflow their stack.
-            let write = if Box::pin(uses_commit_log(&env.config, &io, &store, &at, &job)).await? {
+            let write = if Box::pin(uses_commit_log(
+                &env.config,
+                &self.state.commit_log_probes,
+                &io,
+                &store,
+                &at,
+                &job,
+            ))
+            .await?
+            {
                 Box::pin(write.logged(&io)).await?
             } else {
                 write
@@ -2054,6 +2067,7 @@ fn partition_overwrite_is_dynamic(
 /// fails the probe falls back to the plain commit with a warning).
 async fn uses_commit_log(
     config: &Config,
+    probes: &Mutex<HashMap<String, bool>>,
     io: &krishiv_io::IoContext,
     store: &StoreId,
     at: &krishiv_exec::files::LocatedPath,
@@ -2076,7 +2090,22 @@ async fn uses_commit_log(
         // A directory that already has a log stays logged.
         return Ok(true);
     }
-    let supported = log.supports_put_if_absent(job).await?;
+    let known = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        .copied();
+    let supported = match known {
+        Some(supported) => supported,
+        None => {
+            let supported = log.supports_put_if_absent(job).await?;
+            probes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(at.store.key().to_owned(), supported);
+            supported
+        }
+    };
     if !supported {
         if protocol.as_deref() == Some("LOG") {
             return Err(krishiv_common::error::KrishivUnsupportedFeature {

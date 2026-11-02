@@ -1449,3 +1449,72 @@ impl PartitionedOptions for crate::WriteOptions {
         self
     }
 }
+
+impl Env {
+    /// A logged write of `rows` rows; with `commit` false the writer "dies"
+    /// after its files are complete and before the commit.
+    fn write_logged(&self, dir: &str, mode: SaveMode, uuid: &str, rows: i32, commit: bool) {
+        let w = self.begin(dir, mode, uuid).unwrap().unwrap();
+        let w = self.rt.block_on(w.logged(&self.io)).unwrap();
+        let o = FormatOptions::defaults(ParquetFormat.options());
+        let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+        self.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &self.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            let files = writer.finish().await.unwrap();
+            if commit {
+                w.commit(&self.io, format.as_ref(), schema(), &o, files)
+                    .await
+                    .unwrap();
+            }
+        });
+    }
+
+    fn visible(&self, dir: &str) -> Vec<String> {
+        let log = crate::commit_log::CommitLog::new(
+            &self.io,
+            self.store.clone(),
+            Path::from(dir),
+            dir.to_owned(),
+        );
+        self.rt
+            .block_on(log.snapshot())
+            .unwrap()
+            .files
+            .into_keys()
+            .collect()
+    }
+}
+
+/// A writer killed between its data files and its commit (append or
+/// overwrite) leaves the committed state exactly as it was: the log has no
+/// entry, so readers never see its files, and the old files of an overwrite
+/// are still there.
+#[test]
+fn a_logged_write_killed_before_its_commit_leaves_the_old_state_visible() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let committed = env.visible("t");
+    assert_eq!(committed.len(), 1);
+    env.write_logged("t", SaveMode::Append, "job-2", 3, false);
+    env.write_logged("t", SaveMode::Overwrite, "job-3", 2, false);
+    assert_eq!(env.visible("t"), committed);
+    // The killed writers' files are on the store, but outside the log.
+    let on_store = env.names("t");
+    assert!(on_store.iter().any(|n| n.contains("job-2")), "{on_store:?}");
+    assert!(on_store.iter().any(|n| n.contains("job-1")), "{on_store:?}");
+    // The next write commits normally on top of the committed version.
+    env.write_logged("t", SaveMode::Append, "job-4", 1, true);
+    assert_eq!(env.visible("t").len(), 2);
+}
