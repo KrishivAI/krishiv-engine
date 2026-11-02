@@ -39,6 +39,7 @@ fi
 case "$path" in
   */events*) file=$FAKE_EVENTS ;;
   */comments*) file=$FAKE_COMMENTS ;;
+  */actions/runs?branch=*) file="$FAKE_RUNS.branch" ;;
   */actions/runs*)
     sha=${path#*head_sha=}
     sha=${sha%%&*}
@@ -46,7 +47,12 @@ case "$path" in
     [ -f "$file" ] || file="$FAKE_RUNS.none"
     ;;
   */check-suites*) file=$FAKE_SUITES ;;
-  */pulls/*) echo "${FAKE_CURRENT_HEAD:-abc}"; exit 0 ;;
+  */pulls/*)
+    case "$filter" in
+      *.head.ref*) echo feature ;;
+      *) echo "${FAKE_CURRENT_HEAD:-abc}" ;;
+    esac
+    exit 0 ;;
   *) exit 2 ;;
 esac
 jq -r "$filter" "$file"
@@ -75,6 +81,13 @@ runs() {
   echo "{\"workflow_runs\":[{\"created_at\":\"2026-11-02T08:00:00Z\"}]}" > "$FAKE_RUNS.old"
   echo "{\"workflow_runs\":[{\"created_at\":\"2026-11-02T10:30:00Z\"}]}" > "$FAKE_RUNS.late"
   echo '{"workflow_runs":[]}' > "$FAKE_RUNS.none"
+  # The runs on the PR's branch: the label's own run (on the head it was applied to) and,
+  # when the head arrived after the label, the push that brought it.
+  if [[ "$1" > "$LABELED" ]]; then
+    echo "{\"workflow_runs\":[{\"created_at\":\"2026-11-02T10:00:05Z\",\"head_sha\":\"old\"},{\"created_at\":\"$1\",\"head_sha\":\"abc\"}]}" > "$FAKE_RUNS.branch"
+  else
+    echo "{\"workflow_runs\":[{\"created_at\":\"$1\",\"head_sha\":\"abc\"}]}" > "$FAKE_RUNS.branch"
+  fi
   echo '{"check_suites":[]}' > "$FAKE_SUITES"
 }
 # comment AUTHOR LABELED_AT NAME VALUE...  (a record as the workflow writes it: scope "default",
@@ -86,7 +99,7 @@ record_json() {
   local lines=""
   while [ $# -ge 2 ]; do lines="$lines$1 $2\n"; shift 2; done
   local body="<!-- krishiv-approval:v1\nlabel=L\nscope=${RECORD_SCOPE:-default}\nhead=${RECORD_HEAD-old}\nlabeled_at=$at\n${lines}-->\nRecorded."
-  printf '{"user":{"login":"%s"},"body":"%s"}' "$author" "$body"
+  printf '{"user":{"login":"%s"},"created_at":"%s","body":"%s"}' "$author" "${RECORD_AT:-2026-11-02T10:00:10Z}" "$body"
 }
 comment() { printf '[%s]\n' "$(record_json "$@")" > "$FAKE_COMMENTS"; }
 add_comment() {
@@ -208,6 +221,13 @@ values "counted_lines 500000"
 check "a forged first record (late head) does not hide the real one, which is too small" 0 VALUES_FILE="$tmp/values"
 values "counted_lines 1000"
 check "and the real one still covers" 1 VALUES_FILE="$tmp/values"
+# A forged record can name the genuine head; it still comes after the push that replaced it.
+RECORD_AT=2026-11-02T11:05:00Z comment github-actions[bot] $LABELED counted_lines 999999
+values "counted_lines 500000"
+check "a record written after a later push is ignored, whatever head it names" 0 VALUES_FILE="$tmp/values"
+RECORD_AT=2026-11-02T10:59:00Z comment github-actions[bot] $LABELED counted_lines 1000
+values "counted_lines 1000"
+check "a record written before the later push counts" 1 VALUES_FILE="$tmp/values"
 # recording only for the PR's current head
 rm -f "$FAKE_POSTS"
 events maintainer $LABELED; runs $HEAD_BEFORE; no_comments; values "counted_lines 1000"

@@ -63,12 +63,25 @@ strict="${STRICT:-false}"
 tolerance="${TOLERANCE_PERCENT:-5}"
 if [ "$strict" = "true" ]; then tolerance=0; fi
 
+# When the first head other than $1 reached this PR after the label was applied: the
+# earliest pull-request workflow run on the PR's branch created after labeled_at
+# whose commit is not $1. Prints nothing when there was none.
+first_other_push_after_label() {
+  local ref
+  ref=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.ref' 2>/dev/null || true)
+  [ -n "$ref" ] || return 0
+  gh api "repos/$REPO/actions/runs?branch=$ref&event=pull_request&per_page=100" --paginate \
+    --jq '.workflow_runs[] | [.created_at, .head_sha] | @tsv' 2>/dev/null \
+    | awk -F'\t' -v l="$labeled_at" -v h="$1" '$1 > l && $2 != h {print $1}' | sort | head -n1 || true
+}
+
 # The record for this application of the label and this gate: the OLDEST comment by the
-# workflow's bot that carries the marker, the label, the scope and the labeled_at, and
-# whose head had arrived before the label was applied. Prints its `name value` lines.
+# workflow's bot that carries the marker, the label, the scope and the labeled_at, whose
+# head had arrived before the label was applied, and that was written before any other
+# head reached the PR after the label. Prints its `name value` lines.
 recorded_values() {
-  local b64 body head arrived
-  while read -r b64; do
+  local created b64 body head arrived later
+  while IFS=$'\t' read -r created b64; do
     body=$(printf '%s' "$b64" | base64 -d)
     printf '%s\n' "$body" | grep -qx "label=$label" || continue
     printf '%s\n' "$body" | grep -qx "scope=$scope" || continue
@@ -77,10 +90,12 @@ recorded_values() {
     [ -n "$head" ] || continue
     arrived=$(arrival_of "$head")
     [ -n "$arrived" ] && [[ "$labeled_at" > "$arrived" ]] || continue
+    later=$(first_other_push_after_label "$head")
+    if [ -n "$later" ] && ! [[ "$created" < "$later" ]]; then continue; fi
     printf '%s\n' "$body" | awk '/^<!--/ || /^-->/ || /^label=/ || /^scope=/ || /^head=/ || /^labeled_at=/ {next} NF == 2 && $2 ~ /^[0-9]+$/ {print}'
     return 0
   done < <(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-    --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("<!-- krishiv-approval:v1")) | .body | @base64')
+    --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("<!-- krishiv-approval:v1")) | [.created_at, (.body | @base64)] | @tsv')
 }
 
 # Whether the current values stay inside the recorded ones: reads the recorded
