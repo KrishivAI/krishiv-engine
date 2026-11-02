@@ -138,7 +138,7 @@ impl Opts {
             Purpose::Parse
         };
         let pattern = |v: &str, name: &str| -> Result<DateTimePattern, KrishivError> {
-            datetime_option_as(v, func, name, purpose)
+            datetime_option_as(v, func, name, purpose, false)
         };
         for (k, v) in pairs {
             match k.to_ascii_lowercase().as_str() {
