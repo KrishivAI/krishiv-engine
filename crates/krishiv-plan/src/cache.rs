@@ -373,6 +373,13 @@ impl Encoder {
                 self.expr(expr, bias);
                 self.text(name);
             }
+            ExprNode::MultiAlias { expr, names } => {
+                self.tag("multi-alias");
+                self.expr(expr, bias);
+                for name in names {
+                    self.text(name);
+                }
+            }
             ExprNode::Subquery { kind, plan } => {
                 self.tag("subquery");
                 match kind {

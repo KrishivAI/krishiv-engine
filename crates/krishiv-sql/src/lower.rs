@@ -1105,7 +1105,13 @@ impl Lowerer {
                 },
                 item.span,
             ),
-            Some(_) => return Err(unsupported("multi-name aliases", item.span)),
+            Some(Alias::List(names)) => self.ex(
+                ExprNode::MultiAlias {
+                    expr: arc(e),
+                    names: names.iter().map(|n| n.value.clone()).collect(),
+                },
+                item.span,
+            ),
         }))
     }
 

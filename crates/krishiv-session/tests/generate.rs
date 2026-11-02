@@ -769,3 +769,22 @@ fn order_by_an_aggregate_over_a_generator_below_it() {
         2
     );
 }
+
+#[test]
+fn a_multi_name_alias_needs_a_generator_and_names_every_column_beside_group_by() {
+    let s = Session::new().unwrap();
+    let err = error_of(&s, "select 1 as (a, b)");
+    assert_eq!(err.error_class(), ErrorClass::MultiAliasWithoutGenerator);
+    assert!(
+        err.to_string().contains("Multi part aliasing (a, b)"),
+        "{err}"
+    );
+    // The generator under GROUP BY takes the written names.
+    assert_eq!(
+        rows(
+            &s,
+            "select k, posexplode(arr) as (p, e) from values (1, array(5, 6)) as t(k, arr) group by k, arr order by p"
+        ),
+        table(&[&["1", "0", "5"], &["1", "1", "6"]])
+    );
+}
