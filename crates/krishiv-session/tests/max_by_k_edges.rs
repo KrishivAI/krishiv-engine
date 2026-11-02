@@ -75,3 +75,38 @@ fn a_merge_may_put_nulls_in_a_non_null_seed_collection() {
         "42"
     );
 }
+
+#[test]
+fn a_count_that_is_not_a_constant_is_refused_as_spark_does() {
+    let s = Session::new().unwrap();
+    // Spark 4.2.0: DATATYPE_MISMATCH.NON_FOLDABLE_INPUT, "the input k should be a foldable int
+    // expression; however, got t.k" (a column, also under GROUP BY; Krishiv's error text does not
+    // print the table qualifier) and "got CAST(rand() AS INT)".
+    for (sql, got) in [
+        (
+            "SELECT k, max_by(x, y, k) FROM VALUES ('a', 1, 0), ('b', 2, 0) AS t(x, y, k) GROUP BY k",
+            "k",
+        ),
+        (
+            "SELECT min_by(x, y, k) FROM VALUES ('a', 1, 2) AS t(x, y, k)",
+            "k",
+        ),
+        (
+            "SELECT max_by(x, y, rand()) FROM VALUES ('a', 1, 2) AS t(x, y, k)",
+            "CAST(rand() AS INT)",
+        ),
+    ] {
+        let err = match block_on(s.sql(sql)) {
+            Ok(df) => block_on(df.collect()).expect_err(sql),
+            Err(e) => e,
+        };
+        let text = err.to_string();
+        assert!(text.contains("NON_FOLDABLE_INPUT"), "{sql}: {text}");
+        assert!(
+            text.contains(&format!(
+                "the input k should be a foldable int expression; however, got {got}."
+            )),
+            "{sql}: {text}"
+        );
+    }
+}

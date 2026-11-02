@@ -183,6 +183,10 @@ impl Session {
         class: StatementClass,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        if let Err(e) = reject_system_namespace(statement) {
+            log_denial(self, class, &e);
+            return Err(e);
+        }
         let mut targets = statement_targets(statement);
         if class == StatementClass::Admin
             && !targets.iter().any(|t| t.object == TargetObject::Cluster)
@@ -202,6 +206,10 @@ impl Session {
                 }
             };
             for securable in securables {
+                if let Err(e) = reject_system_write(&securable, target.privilege) {
+                    log_denial(self, class, &e);
+                    return Err(e);
+                }
                 if checked
                     .iter()
                     .any(|(s, p)| *s == securable && *p == target.privilege)
@@ -627,5 +635,124 @@ impl AccessPolicy for PathPrefixPolicy {
             })));
         }
         self.inner.check(principal, securable, privilege)
+    }
+}
+
+/// A policy that allows `Select` as `inner` decides and denies every other
+/// privilege: the read-only surfaces (the MCP server) enforce read-only
+/// through the same [`authorize`] path as every other check, even if a
+/// statement classifier missed a write.
+///
+/// ```
+/// use std::sync::Arc;
+/// use krishiv_session::{AllowAll, ReadOnlyPolicy, Session};
+///
+/// let s = Session::builder().access_policy(Arc::new(ReadOnlyPolicy::new(Arc::new(AllowAll)))).build()?;
+/// let e = futures::executor::block_on(s.sql("CREATE TABLE t (a INT)")).unwrap_err();
+/// assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+/// # Ok::<(), krishiv_common::error::KrishivError>(())
+/// ```
+#[derive(Clone)]
+pub struct ReadOnlyPolicy {
+    inner: Arc<dyn AccessPolicy>,
+}
+
+impl std::fmt::Debug for ReadOnlyPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOnlyPolicy").finish_non_exhaustive()
+    }
+}
+
+impl ReadOnlyPolicy {
+    /// Read-only over `inner`, which decides every `Select`.
+    #[must_use]
+    pub fn new(inner: Arc<dyn AccessPolicy>) -> Self {
+        Self { inner }
+    }
+}
+
+impl AccessPolicy for ReadOnlyPolicy {
+    fn version(&self) -> PolicyVersion {
+        self.inner.version()
+    }
+
+    fn check<'a>(
+        &'a self,
+        principal: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        if privilege != Privilege::Select {
+            return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
+                reason: "the session is read-only".to_owned(),
+            })));
+        }
+        self.inner.check(principal, securable, privilege)
+    }
+}
+
+/// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or
+/// writes something in the `system` catalog (P2-T126): its tables belong to
+/// the engine, whoever the principal is.
+fn reject_system_write(securable: &Securable, privilege: Privilege) -> Result<(), KrishivError> {
+    if !matches!(
+        privilege,
+        Privilege::Create | Privilege::Drop | Privilege::Modify
+    ) {
+        return Ok(());
+    }
+    let (name, kind) = match securable {
+        Securable::Table(t) | Securable::View(t) if crate::system::is_system(&t.catalog) => {
+            (t.to_string(), "tables")
+        }
+        Securable::Namespace(parts)
+            if parts.first().is_some_and(|c| crate::system::is_system(c)) =>
+        {
+            (parts.join("."), "namespaces")
+        }
+        _ => return Ok(()),
+    };
+    Err(krishiv_common::error::KrishivReservedName {
+        name,
+        kind: kind.to_owned(),
+    }
+    .into())
+}
+
+/// `CREATE|DROP DATABASE|SCHEMA|NAMESPACE system`: the name itself is
+/// reserved, not only what would be created inside it.
+fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
+    let name = match statement {
+        Statement::CreateNamespace(n) => &n.name,
+        Statement::DropNamespace(n) => &n.name,
+        _ => return Ok(()),
+    };
+    match name {
+        // `system` or `spark_catalog.system`: the same database, however
+        // it is spelled.
+        DdlName::Parts(o)
+            if match o.parts.as_slice() {
+                [first, second] => {
+                    crate::system::is_system(&first.value)
+                        || (first.value.eq_ignore_ascii_case("spark_catalog")
+                            && crate::system::is_system(&second.value))
+                }
+                parts => parts
+                    .first()
+                    .is_some_and(|p| crate::system::is_system(&p.value)),
+            } =>
+        {
+            Err(krishiv_common::error::KrishivReservedName {
+                name: o
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+                kind: "namespaces".to_owned(),
+            }
+            .into())
+        }
+        _ => Ok(()),
     }
 }
