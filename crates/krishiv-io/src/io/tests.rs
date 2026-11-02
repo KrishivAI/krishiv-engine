@@ -800,3 +800,22 @@ fn reservations_cover_the_whole_coalesced_read() {
         assert_eq!(pool.reserved(), 0);
     });
 }
+
+#[test]
+fn the_block_cache_settings_come_from_the_config() {
+    let off = IoConfig::from_config(&Config::new());
+    assert!(off.block_cache.is_none());
+    let (c, _) = Config::from_pairs([
+        ("krishiv.io.cache.enabled", "true"),
+        ("krishiv.io.cache.path", "/cache/krishiv"),
+        ("krishiv.io.cache.diskBytes", "2g"),
+        ("krishiv.io.cache.memoryBytes", "8m"),
+        ("krishiv.io.cache.blockBytes", "256k"),
+    ])
+    .unwrap();
+    let on = IoConfig::from_config(&c).block_cache.unwrap();
+    assert_eq!(on.dir, std::path::PathBuf::from("/cache/krishiv"));
+    assert_eq!(on.disk_bytes, 2 << 30);
+    assert_eq!(on.memory_bytes, 8 << 20);
+    assert_eq!(on.block_bytes, 256 << 10);
+}
