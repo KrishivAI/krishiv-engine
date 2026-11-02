@@ -3338,6 +3338,34 @@ fn inline_table_of_unevaluable_expressions_fails() {
     );
 }
 
+/// A cell that raises when Spark evaluates it while resolving the table is
+/// `FAILED_SQL_EXPRESSION_EVALUATION` (ANSI: `CAST('nan' AS INT)` fails;
+/// without ANSI it is NULL and the table resolves).
+#[test]
+fn inline_table_cell_that_fails_to_evaluate() {
+    let bad = || {
+        Expr::new(ExprNode::Cast {
+            expr: Arc::new(s("nan")),
+            to: DataType::Integer,
+            mode: crate::CastMode::Ansi,
+        })
+    };
+    let mut on = ctx();
+    on.conf.ansi = true;
+    let r = run(inline_table(vec![vec![int(1)], vec![bad()]], &["a"]), &on);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION"
+    );
+    let try_cast = Expr::new(ExprNode::Cast {
+        expr: Arc::new(s("nan")),
+        to: DataType::Integer,
+        mode: crate::CastMode::Try,
+    });
+    let r = run(inline_table(vec![vec![try_cast]], &["a"]), &on);
+    assert_eq!(class(&r), "OK");
+}
+
 /// The clock functions evaluate once per query, so they may stay.
 #[test]
 fn inline_table_of_clock_calls_resolves() {

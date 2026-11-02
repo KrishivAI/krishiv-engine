@@ -29,10 +29,12 @@ use std::sync::Arc;
 use krishiv_common::error::{
     ColumnAlreadyExists, IncompatibleColumnType,
     InvalidInlineTableCannotEvaluateExpressionInInlineTable,
+    InvalidInlineTableFailedSqlExpressionEvaluation,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
     UnsupportedFeatureSetOperationOnMapType,
 };
+use krishiv_functions::signature::Constant;
 use krishiv_types::DataType;
 
 use super::bind::{same, unsupported};
@@ -151,6 +153,19 @@ impl Resolver<'_> {
                 // `CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE`.
                 let b = self.bind(cell, &cx)?;
                 self.check_inline_bound(&b)?;
+                // Spark evaluates each cell while resolving the table: a
+                // cell that raises is `FAILED_SQL_EXPRESSION_EVALUATION`.
+                if let Some(Constant::Error(_)) = self.fold(&b.expr, self.ctx.conf.ansi) {
+                    return Err(AnalysisError::new(
+                        InvalidInlineTableFailedSqlExpressionEvaluation {
+                            sql_expr: format!(
+                                "\"{}\"",
+                                pretty(&b.shown(), self.ctx.conf.session_zone)
+                            ),
+                        },
+                        o,
+                    ));
+                }
                 cells.push(b);
             }
             bound.push(cells);

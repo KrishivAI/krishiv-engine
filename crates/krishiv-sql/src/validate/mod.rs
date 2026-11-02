@@ -33,7 +33,7 @@
 //! | a `DESCRIBE` with `AS JSON` but no `EXTENDED`/`FORMATTED`, with a column and `AS JSON`, or with a column and a partition | `DESCRIBE_JSON_NOT_EXTENDED`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_JSON`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_PARTITION` |
 //! | a `DESCRIBE` partition key without a value | `INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE` |
 //!
-//! Not checked here: an inline table whose expressions fail when Spark
+//! Not checked here (the analyzer raises it, `Resolver::inline_table`): an inline table whose expressions fail when Spark
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
 //! which needs expression evaluation.
 
