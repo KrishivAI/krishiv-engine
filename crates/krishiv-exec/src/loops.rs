@@ -57,6 +57,18 @@ pub(crate) struct UnionLoopSource {
     recursive: Arc<PhysNode>,
     limits: LoopLimits,
     detached: Arc<Detached>,
+    /// `EXPLAIN ANALYZE`: the rounds run (the anchor counts), the rows they
+    /// produced, and the work of their operators, summed (the rounds' plans
+    /// are not nodes of the outer plan, so their operators fold in here).
+    totals: Totals,
+}
+
+#[derive(Default)]
+struct Totals {
+    rounds: AtomicU64,
+    rows: AtomicU64,
+    compute_ns: AtomicU64,
+    spill_write_bytes: AtomicU64,
 }
 
 impl UnionLoopSource {
@@ -77,6 +89,7 @@ impl UnionLoopSource {
             recursive: Arc::new(recursive),
             limits,
             detached,
+            totals: Totals::default(),
         })
     }
 }
@@ -150,6 +163,19 @@ impl Source for UnionLoopSource {
         }))
     }
 
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
+        let t = &self.totals;
+        crate::metrics::counts([
+            ("rounds", t.rounds.load(Ordering::Relaxed)),
+            ("rows", t.rows.load(Ordering::Relaxed)),
+            ("rounds_compute_ns", t.compute_ns.load(Ordering::Relaxed)),
+            (
+                "rounds_spill_write_bytes",
+                t.spill_write_bytes.load(Ordering::Relaxed),
+            ),
+        ])
+    }
+
     fn max_parallelism(&self, _global: &GlobalState) -> usize {
         1
     }
@@ -193,7 +219,7 @@ impl Source for UnionLoopSource {
                         }
                     }
                     None => {
-                        if !end_run(&mut st).await? {
+                        if !self.end_run(&mut st).await? {
                             return Ok(None);
                         }
                     }
@@ -204,6 +230,10 @@ impl Source for UnionLoopSource {
 }
 
 impl UnionLoopSource {
+    async fn end_run(&self, st: &mut State) -> Result<bool> {
+        end_run_impl(&self.totals, st).await
+    }
+
     /// Starts the anchor or the next round. `false`: the loop ended.
     async fn begin_run(&self, g: &LoopGlobal, st: &mut State) -> Result<bool> {
         let node = if st.started {
@@ -240,6 +270,7 @@ impl UnionLoopSource {
         let stream = QueryRunner::new(Arc::clone(&g.executor))
             .execute(node, Arc::clone(&child))
             .await?;
+        self.totals.rounds.fetch_add(1, Ordering::Relaxed);
         st.run = Some(Run { stream, child });
         st.next = Some(Round {
             out: Output::open(
@@ -271,6 +302,7 @@ impl UnionLoopSource {
         let batch = Batch::new(fixed);
         let n = n as u64;
         st.rows += n;
+        self.totals.rows.fetch_add(n, Ordering::Relaxed);
         let wanted = self.limits.pushed_limit;
         if st.rows > self.limits.rows && wanted.is_none_or(|w| st.rows - n >= w) {
             return Err(RecursionRowLimitExceeded {
@@ -314,9 +346,17 @@ impl Round {
 
 /// The run ended: its rows are the next round's input. `false`: it produced
 /// none, the loop is over.
-async fn end_run(st: &mut State) -> Result<bool> {
+async fn end_run_impl(totals: &Totals, st: &mut State) -> Result<bool> {
     if let Some(run) = st.run.take() {
         run.child.finished().await;
+        let m = run.child.metrics();
+        for e in m.operators.values() {
+            let ns = u64::try_from(e.metrics.compute_time.as_nanos()).unwrap_or(u64::MAX);
+            totals.compute_ns.fetch_add(ns, Ordering::Relaxed);
+            totals
+                .spill_write_bytes
+                .fetch_add(e.metrics.spill_write_bytes, Ordering::Relaxed);
+        }
     }
     let Some(mut round) = st.next.take() else {
         st.done = true;
