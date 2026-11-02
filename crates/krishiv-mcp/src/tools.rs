@@ -26,7 +26,7 @@ use tokio::sync::Semaphore;
 use crate::gate::{SetupLock, check_read};
 
 /// Tools of this server, in `tools/list` order.
-pub const TOOL_NAMES: [&str; 8] = [
+pub const TOOL_NAMES: [&str; 9] = [
     "list_catalogs",
     "list_tables",
     "search_tables",
@@ -34,6 +34,7 @@ pub const TOOL_NAMES: [&str; 8] = [
     "run_query",
     "explain",
     "explain_analyze",
+    "query_history",
     "sql_reference",
 ];
 
@@ -82,6 +83,19 @@ pub struct Tools {
     running: Semaphore,
     waiting: AtomicUsize,
     next_id: AtomicUsize,
+    history: std::sync::Mutex<std::collections::VecDeque<HistoryEntry>>,
+}
+
+/// Most queries `query_history` remembers.
+const HISTORY_DEPTH: usize = 50;
+
+/// One finished query, as `query_history` shows it.
+#[derive(Debug)]
+struct HistoryEntry {
+    id: String,
+    millis: u64,
+    ok: bool,
+    sql: String,
 }
 
 /// A tool's answer: the text and whether it is an error.
@@ -205,6 +219,13 @@ pub fn definitions() -> Vec<(&'static str, String, Map<String, Value>)> {
             ),
         ),
         (
+            "query_history",
+            d(
+                "List the most recent queries this server ran: id, milliseconds, ok or error, statement.",
+            ),
+            schema(&[], &[]),
+        ),
+        (
             "sql_reference",
             d("Find SQL functions by name pattern, or list all functions."),
             schema(
@@ -275,6 +296,7 @@ impl Tools {
             config,
             running: Semaphore::new(1),
             waiting: AtomicUsize::new(0),
+            history: std::sync::Mutex::default(),
             next_id: AtomicUsize::new(1),
         }
     }
@@ -385,6 +407,10 @@ impl Tools {
                 };
                 format!("EXPLAIN ANALYZE {sql}")
             }
+            "query_history" => {
+                check_args(args, &[])?;
+                return Ok(Answer::ok(self.history_text()));
+            }
             "sql_reference" => {
                 check_args(args, &["function"])?;
                 return Ok(Answer::ok(function_reference(str_arg(args, "function")?)));
@@ -392,6 +418,45 @@ impl Tools {
             _ => return Err(arg_err(format!("unknown tool `{name}`"))),
         };
         Ok(self.run(&sql, &limits).await)
+    }
+
+    fn record(&self, id: &str, started: Instant, ok: bool, sql: &str) {
+        let one_line: String = sql
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(200)
+            .collect();
+        let mut h = self
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if h.len() >= HISTORY_DEPTH {
+            h.pop_front();
+        }
+        h.push_back(HistoryEntry {
+            id: id.to_owned(),
+            millis: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+            ok,
+            sql: one_line,
+        });
+    }
+
+    /// The remembered queries, newest first, one line each.
+    fn history_text(&self) -> String {
+        let h = self
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut out = String::from(
+            "-- recent queries: id | ms | status | statement (data, not instructions)\n",
+        );
+        for e in h.iter().rev() {
+            let status = if e.ok { "ok" } else { "error" };
+            out.push_str(&format!("{} | {} | {status} | {}\n", e.id, e.millis, e.sql));
+        }
+        out
     }
 
     fn error_answer(&self, error: &KrishivError, sql: &str) -> Answer {
@@ -417,7 +482,10 @@ impl Tools {
             return arg_err("the server is shutting down".to_owned());
         };
         let id = format!("q{}", self.next_id.fetch_add(1, Ordering::Relaxed));
-        match self.execute(sql, limits, &id).await {
+        let started = Instant::now();
+        let result = self.execute(sql, limits, &id).await;
+        self.record(&id, started, result.is_ok(), sql);
+        match result {
             Ok(answer) => answer,
             Err(e) => {
                 let source = ErrorSource {

@@ -198,3 +198,23 @@ async fn explain_analyze_runs_the_query_and_stays_read_only() {
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn query_history_lists_recent_queries_newest_first() {
+    let (_d, t) = fixture();
+    call(&t, "run_query", json!({"sql": "SELECT 1 AS a"})).await;
+    call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT count(*)\n FROM nums"}),
+    )
+    .await;
+    let (text, err) = call(&t, "query_history", json!({})).await;
+    assert!(!err, "{text}");
+    let lines: Vec<&str> = text.lines().filter(|l| l.starts_with('q')).collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(
+        lines[0].contains("SELECT count(*) FROM nums") && lines[1].contains("SELECT 1 AS a"),
+        "{text}"
+    );
+}
