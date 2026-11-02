@@ -36,6 +36,9 @@ fn file(env: &Env, stats: EnabledStatistics) -> (FileRef, FormatOptions) {
     let props = WriterProperties::builder()
         .set_data_page_row_count_limit(PAGE_ROWS)
         .set_write_batch_size(PAGE_ROWS)
+        // The dictionary page of a column is always fetched whole: keep it
+        // out of the byte comparison.
+        .set_dictionary_enabled(false)
         .set_statistics_enabled(stats)
         .build();
     let f = env.put("pages.parquet", write(&[batch], props));
@@ -101,6 +104,14 @@ fn a_sorted_column_skips_pages() {
         with.len(),
         without.len()
     );
+    // The offset indexes are attached: only the selected pages are fetched.
+    assert!(
+        m_on.bytes_pushed < m_off.bytes_pushed / 2,
+        "{} vs {}",
+        m_on.bytes_pushed,
+        m_off.bytes_pushed
+    );
+    assert!(m_on.index_bytes > 0);
     // Every matching row survives; the rows that stay are a superset.
     let wanted: Vec<i64> = (9_000..=9_700).collect();
     assert!(wanted.iter().all(|k| with.contains(k)));

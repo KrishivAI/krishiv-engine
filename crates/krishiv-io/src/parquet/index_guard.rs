@@ -274,22 +274,36 @@ pub(super) fn bloom_header(bytes: &[u8], declared: &Range<u64>) -> R<(u64, usize
     Ok((num_bytes, header_len))
 }
 
-/// Checks the page headers of the pages in `pages` that lie wholly inside
-/// the pushed bytes `bytes`, which start at file offset `start`: with an
-/// offset index attached, a pushed range may hold some pages of a chunk
-/// and not all (design section 4.4).
+/// Checks the page headers inside the pushed bytes `bytes`, which start at
+/// file offset `start`, of a column chunk starting at `chunk_start` whose
+/// pages are `pages`: with an offset index attached, a pushed range may
+/// hold some pages of a chunk and not all (design section 4.4). The
+/// dictionary page, which lies before the first data page, is checked when
+/// the bytes hold it whole.
 ///
 /// # Errors
 /// [`Rejected`] for a header that fails the page-header walk.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Bloom stage and the sparse fetch of P2-T080b use it"
-    )
-)]
-pub(super) fn sparse_pages(bytes: &[u8], start: u64, pages: &[PageLocation]) -> R<()> {
+pub(super) fn sparse_pages(
+    bytes: &[u8],
+    start: u64,
+    chunk_start: u64,
+    pages: &[PageLocation],
+) -> R<()> {
     let end = start + bytes.len() as u64;
+    let walk = |from: u64, to: u64| -> R<()> {
+        if from < start || to > end || from >= to {
+            return Ok(());
+        }
+        let lo = usize::try_from(from - start).map_err(|_| Rejected::new("offset overflow"))?;
+        let hi = usize::try_from(to - start).map_err(|_| Rejected::new("offset overflow"))?;
+        if let Some(slice) = bytes.get(lo..hi) {
+            thrift_guard::check_pages(slice)?;
+        }
+        Ok(())
+    };
+    if let Some(first) = pages.first().and_then(|p| u64::try_from(p.offset).ok()) {
+        walk(chunk_start, first)?;
+    }
     for p in pages {
         let (Ok(offset), Ok(size)) = (
             u64::try_from(p.offset),
@@ -297,16 +311,8 @@ pub(super) fn sparse_pages(bytes: &[u8], start: u64, pages: &[PageLocation]) -> 
         ) else {
             continue;
         };
-        let Some(page_end) = offset.checked_add(size) else {
-            continue;
-        };
-        if offset < start || page_end > end {
-            continue;
-        }
-        let lo = usize::try_from(offset - start).map_err(|_| Rejected::new("offset overflow"))?;
-        let hi = usize::try_from(page_end - start).map_err(|_| Rejected::new("offset overflow"))?;
-        if let Some(slice) = bytes.get(lo..hi) {
-            thrift_guard::check_pages(slice)?;
+        if let Some(page_end) = offset.checked_add(size) {
+            walk(offset, page_end)?;
         }
     }
     Ok(())

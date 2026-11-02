@@ -123,6 +123,7 @@ fn a_real_file_passes_every_check() {
     sparse_pages(
         &slice(&bytes, &chunk),
         chunk.start,
+        chunk.start,
         offsets.page_locations(),
     )
     .expect("page headers");
@@ -313,17 +314,17 @@ fn a_hostile_page_header_inside_a_sparse_range_is_rejected() {
         first_row_index: 0,
     };
     // The page lies inside the pushed bytes: it is walked and refused.
-    let err = sparse_pages(&page, 1000, std::slice::from_ref(&location)).expect_err("walked");
+    let err = sparse_pages(&page, 1000, 1000, std::slice::from_ref(&location)).expect_err("walked");
     assert!(err.0.contains("larger than the bytes left"), "{err:?}");
     // A page outside the pushed range is not this call's to check.
-    assert!(sparse_pages(&page, 5000, std::slice::from_ref(&location)).is_ok());
+    assert!(sparse_pages(&page, 5000, 5000, std::slice::from_ref(&location)).is_ok());
     // A location that overflows is skipped, not a panic.
     let wild = PageLocation {
         offset: i64::MAX,
         compressed_page_size: i32::MAX,
         first_row_index: 0,
     };
-    assert!(sparse_pages(&page, 1000, &[wild]).is_ok());
+    assert!(sparse_pages(&page, 1000, 1000, &[wild]).is_ok());
 }
 
 /// A `ColumnIndex` of two INT64 pages whose `nan_counts` list has one
