@@ -403,9 +403,11 @@ def test_save_as_table_modes_and_insert_into(spark: SparkSession, df: DataFrame)
     assert spark.table("saved").count() == 6
     df.write.insertInto("saved")
     assert spark.table("saved").count() == 9
-    with pytest.raises(errors.PySparkException) as overwrite:
-        df.write.mode("overwrite").saveAsTable("saved")
-    assert error_class(overwrite.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    df.filter("id > 1").write.mode("overwrite").saveAsTable("saved")
+    assert spark.table("saved").count() == 2
+    with pytest.raises(errors.PySparkException) as self_read:
+        spark.table("saved").write.mode("overwrite").saveAsTable("saved")
+    assert error_class(self_read.value) == "UNSUPPORTED_OVERWRITE.TABLE"
     with pytest.raises(errors.PySparkException) as insert_overwrite:
         df.write.insertInto("saved", overwrite=True)
     assert error_class(insert_overwrite.value) == "KRISHIV_UNSUPPORTED_FEATURE"

@@ -2040,19 +2040,48 @@ impl Session {
         create: bool,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        let text = if create {
+            "CREATE TABLE {} AS SELECT 1"
+        } else {
+            "INSERT INTO {} SELECT 1"
+        };
+        self.authorize_equivalent(name, text, env).await
+    }
+
+    /// [`Self::authorize_table_write`] for any statement `text` (with `{}`
+    /// standing for the quoted table name) the call stands for.
+    async fn authorize_equivalent(
+        &self,
+        name: &TableName,
+        text: &str,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
         let quoted = format!(
             "`{}`.`{}`",
             name.namespace.replace('`', "``"),
             name.name.replace('`', "``")
         );
-        let text = if create {
-            format!("CREATE TABLE {quoted} AS SELECT 1")
-        } else {
-            format!("INSERT INTO {quoted} SELECT 1")
-        };
+        let text = text.replace("{}", &quoted);
         let statement = krishiv_sql::parse_statement(&text, &env.parser).map_err(|e| e.error)?;
         let class = krishiv_sql::classify(&statement);
         self.authorize_statement(&statement, class, env).await
+    }
+
+    /// What a `create` of a new table checks before it changes anything,
+    /// so an overwrite can check it before it drops the old one.
+    fn validate_new_table(&self, name: &TableName, spec: &V2WriteSpec) -> Result<(), KrishivError> {
+        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+            return Err(unsupported("partitioned tables"));
+        }
+        self.warehouse_dir()?;
+        self.provider_of(spec.provider.clone())?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
+        self.check_namespace(name)?;
+        if spec.options.values().any(|v| v.as_plain().is_none()) {
+            return Err(unsupported("secret table options"));
+        }
+        Ok(())
     }
 
     /// The table a `DataFrameWriter` call names.
@@ -2069,8 +2098,10 @@ impl Session {
     /// `ignore` leaves an existing table alone, `append` adds the rows by
     /// column name (names that do not match the table's, a format other than
     /// its, or a `partition_by` fail with `KRISHIV_UNSUPPORTED_FEATURE`), and
-    /// `overwrite` of an existing table fails with `KRISHIV_UNSUPPORTED_FEATURE`
-    /// (Spark drops and recreates it).
+    /// `overwrite` drops the table and creates it again, after the checks that
+    /// can refuse the new table and the `UNSUPPORTED_OVERWRITE.TABLE` check
+    /// (a query that reads the table it replaces); a temporary view of the
+    /// same name makes it `KRISHIV_UNSUPPORTED_FEATURE`.
     pub(crate) async fn exec_save_as_table(
         &self,
         df: &DataFrame,
@@ -2137,10 +2168,29 @@ impl Session {
                 self.exec_write_v2(&by_name, spec, V2Mode::Append).await
             }
             (SaveMode::Overwrite, true) => {
-                // Dropping the table first would lose it when the create then
-                // fails, and Spark refuses to overwrite a table the query reads
-                // (`UNSUPPORTED_OVERWRITE.TABLE`), which this does not check yet.
-                Err(unsupported("saveAsTable overwrite of an existing table"))
+                // Spark drops the table and creates it again. Everything that can
+                // refuse the new table is checked before the old one goes.
+                if self.temp_entry_of(&name, &env) {
+                    return Err(unsupported(
+                        "saveAsTable overwrite of a name a temporary view shadows",
+                    ));
+                }
+                self.authorize_equivalent(&name, "DROP TABLE {}", &env)
+                    .await?;
+                self.authorize_table_write(&name, true, &env).await?;
+                // `UNSUPPORTED_OVERWRITE.TABLE`: the query reads the table it replaces.
+                let analysis = df.analysis().await?;
+                let mut reads = crate::cache::read_tables(analysis.analyzed.plan.root());
+                reads.extend(crate::cache::unresolved_tables(&df.plan));
+                if reads.contains(&name.name.to_lowercase()) {
+                    return Err(krishiv_common::error::UnsupportedOverwriteTable {
+                        table: name.quoted(),
+                    }
+                    .into());
+                }
+                self.validate_new_table(&name, &spec)?;
+                self.drop_named_table(&name, &env, true).await?;
+                self.exec_write_v2(df, spec, V2Mode::Create).await
             }
             // `ErrorIfExists` on an existing table fails in the create.
             _ => self.exec_write_v2(df, spec, V2Mode::Create).await,

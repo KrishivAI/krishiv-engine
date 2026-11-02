@@ -72,18 +72,16 @@ fn save_as_table_modes() {
     let df = block_on(s.sql("SELECT sum(id) FROM t")).unwrap();
     let sums = block_on(df.collect()).unwrap();
     assert_eq!(sums[0].column(0).as_primitive::<Int64Type>().value(0), 12);
-    // overwrite of an existing table is not supported yet, and leaves it alone.
-    assert_eq!(
-        class(block_on(
-            s.table("people")
-                .filter(col("id").gt(lit(1)))
-                .write()
-                .mode("overwrite")
-                .save_as_table("t")
-        )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
-    assert_eq!(count(&s, "t"), 6);
+    // overwrite drops the table and creates it again from the query.
+    block_on(
+        s.table("people")
+            .filter(col("id").gt(lit(1)))
+            .write()
+            .mode("overwrite")
+            .save_as_table("t"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "t"), 2);
     // overwrite of a table that does not exist creates it.
     block_on(
         s.table("people")
@@ -261,4 +259,48 @@ fn append_by_name_is_exact_about_names_and_format() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert!(block_on(s.table("p").count()).is_err());
+}
+
+#[test]
+fn overwrite_checks_before_it_drops() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    // The query reads the table it replaces.
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("overwrite").save_as_table("t")
+        )),
+        "UNSUPPORTED_OVERWRITE.TABLE"
+    );
+    // So does one over a view of it.
+    block_on(s.sql("CREATE TEMPORARY VIEW tv AS SELECT * FROM t")).unwrap();
+    assert_eq!(
+        class(block_on(
+            s.table("tv").write().mode("overwrite").save_as_table("t")
+        )),
+        "UNSUPPORTED_OVERWRITE.TABLE"
+    );
+    // A new table that cannot be created (a partitioning) leaves the old one in place.
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .partition_by(["id"])
+                .mode("overwrite")
+                .save_as_table("t")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(count(&s, "t"), 3, "the table is still there");
+    // A temporary view of the same name is not dropped in the table's place.
+    block_on(s.sql("CREATE TEMPORARY VIEW t AS SELECT 1 AS id, 'x' AS name")).unwrap();
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .mode("overwrite")
+                .save_as_table("t")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
 }
