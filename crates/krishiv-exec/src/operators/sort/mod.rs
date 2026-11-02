@@ -110,7 +110,10 @@ where
 }
 
 /// A breaker's source-side global state: its sink's finalized state.
-fn finalized<T: Send + Sync + 'static>(ctx: &TaskContext, what: &str) -> Result<GlobalState> {
+pub(super) fn finalized<T: Send + Sync + 'static>(
+    ctx: &TaskContext,
+    what: &str,
+) -> Result<GlobalState> {
     let state = ctx
         .dependency()
         .cloned()

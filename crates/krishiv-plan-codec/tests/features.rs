@@ -528,6 +528,28 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
             missing: vec!["shared_subplan".to_owned()]
         }
     );
+    // A reader without `late_fetch` refuses the node and a row id alone.
+    let late_fetch = cases()
+        .into_iter()
+        .find(|(n, _)| n == "late_fetch")
+        .unwrap()
+        .1;
+    let top = late_fetch.root().children()[0];
+    let row_id = plan_of(top.children()[0].clone());
+    for plan in [late_fetch.clone(), row_id] {
+        let err = decode_with(
+            &encode(&plan).unwrap(),
+            &Limits::default(),
+            &ReaderFeatures::only([]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["late_fetch".to_owned()]
+            }
+        );
+    }
     // A reader without `lambda_functions` refuses the lambda plan naming
     // the feature, even though it knows `nested_types`.
     let bytes = encode(

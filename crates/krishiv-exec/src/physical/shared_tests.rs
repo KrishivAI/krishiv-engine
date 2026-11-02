@@ -165,6 +165,7 @@ fn filtered_scan(id: u64) -> PhysNode {
             key_type: DataType::Int64,
         }],
         row_stage: crate::operators::RowStageSettings::default(),
+        row_id: false,
     })
 }
 
