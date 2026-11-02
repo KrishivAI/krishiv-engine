@@ -5477,7 +5477,17 @@ impl Resolver<'_> {
                     let mut names: Vec<String> = hits
                         .iter()
                         .map(|a| {
-                            let mut p = a.qual.to_vec();
+                            // Spark prints no qualifier for a subquery without an
+                            // alias, nor for a select-list generator's columns.
+                            let mut p: Vec<String> = a
+                                .qual
+                                .iter()
+                                .filter(|q| {
+                                    q.as_str() != "__auto_generated_subquery_name"
+                                        && !q.starts_with(crate::GENERATE_QUALIFIER_PREFIX)
+                                })
+                                .cloned()
+                                .collect();
                             p.push(a.col.name.clone());
                             quoted(&p)
                         })
