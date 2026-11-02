@@ -932,3 +932,28 @@ fn a_stack_with_an_alias_list_runs_beside_group_by() {
         table(&[&["1"], &["2"], &["2"], &["3"]])
     );
 }
+
+// Spark 4.2 prints no qualifier for a subquery without an alias or for a
+// generator's columns in AMBIGUOUS_REFERENCE.
+#[test]
+fn an_ambiguous_generator_column_prints_without_internal_qualifiers() {
+    let s = Session::new().unwrap();
+    for (q, want) in [
+        (
+            "select col from (select 1 as col, explode(array(1,2)))",
+            "Reference `col` is ambiguous, could be: [`col`, `col`]",
+        ),
+        (
+            "select col from (select explode(array(1,2)), explode_outer(array(3)))",
+            "Reference `col` is ambiguous, could be: [`col`, `col`]",
+        ),
+        (
+            "select t.k from (select 1 as k, explode(array(1,2)) as k) t",
+            "Reference `t`.`k` is ambiguous, could be: [`t`.`k`, `t`.`k`]",
+        ),
+    ] {
+        let err = error_of(&s, q);
+        assert_eq!(err.error_class(), ErrorClass::AmbiguousReference, "{q}");
+        assert!(err.to_string().contains(want), "{q}: {err}");
+    }
+}
