@@ -1584,8 +1584,20 @@ impl Session {
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
+        self.drop_named_table(&name, &env, d.if_exists).await?;
+        self.empty_frame().await
+    }
+
+    /// `DROP TABLE` for a resolved name; also what `saveAsTable` in overwrite
+    /// mode runs before it creates the table again.
+    async fn drop_named_table(
+        &self,
+        name: &TableName,
+        env: &QueryEnv,
+        if_exists: bool,
+    ) -> Result<(), KrishivError> {
         // `DROP TABLE` on a permanent view is refused as Spark's `DropTableCommand` does.
-        if self.temp_entry_of(&name, &env) {
+        if self.temp_entry_of(name, env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
             self.state.cache.invalidate_table(&name.name);
@@ -1602,7 +1614,7 @@ impl Session {
             }
             // Checked before the metadata goes: a refused delete must not orphan the files.
             let dir = self.deletable_dir(&table).await?;
-            self.forget_cached(&name);
+            self.forget_cached(name);
             self.state
                 .catalog
                 .store
@@ -1610,10 +1622,10 @@ impl Session {
             if let Some(dir) = dir {
                 remove_dir(&dir)?;
             }
-        } else if !d.if_exists {
+        } else if !if_exists {
             return Err(name.not_found());
         }
-        self.empty_frame().await
+        Ok(())
     }
 
     /// `TRUNCATE TABLE name`: removes the table's files and keeps its
@@ -2013,6 +2025,90 @@ impl Session {
         // The partitions written (`AlterTableAddPartitionCommand` after an insert).
         self.register_partitions(name, &dirs, false);
         Ok(())
+    }
+
+    /// The table a `DataFrameWriter` call names.
+    fn writer_table_name(&self, table: &str, env: &QueryEnv) -> Result<TableName, KrishivError> {
+        let parsed = krishiv_sql::parse_multipart_identifier(table, &self.parser_options())
+            .map_err(|e| e.error)?;
+        let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
+        TableName::resolve(&parts, &self.state.catalog.current_namespace(), env)
+    }
+
+    /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
+    /// table is created from the DataFrame's schema (an existing one in
+    /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
+    /// `ignore` leaves an existing table alone, `append` adds the rows by
+    /// column name (case-insensitively; names that do not match the table's
+    /// fail with `KRISHIV_UNSUPPORTED_FEATURE`), and `overwrite` drops the
+    /// table and creates it again.
+    pub(crate) async fn exec_save_as_table(
+        &self,
+        df: &DataFrame,
+        spec: V2WriteSpec,
+        mode: krishiv_io::SaveMode,
+    ) -> Result<(), KrishivError> {
+        use krishiv_io::SaveMode;
+        let env = self.query_env();
+        let name = self.writer_table_name(&spec.table, &env)?;
+        let exists = self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some();
+        match (mode, exists) {
+            (SaveMode::Ignore, true) => Ok(()),
+            (SaveMode::Append, true) => {
+                let table = self.table_for_write(&name, "INSERT", &env)?;
+                let schema = df.schema().await?;
+                let have: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                let mut order = Vec::with_capacity(table.columns.len());
+                for c in &table.columns {
+                    match have.iter().find(|h| h.eq_ignore_ascii_case(&c.name)) {
+                        Some(h) => order.push(*h),
+                        None => break,
+                    }
+                }
+                if order.len() != table.columns.len() || order.len() != have.len() {
+                    return Err(unsupported(
+                        "saveAsTable append with column names that differ from the table's",
+                    ));
+                }
+                let by_name = df.select(order);
+                self.exec_write_v2(&by_name, spec, V2Mode::Append).await
+            }
+            (SaveMode::Overwrite, true) => {
+                self.drop_named_table(&name, &env, true).await?;
+                self.exec_write_v2(df, spec, V2Mode::Create).await
+            }
+            // `ErrorIfExists` on an existing table fails in the create.
+            _ => self.exec_write_v2(df, spec, V2Mode::Create).await,
+        }
+    }
+
+    /// `DataFrameWriter.insertInto`: `errorifexists`, `ignore` and `append`
+    /// are all `INSERT INTO` by position (Spark's `insertInto` ignores the
+    /// first two); `overwrite` is `INSERT OVERWRITE`, which the session does
+    /// not run yet.
+    pub(crate) async fn exec_insert_into(
+        &self,
+        df: &DataFrame,
+        table: &str,
+        mode: krishiv_io::SaveMode,
+    ) -> Result<(), KrishivError> {
+        if mode == krishiv_io::SaveMode::Overwrite {
+            return Err(unsupported("INSERT OVERWRITE"));
+        }
+        let spec = V2WriteSpec {
+            table: table.to_owned(),
+            provider: None,
+            options: BTreeMap::new(),
+            properties: BTreeMap::new(),
+            partitioned_by: Vec::new(),
+            cluster_by: Vec::new(),
+        };
+        self.exec_write_v2(df, spec, V2Mode::Append).await
     }
 
     /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`

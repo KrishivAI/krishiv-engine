@@ -1575,6 +1575,8 @@ impl DataFrame {
             mode: "error".to_owned(),
             options: BTreeMap::new(),
             partition_by: Vec::new(),
+            bucket_by: None,
+            sort_by: None,
         }
     }
 
@@ -1887,6 +1889,10 @@ pub struct DataFrameWriter {
     mode: String,
     options: BTreeMap<String, OptionValue>,
     partition_by: Vec<String>,
+    /// `bucketBy`: the bucket count and columns.
+    bucket_by: Option<(i32, Vec<String>)>,
+    /// `sortBy`.
+    sort_by: Option<Vec<String>>,
 }
 
 impl DataFrameWriter {
@@ -1999,6 +2005,7 @@ impl DataFrameWriter {
     /// [`Self::save`], returning the partition directories (`col=value/...`
     /// below `path`, escaped) that hold the committed files.
     pub(crate) async fn save_reporting(self, path: &str) -> Result<Vec<String>, KrishivError> {
+        self.assert_not_bucketed("save")?;
         let target = WriteTarget {
             format: self.format,
             mode: self.mode,
@@ -2016,6 +2023,153 @@ impl DataFrameWriter {
                 df.session.write_files(physical, &a.env, target).await
             })
             .await
+    }
+
+    /// Buckets the output by `cols` into `buckets` buckets (PySpark's
+    /// `bucketBy`). Only `saveAsTable` takes a bucketed layout in Spark, and
+    /// the engine has no bucketed tables yet: `save` and `insertInto` fail as
+    /// in Spark and `save_as_table` with `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().bucket_by(4, ["a"]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn bucket_by(
+        mut self,
+        buckets: i32,
+        cols: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Self {
+        self.bucket_by = Some((
+            buckets,
+            cols.into_iter().map(|c| c.as_ref().to_owned()).collect(),
+        ));
+        self
+    }
+
+    /// Sorts each bucket by `cols` (PySpark's `sortBy`); needs `bucket_by`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().bucket_by(4, ["a"]).sort_by(["b"]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn sort_by(mut self, cols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.sort_by = Some(cols.into_iter().map(|c| c.as_ref().to_owned()).collect());
+        self
+    }
+
+    /// Spark's `isBucketed` and `assertNotBucketed(operation)`: `sortBy`
+    /// without `bucketBy` is `SORT_BY_WITHOUT_BUCKETING`; a bucketed write
+    /// through `operation` is refused.
+    fn assert_not_bucketed(&self, operation: &str) -> Result<(), KrishivError> {
+        match (&self.bucket_by, &self.sort_by) {
+            (None, None) => Ok(()),
+            (None, Some(_)) => Err(krishiv_common::error::SortByWithoutBucketing {}.into()),
+            (Some(_), None) => Err(krishiv_common::error::LegacyErrorTemp1312 {
+                operation: operation.to_owned(),
+            }
+            .into()),
+            (Some(_), Some(_)) => Err(krishiv_common::error::LegacyErrorTemp1313 {
+                operation: operation.to_owned(),
+            }
+            .into()),
+        }
+    }
+
+    /// The table request of `saveAsTable` and `insertInto`.
+    fn table_spec(&self, table: &str) -> crate::table_commands::V2WriteSpec {
+        crate::table_commands::V2WriteSpec {
+            table: table.to_owned(),
+            provider: Some(self.format.clone()).filter(|f| !f.is_empty()),
+            options: self.options.clone(),
+            properties: BTreeMap::new(),
+            partitioned_by: self.partition_by.clone(),
+            cluster_by: Vec::new(),
+        }
+    }
+
+    /// Saves the rows as the table `table` (PySpark's `saveAsTable`). The
+    /// mode is Spark's: `errorifexists` (the default) fails with
+    /// `TABLE_OR_VIEW_ALREADY_EXISTS` when the table exists, `ignore` leaves
+    /// it, `append` adds the rows by column name and `overwrite` drops and
+    /// creates it again. The format is [`Self::format`], else
+    /// `spark.sql.sources.default`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// futures::executor::block_on(s.table("t").write().save_as_table("u"))?;
+    /// assert_eq!(futures::executor::block_on(s.table("u").count())?, 0);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_SAVE_MODE`; `SORT_BY_WITHOUT_BUCKETING`;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for `bucket_by` or `partition_by`;
+    /// `TABLE_OR_VIEW_ALREADY_EXISTS`; analysis and write errors.
+    pub async fn save_as_table(self, table: &str) -> Result<(), KrishivError> {
+        let mode = krishiv_io::SaveMode::parse(&self.mode)?;
+        if let (None, Some(_)) = (&self.bucket_by, &self.sort_by) {
+            return Err(krishiv_common::error::SortByWithoutBucketing {}.into());
+        }
+        if self.bucket_by.is_some() {
+            return Err(KrishivUnsupportedFeature {
+                feature: "bucketBy".to_owned(),
+            }
+            .into());
+        }
+        let spec = self.table_spec(table);
+        let df = self.df;
+        let session = df.session.clone();
+        session
+            .on_executor(async move { df.session.exec_save_as_table(&df, spec, mode).await })
+            .await
+    }
+
+    /// Inserts the rows into the existing table `table` by position
+    /// (PySpark's `insertInto`). `errorifexists`, `ignore` and `append` all
+    /// append, as in Spark; `overwrite` is `INSERT OVERWRITE`, which fails
+    /// with `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// futures::executor::block_on(s.table("t").write().save_as_table("u"))?;
+    /// futures::executor::block_on(s.table("t").write().insert_into("u"))?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_SAVE_MODE`; the bucketing errors of `save`;
+    /// `PARTITION_BY_NOT_ALLOWED_WITH_INSERT_INTO` after `partition_by`;
+    /// `TABLE_OR_VIEW_NOT_FOUND`; the arity and write errors of `INSERT INTO`.
+    pub async fn insert_into(self, table: &str) -> Result<(), KrishivError> {
+        let mode = krishiv_io::SaveMode::parse(&self.mode)?;
+        self.assert_not_bucketed("insertInto")?;
+        if !self.partition_by.is_empty() {
+            return Err(krishiv_common::error::PartitionByNotAllowedWithInsertInto {
+                table_name: table.to_owned(),
+            }
+            .into());
+        }
+        let df = self.df;
+        let table = table.to_owned();
+        let session = df.session.clone();
+        session
+            .on_executor(async move { df.session.exec_insert_into(&df, &table, mode).await })
+            .await
+    }
+
+    /// Writes the rows as text files under `path` (PySpark's `write.text`):
+    /// one string column.
+    ///
+    /// # Errors
+    /// As [`Self::save`].
+    pub async fn text(self, path: &str) -> Result<(), KrishivError> {
+        self.format("text").save(path).await
     }
 
     /// Writes the rows as Parquet files under `path` (PySpark's
