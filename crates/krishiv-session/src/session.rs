@@ -2227,7 +2227,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 12] = [
+const PARSER_KEYS: [&str; 14] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -2240,6 +2240,8 @@ const PARSER_KEYS: [&str; 12] = [
     "spark.sql.parser.singleCharacterPipeOperator.enabled",
     "spark.sql.legacy.viewSchemaBindingMode",
     "spark.sql.caseSensitive",
+    "spark.sql.parser.quotedRegexColumnNames",
+    "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.

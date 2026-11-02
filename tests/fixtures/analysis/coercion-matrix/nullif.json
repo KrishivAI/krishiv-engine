@@ -1306,11 +1306,11 @@
     },
     {
       "id": "nullif/VOID/MAP<STRING,INT>/ansi_off",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS VOID), CAST(NULL AS MAP<STRING,INT>))) | resolves to void where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS VOID), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS VOID), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     },
     {
       "id": "nullif/VOID/MAP<STRING,INT>/ansi_on",
-      "reason": "SELECT typeof(nullif(CAST(NULL AS VOID), CAST(NULL AS MAP<STRING,INT>))) | resolves to void where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+      "reason": "SELECT typeof(nullif(CAST(NULL AS VOID), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`nullif`\", \"sqlExpr\": \"\\\"nullif(CAST(NULL AS VOID), NULL)\\\"\"} where Spark has DATATYPE_MISMATCH.INVALID_ORDERING_TYPE {\"dataType\": \"\\\"MAP<STRING, INT>\\\"\", \"functionName\": \"`=`\", \"sqlExpr\": \"\\\"(commonexpressionref() = NULL)\\\"\"}"
     }
   ],
   "form": "nullif",

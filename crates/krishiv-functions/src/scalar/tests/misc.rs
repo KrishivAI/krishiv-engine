@@ -128,3 +128,19 @@ fn misc_functions_take_no_arguments() {
         assert!(err.to_string().contains(name), "{name}: {err}");
     }
 }
+
+#[test]
+fn a_full_match_regex_keeps_its_anchors_outside_the_pattern_text() {
+    use crate::scalar::FullMatch;
+    for pattern in ["\\Qfoo", "(?x)foo # trailing comment", "foo+", "(?i)FOO"] {
+        let m = FullMatch::new(pattern, false).unwrap();
+        assert!(m.is_match("foo").unwrap(), "{pattern}");
+        assert!(!m.is_match("foox").unwrap(), "{pattern}");
+    }
+    assert!(
+        FullMatch::new("FOO", true)
+            .unwrap()
+            .is_match("foo")
+            .unwrap()
+    );
+}

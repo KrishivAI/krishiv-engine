@@ -103,10 +103,12 @@ enum Context {
 /// operand position reads a word that is a keyword at the start of an item
 /// as a name (`NOT` in `1 = NOT + 1`, a column named `NOT`, as Spark's
 /// parser does), the right operand of `SELECT 1 = <text>`, rendered like
-/// [`without_spans`]. A node's text re-parses to the node when any of them
-/// does.
-fn reparsed(text: &str, options: &ParserOptions) -> [Option<String>; 3] {
-    let parse = |sql: String, context: Context| -> Option<String> {
+/// [`without_spans`]. With `spark.sql.parser.quotedRegexColumnNames` on it
+/// also parses the item and nested forms with the option off, as a backquoted
+/// name outside a select item is a column. A node's text re-parses to the
+/// node when any of them does.
+fn reparsed(text: &str, options: &ParserOptions) -> Vec<Option<String>> {
+    let parse = |sql: String, context: Context, options: &ParserOptions| -> Option<String> {
         let q = parse_query(&sql, options).ok()?;
         let SetExprKind::Select(s) = q.body.kind else {
             return None;
@@ -120,11 +122,22 @@ fn reparsed(text: &str, options: &ParserOptions) -> [Option<String>; 3] {
         };
         Some(without_spans(format!("{expr:#?}").lines()))
     };
-    [
-        parse(format!("SELECT {text}"), Context::Item),
-        parse(format!("SELECT ({text})"), Context::Nested),
-        parse(format!("SELECT 1 = {text}"), Context::Operand),
-    ]
+    let mut out = vec![
+        parse(format!("SELECT {text}"), Context::Item, options),
+        parse(format!("SELECT ({text})"), Context::Nested, options),
+        parse(format!("SELECT 1 = {text}"), Context::Operand, options),
+    ];
+    // A backquoted name outside a select item is a column even where the select list would read
+    // it as a regex (`spark.sql.parser.quotedRegexColumnNames`).
+    if options.quoted_regex_column_names {
+        let plain = ParserOptions {
+            quoted_regex_column_names: false,
+            ..*options
+        };
+        out.push(parse(format!("SELECT {text}"), Context::Item, &plain));
+        out.push(parse(format!("SELECT ({text})"), Context::Nested, &plain));
+    }
+    out
 }
 
 /// Checks the spans of `q`, parsed from `sql` with `options` (see the
