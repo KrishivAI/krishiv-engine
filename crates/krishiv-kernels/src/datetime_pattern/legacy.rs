@@ -352,16 +352,19 @@ impl LegacyPattern {
 
 /// UTC micros of the local time `local`, resolved as a non-lenient
 /// `GregorianCalendar` does: a time in a gap is invalid (`None`), and in an
-/// overlap the later instant (the smaller offset) wins.
+/// overlap the later instant (the smaller offset) wins. Zone offsets are the
+/// real rules' (LMT before 1900): Spark rebases the parsed instant so the
+/// wall clock survives, while only the printed offset letters use the raw
+/// `java.util.TimeZone` offset.
 fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
     let secs = local.div_euclid(MICROS_PER_SECOND);
     let near = [
-        tz.legacy_offset_at_utc(secs.saturating_sub(86_400)),
-        tz.legacy_offset_at_utc(secs.saturating_add(86_400)),
+        tz.offset_at_utc(secs.saturating_sub(86_400)),
+        tz.offset_at_utc(secs.saturating_add(86_400)),
     ];
     let offset = near
         .into_iter()
-        .filter(|&o| tz.legacy_offset_at_utc(secs.saturating_sub(i64::from(o))) == o)
+        .filter(|&o| tz.offset_at_utc(secs.saturating_sub(i64::from(o))) == o)
         .min()?;
     local.checked_sub(i64::from(offset).checked_mul(MICROS_PER_SECOND)?)
 }
