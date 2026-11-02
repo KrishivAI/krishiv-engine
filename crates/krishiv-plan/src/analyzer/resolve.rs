@@ -151,6 +151,13 @@ pub(super) struct Resolver<'a> {
     /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
     /// stack.
     pub(super) expr_depth: usize,
+    /// Nodes under the key argument of an AES call (ADR 0042), shared by
+    /// every nested `expr_in` (lambda bodies, subqueries) so the secret
+    /// context is inherited on all analysis paths; cleared when the
+    /// outermost expression finishes. `secret_scope` is set while a secret
+    /// node's children are bound, so a nested pass marks its root.
+    pub(super) secret: std::collections::HashSet<usize>,
+    pub(super) secret_scope: bool,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
@@ -191,6 +198,8 @@ pub(super) fn resolve(
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
+        secret: std::collections::HashSet::new(),
+        secret_scope: false,
         op_outer: None,
         root_env: None,
         folds: std::cell::RefCell::default(),

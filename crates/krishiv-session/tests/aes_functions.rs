@@ -262,6 +262,47 @@ fn the_key_never_reaches_an_error_message() {
     }
 }
 
+/// The secret context reaches every analysis path: whatever wraps the bad
+/// key expression (lambdas, CASE, casts, comparisons, subqueries, aggregate
+/// and window arguments, nested calls, constructors), the error text never
+/// shows the key.
+#[test]
+fn the_key_is_hidden_under_every_wrapper() {
+    let s = Session::new().unwrap();
+    let bad = "CAST(array('secretkey-123456') AS BINARY)";
+    let wrappers = [
+        format!("CAST(transform(array(1), x -> {bad}) AS STRING)"),
+        format!("CAST(filter(array(1), x -> {bad} IS NOT NULL) AS STRING)"),
+        format!("CAST(aggregate(array(1), {bad}, (a, x) -> a) AS STRING)"),
+        format!("CAST(transform(array(1), x -> transform(array(2), y -> {bad})) AS STRING)"),
+        format!("CASE WHEN true THEN {bad} ELSE 'k' END"),
+        format!("CASE WHEN {bad} IS NULL THEN 'a' ELSE 'b' END"),
+        format!("CAST({bad} AS STRING)"),
+        format!("CAST(({bad} = {bad}) AS STRING)"),
+        format!("CAST(({bad} < {bad}) AS STRING)"),
+        format!("CAST((SELECT {bad}) AS STRING)"),
+        format!("CAST((SELECT transform(array(1), x -> {bad})) AS STRING)"),
+        format!("CAST(max({bad}) AS STRING)"),
+        format!("CAST(max({bad}) OVER () AS STRING)"),
+        format!("concat(upper(CAST({bad} AS STRING)), 'x')"),
+        format!("CAST(struct({bad}) AS STRING)"),
+        format!("CAST(map({bad}, 1) AS STRING)"),
+        format!("CAST(array({bad}) AS STRING)"),
+    ];
+    for w in &wrappers {
+        for sql in [
+            format!("SELECT aes_encrypt('Spark', {w}) FROM range(2)"),
+            format!("SELECT aes_decrypt(unhex('00'), {w}, 'GCM') FROM range(2)"),
+        ] {
+            let err = one(&s, &sql).expect_err(&sql);
+            assert!(
+                !format!("{err:?} {err}").contains("secretkey-123456"),
+                "{sql}: {err}"
+            );
+        }
+    }
+}
+
 /// A failure while evaluating the key (ANSI cast of a bad string) names no
 /// value of it.
 #[test]
