@@ -182,6 +182,7 @@ fn spatial_values_are_no_keys() {
         format!("max({m})"),
         format!("min({m})"),
         format!("count(DISTINCT {m})"),
+        format!("collect_set({m})"),
     ] {
         let e = error(&q);
         assert!(e.contains("GEOMETRY or GEOGRAPHY"), "{q}: {e}");
