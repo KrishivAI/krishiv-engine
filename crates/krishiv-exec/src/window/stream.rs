@@ -523,7 +523,13 @@ impl Lead {
     }
 
     /// Folds batches until every group up to row `until` is closed.
-    fn advance(&mut self, env: &Env, until: u64, query: &QueryContext) -> Result<()> {
+    fn advance(
+        &mut self,
+        env: &Env,
+        until: u64,
+        query: &QueryContext,
+        shed: &mut Shed<'_>,
+    ) -> Result<()> {
         while self.closed < until {
             // A peer group may span the partition: this can read all of it.
             query.check_cancelled()?;
@@ -544,7 +550,7 @@ impl Lead {
             let mut values = Vec::with_capacity(self.folds.len());
             for (j, fold) in self.folds.iter_mut().enumerate() {
                 values.push(match fold {
-                    Some(fold) => Some(fold_batch(env, j, fold, &cur, &snap, &mut Shed::none())?),
+                    Some(fold) => Some(fold_batch(env, j, fold, &cur, &snap, shed)?),
                     None => None,
                 });
             }
@@ -670,7 +676,7 @@ impl Emit {
         // Each row's peer group (in the lead's queue), when needed.
         let mut groups: Vec<(usize, usize)> = Vec::new();
         if let Some(lead) = &mut self.lead {
-            lead.advance(env, end, &self.query)?;
+            lead.advance(env, end, &self.query, &mut Shed::all(&mut self.framed))?;
             groups.reserve_exact(n);
             let (mut k, mut p) = (0, 0);
             for i in 0..n {

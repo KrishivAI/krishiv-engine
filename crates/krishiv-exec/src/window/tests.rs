@@ -2758,6 +2758,65 @@ async fn a_refused_charge_takes_batches_back_from_a_frame() {
     assert!(!frame.hold_rows(0, 1_000).unwrap(), "folds from the file");
     drop((charge, hog, framed));
     ctx.consumer().consumer().release_credit();
+    drop(credit);
+    assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+}
+
+/// One refused charge costs no more frames than it needs: the second frame
+/// keeps its batches when the first gives back enough.
+#[tokio::test]
+async fn a_refused_charge_takes_batches_from_as_few_frames_as_it_needs() {
+    use super::disk::{Framed, Shed};
+    let wide = between(
+        FrameUnits::Rows,
+        FrameBound::Offset(-1000),
+        FrameBound::Offset(1000),
+    );
+    let sum = (agg(AggregateFunction::Sum, Some(3)), wide);
+    let window = plan(vec![sum.clone(), sum], false);
+    let rows: Vec<Row> = (0..1_000).map(|i| (None, Some(i), i, Some(i))).collect();
+    let (_dir, scope) = spill_scope();
+    let op = Window::new(schema(), window, true, Some(scope.clone())).unwrap();
+    let limit = 1 << 20;
+    let (_root, ctx) = task(limit);
+    let consumer = Arc::clone(ctx.consumer().consumer());
+    let mut credit = ctx.consumer().reservation();
+    credit.try_grow(1 << 16).unwrap();
+    credit.shrink_to_credit(1 << 16);
+    let scratch = ctx
+        .consumer()
+        .reservation()
+        .releasing_to_credit()
+        .for_spill_scratch();
+    let mut writer = scope.writer(schema(), scratch).unwrap();
+    for b in rows.chunks(50).map(batch) {
+        writer.write(&b).unwrap();
+    }
+    let file = writer.finish().unwrap();
+    let mut framed: Vec<Option<Framed>> = op
+        .env
+        .plan
+        .functions
+        .iter()
+        .map(|f| Framed::open(&op.env, f, &file, &consumer).unwrap())
+        .collect();
+    for frame in framed.iter_mut().flatten() {
+        assert!(frame.hold_rows(0, 1_000).unwrap(), "the pool has room");
+    }
+    let pool = Arc::clone(ctx.query().pool());
+    let mut hog = krishiv_memory::Reservation::new(Arc::clone(&pool), pool.register("hog", None));
+    take_all_but(&mut hog, limit, 0);
+    let mut charge = krishiv_memory::Reservation::new(Arc::clone(consumer.pool()), consumer.id());
+    Shed::all(&mut framed).grow(&mut charge, 32 << 10).unwrap();
+    let mut holds = framed
+        .iter_mut()
+        .flatten()
+        .map(|frame| frame.hold_rows(0, 1_000).unwrap());
+    assert_eq!(holds.next(), Some(false), "the first gave its batches up");
+    assert_eq!(holds.next(), Some(true), "the second kept them");
+    drop(holds);
+    drop((charge, hog, framed));
+    ctx.consumer().consumer().release_credit();
 }
 
 /// An exact percentile's value map is charged as it grows: distinct values

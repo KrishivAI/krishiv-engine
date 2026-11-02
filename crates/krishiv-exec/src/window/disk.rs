@@ -65,7 +65,7 @@ impl<'a> Shed<'a> {
         framed: &'a mut [Option<Framed>],
         j: usize,
     ) -> Option<(&'a mut Framed, Self)> {
-        let (before, rest) = framed.split_at_mut(j);
+        let (before, rest) = framed.split_at_mut_checked(j)?;
         let (own, after) = rest.split_first_mut()?;
         Some((own.as_mut()?, Self { before, after }))
     }
@@ -83,20 +83,25 @@ impl<'a> Shed<'a> {
         Self::all(&mut [])
     }
 
-    /// Grows `charge` by `bytes`; if refused, the frames give their batches
-    /// up, and fold from the file from then on, for a second try.
+    /// Grows `charge` by `bytes`; while refused, one more frame gives its
+    /// batches up, and folds from the file from then on.
     pub(super) fn grow(&mut self, charge: &mut Reservation, bytes: usize) -> Result<()> {
-        if charge.try_grow(bytes).is_ok() {
-            return Ok(());
-        }
+        let mut refused = match charge.try_grow(bytes) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
         for framed in self.before.iter_mut().chain(self.after.iter_mut()) {
-            if let Some(Framed::Held(h)) = framed {
+            if let Some(Framed::Held(h)) = framed
+                && h.0.charge.size() > 0
+            {
                 h.0.release();
+                match charge.try_grow(bytes) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => refused = e,
+                }
             }
         }
-        charge
-            .try_grow(bytes)
-            .map_err(krishiv_common::error::KrishivError::from)
+        Err(refused.into())
     }
 }
 
@@ -997,7 +1002,8 @@ impl Held {
     /// A batch whose frames are all empty: nothing held moves, because later
     /// frames may still read those rows (`ROWS BETWEEN 1000 PRECEDING AND 900
     /// PRECEDING` reads the first rows only after 900 empty frames). A row of
-    /// the current batch gives the evaluation its input.
+    /// the current batch gives the evaluation its input. Without room for
+    /// that, the frame gives its batches up and folds from the file.
     fn no_frames(
         &mut self,
         env: &Env,
