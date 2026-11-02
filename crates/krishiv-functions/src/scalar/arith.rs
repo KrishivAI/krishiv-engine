@@ -13,15 +13,17 @@
 use std::sync::Arc;
 
 use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, IntervalYearMonthType,
 };
 use arrow_array::{ArrayRef, PrimitiveArray};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use krishiv_kernels::decimal::{DecimalOp, DecimalPlan, decimal_arith, decimal_unary, result_type};
 use krishiv_kernels::integer::{self, SparkIntegral, UnaryOp};
+use krishiv_kernels::version::IntWidth;
 use krishiv_kernels::{
     Add, AnsiError, ArithOp, JavaWrap, KernelCtx, KernelError, Mul, NullOnOverflow, Operand, Sub,
-    float,
+    float, interval,
 };
 
 use super::args::Inputs;
@@ -219,6 +221,26 @@ fn unary_arith(op: UnaryOp, t: &DataType, opts: &BindOptions) -> Option<Binding>
         DataType::Decimal128(..) => Binding::new(t.clone(), move |x: &Inputs<'_>| {
             Ok(Arc::new(decimal_unary(op, &x.array::<Decimal128Type>(0)?)?) as ArrayRef)
         }),
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let message = ctx.spark_version().overflow_message(IntWidth::Int);
+            Binding::new(t.clone(), move |x: &Inputs<'_>| {
+                let a = x.array::<IntervalYearMonthType>(0)?;
+                Ok(Arc::new(match op {
+                    UnaryOp::Abs => interval::abs_year_month(&a, message)?,
+                    UnaryOp::Negate => interval::negate_year_month(&a)?,
+                }) as ArrayRef)
+            })
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            let message = ctx.spark_version().overflow_message(IntWidth::Long);
+            Binding::new(t.clone(), move |x: &Inputs<'_>| {
+                let a = x.array::<DurationMicrosecondType>(0)?;
+                Ok(Arc::new(match op {
+                    UnaryOp::Abs => interval::abs_day_time(&a, message)?,
+                    UnaryOp::Negate => interval::negate_day_time(&a)?,
+                }) as ArrayRef)
+            })
+        }
         _ => return None,
     })
 }
@@ -246,6 +268,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     | DataType::Float32
                     | DataType::Float64
                     | DataType::Decimal128(..)
+                    | DataType::Interval(IntervalUnit::YearMonth)
+                    | DataType::Duration(TimeUnit::Microsecond)
             ) =>
         {
             Some(Binding::new(t.clone(), |x: &Inputs<'_>| x.column(0)))

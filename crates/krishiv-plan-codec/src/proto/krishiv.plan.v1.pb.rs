@@ -641,6 +641,11 @@ pub struct AggregateExpr {
     /// folded HyperLogLog++ addressing bits).
     #[prost(uint32, tag = "16")]
     pub hll_precision: u32,
+    /// feature: interval_types (an array result of ANSI intervals only: the Arrow
+    /// IPC `Schema` flatbuffer of its element field, whose metadata holds the
+    /// interval's fields; empty otherwise).
+    #[prost(bytes = "vec", tag = "17")]
+    pub result_element: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {

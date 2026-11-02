@@ -64,6 +64,19 @@ fn rows_order_as_spark_does() {
 }
 
 #[test]
+fn day_time_intervals_order_by_value() {
+    let a: ArrayRef = Arc::new(arrow_array::DurationMicrosecondArray::from(vec![
+        Some(-1),
+        Some(2),
+        None,
+    ]));
+    assert_eq!(cmp_rows(&a, 0, &a, 1).unwrap(), Ordering::Less);
+    assert_eq!(cmp_rows(&a, 1, &a, 0).unwrap(), Ordering::Greater);
+    assert_eq!(cmp_rows(&a, 1, &a, 1).unwrap(), Ordering::Equal);
+    assert_eq!(cmp_rows(&a, 2, &a, 0).unwrap(), Ordering::Less);
+}
+
+#[test]
 fn structs_order_lexicographically() {
     let fields: Fields = vec![
         Field::new("x", DataType::Int32, true),

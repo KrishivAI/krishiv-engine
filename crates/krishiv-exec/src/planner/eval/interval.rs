@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray as _;
-use arrow_array::types::{DurationMicrosecondType, Int32Type, Int64Type, IntervalYearMonthType};
+use arrow_array::types::{
+    DurationMicrosecondType, Float64Type, Int32Type, Int64Type, IntervalYearMonthType,
+};
 use arrow_array::{Array, ArrayRef, RecordBatch, new_null_array};
 use arrow_schema::{DataType as ArrowType, IntervalUnit, TimeUnit};
 use krishiv_common::error::KrishivError;
@@ -15,6 +17,9 @@ use krishiv_kernels::datetime::{
 use krishiv_kernels::interval::{
     AddOp, ScaleOp, add_day_time, add_year_month, extract_days, negate_day_time, negate_year_month,
     scale_day_time, scale_year_month, subtract_dates, subtract_timestamps,
+};
+use krishiv_kernels::interval_calendar::{
+    add_calendar, date_add_calendar, negate_calendar, scale_calendar, timestamp_add_calendar,
 };
 use krishiv_plan::Builtin;
 
@@ -31,6 +36,11 @@ pub(super) fn is_ansi(t: &ArrowType) -> bool {
     )
 }
 
+/// Whether `t` carries a calendar interval.
+pub(super) fn is_calendar(t: &ArrowType) -> bool {
+    matches!(t, ArrowType::Interval(IntervalUnit::MonthDayNano))
+}
+
 /// A two-operand interval operator.
 #[derive(Debug)]
 struct Binary {
@@ -42,6 +52,8 @@ struct Binary {
     /// The session zone, when an operand is a `TIMESTAMP`.
     zone: Option<ZoneRef>,
     kernels: krishiv_kernels::KernelCtx,
+    /// A calendar operator's `ansiEnabled`.
+    exact: bool,
 }
 
 /// `op(l, r)`; `out` is the result's Arrow type.
@@ -65,6 +77,35 @@ pub(super) fn binary(
         nullable,
         zone,
         kernels: env.kernels,
+        exact: false,
+    }))
+}
+
+/// `op(l, r)` of a calendar operator that takes `ansiEnabled`.
+pub(super) fn calendar_binary(
+    op: Builtin,
+    l: Arc<dyn PhysExpr>,
+    r: Arc<dyn PhysExpr>,
+    out: ArrowType,
+    nullable: bool,
+    exact: bool,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    // Without `exact`, `DateAddInterval` runs through a timestamp in the session zone.
+    let zone = if op == Builtin::DateAddInterval && !exact {
+        Some(env.zone_rules()?)
+    } else {
+        None
+    };
+    Ok(Arc::new(Binary {
+        op,
+        l,
+        r,
+        out,
+        nullable,
+        zone,
+        kernels: env.kernels,
+        exact,
     }))
 }
 
@@ -132,6 +173,32 @@ impl Binary {
                         .with_data_type(self.out.clone()),
                 )
             }
+            Builtin::TimestampAddInterval if is_calendar(r.array().data_type()) => Arc::new(
+                timestamp_add_calendar(prim(l), prim(r), zone)?.with_data_type(self.out.clone()),
+            ),
+            Builtin::DateAddInterval => Arc::new(date_add_calendar(
+                prim(l),
+                prim(r),
+                self.exact,
+                zone,
+                &self.kernels,
+            )?),
+            b @ (Builtin::CalendarAdd | Builtin::CalendarSubtract) => Arc::new(add_calendar(
+                l.array().as_primitive(),
+                r.array().as_primitive(),
+                b == Builtin::CalendarSubtract,
+                self.exact,
+            )?),
+            b @ (Builtin::MultiplyInterval | Builtin::DivideInterval) => Arc::new(scale_calendar(
+                l.array().as_primitive(),
+                r.array().as_primitive::<Float64Type>(),
+                if b == Builtin::MultiplyInterval {
+                    ScaleOp::Multiply
+                } else {
+                    ScaleOp::Divide
+                },
+                self.exact,
+            )?),
             Builtin::TimestampAddInterval => {
                 let r = micros(r);
                 Arc::new(
@@ -206,6 +273,19 @@ struct Unary {
     op: Builtin,
     e: Arc<dyn PhysExpr>,
     out: ArrowType,
+    /// A calendar operator's `ansiEnabled`.
+    exact: bool,
+}
+
+/// `- e` of a calendar interval.
+pub(super) fn calendar_negate(e: Arc<dyn PhysExpr>, exact: bool) -> Arc<dyn PhysExpr> {
+    let out = e.data_type().clone();
+    Arc::new(Unary {
+        op: Builtin::CalendarNegate,
+        e,
+        out,
+        exact,
+    })
 }
 
 /// `op(e)`: unary `-`, or `ExtractANSIIntervalDays`.
@@ -215,7 +295,12 @@ pub(super) fn unary(op: Builtin, e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
     } else {
         e.data_type().clone()
     };
-    Arc::new(Unary { op, e, out })
+    Arc::new(Unary {
+        op,
+        e,
+        out,
+        exact: false,
+    })
 }
 
 impl PhysExpr for Unary {
@@ -237,6 +322,9 @@ impl PhysExpr for Unary {
         let out: ArrayRef = match (self.op, a.data_type()) {
             (Builtin::ExtractAnsiIntervalDays, ArrowType::Duration(_)) => {
                 Arc::new(extract_days(a.as_primitive()))
+            }
+            (Builtin::CalendarNegate, _) => {
+                Arc::new(negate_calendar(a.as_primitive(), self.exact)?)
             }
             (_, ArrowType::Interval(_)) => Arc::new(negate_year_month(a.as_primitive())?),
             (_, ArrowType::Duration(_)) => Arc::new(negate_day_time(a.as_primitive())?),
