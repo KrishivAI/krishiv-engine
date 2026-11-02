@@ -209,13 +209,20 @@ fn bucketing_is_refused_as_spark_refuses_it() {
 }
 
 #[test]
-fn text_is_unsupported_until_the_engine_writes_it() {
+fn text_writes_one_string_column_and_orc_is_unsupported() {
     let s = session();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("txt").to_str().unwrap().to_owned();
     let one = s.table("people").select(["name"]);
+    block_on(one.write().text(&path)).unwrap();
+    let back = block_on(s.read().format("text").load([path.as_str()]).count()).unwrap();
+    assert_eq!(back, 3);
+    // The text source takes one column, as in Spark.
+    let two = dir.path().join("two").to_str().unwrap().to_owned();
+    assert!(block_on(s.table("people").write().text(&two)).is_err());
+    let orc = dir.path().join("orc").to_str().unwrap().to_owned();
     assert_eq!(
-        class(block_on(one.write().text(&path))),
+        class(block_on(s.table("people").write().format("orc").save(&orc))),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
 }
@@ -315,16 +322,18 @@ fn overwrite_checks_before_it_drops() {
 fn overwrite_never_drops_a_table_the_write_would_refuse_to_replace() {
     let s = session();
     block_on(s.table("people").write().save_as_table("t")).unwrap();
-    // Formats the engine cannot write, duplicate output columns and bad options fail before the drop.
-    assert_eq!(
-        class(block_on(
-            s.table("people")
-                .write()
-                .format("text")
-                .mode("overwrite")
-                .save_as_table("t")
-        )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+    // A format that cannot hold this table (the text source takes one column), duplicate output
+    // columns and bad options fail before the drop.
+    let refused = class(block_on(
+        s.table("people")
+            .write()
+            .format("text")
+            .mode("overwrite")
+            .save_as_table("t"),
+    ));
+    assert!(
+        ["KRISHIV_UNSUPPORTED_FEATURE", "_LEGACY_ERROR_TEMP_1290"].contains(&refused.as_str()),
+        "{refused}"
     );
     let dup = s
         .table("people")
@@ -511,4 +520,17 @@ fn the_collected_call_the_python_bridge_makes_runs_the_same_writers() {
     ));
     assert_eq!(class(e), "_LEGACY_ERROR_TEMP_1313");
     block_on(df.write_to_with("parquet", "error", &path, opts(), vec![], None, None)).unwrap();
+}
+
+#[test]
+fn an_invalid_codec_does_not_destroy_the_table_it_would_replace() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    let w = s
+        .table("people")
+        .write()
+        .option("compression", "no-such-codec")
+        .mode("overwrite");
+    assert!(block_on(w.save_as_table("t")).is_err());
+    assert_eq!(count(&s, "t"), 3, "the table survived");
 }

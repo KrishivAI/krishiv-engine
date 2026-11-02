@@ -2303,6 +2303,9 @@ impl Session {
                 self.authorize_table_write(&name, true, &env).await
             }
             (SaveMode::Append, true) => {
+                // Asked first, as `insertInto` does: what is reported about a table the caller
+                // may not write must not depend on its metadata.
+                self.authorize_table_write(&name, false, &env).await?;
                 let table = self.table_for_write(&name, "INSERT", &env)?;
                 // Spark refuses an append whose format or partitioning differs
                 // from the table's.

@@ -1749,9 +1749,14 @@ impl Session {
     ) -> Result<(), KrishivError> {
         unique_columns(schema, env.analysis.conf.case_sensitive)?;
         let format = self.writable_format(format)?;
-        format.options().parse(options, &env.config)?;
+        let (parsed, _) = format.options().parse(options, &env.config)?;
         // The framework options the format schema skips (`maxRecordsPerFile`).
         max_records_per_file(options, format.name())?;
+        // What the writer would refuse once it exists (a Parquet codec that is not one, a CSV
+        // option combination, a schema the format cannot hold): the same check `write` makes.
+        format
+            .check_write(schema, &parsed)
+            .map_err(|e| e.into_error("the table"))?;
         Ok(())
     }
 

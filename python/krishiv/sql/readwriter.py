@@ -64,7 +64,7 @@ class DataFrameWriter:
     ``saveAsTable``/``insertInto`` and the ``parquet``/``csv``/``json``/``text``
     shortcuts). ``bucketBy`` and ``sortBy`` are accepted but the engine has no
     bucketed tables: ``save`` and ``insertInto`` fail as in Spark and
-    ``saveAsTable`` with ``KRISHIV_UNSUPPORTED_FEATURE``; so does writing ``text``.
+    ``saveAsTable`` with ``KRISHIV_UNSUPPORTED_FEATURE``; so does writing ``orc``.
     ``saveAsTable`` in ``overwrite`` mode drops and recreates the table (a query
     reading it fails with ``UNSUPPORTED_OVERWRITE.TABLE``) and ``insertInto`` in
     ``overwrite`` mode is ``INSERT OVERWRITE``. Unknown formats fail the
@@ -263,8 +263,7 @@ class DataFrameWriter:
         compression: str | None = None,
         lineSep: str | None = None,
     ) -> None:
-        """Writes the rows as text files; the engine does not write text yet
-        (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        """Writes the rows as text files: one string column, as in Spark."""
         self.save(path, format="text", compression=compression, lineSep=lineSep)
 
 

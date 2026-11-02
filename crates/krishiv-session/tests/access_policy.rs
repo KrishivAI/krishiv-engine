@@ -1637,3 +1637,27 @@ fn a_denied_path_does_not_lose_the_table_an_overwrite_would_replace() {
         "the table survived the denial"
     );
 }
+
+/// A denied append is reported as a denial whether or not the table is there, and whatever the
+/// format asked for: the metadata of a table the caller may not write is not consulted first.
+#[test]
+fn an_append_is_authorized_before_the_table_is_inspected() {
+    let s = session(Policy::new(all_but_modify));
+    let (a, b) = (
+        class(block_on(
+            s.table("t")
+                .write()
+                .format("csv")
+                .mode("append")
+                .save_as_table("t"),
+        )),
+        class(block_on(
+            s.table("t")
+                .write()
+                .format("csv")
+                .mode("append")
+                .save_as_table("missing"),
+        )),
+    );
+    assert_eq!((a.as_str(), b.as_str()), (DENIED, DENIED));
+}

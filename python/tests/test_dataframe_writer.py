@@ -429,10 +429,15 @@ def test_bucketing_is_refused_as_spark_refuses_it(df: DataFrame, tmp_path: Any) 
     assert error_class(partitioned.value) == "PARTITION_BY_NOT_ALLOWED_WITH_INSERT_INTO"
 
 
-def test_text_writing_is_unsupported(df: DataFrame, tmp_path: Any) -> None:
-    with pytest.raises(errors.PySparkException) as text:
-        df.select("name").write.text(str(tmp_path / "t"))
-    assert error_class(text.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+def test_text_writes_one_column_and_orc_is_unsupported(spark: SparkSession, df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "t")
+    df.select("name").write.text(path)
+    assert spark.read.format("text").load(path).count() == 3
+    with pytest.raises(errors.PySparkException):
+        df.write.text(str(tmp_path / "two"))  # two columns: Spark's text source takes one
+    with pytest.raises(errors.PySparkException) as orc:
+        df.write.format("orc").save(str(tmp_path / "o"))
+    assert error_class(orc.value) == "KRISHIV_UNSUPPORTED_FEATURE"
 
 
 def test_bucket_by_and_sort_by_reject_a_list_with_more_columns(df: DataFrame) -> None:

@@ -28,7 +28,7 @@ Paths are relative to this crate.
 
 ## Writers (Spark 4.0 `DataFrameWriter` is the reference)
 - `saveAsTable` modes: `errorifexists` fails on an existing table, `ignore` leaves it, `append` adds by column name (another format, a partitioning or other names are `KRISHIV_UNSUPPORTED_FEATURE`), `overwrite` drops and recreates. `insertInto` is by position: `append`, `ignore` and `errorifexists` all append, `overwrite` is `INSERT OVERWRITE`. The format defaults to `spark.sql.sources.default` when `format()` was not called.
-- The file formats the engine writes are Parquet and CSV; `json`, `text` and `orc` writes are `KRISHIV_UNSUPPORTED_FEATURE`.
+- The file formats the engine writes are Parquet, CSV, JSON, Avro and text (one string column); `orc` writes are `KRISHIV_UNSUPPORTED_FEATURE`.
 
 ## Extension points
 - New DataFrame action: an async method in `src/dataframe.rs` running on the session executor; transformations only build IR.
