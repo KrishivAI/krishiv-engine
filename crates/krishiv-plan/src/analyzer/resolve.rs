@@ -58,6 +58,10 @@ pub(super) struct AggInfo {
     pub(super) analytics: Option<Arc<super::analytics::Analytics>>,
     /// With windows: the `HAVING` filtering the aggregate below them.
     pub(super) having: Option<Arc<Expr>>,
+    /// The second aggregate of `RewriteDistinctAggregates`: its input is the first aggregate's
+    /// output, one row per distinct set, so an aggregate added to it later (a `HAVING` or `ORDER BY`
+    /// call the select list does not hold) would run over those rows, not the query's.
+    pub(super) distinct_rewritten: bool,
 }
 
 impl AggInfo {
@@ -696,8 +700,9 @@ impl Resolver<'_> {
                 anchor,
                 recursive,
                 max_level,
+                limit,
                 ..
-            } => self.union_loop(p, *id, anchor, recursive, *max_level, env),
+            } => self.union_loop(p, *id, anchor, recursive, *max_level, *limit, env),
             PlanNode::UnionLoopRef { id, .. } => self.loop_ref(p, *id),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Pivot {

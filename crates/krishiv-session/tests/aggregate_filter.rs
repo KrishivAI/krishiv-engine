@@ -521,3 +521,34 @@ fn counts_beside_multi_distinct_over_empty_input_are_zero() -> R {
     );
     Ok(())
 }
+
+/// Found by the TPC-H query generator against DuckDB (`SELECT r_regionkey, COUNT(DISTINCT r_name),
+/// COUNT(DISTINCT r_comment) FROM region GROUP BY r_regionkey HAVING COUNT(*) > 1` kept all five
+/// groups of one row each; Spark 4.2 and DuckDB answer no rows). A `HAVING` or `ORDER BY` aggregate
+/// that is not `DISTINCT`, `min` or `max` was planned over the distinct rewrite's own rows, one per
+/// distinct set, whether or not the select list holds the same call. It is refused until the rewrite
+/// takes those calls (Spark rewrites them with the select list's); the select list's alias reads the
+/// rewrite's own output, which counts the query's rows.
+#[test]
+fn having_aggregate_over_several_distinct_sets_is_not_miscounted() -> R {
+    let s = session()?;
+    for sql in [
+        "SELECT a, COUNT(DISTINCT b), COUNT(DISTINCT p) FROM t GROUP BY a HAVING COUNT(*) > 1",
+        "SELECT a, COUNT(DISTINCT b), COUNT(DISTINCT p) FROM t GROUP BY a ORDER BY COUNT(*)",
+        "SELECT a, COUNT(DISTINCT b), COUNT(DISTINCT p) FROM t GROUP BY a HAVING SUM(b) > 10",
+        "SELECT a, COUNT(DISTINCT b), COUNT(DISTINCT p), COUNT(*) FROM t GROUP BY a \
+         HAVING COUNT(*) > 1",
+    ] {
+        assert_eq!(class(&s, sql)?, "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
+    // Group 3 has one row: the alias counts the query's rows.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT a, COUNT(DISTINCT b), COUNT(DISTINCT p), COUNT(*) AS c FROM t GROUP BY a \
+             HAVING c > 1 ORDER BY a"
+        )?,
+        ["NULL|1|2|2", "1|2|2|2", "2|1|1|2"]
+    );
+    Ok(())
+}

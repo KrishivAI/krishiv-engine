@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     DatatypeMismatchStackColumnDiffTypes, DatatypeMismatchUnexpectedInputType,
-    UdtfAliasNumberMismatch, UnresolvedColumnWithoutSuggestion, UnsupportedGeneratorMultiGenerator,
-    UnsupportedGeneratorNestedInExpressions,
+    DatatypeMismatchValueOutOfRange, UdtfAliasNumberMismatch, UnresolvedColumnWithoutSuggestion,
+    UnsupportedGeneratorMultiGenerator, UnsupportedGeneratorNestedInExpressions,
 };
 use krishiv_types::DataType;
 
@@ -173,6 +173,47 @@ impl Resolver<'_> {
         Ok(self.make(origin, node, out, &[&below]))
     }
 
+    /// `items` with each `stack(..)` select item (aliased or not) replaced
+    /// by `inline` over the array of structs [`Self::stack_rows`] builds, so
+    /// the item takes the path of the explode family.
+    pub(super) fn stack_items(
+        &mut self,
+        c: &Rel,
+        items: &[Arc<Expr>],
+        env: &Arc<Env>,
+    ) -> Result<Vec<Arc<Expr>>, AnalysisError> {
+        let rels = [c];
+        let cx = Self::cx(&c.out, &rels, env, "Aggregate");
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let (inner, alias) = match &item.node {
+                ExprNode::Alias { expr, name } => (expr, Some(name)),
+                _ => (item, None),
+            };
+            let is_stack = matches!(&inner.node, ExprNode::Function(f)
+                if f.unqualified() == Some("stack") && f.args.len() >= 2);
+            if !is_stack {
+                out.push(Arc::clone(item));
+                continue;
+            }
+            let array = self.stack_rows(inner, &cx)?;
+            let call = Arc::new(
+                Expr::function("inline", vec![(*array).clone()]).with_origin(inner.origin),
+            );
+            out.push(match alias {
+                Some(name) => Arc::new(
+                    Expr::new(ExprNode::Alias {
+                        expr: call,
+                        name: name.clone(),
+                    })
+                    .with_origin(item.origin),
+                ),
+                None => call,
+            });
+        }
+        Ok(out)
+    }
+
     /// `stack(n, e1, ..., ek)` as the array of `n` structs (`col0`, `col1`,
     /// ... the fields; a short last row is padded with NULL) `inline`
     /// generates its rows from, after Spark's `Stack` checks: the count is
@@ -213,12 +254,30 @@ impl Resolver<'_> {
                 origin,
             ));
         }
-        let rows = match &f.args[0].node {
-            ExprNode::Literal(Literal::Integer(n)) => usize::try_from(*n)
-                .ok()
-                .filter(|n| (1..=STACK_MAX_ROWS).contains(n)),
-            _ => None,
+        // The count is any constant INT (`cast(2 as int)` folds).
+        let count_value = match &f.args[0].node {
+            ExprNode::Literal(Literal::Integer(n)) => Some(i64::from(*n)),
+            _ => match self.fold(&count.expr, self.ctx.conf.ansi) {
+                Some(super::Constant::Integral(n)) => Some(n),
+                _ => None,
+            },
         };
+        if let Some(n) = count_value
+            && n <= 0
+        {
+            return Err(AnalysisError::new(
+                DatatypeMismatchValueOutOfRange {
+                    expr_name: "`n`".to_owned(),
+                    value_range: "(0, 2147483647]".to_owned(),
+                    current_value: n.to_string(),
+                    sql_expr: shown,
+                },
+                origin,
+            ));
+        }
+        let rows = count_value
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| (1..=STACK_MAX_ROWS).contains(n));
         let Some(rows) = rows else {
             return Err(unsupported(
                 "stack with a row count that is no INT literal from 1 to 4096",

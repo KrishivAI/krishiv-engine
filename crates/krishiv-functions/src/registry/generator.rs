@@ -25,6 +25,10 @@ pub(super) fn specs() -> Vec<Spec> {
         "posexplode_outer",
         "inline",
         "inline_outer",
+        // Rewritten to `inline` over an array of structs where a generator
+        // is allowed (select list, FROM); registered so that anywhere else
+        // it is a generator call, with Spark's errors.
+        "stack",
     ]
     .into_iter()
     .map(|name| Spec {

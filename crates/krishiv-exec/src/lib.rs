@@ -82,6 +82,7 @@ mod executor;
 pub mod files;
 pub mod hash;
 mod join;
+mod loops;
 mod metrics;
 mod morsel;
 mod operator;

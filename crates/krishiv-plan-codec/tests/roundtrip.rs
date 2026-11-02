@@ -58,6 +58,8 @@ variants!(
     Exchange,
     SharedRead,
     LateFetch,
+    UnionLoop,
+    LoopRef,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -70,6 +72,8 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
+        PhysNode::UnionLoop { .. } => Variant::UnionLoop,
+        PhysNode::LoopRef { .. } => Variant::LoopRef,
         PhysNode::Expand { .. } => Variant::Expand,
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
@@ -134,6 +138,32 @@ fn a_filters_scan_wait_round_trips() {
     join.runtime_filters[0].options.scan_waits = true;
     let plan = plan_of(PhysNode::HashJoin(join));
     assert_eq!(round_trip(&plan), plan);
+}
+
+/// A top-N's bound survives the wire and needs no feature: a plan without it
+/// is the same plan with scans that prune less. The field is ignorable, so
+/// the goldens only ever hold it unset.
+#[test]
+fn a_top_n_bound_round_trips_and_is_ignorable() {
+    let (_, plain) = cases().into_iter().find(|(n, _)| n == "top_n").unwrap();
+    let PhysNode::TopN {
+        input,
+        keys,
+        limit,
+        bound: None,
+    } = plain.root().clone()
+    else {
+        panic!("not a top-N without a bound");
+    };
+    let bound = plan_of(PhysNode::TopN {
+        input,
+        keys,
+        limit,
+        bound: Some(krishiv_io::FilterId(3)),
+    });
+    assert_eq!(round_trip(&bound), bound);
+    assert_eq!(plan_features(&bound), plan_features(&plain));
+    assert_ne!(encode(&bound).unwrap(), encode(&plain).unwrap());
 }
 
 #[test]
@@ -498,7 +528,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "window_offset_values"
             | "window_range_values"
             | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
-            n if n.starts_with("generate_") => 6,
+            n if n.starts_with("generate_") || n.starts_with("union_loop") => 6,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -1234,4 +1264,34 @@ fn aggregates_the_format_does_not_know_are_refused() {
             },
         }));
     }
+}
+
+#[test]
+fn a_reader_without_union_loop_refuses_a_recursive_plan_naming_it() {
+    for name in ["union_loop", "union_loop_unbounded"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        let bytes = encode(&plan).unwrap();
+        let reader = ReaderFeatures::only([Feature::LimitOffset]);
+        let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["union_loop".to_owned()]
+            },
+            "{name}"
+        );
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_loop_without_limits_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("union_loop");
+    for node in &mut m.nodes {
+        if let Some(Kind::UnionLoop(u)) = &mut node.kind {
+            u.limits = None;
+        }
+    }
+    corrupt(&m, "a recursive loop without limits");
 }
