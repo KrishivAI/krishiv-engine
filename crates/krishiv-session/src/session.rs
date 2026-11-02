@@ -1957,18 +1957,19 @@ async fn uses_commit_log(
         .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
         .and_then(ConfigValue::as_str)
         .map(str::to_ascii_uppercase);
-    if protocol.as_deref() == Some("NONE") {
-        return Ok(false);
-    }
     let log = krishiv_io::commit_log::CommitLog::new(
         io,
         store.clone(),
         at.path.clone(),
         at.display.clone(),
     );
+    // A directory that already has a log stays logged whatever the setting says: readers apply the
+    // log, so a write that skipped it would succeed and stay invisible.
     if log.exists().await? {
-        // A directory that already has a log stays logged.
         return Ok(true);
+    }
+    if protocol.as_deref() == Some("NONE") {
+        return Ok(false);
     }
     let known = probes
         .lock()

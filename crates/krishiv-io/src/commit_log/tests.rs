@@ -258,3 +258,29 @@ async fn a_commit_whose_response_was_lost_is_recognised_by_its_bytes() {
     assert_eq!(l.commit(None, &other).await.unwrap(), 1);
     assert_eq!(names(&l.snapshot().await.unwrap()), ["f1", "f2"]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_answer_on_the_last_attempt_is_still_a_success() {
+    use crate::io::FaultStore;
+    let inner = Arc::new(InMemory::new());
+    let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let sched = IoScheduler::new(IoConfig {
+        max_retries: 0,
+        ..IoConfig::default()
+    });
+    let store = StoreId::new("memory://last");
+    sched.register_store(store.clone(), Arc::clone(&fault) as Arc<dyn ObjectStore>);
+    let io = sched.context();
+    let l = CommitLog::new(&io, store, Path::from("t"), "memory://last/t".to_owned());
+    let e = entry("w", CommitMode::Append, &["f1"], &[]);
+    // The entry landed, its answer was lost, and no retry is allowed: the read-back finds our bytes.
+    inner
+        .put(
+            &Path::from("t/_krishiv_log/00000000000000000000.json"),
+            encode_entry(&e).into(),
+        )
+        .await
+        .unwrap();
+    fault.fail_next_puts(1);
+    assert_eq!(l.commit(None, &e).await.unwrap(), 0);
+}

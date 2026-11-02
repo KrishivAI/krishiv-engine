@@ -544,8 +544,12 @@ impl FileReads {
                 .skip(base)
                 .map(|p| p.as_ref().to_owned())
                 .collect();
-            // The file and each directory above it are candidates.
+            // The file and each directory above it are candidates; a hidden name (`_krishiv_log`,
+            // `.staging`) is never a root of its own, and nothing below one is a candidate.
             for n in 1..=below.len() {
+                if below[..n].iter().any(|p| hidden(p)) {
+                    break;
+                }
                 let names: Vec<&str> = below[..n].iter().map(String::as_str).collect();
                 if glob.matches(&names) {
                     matched

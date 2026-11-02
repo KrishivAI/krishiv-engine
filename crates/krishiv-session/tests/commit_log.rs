@@ -59,14 +59,19 @@ fn appends_and_overwrites_go_through_the_log() {
     let s = session_with(&[1, 2]);
     block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
     block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    // Version 0 initializes the log (before any file is written), then one commit per append.
     assert_eq!(
         log_versions(&root),
-        ["00000000000000000000.json", "00000000000000000001.json"]
+        [
+            "00000000000000000000.json",
+            "00000000000000000001.json",
+            "00000000000000000002.json"
+        ]
     );
     assert_eq!(ids(&s, &path), [1, 1, 2, 2]);
     let s2 = session_with(&[7]);
     block_on(s2.table("t").write().mode("overwrite").parquet(&path)).unwrap();
-    assert_eq!(log_versions(&root).len(), 3);
+    assert_eq!(log_versions(&root).len(), 4);
     assert_eq!(ids(&s2, &path), [7]);
 }
 
@@ -117,4 +122,81 @@ fn escaped_partition_values_survive_the_log() {
     let df = block_on(s.sql("SELECT 1 AS id, 'a/b%c' AS p")).unwrap();
     block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
     assert_eq!(ids(&s, &path), [1]);
+}
+
+#[test]
+fn a_dynamic_overwrite_keeps_the_other_partitions_in_the_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p UNION ALL SELECT 2, 'b'")).unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    s.conf()
+        .set("spark.sql.sources.partitionOverwriteMode", "DYNAMIC")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 3 AS id, 'a' AS p")).unwrap();
+    block_on(
+        df.write()
+            .partition_by(["p"])
+            .mode("overwrite")
+            .parquet(&path),
+    )
+    .unwrap();
+    // `p=a` was replaced; `p=b` is still visible through the log.
+    assert_eq!(ids(&s, &path), [2, 3]);
+}
+
+#[test]
+fn an_existing_log_is_kept_by_a_session_that_does_not_ask_for_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let logged = session_with(&[1]);
+    block_on(logged.table("t").write().mode("append").parquet(&path)).unwrap();
+    // A fresh session with the default protocol appends: the rows stay visible.
+    let plain = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![2]))],
+    )
+    .unwrap();
+    plain.register_batches("t", schema, vec![batch]).unwrap();
+    block_on(plain.table("t").write().mode("append").parquet(&path)).unwrap();
+    assert_eq!(ids(&plain, &path), [1, 2]);
+}
+
+#[test]
+fn a_first_write_that_died_leaves_its_files_outside_the_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.to_str().unwrap().to_owned();
+    // A first logged append initializes the log (adopting nothing), then dies before its commit:
+    // simulated by a stray data file written after the log exists.
+    let s = session_with(&[1]);
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    let data = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, root.join("part-00000-dead-c000.snappy.parquet")).unwrap();
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    // The dead write's file is not adopted by the next append.
+    assert_eq!(ids(&s, &path), [1, 1]);
+}
+
+#[test]
+fn a_wildcard_read_of_a_logged_root_skips_the_log_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = session_with(&[4, 5]);
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    assert_eq!(ids(&s, &format!("{path}/*")), [4, 5]);
 }

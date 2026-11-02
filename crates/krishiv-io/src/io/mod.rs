@@ -1254,6 +1254,12 @@ impl IoContext {
                 }
             };
             if attempt >= cfg.max_retries {
+                // The last answer may be a lost one: an object holding our bytes is a success.
+                if maybe_landed
+                    && self.get_object(store, path).await.ok().flatten().as_ref() == Some(&bytes)
+                {
+                    return Ok(PutIfAbsent::Created);
+                }
                 return Err(write_failed(&display, "gave up after retries"));
             }
             self.count(|c| &c.retries, 1);

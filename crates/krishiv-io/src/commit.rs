@@ -108,8 +108,6 @@ struct LogState {
     base: Option<u64>,
     /// Files visible in the log at that version, relative to the root.
     visible: Vec<String>,
-    /// Files already in the directory that the first log entry adopts.
-    adopted: Vec<AddedFile>,
 }
 
 impl DirectoryWrite {
@@ -191,25 +189,35 @@ impl DirectoryWrite {
     /// Store failures; `KRISHIV_COMMIT_LOG_CORRUPT`.
     pub async fn logged(mut self, io: &IoContext) -> Result<Self> {
         let log = self.commit_log(io);
-        let snap = log.snapshot().await?;
-        let adopted = if snap.version.is_none() && !self.overwrite {
-            let mut out = Vec::new();
+        let mut snap = log.snapshot().await?;
+        if snap.version.is_none() {
+            // Initialize the log before any task writes a file: the files already here are adopted
+            // now, so a first write that dies leaves them visible and its own files outside the log
+            // (a later write finds a log and adopts nothing).
+            let mut adopted = Vec::new();
             for meta in io.list(&self.store, &self.dir).await? {
                 let rel = self.relative(&meta.location);
                 if rel.is_empty() || rel.split('/').any(is_hidden) {
                     continue;
                 }
-                out.push(AddedFile {
+                adopted.push(AddedFile {
                     partition: partition_of(&rel),
                     path: rel,
                     size: meta.size,
                     rows: 0,
                 });
             }
-            out
-        } else {
-            Vec::new()
-        };
+            let init = LogEntry {
+                query_id: self.job_uuid.clone(),
+                write_id: format!("{}:init", self.job_uuid),
+                job_uuid: self.job_uuid.clone(),
+                mode: CommitMode::Append,
+                add: adopted,
+                remove: Vec::new(),
+            };
+            log.commit(None, &init).await?;
+            snap = log.snapshot().await?;
+        }
         // The log's own objects are never data to replace.
         let log_dir = self.dir.clone().join(LOG_DIR);
         self.replaced
@@ -217,7 +225,6 @@ impl DirectoryWrite {
         self.log = Some(LogState {
             base: snap.version,
             visible: snap.files.into_keys().collect(),
-            adopted,
         });
         Ok(self)
     }
@@ -347,8 +354,13 @@ impl DirectoryWrite {
             // The entry exists before any old object is deleted: a reader
             // of the log never sees a file that is gone.
             let remove: Vec<String> = if self.overwrite {
-                let mut r: std::collections::BTreeSet<String> =
-                    state.visible.iter().cloned().collect();
+                // A static overwrite replaces everything visible; a dynamic one only the files of
+                // the partitions it wrote (`replaced`), and leaves the other partitions in the log.
+                let mut r: std::collections::BTreeSet<String> = if self.dynamic {
+                    std::collections::BTreeSet::new()
+                } else {
+                    state.visible.iter().cloned().collect()
+                };
                 r.extend(
                     replaced
                         .iter()
@@ -359,16 +371,18 @@ impl DirectoryWrite {
             } else {
                 Vec::new()
             };
-            let mut add: Vec<AddedFile> = state.adopted.clone();
-            add.extend(files.iter().map(|f| {
-                let rel = self.relative_written(&f.path);
-                AddedFile {
-                    partition: partition_of(&rel),
-                    path: rel,
-                    size: f.size,
-                    rows: f.rows,
-                }
-            }));
+            let add: Vec<AddedFile> = files
+                .iter()
+                .map(|f| {
+                    let rel = self.relative_written(&f.path);
+                    AddedFile {
+                        partition: partition_of(&rel),
+                        path: rel,
+                        size: f.size,
+                        rows: f.rows,
+                    }
+                })
+                .collect();
             let entry = LogEntry {
                 query_id: self.job_uuid.clone(),
                 write_id: self.job_uuid.clone(),
