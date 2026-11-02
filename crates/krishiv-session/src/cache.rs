@@ -68,6 +68,8 @@ pub(crate) struct CacheEntry {
     /// only cover versioned tables; temporary tables leave no pins, so the
     /// entry carries what `REFRESH TABLE` / `UNCACHE TABLE` match on.
     pub(crate) tables: Vec<String>,
+    /// When the snapshot was stored (`krishiv.cache.ttl` counts from here).
+    pub(crate) stored: std::time::Instant,
 }
 
 /// The relations a session has cached, by key and by hidden scan name.
@@ -153,6 +155,14 @@ impl RelationCache {
             generation: AtomicU64::new(0),
             state: Mutex::new(CacheState::default()),
         }
+    }
+
+    /// The `krishiv.cache.ttl` of a query's configuration snapshot.
+    pub(crate) fn ttl_of(config: &Config) -> std::time::Duration {
+        config
+            .get(&krishiv_common::config::CACHE_TTL)
+            .and_then(ConfigValue::as_duration)
+            .unwrap_or(std::time::Duration::from_secs(24 * 60 * 60))
     }
 
     /// The `krishiv.cache.maxBytes` cap of a query's configuration snapshot.
@@ -276,11 +286,42 @@ impl RelationCache {
             bytes,
             reads_files,
             tables,
+            stored: std::time::Instant::now(),
         });
         state.used = state.used.saturating_add(bytes);
         state.names.insert(name.clone(), key.clone());
         state.entries.insert(key, entry);
         Some(name)
+    }
+
+    /// Drops the entries stored longer than `ttl` ago (`krishiv.cache.ttl`; a zero
+    /// `ttl` never expires); how many. A query planned afterwards recomputes
+    /// what they held. Like every invalidation it bumps the generation, so a fill
+    /// that started before it is not stored.
+    pub(crate) fn expire(&self, ttl: std::time::Duration) -> usize {
+        if ttl.is_zero() {
+            return 0;
+        }
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        let stale: Vec<CacheKey> = state
+            .entries
+            .iter()
+            .filter(|(_, e)| now.saturating_duration_since(e.stored) >= ttl)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if stale.is_empty() {
+            return 0;
+        }
+        self.invalidated();
+        for key in &stale {
+            if let Some(entry) = state.entries.remove(key) {
+                state.used = state.used.saturating_sub(entry.bytes);
+                self.pool.release(self.consumer, entry.bytes);
+            }
+        }
+        state.names.retain(|_, k| !stale.contains(k));
+        stale.len()
     }
 
     /// Drops the entry for `key`; whether one existed.

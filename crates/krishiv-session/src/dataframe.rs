@@ -1229,6 +1229,8 @@ impl DataFrame {
         &self,
         a: &Arc<Analysis>,
     ) -> Result<(krishiv_exec::planner::PhysicalPlan, CacheFill), KrishivError> {
+        // Snapshots older than `krishiv.cache.ttl` go before the lookup: this query recomputes them.
+        self.session.state.cache.expire(a.env.cache_ttl);
         let key = CacheKey::of(&a.analyzed);
         let hit = self.session.state.cache.lookup(&key).is_some();
         let substituted = self.session.state.cache.substitute(&a.analyzed);

@@ -36,6 +36,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
     &CACHE_MAX_BYTES,
+    &CACHE_TTL,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -94,6 +95,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
 /// A test checks the order and that it holds exactly the keys and aliases
 /// of [`REGISTRY`]; add new entries here in order.
 pub static INDEX: &[(&str, &ConfigEntry)] = &[
+    ("krishiv.cache.ttl", &CACHE_TTL),
     ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
@@ -679,6 +681,21 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
           lazy (on first use) and all-or-nothing: when caching a relation would exceed the cap, \
           the query runs uncached instead of failing. `0` disables caching: queries always run \
           uncached.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.cache.ttl`.
+pub static CACHE_TTL: ConfigEntry = ConfigEntry {
+    key: "krishiv.cache.ttl",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(24 * 60 * 60))),
+    doc: "How long a cached relation (`DataFrame.cache`, `persist`) stays valid, counted from \
+          when it was materialized: an older snapshot is dropped before the next query that \
+          would have used it, which then recomputes it (and caches it again if it is still \
+          marked). `0s` never expires. Invalidation by writes and `REFRESH TABLE` works \
+          independently of the time.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

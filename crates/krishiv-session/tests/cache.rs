@@ -594,3 +594,32 @@ fn a_configuration_change_does_not_serve_the_old_snapshot() {
     block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
     assert!(block_on(df.is_cached()).unwrap());
 }
+
+#[test]
+fn an_entry_older_than_the_ttl_is_dropped_before_the_next_query() {
+    let s = int_session(vec![1, 2]);
+    s.conf().set("krishiv.cache.ttl", "100ms").unwrap();
+    let df = s.table("t").cache();
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
+    assert!(block_on(df.is_cached()).unwrap());
+    // Within the TTL another query leaves it alone.
+    assert_eq!(block_on(s.table("t").count()).unwrap(), 2);
+    assert!(block_on(df.is_cached()).unwrap());
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    // Past it, the next query drops the entry (and its bytes); the cached frame refills on its own next action.
+    assert_eq!(block_on(s.table("t").count()).unwrap(), 2);
+    assert!(!block_on(df.is_cached()).unwrap());
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2]);
+    assert!(block_on(df.is_cached()).unwrap());
+}
+
+#[test]
+fn a_zero_ttl_never_expires() {
+    let s = int_session(vec![1]);
+    s.conf().set("krishiv.cache.ttl", "0s").unwrap();
+    let df = s.table("t").cache();
+    block_on(df.collect()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(block_on(s.table("t").count()).unwrap(), 1);
+    assert!(block_on(df.is_cached()).unwrap());
+}

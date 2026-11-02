@@ -680,3 +680,16 @@ fn cte_recursion_limits_default_and_alias() {
     assert_eq!(c.get(&CTE_RECURSION_ROW_LIMIT), Some(&ConfigValue::Int(-1)));
     assert!(c.set("krishiv.sql.cteRecursionLevelLimit", "many").is_err());
 }
+
+#[test]
+fn cache_ttl_defaults_to_a_day_and_parses() {
+    use std::time::Duration;
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&CACHE_TTL).and_then(ConfigValue::as_duration);
+    assert_eq!(get(&c), Some(Duration::from_secs(24 * 60 * 60)));
+    c.set("krishiv.cache.ttl", "90s").unwrap();
+    assert_eq!(get(&c), Some(Duration::from_secs(90)));
+    c.set("krishiv.cache.ttl", "0s").unwrap();
+    assert_eq!(get(&c), Some(Duration::ZERO));
+    assert!(c.set("krishiv.cache.ttl", "soon").is_err());
+}

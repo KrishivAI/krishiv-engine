@@ -1095,6 +1095,7 @@ impl Session {
         let parser = parser_options(&config);
         // The cache cap is the query's own configuration snapshot.
         let cache_cap = RelationCache::cap_of(&config);
+        let cache_ttl = RelationCache::ttl_of(&config);
         // One snapshot of the variables per query, like the configuration
         // snapshot: every reference in the query reads the same values.
         let variables = self.state.variables.snapshot();
@@ -1152,6 +1153,7 @@ impl Session {
             policy_version: self.state.policy.version().0,
             cache_generation,
             cache_cap,
+            cache_ttl,
             sql_functions,
             functions_version,
         }
@@ -2326,6 +2328,8 @@ pub(crate) struct QueryEnv {
     pub(crate) cache_generation: u64,
     /// `krishiv.cache.maxBytes` of the query's configuration snapshot.
     pub(crate) cache_cap: usize,
+    /// The query's `krishiv.cache.ttl`.
+    pub(crate) cache_ttl: std::time::Duration,
     /// The registry in `analysis`, as itself: the function map the query
     /// reads and the texts of function bodies.
     pub(crate) sql_functions: Arc<QueryFunctions>,
