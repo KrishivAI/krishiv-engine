@@ -34,7 +34,7 @@ fn sign_of(s: &str) -> (i64, &str) {
 
 /// The parts of `INTERVAL [+|-]'body' qualifier` (any case, any spaces), where
 /// `qualifier` is the target type's; or `None` if `s` is not that literal.
-fn literal_body<'a>(s: &'a str, qualifier: &str) -> Option<(i64, &'a str)> {
+fn literal_body(s: &str, qualifier: impl Fn() -> String) -> Option<(i64, &str)> {
     let head = s.get(..8)?;
     if !head.eq_ignore_ascii_case("interval") {
         return None;
@@ -45,7 +45,7 @@ fn literal_body<'a>(s: &'a str, qualifier: &str) -> Option<(i64, &'a str)> {
     let (body, tail) = rest.split_once('\'')?;
     let tail = tail.strip_prefix(|c: char| c.is_ascii_whitespace())?;
     let words: Vec<&str> = tail.split_ascii_whitespace().collect();
-    (words.join(" ").eq_ignore_ascii_case(qualifier)).then_some((outer, body))
+    (words.join(" ").eq_ignore_ascii_case(&qualifier())).then_some((outer, body))
 }
 
 fn digits(s: &str) -> bool {
@@ -75,8 +75,9 @@ pub fn cast_to_year_month(
     start: YearMonthField,
     end: YearMonthField,
 ) -> Result<i32, KrishivError> {
-    let qualifier = qualifier(start.name(), end.name());
+    let qualifier = || qualifier(start.name(), end.name());
     let unmatched = || -> KrishivError {
+        let qualifier = qualifier();
         InvalidIntervalFormatUnmatchedFormatString {
             input: input.to_owned(),
             interval_str: "year-month".to_owned(),
@@ -97,7 +98,7 @@ pub fn cast_to_year_month(
         .into()
     };
     let s = trim_all(input);
-    let (outer, body) = literal_body(s, &qualifier).unwrap_or((1, s));
+    let (outer, body) = literal_body(s, qualifier).unwrap_or((1, s));
     let (inner, body) = sign_of(body);
     let sign = outer.saturating_mul(inner);
     let months = if start == end {
@@ -158,8 +159,9 @@ pub fn cast_to_day_time(
         (DayTimeField::Minute, MICROS_PER_MINUTE, 59),
         (DayTimeField::Second, MICROS_PER_SECOND, 59),
     ];
-    let qualifier = qualifier(start.name(), end.name());
+    let qualifier = || qualifier(start.name(), end.name());
     let unmatched = || -> KrishivError {
+        let qualifier = qualifier();
         InvalidIntervalFormatUnmatchedFormatStringWithNotice {
             input: input.to_owned(),
             interval_str: "day-time".to_owned(),
@@ -179,7 +181,7 @@ pub fn cast_to_day_time(
         .into()
     };
     let s = trim_all(input);
-    let (outer, body) = literal_body(s, &qualifier).unwrap_or((1, s));
+    let (outer, body) = literal_body(s, qualifier).unwrap_or((1, s));
     let (inner, body) = sign_of(body);
     let sign = outer.saturating_mul(inner);
     // `d h:m:s`: a space after a day, a colon after the rest.

@@ -545,7 +545,7 @@ fn builtin(
             args.pop();
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
-            interval::calendar_binary(b, l, r, out, f.nullable, exact, env)
+            interval::calendar_binary(b, l, r, out, f.nullable, exact, env)?
         }
         (Builtin::CalendarNegate, 2) => {
             let exact = exact_flag(f)?;

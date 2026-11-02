@@ -23,7 +23,7 @@ use arrow_array::{
 };
 use arrow_buffer::IntervalMonthDayNano;
 
-use crate::cast::datetime::{MICROS_PER_DAY, utc_to_local};
+use crate::cast::datetime::{MICROS_PER_DAY, local_to_utc, utc_to_local};
 use crate::datetime::{TimeZoneRules, add_months, at, local_to_utc_keeping, map2};
 use crate::dispatch::KernelCtx;
 use crate::error::KernelError;
@@ -301,18 +301,20 @@ pub fn timestamp_add_calendar(
     )
 }
 
-/// `date + interval`. Without `exact`, time in the interval is added in UTC
-/// and the day taken from the result; with it, time is refused.
+/// `date + interval`. Without `exact`, time in the interval is added to the
+/// date's midnight in `zone` (`None` for UTC) and the day taken from the result
+/// there, so a daylight-saving change can move it; with `exact`, time is refused.
 ///
 /// # Errors
 /// As in the module docs; `ARITHMETIC_OVERFLOW` for a result outside the
 /// `DATE` range; `DATETIME_OVERFLOW` for one outside the timestamp range on
-/// the path through UTC; `INTERNAL_ERROR` for operands of different lengths or
-/// two literals.
+/// the path through a timestamp; `INTERNAL_ERROR` for operands of different
+/// lengths or two literals.
 pub fn date_add_calendar(
     start: Operand<'_, Date32Type>,
     i: Operand<'_, IntervalMonthDayNanoType>,
     exact: bool,
+    zone: Option<&dyn TimeZoneRules>,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
     let len = match (&start, &i) {
@@ -345,8 +347,16 @@ pub fn date_add_calendar(
         } else {
             let day = i64::from(d)
                 .checked_mul(MICROS_PER_DAY)
+                .and_then(|midnight| match zone {
+                    Some(tz) => local_to_utc(midnight, tz),
+                    None => Some(midnight),
+                })
                 .and_then(|t| {
-                    add_to_instant(t, v.months, v.days, v.nanoseconds / NANOS_PER_MICRO, None)
+                    add_to_instant(t, v.months, v.days, v.nanoseconds / NANOS_PER_MICRO, zone)
+                })
+                .and_then(|t| match zone {
+                    Some(tz) => utc_to_local(t, tz),
+                    None => Some(t),
                 })
                 .ok_or_else(|| KernelError::datetime_overflow(row, "date + interval"))?
                 .div_euclid(MICROS_PER_DAY);
@@ -361,6 +371,7 @@ pub fn date_add_calendar(
 
 #[cfg(test)]
 mod tests {
+    use crate::datetime::resolve_zone;
     use krishiv_common::error::ErrorClass;
 
     use super::*;
@@ -485,12 +496,34 @@ mod tests {
     }
 
     #[test]
+    fn a_date_with_time_runs_through_the_zone_it_is_given() {
+        let ctx = KernelCtx::default();
+        let tz = resolve_zone("America/Los_Angeles").unwrap();
+        let add = |day: i32, hours: i64| {
+            let i = cal(0, 0, hours * 3_600_000_000);
+            date_add_calendar(
+                Operand::Scalar(Some(day)),
+                Operand::Array(&i),
+                false,
+                Some(&tz),
+                &ctx,
+            )
+            .unwrap()
+            .value(0)
+        };
+        // 2024-03-10 lost an hour there, so 23 hours reach the next midnight.
+        assert_eq!(add(19_792, 23), 19_793);
+        // 2024-11-03 gained one, so 24 hours stay on the day.
+        assert_eq!(add(20_030, 24), 20_030);
+    }
+
+    #[test]
     fn a_date_takes_months_then_days_and_time_only_without_exact() {
         let ctx = KernelCtx::default();
         let day = 19_753; // 2024-01-31
         let start = Operand::Scalar(Some(day));
         let i = cal(1, 1, 0);
-        let moved = date_add_calendar(start, Operand::Array(&i), true, &ctx);
+        let moved = date_add_calendar(start, Operand::Array(&i), true, None, &ctx);
         // 2024-02-29, then a day.
         assert!(moved.is_ok_and(|a| a.value(0) == 19_783));
         let hour = cal(0, 0, -3_600_000_000);
@@ -498,6 +531,7 @@ mod tests {
             Operand::Scalar(Some(day)),
             Operand::Array(&hour),
             true,
+            None,
             &ctx,
         )
         .map_err(|e| e.error_class());
@@ -509,6 +543,7 @@ mod tests {
             Operand::Scalar(Some(day)),
             Operand::Array(&hour),
             false,
+            None,
             &ctx,
         );
         assert!(floored.is_ok_and(|a| a.value(0) == 19_752));
@@ -518,12 +553,13 @@ mod tests {
                 Operand::Scalar(Some(day)),
                 Operand::Array(&far),
                 false,
+                None,
                 &ctx
             )
             .is_err()
         );
         let null = Date32Array::from(vec![None]);
-        let out = date_add_calendar(Operand::Array(&null), Operand::Array(&i), true, &ctx);
+        let out = date_add_calendar(Operand::Array(&null), Operand::Array(&i), true, None, &ctx);
         assert!(out.is_ok_and(|a| a.is_null(0)));
     }
 

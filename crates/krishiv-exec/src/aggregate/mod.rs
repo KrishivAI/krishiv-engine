@@ -924,7 +924,6 @@ pub(crate) fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
 }
 
-/// Spark's ANSI `ARITHMETIC_OVERFLOW` of a `long` addition in `sum`.
 /// `sum` or `avg` of an interval past its family's range, ANSI on or off.
 pub(crate) fn interval_sum_overflow() -> KrishivError {
     IntervalArithmeticOverflowWithSuggestion {
@@ -933,6 +932,7 @@ pub(crate) fn interval_sum_overflow() -> KrishivError {
     .into()
 }
 
+/// Spark's ANSI `ARITHMETIC_OVERFLOW` of a `long` addition in `sum`.
 pub(crate) fn long_overflow() -> KrishivError {
     ArithmeticOverflow {
         message: "overflow".to_owned(),

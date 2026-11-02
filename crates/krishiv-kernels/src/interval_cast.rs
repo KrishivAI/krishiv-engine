@@ -47,7 +47,9 @@ impl std::fmt::Debug for CastNames<'_> {
 fn carrier(a: &dyn Array) -> Result<PrimitiveArray<Int64Type>, KernelError> {
     match a.data_type() {
         DataType::Interval(_) => Ok(a.as_primitive::<IntervalYearMonthType>().unary(i64::from)),
-        DataType::Duration(_) => Ok(a.as_primitive::<DurationMicrosecondType>().unary(|v| v)),
+        DataType::Duration(_) => Ok(a
+            .as_primitive::<DurationMicrosecondType>()
+            .reinterpret_cast::<Int64Type>()),
         other => Err(KernelError::internal(format!(
             "an interval cast of {other}"
         ))),
@@ -145,17 +147,29 @@ fn rescale(unscaled: i128, from: i8, precision: u8, to: i8) -> Option<i128> {
     (out.unsigned_abs() < ten_pow(u32::from(precision))?.unsigned_abs()).then_some(out)
 }
 
+/// Microseconds as seconds with all six digits, as Spark's message shows them.
+fn micros_text(micros: i64) -> String {
+    let sign = if micros < 0 { "-" } else { "" };
+    let abs = micros.unsigned_abs();
+    let per_second = MICROS_PER_SECOND.unsigned_abs();
+    let (whole, fraction) = (
+        abs.checked_div(per_second).unwrap_or(0),
+        abs.checked_rem(per_second).unwrap_or(0),
+    );
+    format!("{sign}{whole}.{fraction:06}")
+}
+
 /// A year-month or day-time column as `decimal(precision, scale)`, counting
 /// `unit`s; only a day-time value ending in SECOND keeps a fraction.
 ///
 /// # Errors
-/// `CAST_OVERFLOW`, unless `null_on_overflow`.
+/// `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION`, ANSI on or off, unless
+/// `null_on_overflow`.
 pub fn interval_to_decimal(
     a: &dyn Array,
     unit: i64,
     to: &DataType,
     null_on_overflow: bool,
-    names: CastNames<'_>,
 ) -> Result<ArrayRef, KernelError> {
     let (DataType::Decimal64(precision, scale) | DataType::Decimal128(precision, scale)) = *to
     else {
@@ -163,13 +177,34 @@ pub fn interval_to_decimal(
     };
     let v = carrier(a)?;
     let seconds = matches!(a.data_type(), DataType::Duration(_)) && unit == MICROS_PER_SECOND;
-    let out = map_values::<Decimal128Type>(&v, null_on_overflow, names, |x| {
-        if seconds {
+    let mut out = PrimitiveBuilder::<Decimal128Type>::with_capacity(v.len());
+    for (row, x) in v.iter().enumerate() {
+        let Some(x) = x else {
+            out.append_null();
+            continue;
+        };
+        let counted = x.checked_div(unit).unwrap_or(x);
+        let cast = if seconds {
             rescale(i128::from(x), 6, precision, scale)
         } else {
-            rescale(i128::from(x.checked_div(unit)?), 0, precision, scale)
+            rescale(i128::from(counted), 0, precision, scale)
+        };
+        match cast {
+            Some(n) => out.append_value(n),
+            None if null_on_overflow => out.append_null(),
+            None => {
+                let text = if seconds {
+                    micros_text(x)
+                } else {
+                    counted.to_string()
+                };
+                return Err(KernelError::decimal_out_of_range(
+                    row, text, precision, scale,
+                ));
+            }
         }
-    })?;
+    }
+    let out = out.finish();
     let out = out
         .with_precision_and_scale(precision, scale)
         .map_err(|e| KernelError::internal(e.to_string()))?;
@@ -332,44 +367,28 @@ mod tests {
     #[test]
     fn decimal_keeps_a_seconds_fraction_and_rounds_half_up() {
         let a = DurationMicrosecondArray::from(vec![1_500_000, -1_500_000]);
-        let out = interval_to_decimal(
-            &a,
-            MICROS_PER_SECOND,
-            &DataType::Decimal128(10, 0),
-            false,
-            names(),
-        )
-        .unwrap();
+        let out = interval_to_decimal(&a, MICROS_PER_SECOND, &DataType::Decimal128(10, 0), false)
+            .unwrap();
         let out = out.as_primitive::<Decimal128Type>();
         assert_eq!((out.value(0), out.value(1)), (2, -2));
-        let out = interval_to_decimal(
-            &a,
-            MICROS_PER_SECOND,
-            &DataType::Decimal128(10, 3),
-            false,
-            names(),
-        )
-        .unwrap();
+        let out = interval_to_decimal(&a, MICROS_PER_SECOND, &DataType::Decimal128(10, 3), false)
+            .unwrap();
         assert_eq!(out.as_primitive::<Decimal128Type>().value(0), 1_500);
-        let out = interval_to_decimal(
-            &a,
-            MICROS_PER_SECOND,
-            &DataType::Decimal64(10, 3),
-            false,
-            names(),
-        )
-        .unwrap();
+        let out =
+            interval_to_decimal(&a, MICROS_PER_SECOND, &DataType::Decimal64(10, 3), false).unwrap();
         assert_eq!(out.data_type(), &DataType::Decimal64(10, 3));
         assert_eq!(out.as_primitive::<Decimal64Type>().value(1), -1_500);
-        let e = interval_to_decimal(
-            &a,
-            MICROS_PER_SECOND,
-            &DataType::Decimal128(2, 2),
-            false,
-            names(),
-        )
-        .unwrap_err();
-        assert!(e.to_string().contains("CAST_OVERFLOW"), "{e}");
+        let e = interval_to_decimal(&a, MICROS_PER_SECOND, &DataType::Decimal128(2, 2), false)
+            .unwrap_err();
+        let text = e.to_string();
+        assert!(text.contains("NUMERIC_VALUE_OUT_OF_RANGE"), "{text}");
+        assert!(text.contains("1.500000"), "{text}");
+        assert_eq!(micros_text(-99_500_000), "-99.500000");
+        let months = IntervalYearMonthArray::from(vec![10]);
+        let e = interval_to_decimal(&months, 1, &DataType::Decimal128(1, 0), false).unwrap_err();
+        assert!(e.to_string().contains(" 10 "), "{e}");
+        let out = interval_to_decimal(&months, 1, &DataType::Decimal128(1, 0), true).unwrap();
+        assert!(out.is_null(0));
     }
 
     #[test]

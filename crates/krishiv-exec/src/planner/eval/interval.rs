@@ -90,17 +90,23 @@ pub(super) fn calendar_binary(
     nullable: bool,
     exact: bool,
     env: &EvalEnv,
-) -> Arc<dyn PhysExpr> {
-    Arc::new(Binary {
+) -> Result<Arc<dyn PhysExpr>> {
+    // Without `exact`, `DateAddInterval` runs through a timestamp in the session zone.
+    let zone = if op == Builtin::DateAddInterval && !exact {
+        Some(env.zone_rules()?)
+    } else {
+        None
+    };
+    Ok(Arc::new(Binary {
         op,
         l,
         r,
         out,
         nullable,
-        zone: None,
+        zone,
         kernels: env.kernels,
         exact,
-    })
+    }))
 }
 
 /// The months of a year-month value as plain integers, as the date kernels take them.
@@ -174,6 +180,7 @@ impl Binary {
                 prim(l),
                 prim(r),
                 self.exact,
+                zone,
                 &self.kernels,
             )?),
             b @ (Builtin::CalendarAdd | Builtin::CalendarSubtract) => Arc::new(add_calendar(

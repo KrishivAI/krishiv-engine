@@ -315,6 +315,10 @@ FUNCTIONS = [
     "cast(interval '1 02' day to hour as int)",
     "cast(interval '1 02' day to hour as bigint)",
     "cast(interval '3' month as decimal(10,2))",
+    "cast(interval '10' month as decimal(1,0))",
+    "cast(interval '99.5' second as decimal(2,0))",
+    "try_cast(interval '10' month as decimal(1,0))",
+    "cast(99999999999.5BD as interval month)",
     "cast(interval '1-2' year to month as int)",
     "cast(interval '200' day as tinyint)",
     "cast(interval '40000' day as smallint)",
@@ -974,6 +978,9 @@ FUNCTIONS = [
 
 
 CALENDAR_ZONED = [
+    "date'2024-03-10' + cast('23 hours' as interval)",
+    "date'2024-11-03' + cast('24 hours' as interval)",
+    "date'2024-11-04' - cast('25 hours' as interval)",
     "timestamp'2024-01-31 00:00:00' + cast('1 day' as interval)",
     "timestamp'2024-03-09 02:30:00' + cast('1 day' as interval)",
     "timestamp'2024-03-09 12:00:00' + cast('1 day' as interval)",

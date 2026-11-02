@@ -27,6 +27,38 @@
    "value": "3.00"
   },
   {
+   "expr": "cast(interval '10' month as decimal(1,0))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(INTERVAL '10' MONTH AS DECIMAL(1,0))",
+   "type": "decimal(1,0)",
+   "value_error_class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '99.5' second as decimal(2,0))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(INTERVAL '99.5' SECOND AS DECIMAL(2,0))",
+   "type": "decimal(2,0)",
+   "value_error_class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION"
+  },
+  {
+   "expr": "try_cast(interval '10' month as decimal(1,0))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TRY_CAST(INTERVAL '10' MONTH AS DECIMAL(1,0))",
+   "type": "decimal(1,0)",
+   "value": null
+  },
+  {
+   "expr": "cast(99999999999.5BD as interval month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(99999999999.5 AS INTERVAL MONTH)",
+   "type": "interval month",
+   "value_error_class": "CAST_OVERFLOW"
+  },
+  {
    "expr": "cast(interval '1-2' year to month as int)",
    "zone": "UTC",
    "ansi": true,
@@ -4909,6 +4941,38 @@
    "value": "3.00"
   },
   {
+   "expr": "cast(interval '10' month as decimal(1,0))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CAST(INTERVAL '10' MONTH AS DECIMAL(1,0))",
+   "type": "decimal(1,0)",
+   "value_error_class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION"
+  },
+  {
+   "expr": "cast(interval '99.5' second as decimal(2,0))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CAST(INTERVAL '99.5' SECOND AS DECIMAL(2,0))",
+   "type": "decimal(2,0)",
+   "value_error_class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION"
+  },
+  {
+   "expr": "try_cast(interval '10' month as decimal(1,0))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TRY_CAST(INTERVAL '10' MONTH AS DECIMAL(1,0))",
+   "type": "decimal(1,0)",
+   "value": null
+  },
+  {
+   "expr": "cast(99999999999.5BD as interval month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CAST(99999999999.5 AS INTERVAL MONTH)",
+   "type": "interval month",
+   "value_error_class": "CAST_OVERFLOW"
+  },
+  {
    "expr": "cast(interval '1-2' year to month as int)",
    "zone": "UTC",
    "ansi": false,
@@ -9767,6 +9831,30 @@
    "value": "5650310968337874586"
   },
   {
+   "expr": "date'2024-03-10' + cast('23 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "DATE '2024-03-10' + CAST(23 hours AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'2024-11-03' + cast('24 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "DATE '2024-11-03' + CAST(24 hours AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'2024-11-04' - cast('25 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "DATE '2024-11-04' - CAST(25 hours AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
    "expr": "timestamp'2024-01-31 00:00:00' + cast('1 day' as interval)",
    "zone": "America/Los_Angeles",
    "ansi": true,
@@ -9901,6 +9989,30 @@
    "name": "DATE '2024-03-09' + CAST(1 day AS INTERVAL)",
    "type": "date",
    "value": "2024-03-10"
+  },
+  {
+   "expr": "date'2024-03-10' + cast('23 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "DATE '2024-03-10' + CAST(23 hours AS INTERVAL)",
+   "type": "date",
+   "value": "2024-03-11"
+  },
+  {
+   "expr": "date'2024-11-03' + cast('24 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "DATE '2024-11-03' + CAST(24 hours AS INTERVAL)",
+   "type": "date",
+   "value": "2024-11-03"
+  },
+  {
+   "expr": "date'2024-11-04' - cast('25 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "DATE '2024-11-04' - CAST(25 hours AS INTERVAL)",
+   "type": "date",
+   "value": "2024-11-03"
   },
   {
    "expr": "timestamp'2024-01-31 00:00:00' + cast('1 day' as interval)",
