@@ -804,8 +804,6 @@ pub(crate) struct Totals {
 pub(crate) struct QueryLog {
     rows: Mutex<VecDeque<QueryRow>>,
     counter: AtomicU64,
-    /// Rows begun, evictions aside.
-    begun: AtomicU64,
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
@@ -902,7 +900,6 @@ impl QueryLog {
     pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
         let ms = now_ms();
         let id = self.next_id(ms);
-        self.begun.fetch_add(1, Ordering::AcqRel);
         let (text, truncated) = match text {
             None => (None, false),
             Some(t) if t.len() <= TEXT_BYTES => (Some(t.to_owned()), false),
@@ -959,21 +956,12 @@ impl QueryLog {
         id
     }
 
-    /// How many queries have begun (a row each) so far.
-    pub(crate) fn started(&self) -> u64 {
-        self.begun.load(Ordering::Acquire)
-    }
-
     /// Records a statement that failed before it ran: parsing, analysis or
     /// an access check. A denial is `denied`; a cancellation `cancelled`.
     pub(crate) fn record_refused(&self, text: &str, error: &KrishivError) {
         let id = self.begin(Some(text), None);
         let class = error.error_class().name();
-        let state = match class {
-            "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
-            "OPERATION_CANCELED" => "cancelled",
-            _ => "failed",
-        };
+        let state = outcome_state(class);
         self.finish(
             &id,
             &Finished {
@@ -985,6 +973,19 @@ impl QueryLog {
                 totals: None,
             },
         );
+    }
+
+    /// Turns the finished query `id` into a failed one: the write it ran completed its stream but a
+    /// step after it (the commit, a re-check of the path) failed, so the stream's `finished` was
+    /// not the write's outcome. Its other figures stay.
+    pub(crate) fn fail(&self, id: &str, error: &KrishivError) {
+        let class = error.error_class().name();
+        let state = outcome_state(class);
+        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
+            row.state = state;
+            row.error_class = (state != "cancelled").then(|| class.to_owned());
+        }
     }
 
     /// Marks the query `id` finished (a row evicted meanwhile is gone).
@@ -1029,6 +1030,15 @@ impl QueryLog {
             .iter()
             .cloned()
             .collect()
+    }
+}
+
+/// The state a failed query shows for its error class.
+fn outcome_state(class: &str) -> &'static str {
+    match class {
+        "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
+        "OPERATION_CANCELED" => "cancelled",
+        _ => "failed",
     }
 }
 
@@ -1131,6 +1141,39 @@ mod tests {
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_finished_query_can_be_turned_into_a_failed_one() {
+        let log = QueryLog::default();
+        let id = log.begin(Some("INSERT"), Some("write"));
+        log.finish(
+            &id,
+            &Finished {
+                state: "finished",
+                wall_ns: 5,
+                peak_memory_bytes: 7,
+                error_class: None,
+                operators: Vec::new(),
+                totals: None,
+            },
+        );
+        let error: KrishivError = krishiv_common::error::PathNotFound {
+            path: "x".to_owned(),
+        }
+        .into();
+        log.fail(&id, &error);
+        let row = &log.snapshot()[0];
+        assert_eq!(row.state, "failed");
+        assert_eq!(row.error_class.as_deref(), Some("PATH_NOT_FOUND"));
+        assert_eq!(row.wall_ns, Some(5));
+        // A row evicted meanwhile is just gone.
+        log.fail("unknown", &error);
+        let cancelled: KrishivError = krishiv_common::error::OperationCanceled {}.into();
+        log.fail(&id, &cancelled);
+        let row = &log.snapshot()[0];
+        assert_eq!(row.state, "cancelled");
+        assert_eq!(row.error_class, None);
     }
 
     #[test]

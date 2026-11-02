@@ -201,7 +201,7 @@ fn operators_lists_what_a_finished_query_ran() {
 fn queries_records_statements_refused_before_they_ran() {
     let s = Session::new().unwrap();
     assert!(run_all(&s, "SELECT nope FROM range(1)").is_err());
-    assert!(run_all(&s, "SELEC 1").is_err());
+    assert!(run_all(&s, "SELECT 1 +").is_err());
     let rows = strings_in(
         &s,
         "SELECT concat_ws('|', state, error_class) FROM system.queries WHERE state NOT IN ('finished', 'running') ORDER BY submitted_at",
@@ -440,4 +440,57 @@ fn an_eager_failure_is_one_row_not_two() {
         after[0].parse::<u32>().unwrap() <= 1,
         "{before:?} {after:?}"
     );
+}
+
+#[test]
+fn overlapping_refused_statements_each_get_a_row() {
+    let s = Session::new().unwrap();
+    // Statements of one session refused while others run: none of them is hidden by another's row.
+    std::thread::scope(|scope| {
+        for i in 0..8 {
+            let s = s.clone();
+            scope.spawn(move || {
+                let sql = if i % 2 == 0 {
+                    format!("SELECT nope_{i} FROM range(1)")
+                } else {
+                    format!("SELECT {i} +")
+                };
+                assert!(run_all(&s, &sql).is_err());
+            });
+        }
+    });
+    let n = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE state = 'failed' \
+         AND (query_text LIKE 'SELECT nope_%' OR query_text LIKE 'SELECT _ +')",
+    );
+    assert_eq!(n, ["8"], "{n:?}");
+}
+
+#[test]
+fn explain_analyze_and_commands_show_their_statement_in_the_history() {
+    let s = Session::new().unwrap();
+    run_all(&s, "EXPLAIN ANALYZE SELECT 1 AS probe").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT concat_ws('|', state, statement_class) FROM system.queries \
+         WHERE query_text LIKE 'EXPLAIN ANALYZE SELECT 1 AS probe%'",
+    );
+    // The explained query that ran, and the one-row result frame that was collected.
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert!(r.iter().all(|row| row == "finished|READ"), "{r:?}");
+    // Neither is an anonymous row.
+    let anonymous = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries \
+         WHERE query_text IS NULL AND state = 'finished' AND statement_class IS NULL",
+    );
+    assert_eq!(anonymous, ["0"], "{anonymous:?}");
+    // A command's result frame shows its statement when it runs.
+    run_all(&s, "SHOW TABLES").unwrap();
+    let shown = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE query_text LIKE 'SHOW TABLES%'",
+    );
+    assert_eq!(shown, ["1"], "{shown:?}");
 }

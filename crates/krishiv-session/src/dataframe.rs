@@ -1117,6 +1117,7 @@ impl DataFrame {
         if let Some(a) = &cached {
             env.text.clone_from(&a.env.text);
             env.statement_class = a.env.statement_class;
+            env.row = Arc::clone(&a.env.row);
         }
         if let Some(a) = cached
             && !a.analyzed.reads_files
@@ -1159,6 +1160,27 @@ impl DataFrame {
         });
         *self.analysis.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&analysis));
         Ok(analysis)
+    }
+
+    /// Makes the statement `text` of class `class` the one this frame's executions show in
+    /// `system.queries`, when its analysis has none yet (a frame a command made).
+    pub(crate) fn with_statement(
+        &self,
+        text: &krishiv_common::redact::RedactedSql,
+        class: &'static str,
+    ) {
+        let mut cached = self.analysis.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(a) = cached.as_ref()
+            && a.env.text.is_none()
+        {
+            let mut env = QueryEnv::clone(&a.env);
+            env.text = Some(Arc::from(text.as_str()));
+            env.statement_class = Some(class);
+            *cached = Some(Arc::new(Analysis {
+                env: Arc::new(env),
+                analyzed: Arc::clone(&a.analyzed),
+            }));
+        }
     }
 
     /// The result's schema: names, Arrow types and nullability.

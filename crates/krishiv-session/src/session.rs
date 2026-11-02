@@ -511,16 +511,17 @@ impl Session {
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let (session, text) = (self.clone(), query.to_owned());
-        let started = self.state.queries.started();
+        let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+        let marker = Arc::clone(&row);
         let result = self
-            .on_executor(async move { session.sql_here(&text).await })
+            .on_executor(async move { session.sql_here_marked(&text, marker).await })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
         // row of `system.queries` too, with the text as the session may show it.
         // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
         // that failed while it ran): that one has its row.
         if let Err(error) = &result
-            && self.state.queries.started() == started
+            && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
             self.state
                 .queries
@@ -634,7 +635,18 @@ impl Session {
     }
 
     pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        let env = self.query_env();
+        self.sql_here_marked(query, Arc::default()).await
+    }
+
+    /// [`Self::sql_here`], with `row` as the statement's slot for the id of the `system.queries`
+    /// row a query of it began.
+    pub(crate) async fn sql_here_marked(
+        &self,
+        query: &str,
+        row: Arc<std::sync::Mutex<Option<String>>>,
+    ) -> Result<DataFrame, KrishivError> {
+        let mut env = self.query_env();
+        env.row = row;
         let query = self.substituted(query);
         let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
@@ -648,9 +660,12 @@ impl Session {
         // drops (its reads are checked by analysis, first thing).
         let class = krishiv_sql::classify(&statement);
         self.authorize_statement(&statement, class, &env).await?;
-        let mut env = env;
         env.statement_class = Some(class.name());
-        self.run_statement(statement, env, query, &redacted).await
+        let df = self.run_statement(statement, env, query, &redacted).await?;
+        // Whatever frame the statement returns (a command's result too) shows the statement's
+        // text and class when it runs.
+        df.with_statement(&redacted, class.name());
+        Ok(df)
     }
 
     /// Runs the parsed, authorized `statement`.
@@ -670,7 +685,7 @@ impl Session {
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
             }
-            Statement::Explain(e) => self.explain_statement(&e).await,
+            Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
@@ -1272,6 +1287,7 @@ impl Session {
             policy_version: self.state.policy.version().0,
             text: None,
             statement_class: None,
+            row: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1613,6 +1629,7 @@ impl Session {
             .state
             .queries
             .begin(env.text.as_deref(), env.statement_class);
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let mut pending = PendingFold(Some(QueryFold {
             query: Arc::clone(&query),
             state: Arc::clone(&self.state),
@@ -2055,17 +2072,36 @@ impl Session {
             }
             drop(rows);
             let files = committed_files(&batches)?;
-            if let Err(denied) = crate::access::still_physical(self, &at) {
-                // The files the query wrote are under the anchor: remove
-                // them (best effort) before refusing.
-                for f in &files {
-                    drop(io.delete(&store, &f.path).await);
+            // The query's stream has ended and its `system.queries` row says `finished`: a failure
+            // of the steps that follow is the write's outcome, so the row is corrected.
+            let after_run = async {
+                if let Err(denied) = crate::access::still_physical(self, &at) {
+                    // The files the query wrote are under the anchor: remove
+                    // them (best effort) before refusing.
+                    for f in &files {
+                        drop(io.delete(&store, &f.path).await);
+                    }
+                    return Err(denied);
                 }
-                return Err(denied);
+                write
+                    .commit(&io, format.as_ref(), schema, &parsed, files.clone())
+                    .await
             }
-            let committed = write
-                .commit(&io, format.as_ref(), schema, &parsed, files)
-                .await?;
+            .await;
+            let committed = match after_run {
+                Ok(committed) => committed,
+                Err(error) => {
+                    let id = env
+                        .row
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
+                    if let Some(id) = id {
+                        self.state.queries.fail(&id, &error);
+                    }
+                    return Err(error);
+                }
+            };
             // The engine's own write may have replaced a cached path: entries
             // reading files are dropped, so the next action lists them again.
             // (An external change drops nothing and stays invisible.)
@@ -2576,6 +2612,7 @@ fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k str, Strin
 }
 
 /// The analysis inputs of one query and the versions they were taken at.
+#[derive(Clone)]
 pub(crate) struct QueryEnv {
     pub(crate) config: Arc<Config>,
     pub(crate) parser: ParserOptions,
@@ -2603,6 +2640,11 @@ pub(crate) struct QueryEnv {
     pub(crate) text: Option<Arc<str>>,
     /// The statement's class (`StatementClass::name`), for `system.queries`.
     pub(crate) statement_class: Option<&'static str>,
+    /// The id of the `system.queries` row the statement's latest query began, if any: `sql`
+    /// records a refusal only for a statement that never got a row, and a write corrects its row
+    /// when a step after its run fails. Statement-local, so another statement of the same
+    /// session cannot set or clear it.
+    pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
