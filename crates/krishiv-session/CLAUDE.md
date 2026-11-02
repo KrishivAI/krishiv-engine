@@ -20,9 +20,14 @@ Paths are relative to this crate.
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
 - `src/access.rs` `StatementInfo` / `Session::statement_info` (class + read securables with columns), write/DDL checks (`authorize_statement`), the `krishiv::audit` denial record, `PathPrefixPolicy`
 - `src/partitions.rs` partitioned and bucketed tables: the layout `CREATE TABLE` stores (partition columns last), the partitions the catalog tracks (`ADD PARTITION`, registered after `INSERT`/CTAS), `DESCRIBE ... PARTITION`, `SHOW PARTITIONS`, `ANALYZE ... PARTITION`; `tests/partitioned_tables.rs`
+- `src/dataframe.rs` `DataFrameWriter` (files: `save`, `parquet`/`csv`/`json`/`text`; tables: `save_as_table`, `insert_into`; `bucket_by`/`sort_by`, which only Spark's `saveAsTable` takes and the engine has no bucketed tables for) and `DataFrameWriterV2` (`writeTo`). Table writers have no statement of their own: they run `table_commands.rs` `exec_save_as_table` / `exec_insert_into` / `exec_write_v2` (one path with `CREATE TABLE AS` and `INSERT`) and make the access checks of the statement they stand for through `authorize_equivalent` (`tests/access_policy.rs`). `saveAsTable` overwrite drops and recreates the table only after every check that can refuse the new one (`validate_new_table`, `Session::check_write_ready`, `UNSUPPORTED_OVERWRITE.TABLE`); `tests/dataframe_writer_tables.rs`
 - `src/explain.rs` EXPLAIN and `DataFrame::estimate` (ADR 0041: estimated table-scan bytes and rows from the optimizer's statistics, `None` when unknown; the CLI's agent cost gate uses it); `src/profile.rs` profile for EXPLAIN ANALYZE
 - `src/agent.rs` the `krishiv.agent-result` v1 formatter (compact tables, errors, estimates) plus the shared Spark-style value renderer
 - `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` and `tests/window_goldens.rs` (window functions against Spark goldens) end-to-end tests
+
+## Writers (Spark 4.0 `DataFrameWriter` is the reference)
+- `saveAsTable` modes: `errorifexists` fails on an existing table, `ignore` leaves it, `append` adds by column name (another format, a partitioning or other names are `KRISHIV_UNSUPPORTED_FEATURE`), `overwrite` drops and recreates. `insertInto` is by position: `append`, `ignore` and `errorifexists` all append, `overwrite` is `INSERT OVERWRITE`. The format defaults to `spark.sql.sources.default` when `format()` was not called.
+- The file formats the engine writes are Parquet and CSV; `json`, `text` and `orc` writes are `KRISHIV_UNSUPPORTED_FEATURE`.
 
 ## Extension points
 - New DataFrame action: an async method in `src/dataframe.rs` running on the session executor; transformations only build IR.
