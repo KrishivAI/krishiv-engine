@@ -731,3 +731,19 @@ fn result_cache_entries_parse_and_default() {
     assert!(c.set("krishiv.resultCache.enabled", "maybe").is_err());
     assert!(c.set("krishiv.resultCache.maxBytes", "lots").is_err());
 }
+
+#[test]
+fn deterministic_order_is_off_by_default_and_parses() {
+    use super::registry::DETERMINISTIC_ORDER;
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&DETERMINISTIC_ORDER).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set("krishiv.deterministicOrder", "true").unwrap();
+    assert_eq!(
+        c.get(&DETERMINISTIC_ORDER).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert!(c.set("krishiv.deterministicOrder", "sometimes").is_err());
+}

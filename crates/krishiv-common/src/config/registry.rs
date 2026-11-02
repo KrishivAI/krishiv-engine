@@ -36,6 +36,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
     &CACHE_MAX_BYTES,
+    &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
@@ -123,6 +124,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
     ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
     ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
@@ -687,6 +689,22 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
           lazy (on first use) and all-or-nothing: when caching a relation would exceed the cap, \
           the query runs uncached instead of failing. `0` disables caching: queries always run \
           uncached.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Reproducible results: one driver per pipeline.
+pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
+    key: "krishiv.deterministicOrder",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Make a query's result reproducible: every pipeline runs on one driver, so partial \
+          states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
+          merges) are merged in the order the input arrives and a query without `ORDER BY` \
+          returns its rows in the same order on every run, byte for byte, for the engine's \
+          own scans. Costs the parallelism of the query: meant for reproducing a result, \
+          comparing two builds, and tests. Off by default.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

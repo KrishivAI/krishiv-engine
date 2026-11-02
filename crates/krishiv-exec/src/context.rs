@@ -68,6 +68,10 @@ pub struct ExecConfig {
     /// The bytes of one key's right-side rows a sort-merge join keeps in
     /// memory (`krishiv.exec.join.smj.bufferBytes`; 0: a share of the pool).
     pub join_merge_buffer_bytes: usize,
+    /// Every pipeline runs on one driver, so the order of merges and of the
+    /// output rows does not depend on how the drivers interleave
+    /// (`krishiv.deterministicOrder`).
+    pub deterministic_order: bool,
 }
 
 impl Default for ExecConfig {
@@ -85,6 +89,7 @@ impl Default for ExecConfig {
             join_radix_bits: 3,
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
+            deterministic_order: false,
         }
     }
 }
@@ -124,9 +129,14 @@ impl ExecConfig {
             .get(&EXEC_SEED)
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .map(i64::cast_unsigned);
+        let deterministic_order = config
+            .get(&krishiv_common::config::DETERMINISTIC_ORDER)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(false);
         Self {
             batch_size,
             seed,
+            deterministic_order,
             sort_hash_buckets,
             agg_row_layout,
             join_row_layout,
