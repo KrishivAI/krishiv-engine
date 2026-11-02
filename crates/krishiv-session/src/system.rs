@@ -125,13 +125,15 @@ enum Kind {
     Double,
     /// `MAP<STRING, STRING>`.
     Labels,
+    /// `ARRAY<INT>`.
+    IntList,
     /// `ARRAY<STRUCT<le: DOUBLE, count: BIGINT>>`.
     Buckets,
 }
 
 /// A table's columns: `(name, kind, nullable)`.
 fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
-    use Kind::{Buckets, Double, Flag, Int, Labels, Long, Text, Time};
+    use Kind::{Buckets, Double, Flag, Int, IntList, Labels, Long, Text, Time};
     Some(match table.to_ascii_lowercase().as_str() {
         "capabilities" => vec![
             ("worker_id", Text, false),
@@ -181,6 +183,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("node_id", Int, true),
             ("name", Text, false),
             ("role", Text, false),
+            ("pipelines", IntList, false),
             ("drivers", Long, false),
             ("rows_in", Long, false),
             ("rows_out", Long, false),
@@ -196,6 +199,8 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("spilled_bytes", Long, false),
             ("spill_files", Long, false),
             ("spill_write_bytes", Long, false),
+            ("extra", Labels, false),
+            ("workers", Int, false),
         ],
         "queries" => vec![
             ("query_id", Text, false),
@@ -237,6 +242,9 @@ fn columns(table: &str) -> Option<Vec<TableColumn>> {
                     Kind::Time => DataType::Timestamp,
                     Kind::Double => DataType::Double,
                     Kind::Labels => labels_type(),
+                    Kind::IntList => DataType::Array(
+                        krishiv_types::ArrayType::new(DataType::Integer, false).into(),
+                    ),
                     Kind::Buckets => buckets_type(),
                 },
                 nullable,
@@ -263,6 +271,20 @@ fn buckets_type() -> DataType {
         )
         .into(),
     )
+}
+
+/// An `ARRAY<INT>` column.
+fn int_list_column(rows: &[&[i32]]) -> ArrayRef {
+    use arrow_array::ListArray;
+    use arrow_buffer::OffsetBuffer;
+    let ArrowType::List(element) =
+        DataType::Array(krishiv_types::ArrayType::new(DataType::Integer, false).into()).to_arrow()
+    else {
+        unreachable!("an array type maps to a list")
+    };
+    let values = Int32Array::from_iter_values(rows.iter().flat_map(|r| r.iter().copied()));
+    let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.len()));
+    Arc::new(ListArray::new(element, offsets, Arc::new(values), None))
 }
 
 /// A `MAP<STRING, STRING>` column of `rows` label sets.
@@ -480,6 +502,12 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(Int32Array::from_iter(rows.iter().map(|r| r.node_id))),
             text(rows.iter().map(|r| Some(r.name.as_str()))),
             text(rows.iter().map(|r| Some(r.role))),
+            int_list_column(
+                &rows
+                    .iter()
+                    .map(|r| r.pipelines.as_slice())
+                    .collect::<Vec<_>>(),
+            ),
             l(|r| r.drivers),
             l(|r| r.rows_in),
             l(|r| r.rows_out),
@@ -495,6 +523,8 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             l(|r| r.spilled_bytes),
             l(|r| r.spill_files),
             l(|r| r.spill_write_bytes),
+            labels_column(&rows.iter().map(|r| r.extra.as_slice()).collect::<Vec<_>>()),
+            Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.workers)))),
         ];
     }
     if table.eq_ignore_ascii_case("queries") {
@@ -664,6 +694,9 @@ pub(crate) struct OperatorRow {
     pub(crate) spilled_bytes: i64,
     pub(crate) spill_files: i64,
     pub(crate) spill_write_bytes: i64,
+    pub(crate) pipelines: Vec<i32>,
+    pub(crate) extra: Vec<(String, String)>,
+    pub(crate) workers: i32,
 }
 
 impl OperatorRow {
@@ -672,6 +705,7 @@ impl OperatorRow {
         query_id: &str,
         id: krishiv_exec::OperatorId,
         e: &krishiv_exec::OperatorEntry,
+        workers: u64,
     ) -> Self {
         let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
         let ns = |d: std::time::Duration| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX);
@@ -697,6 +731,25 @@ impl OperatorRow {
             spilled_bytes: n(m.spilled_bytes),
             spill_files: n(m.spill_files),
             spill_write_bytes: n(m.spill_write_bytes),
+            pipelines: e
+                .pipelines
+                .iter()
+                .map(|p| i32::try_from(*p).unwrap_or(i32::MAX))
+                .collect(),
+            extra: e
+                .extra
+                .iter()
+                .map(|(name, v)| {
+                    let value = match v {
+                        krishiv_exec::Metric::Count(n) | krishiv_exec::Metric::Max(n) => {
+                            n.to_string()
+                        }
+                        krishiv_exec::Metric::Text(t) => t.clone(),
+                    };
+                    (name.to_string(), value)
+                })
+                .collect(),
+            workers: i32::try_from(workers).unwrap_or(i32::MAX),
         }
     }
 }
@@ -926,6 +979,10 @@ pub(crate) fn provider(
                     Kind::Time => ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
                     Kind::Double => ArrowType::Float64,
                     Kind::Labels => labels_type().to_arrow(),
+                    Kind::IntList => DataType::Array(
+                        krishiv_types::ArrayType::new(DataType::Integer, false).into(),
+                    )
+                    .to_arrow(),
                     Kind::Buckets => buckets_type().to_arrow(),
                 };
                 Field::new(*name, ty, *nullable)

@@ -1670,7 +1670,7 @@ impl QueryStart {
                     .operators
                     .iter()
                     .take(500)
-                    .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e))
+                    .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e, metrics.workers))
                     .collect(),
                 totals: Some(crate::system::Totals {
                     workload_class: query.class().as_str(),

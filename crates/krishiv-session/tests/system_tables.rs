@@ -350,3 +350,25 @@ fn metrics_lists_the_engine_series_with_labels() {
         assert!(n.parse::<u32>().unwrap() >= 1, "{h:?}");
     }
 }
+
+#[test]
+fn operators_carry_pipelines_extras_and_workers() {
+    let s = Session::new().unwrap();
+    run_all(
+        &s,
+        "SELECT id % 3 AS k, count(*) FROM range(1000) GROUP BY id % 3",
+    )
+    .unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT concat_ws('|', CAST(size(pipelines) >= 1 AS STRING), CAST(size(extra) >= 0 AS STRING), CAST(workers AS STRING)) \
+         FROM system.operators LIMIT 1",
+    );
+    assert_eq!(r, ["true|true|1"], "{r:?}");
+    // Some operator reports an extra counter (an aggregate's groups, say).
+    let n = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.operators WHERE size(extra) > 0",
+    );
+    assert!(n[0].parse::<u32>().unwrap() >= 1, "{n:?}");
+}
