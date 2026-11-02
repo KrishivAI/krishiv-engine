@@ -521,27 +521,49 @@ pub(super) fn interval_to_string(e: Arc<dyn PhysExpr>, from: DataType) -> Arc<dy
 
 /// `a`, of the interval type `from`, as `CAST(.. AS STRING)` writes it.
 pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef> {
-    use arrow_array::StringViewArray;
     use arrow_array::types::{
-        DurationMicrosecondType, IntervalMonthDayNanoType, IntervalYearMonthType,
+        ArrowPrimitiveType, DurationMicrosecondType, IntervalMonthDayNanoType,
+        IntervalYearMonthType,
     };
-    use krishiv_types::interval::{calendar_string, day_time_string, year_month_string};
-    let out: StringViewArray = match (from, a.data_type()) {
-        (DataType::YearMonthInterval { start, end }, ArrowType::Interval(_)) => a
-            .as_primitive::<IntervalYearMonthType>()
-            .iter()
-            .map(|v| v.map(|m| year_month_string(m, *start, *end)))
-            .collect(),
-        (DataType::DayTimeInterval { start, end }, ArrowType::Duration(_)) => a
-            .as_primitive::<DurationMicrosecondType>()
-            .iter()
-            .map(|v| v.map(|m| day_time_string(m, *start, *end)))
-            .collect(),
-        (DataType::CalendarInterval, ArrowType::Interval(_)) => a
-            .as_primitive::<IntervalMonthDayNanoType>()
-            .iter()
-            .map(|v| v.map(|i| calendar_string(i.months, i.days, i.nanoseconds / 1000)))
-            .collect(),
+    use arrow_array::{PrimitiveArray, StringViewArray, builder::StringViewBuilder};
+    use krishiv_types::interval::{calendar_string, write_day_time, write_year_month};
+
+    /// The rendered rows, through one reused buffer.
+    fn rendered<T: ArrowPrimitiveType>(
+        a: &PrimitiveArray<T>,
+        write: impl Fn(&mut String, T::Native),
+    ) -> StringViewArray {
+        let mut out = StringViewBuilder::with_capacity(a.len());
+        let mut text = String::new();
+        for v in a {
+            match v {
+                Some(v) => {
+                    text.clear();
+                    write(&mut text, v);
+                    out.append_value(&text);
+                }
+                None => out.append_null(),
+            }
+        }
+        out.finish()
+    }
+
+    let out = match (from, a.data_type()) {
+        (DataType::YearMonthInterval { start, end }, ArrowType::Interval(_)) => {
+            rendered(a.as_primitive::<IntervalYearMonthType>(), |text, m| {
+                write_year_month(text, m, *start, *end);
+            })
+        }
+        (DataType::DayTimeInterval { start, end }, ArrowType::Duration(_)) => {
+            rendered(a.as_primitive::<DurationMicrosecondType>(), |text, m| {
+                write_day_time(text, m, *start, *end);
+            })
+        }
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            rendered(a.as_primitive::<IntervalMonthDayNanoType>(), |text, i| {
+                text.push_str(&calendar_string(i.months, i.days, i.nanoseconds / 1000));
+            })
+        }
         (from, carrier) => {
             return Err(internal(&format!("a {from} value carried as {carrier}")));
         }

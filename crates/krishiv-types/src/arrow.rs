@@ -286,6 +286,27 @@ impl DataType {
                 | Self::DayTimeInterval { .. },
                 _,
             ) => *arrow == self.to_arrow(),
+            // The element, key, value or field types decide, so a tag on the
+            // top-level field can say what plain nested fields don't.
+            (Self::Array(a), ArrowType::List(e) | ArrowType::LargeList(e)) => {
+                a.element_type().is_valid_storage(e.data_type())
+            }
+            (Self::Map(m), ArrowType::Map(entries, _)) => match entries.data_type() {
+                ArrowType::Struct(kv) => match (kv.first(), kv.get(1)) {
+                    (Some(k), Some(v)) => {
+                        m.key_type().is_valid_storage(k.data_type())
+                            && m.value_type().is_valid_storage(v.data_type())
+                    }
+                    _ => false,
+                },
+                _ => false,
+            },
+            (Self::Struct(s), ArrowType::Struct(fields)) => {
+                s.fields().len() == fields.len()
+                    && s.fields().iter().zip(fields.iter()).all(|(a, b)| {
+                        a.name() == b.name() && a.data_type().is_valid_storage(b.data_type())
+                    })
+            }
             _ => Self::from_arrow(arrow).is_ok_and(|t| t == *self),
         }
     }

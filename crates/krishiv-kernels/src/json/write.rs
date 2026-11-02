@@ -18,11 +18,12 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, Time64NanosecondType, TimestampMicrosecondType,
+    Date32Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalYearMonthType, Time64NanosecondType,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, StringArray};
-use arrow_schema::{DataType as ArrowType, TimeUnit};
+use arrow_schema::{DataType as ArrowType, IntervalUnit, TimeUnit};
 use krishiv_common::error::{InternalError, KrishivError};
 
 use super::JsonOptions;
@@ -133,6 +134,15 @@ fn write_value(
         ArrowType::Int16 => push_int(i64::from(col.as_primitive::<Int16Type>().value(row)), text),
         ArrowType::Int32 => push_int(i64::from(col.as_primitive::<Int32Type>().value(row)), text),
         ArrowType::Int64 => push_int(col.as_primitive::<Int64Type>().value(row), text),
+        // Only inside a map key: `eval` turns any other interval into its text.
+        ArrowType::Interval(IntervalUnit::YearMonth) => push_int(
+            i64::from(col.as_primitive::<IntervalYearMonthType>().value(row)),
+            text,
+        ),
+        ArrowType::Duration(TimeUnit::Microsecond) => push_int(
+            col.as_primitive::<DurationMicrosecondType>().value(row),
+            text,
+        ),
         ArrowType::UInt8 | ArrowType::UInt16 | ArrowType::UInt32 | ArrowType::UInt64 => {
             return Err(internal(format!(
                 "a JSON value of Arrow type {}",
