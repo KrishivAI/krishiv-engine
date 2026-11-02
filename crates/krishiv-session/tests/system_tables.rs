@@ -62,6 +62,8 @@ fn nothing_can_be_created_or_dropped_in_system() {
         "CREATE DATABASE system",
         "CREATE SCHEMA IF NOT EXISTS system",
         "DROP DATABASE system",
+        "CREATE DATABASE spark_catalog.system",
+        "DROP SCHEMA SPARK_CATALOG.System",
         "CREATE TABLE system.x (a INT) USING parquet",
         "CREATE TABLE system.capabilities (a INT) USING parquet",
         "DROP TABLE system.capabilities",
@@ -84,4 +86,25 @@ fn memory_lists_the_pool_tree() {
     assert_eq!(r, ["true"]);
     let r = strings("SELECT worker_id FROM system.memory LIMIT 1");
     assert_eq!(r, ["local"]);
+}
+
+#[test]
+fn a_view_over_a_system_table_ignores_a_session_table_of_the_same_name() {
+    let s = Session::new().unwrap();
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        "x",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    s.register_batches("capabilities", schema, vec![]).unwrap();
+    let df = block_on(s.sql("SELECT name FROM system.capabilities")).unwrap();
+    block_on(df.create_or_replace_temp_view("v")).unwrap();
+    let rows = block_on(async {
+        s.sql("SELECT count(*) FROM v WHERE name = 'engine'")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert!(rows[0].num_rows() == 1);
 }

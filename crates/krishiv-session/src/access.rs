@@ -728,10 +728,19 @@ fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
         _ => return Ok(()),
     };
     match name {
+        // `system` or `spark_catalog.system`: the same database, however
+        // it is spelled.
         DdlName::Parts(o)
-            if o.parts
-                .first()
-                .is_some_and(|p| crate::system::is_system(&p.value)) =>
+            if match o.parts.as_slice() {
+                [first, second] => {
+                    crate::system::is_system(&first.value)
+                        || (first.value.eq_ignore_ascii_case("spark_catalog")
+                            && crate::system::is_system(&second.value))
+                }
+                parts => parts
+                    .first()
+                    .is_some_and(|p| crate::system::is_system(&p.value)),
+            } =>
         {
             Err(krishiv_common::error::KrishivReservedName {
                 name: o

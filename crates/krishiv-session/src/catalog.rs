@@ -1979,6 +1979,11 @@ impl Pinner<'_> {
                 self.owned.insert(last.to_lowercase());
                 return Ok(Arc::clone(plan));
             }
+            // A `system` table is the engine's, whatever the session names
+            // its own tables: it is read as it is when the view is queried.
+            if crate::system::is_system_table(name) {
+                return Ok(Arc::clone(plan));
+            }
             let key = last.to_lowercase();
             if !self.pins.contains_key(&key) {
                 let pin = match self.catalog.get(last, self.case_sensitive) {
