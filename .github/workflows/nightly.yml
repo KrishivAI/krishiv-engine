@@ -66,6 +66,55 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+  # P2-T101 / P2-T110a: fresh differential fixtures each night, the seed being the date. Expressions
+  # against a real Spark 4.2 (local mode) and generated TPC-H queries against DuckDB; a new
+  # disagreement fails the job (known ones are ratcheted in tests/fixtures). Spark generation is
+  # slow (about 5 minutes per 300 roots), hence the root budget; raise it with the runner time.
+  differential:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Seed (the date)
+        run: echo "SEED=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+      - name: Generate queries (DuckDB)
+        run: |
+          mkdir -p "$RUNNER_TEMP/diff"
+          uv run --project bench python -I tests/scripts/gen_query_oracle.py \
+            --data crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet \
+            --count 3000 --seed "$SEED" > "$RUNNER_TEMP/diff/queries.json"
+      - name: Queries against DuckDB
+        env:
+          KRISHIV_QUERY_ORACLE: ${{ runner.temp }}/diff/queries.json
+        run: cargo test -p krishiv-testkit --locked --test query_oracle matches_duckdb_up_to_known_failures
+      - name: Generate expressions (Spark 4.2, local mode)
+        run: |
+          env -u SPARK_HOME uv run --no-project --python 3.12 --with 'pyspark==4.2.0' \
+            python -I tests/scripts/gen_expr_differential.py --roots 1500 --seed "$SEED" \
+            > "$RUNNER_TEMP/diff/expr.json"
+      - name: Expressions against Spark
+        run: |
+          cargo run -p krishiv-testkit --locked --bin expr-diff -- \
+            --fixture "$RUNNER_TEMP/diff/expr.json" \
+            --known tests/fixtures/spark-4.2.0/expr-differential-known-failures.json \
+            --out "$RUNNER_TEMP/diff/expr-mismatches.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: differential-${{ env.SEED }}
+          path: ${{ runner.temp }}/diff
+          retention-days: 30
+
   # P2-T105: full line + branch coverage (branch needs nightly rustc), report only.
   coverage:
     if: github.repository == 'KrishivAI/krishiv-engine'
