@@ -283,6 +283,32 @@ pub enum Oracle {
     NoRec,
 }
 
+impl Oracle {
+    /// The name a regression file carries.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::TlpWhere => "tlp-where",
+            Self::TlpAggregate => "tlp-aggregate",
+            Self::TlpHaving => "tlp-having",
+            Self::NoRec => "norec",
+        }
+    }
+
+    /// The oracle named `name`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        [
+            Self::TlpWhere,
+            Self::TlpAggregate,
+            Self::TlpHaving,
+            Self::NoRec,
+        ]
+        .into_iter()
+        .find(|o| o.name() == name)
+    }
+}
+
 /// A violated oracle.
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -327,7 +353,11 @@ fn parts(p: &str) -> [String; 3] {
     ]
 }
 
-fn tlp_where(r: &mut dyn QueryRunner, s: &Source, p: &Pred) -> Result<Option<String>, String> {
+fn tlp_where(
+    r: &mut dyn QueryRunner,
+    s: &Source,
+    p: &dyn fmt::Display,
+) -> Result<Option<String>, String> {
     let cols = s.cols.iter().map(|c| c.0).collect::<Vec<_>>().join(", ");
     let whole = r.run(&format!("SELECT {cols} FROM {}", s.from))?;
     let mut union = Vec::new();
@@ -338,7 +368,11 @@ fn tlp_where(r: &mut dyn QueryRunner, s: &Source, p: &Pred) -> Result<Option<Str
     Ok((want != got).then(|| format!("{} rows, the partitions hold {}", want.len(), got.len())))
 }
 
-fn tlp_aggregate(r: &mut dyn QueryRunner, s: &Source, p: &Pred) -> Result<Option<String>, String> {
+fn tlp_aggregate(
+    r: &mut dyn QueryRunner,
+    s: &Source,
+    p: &dyn fmt::Display,
+) -> Result<Option<String>, String> {
     let m = s.measure;
     let agg = format!("COUNT(*), SUM({m}), MIN({m}), MAX({m})");
     let whole = r.run(&format!("SELECT {agg} FROM {}", s.from))?;
@@ -373,7 +407,11 @@ fn tlp_aggregate(r: &mut dyn QueryRunner, s: &Source, p: &Pred) -> Result<Option
     Ok((want != got).then(|| format!("COUNT/SUM/MIN/MAX {want:?}, combined {got:?}")))
 }
 
-fn tlp_having(r: &mut dyn QueryRunner, s: &Source, p: &Pred) -> Result<Option<String>, String> {
+fn tlp_having(
+    r: &mut dyn QueryRunner,
+    s: &Source,
+    p: &dyn fmt::Display,
+) -> Result<Option<String>, String> {
     let q = |w: &str| {
         format!(
             "SELECT {g}, COUNT(*) FROM {} GROUP BY {g}{w}",
@@ -390,7 +428,11 @@ fn tlp_having(r: &mut dyn QueryRunner, s: &Source, p: &Pred) -> Result<Option<St
     Ok((want != got).then(|| format!("{} groups, the partitions hold {}", want.len(), got.len())))
 }
 
-fn norec(r: &mut dyn QueryRunner, s: &Source, p: &Pred) -> Result<Option<String>, String> {
+fn norec(
+    r: &mut dyn QueryRunner,
+    s: &Source,
+    p: &dyn fmt::Display,
+) -> Result<Option<String>, String> {
     let filtered = r.run(&format!("SELECT COUNT(*) FROM {} WHERE {p}", s.from))?;
     let counted = r.run(&format!(
         "SELECT SUM(CASE WHEN {p} THEN 1 ELSE 0 END) FROM {}",
@@ -411,7 +453,7 @@ pub fn check(
     r: &mut dyn QueryRunner,
     oracle: Oracle,
     source: usize,
-    p: &Pred,
+    p: &dyn fmt::Display,
 ) -> Result<Option<String>, String> {
     let s = &SOURCES[source];
     match oracle {
@@ -514,14 +556,18 @@ pub fn reduce(p: &Pred, still_fails: &mut dyn FnMut(&Pred) -> bool) -> Pred {
     }
 }
 
-/// A finding reduced to its smallest failing predicate, ready to paste into a regression test.
+/// The smallest predicate that still fails the oracle of `f`.
+pub fn reduce_finding(r: &mut dyn QueryRunner, f: &Finding) -> Pred {
+    reduce(&f.pred, &mut |c| {
+        matches!(check(r, f.oracle, f.source, c), Ok(Some(_)))
+    })
+}
+
+/// A finding with its reduced predicate `small`, ready to paste into a regression test.
 ///
 /// # Errors
 /// When writing the report fails (never, in practice).
-pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error> {
-    let small = reduce(&f.pred, &mut |c| {
-        matches!(check(r, f.oracle, f.source, c), Ok(Some(_)))
-    });
+pub fn render_report(f: &Finding, small: &Pred) -> Result<String, fmt::Error> {
     let mut out = String::new();
     writeln!(
         out,
@@ -529,11 +575,90 @@ pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error
         f.oracle,
         SOURCES[f.source].from,
         f.detail,
-        tokens(&small),
+        tokens(small),
         tokens(&f.pred),
         f.pred
     )?;
     Ok(out)
+}
+
+/// A finding reduced to its smallest failing predicate, ready to paste into a regression test.
+///
+/// # Errors
+/// When writing the report fails (never, in practice).
+pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error> {
+    let small = reduce_finding(r, f);
+    render_report(f, &small)
+}
+
+/// A predicate given as SQL text.
+struct Raw(String);
+
+impl fmt::Display for Raw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The regression file of a reduced finding: its name (stable for the same oracle, source and
+/// predicate) and its JSON text. The nightly hunt writes these (`--regressions DIR`); a file
+/// committed under `tests/fixtures/metamorphic/regressions/` is replayed by the
+/// `regressions_hold` test, so a fixed bug stays fixed.
+#[must_use]
+pub fn regression_file(
+    oracle: Oracle,
+    source: usize,
+    small: &Pred,
+    detail: &str,
+) -> (String, String) {
+    let predicate = small.to_string();
+    // FNV-1a over the identifying parts.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in oracle
+        .name()
+        .bytes()
+        .chain(source.to_le_bytes())
+        .chain(predicate.bytes())
+    {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let text = serde_json::json!({
+        "oracle": oracle.name(),
+        "source": source,
+        "predicate": predicate,
+        "found": detail,
+    });
+    (
+        format!("{}-{h:016x}.json", oracle.name()),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&text).unwrap_or_default()
+        ),
+    )
+}
+
+/// Replays a regression file: `Ok(None)` when its oracle holds.
+///
+/// # Errors
+/// A malformed file, or the engine's failure on a query.
+pub fn replay_regression(r: &mut dyn QueryRunner, text: &str) -> Result<Option<String>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let oracle = v
+        .get("oracle")
+        .and_then(serde_json::Value::as_str)
+        .and_then(Oracle::from_name)
+        .ok_or("missing or unknown `oracle`")?;
+    let source = v
+        .get("source")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n < SOURCES.len())
+        .ok_or("missing or unknown `source`")?;
+    let predicate = v
+        .get("predicate")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("missing `predicate`")?;
+    check(r, oracle, source, &Raw(predicate.to_owned()))
 }
 
 /// The `metamorphic-hunt` command over `args` (without the program name); `Ok(true)` when no
@@ -545,16 +670,17 @@ pub fn hunt_cli(
     args: impl IntoIterator<Item = String>,
     out: &mut dyn Write,
 ) -> Result<bool, String> {
-    let (mut data, mut seed, mut seconds) = (None, 1_u64, 60_u64);
+    let (mut data, mut seed, mut seconds, mut regressions) = (None, 1_u64, 60_u64, None);
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
-        let v = args
-            .next()
-            .ok_or("usage: metamorphic-hunt --data DIR [--seed N] [--seconds N]")?;
+        let v = args.next().ok_or(
+            "usage: metamorphic-hunt --data DIR [--seed N] [--seconds N] [--regressions DIR]",
+        )?;
         match flag.as_str() {
             "--data" => data = Some(std::path::PathBuf::from(v)),
             "--seed" => seed = v.parse().map_err(|e| format!("--seed: {e}"))?,
             "--seconds" => seconds = v.parse().map_err(|e| format!("--seconds: {e}"))?,
+            "--regressions" => regressions = Some(std::path::PathBuf::from(v)),
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
@@ -577,9 +703,18 @@ pub fn hunt_cli(
         }
         for f in &h.findings {
             bad += 1;
-            let text = report(&mut runner, f).map_err(|e| e.to_string())?;
+            let small = reduce_finding(&mut runner, f);
+            let text = render_report(f, &small).map_err(|e| e.to_string())?;
             writeln!(out, "VIOLATION (seed batch {}):\n{text}", next - 1)
                 .map_err(|e| e.to_string())?;
+            if let Some(dir) = &regressions {
+                let (name, body) = regression_file(f.oracle, f.source, &small, &f.detail);
+                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                let path = dir.join(name);
+                std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+                writeln!(out, "  regression file: {}", path.display())
+                    .map_err(|e| e.to_string())?;
+            }
         }
     }
     let rate = checked as f64 / start.elapsed().as_secs_f64().max(1e-9);
