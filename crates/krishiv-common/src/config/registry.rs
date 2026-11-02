@@ -36,6 +36,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
     &CACHE_MAX_BYTES,
+    &RESULT_CACHE_ENABLED,
+    &RESULT_CACHE_TTL,
+    &RESULT_CACHE_MAX_BYTES,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -109,6 +112,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
+    ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),
@@ -128,8 +132,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
+    ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
@@ -681,6 +687,48 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
           lazy (on first use) and all-or-nothing: when caching a relation would exceed the cap, \
           the query runs uncached instead of failing. `0` disables caching: queries always run \
           uncached.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Whether the process-wide result cache serves and stores query results.
+pub static RESULT_CACHE_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.resultCache.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Keep the rows of a query for later runs of the same query by any session of the process \
+          with the same principal and access-policy version. Only queries over permanent \
+          catalog tables with no non-deterministic function are cached. Entries are dropped by \
+          `REFRESH TABLE`, `CLEAR CACHE` and every write the engine commits to a table they \
+          read; a change made outside the engine is not seen until the entry expires. Off by \
+          default.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// How long a result-cache entry is served.
+pub static RESULT_CACHE_TTL: ConfigEntry = ConfigEntry {
+    key: "krishiv.resultCache.ttl",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(24 * 60 * 60))),
+    doc: "How long the result cache serves an entry, counted from when it was stored; an older \
+          entry is dropped before the next lookup and the query runs again. `0s` never \
+          expires. Needs `krishiv.resultCache.enabled`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Byte cap of the process-wide result cache.
+pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.resultCache.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Most bytes the result cache holds, for the whole process, as Arrow batches outside the \
+          query memory pool. A result larger than the cap is not stored; when a new result \
+          would pass the cap the oldest entries go first. Needs `krishiv.resultCache.enabled`.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

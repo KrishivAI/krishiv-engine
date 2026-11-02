@@ -160,7 +160,11 @@ pub(crate) struct TableName {
 }
 
 impl TableName {
-    fn resolve(parts: &[String], current: &str, env: &QueryEnv) -> Result<Self, KrishivError> {
+    pub(crate) fn resolve(
+        parts: &[String],
+        current: &str,
+        env: &QueryEnv,
+    ) -> Result<Self, KrishivError> {
         let fold = |s: &str| {
             if env.analysis.conf.case_sensitive {
                 s.to_owned()
