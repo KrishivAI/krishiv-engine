@@ -2787,14 +2787,36 @@ impl Resolver<'_> {
                 JoinCondition::On(cond)
             }
         };
+        // Columns an earlier `USING` join merged away stay reachable above this join, and its
+        // condition may read them (`a NATURAL JOIN b JOIN c ON b.k = c.k`): the inputs are
+        // revealed, the join runs over the wide inputs and a projection restores the output.
+        let wide = if keys.is_none() && !matches!(kind, JoinKind::Existence(_)) {
+            let (wl, wr) = (self.reveal_hidden(&l)?, self.reveal_hidden(&r)?);
+            (wl.out.len() != l.out.len() || wr.out.len() != r.out.len()).then_some((wl, wr))
+        } else {
+            None
+        };
+        let (jl, jr) = wide.as_ref().map_or((&l, &r), |(a, b)| (a, b));
         let node = PlanNode::Join {
-            left: Arc::clone(&l.plan),
-            right: Arc::clone(&r.plan),
+            left: Arc::clone(&jl.plan),
+            right: Arc::clone(&jr.plan),
             kind,
             condition,
         };
         let Some(keys) = keys else {
-            return Ok(self.make(p.origin, node, out, &[&l, &r]));
+            let Some((wl, wr)) = &wide else {
+                let mut j = self.make(p.origin, node, out, &[&l, &r]);
+                j.hidden = Self::carried_hidden(&l, &r, kind, (ln, rn)).into();
+                return Ok(j);
+            };
+            let mut wide_out: Vec<Attr> = wl.out.iter().map(|a| nullable(a, ln)).collect();
+            if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                wide_out.extend(wr.out.iter().map(|a| nullable(a, rn)));
+            }
+            let j = self.make(p.origin, node, wide_out, &[wl, wr]);
+            let mut res = self.restore(&j, &out);
+            res.hidden = Self::carried_hidden(wl, wr, kind, (ln, rn)).into();
+            return Ok(res);
         };
         let j = self.make(Origin::UNKNOWN, node, out, &[&l, &r]);
         let mut res = self.using_project(p.origin, &j, kind, &keys, env)?;
@@ -2808,6 +2830,42 @@ impl Resolver<'_> {
             .collect();
         res.hidden = hidden.into();
         Ok(res)
+    }
+
+    /// `c` with the columns its `hidden` list names in its output, as far as they can be reached.
+    fn reveal_hidden(&mut self, c: &Rel) -> Result<Rel, AnalysisError> {
+        if c.hidden.is_empty() {
+            return Ok(c.clone());
+        }
+        let exprs: Vec<Arc<Expr>> = c
+            .hidden
+            .iter()
+            .map(|a| col_expr(&a.col, Origin::UNKNOWN))
+            .collect();
+        self.reveal_exprs(c, exprs.iter())
+    }
+
+    /// The hidden columns a join above `l` and `r` passes on, nullable on the outer side; only
+    /// those the (revealed) inputs output can be read again.
+    fn carried_hidden(l: &Rel, r: &Rel, kind: JoinKind, nullable_sides: (bool, bool)) -> Vec<Attr> {
+        let side = |rel: &Rel, null: bool| -> Vec<Attr> {
+            rel.hidden
+                .iter()
+                .filter(|a| rel.out.iter().any(|o| o.col.id == a.col.id))
+                .map(|a| Attr {
+                    col: BoundColumn {
+                        nullable: a.col.nullable || null,
+                        ..a.col.clone()
+                    },
+                    ..a.clone()
+                })
+                .collect()
+        };
+        let mut out = side(l, nullable_sides.0);
+        if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+            out.extend(side(r, nullable_sides.1));
+        }
+        out
     }
 
     /// The common column names of a `NATURAL JOIN`'s inputs, as Spark's

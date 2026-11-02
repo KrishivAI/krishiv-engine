@@ -4971,9 +4971,15 @@ impl Resolver<'_> {
         // than unresolved.
         let mut lenient_dup = false;
         // The columns a `USING` join merged away answer to a qualified name.
+        let joined: Vec<Attr>;
         let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
             ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
             ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            // A join condition reads the merged-away columns of both inputs.
+            (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
+                joined = rels.iter().flat_map(|r| r.hidden.iter().cloned()).collect();
+                Some(&joined[..])
+            }
             _ => None,
         };
         for (i, level) in [Some(scope), extra, hidden].into_iter().enumerate() {

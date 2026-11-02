@@ -149,3 +149,35 @@ fn a_qualified_star_lists_the_merged_away_key_first() {
         assert_eq!(names, ["k", "a"], "{kind}");
     }
 }
+
+/// A join above a `NATURAL`/`USING` join reads the merged-away key in its condition and passes it
+/// on, so qualified names and `t.*` still reach it.
+#[test]
+fn a_later_join_condition_reads_the_merged_away_key() {
+    let s = session();
+    block_on(s.sql(
+        "CREATE TEMPORARY VIEW nt3 AS SELECT * FROM VALUES ('one', 4), ('two', 5), ('five', 7) AS nt3(k, v3)",
+    ))
+    .unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT nt2.k, nt3.k FROM nt1 NATURAL JOIN nt2 JOIN nt3 ON nt2.k = nt3.k"
+        ),
+        ["one|one", "one|one", "two|two"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT nt2.k, nt3.k FROM nt1 NATURAL JOIN nt2 LEFT JOIN nt3 ON nt2.k = nt3.k"
+        ),
+        ["one|one", "one|one", "two|two"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT nt1.k, CAST(nt3.v3 AS STRING), nt2.k FROM nt1 NATURAL JOIN nt2 JOIN nt3 ON nt2.k = nt3.k WHERE nt2.v2 = 22"
+        ),
+        ["two|5|two"]
+    );
+}
