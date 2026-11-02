@@ -132,13 +132,19 @@ fn insert_into_appends_by_position_and_ignores_the_first_two_modes() {
     block_on(s.table("people").write().mode("ignore").insert_into("t")).unwrap();
     block_on(s.table("people").write().mode("append").insert_into("t")).unwrap();
     assert_eq!(count(&s, "t"), 12);
-    // overwrite is INSERT OVERWRITE.
-    assert_eq!(
-        class(block_on(
-            s.table("people").write().mode("overwrite").insert_into("t")
-        )),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    // overwrite is INSERT OVERWRITE, by position: the table holds just these rows.
+    block_on(
+        s.table("people")
+            .filter(col("id").gt(lit(1)))
+            .write()
+            .mode("overwrite")
+            .insert_into("t"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "t"), 2);
+    // reading the table it overwrites is refused.
+    assert!(block_on(s.table("t").write().mode("overwrite").insert_into("t")).is_err());
+    assert_eq!(count(&s, "t"), 2, "and leaves it alone");
     // a missing table.
     assert_eq!(
         class(block_on(s.table("people").write().insert_into("missing"))),

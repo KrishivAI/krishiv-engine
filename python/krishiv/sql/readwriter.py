@@ -64,9 +64,10 @@ class DataFrameWriter:
     ``saveAsTable``/``insertInto`` and the ``parquet``/``csv``/``json``/``text``
     shortcuts). ``bucketBy`` and ``sortBy`` are accepted but the engine has no
     bucketed tables: ``save`` and ``insertInto`` fail as in Spark and
-    ``saveAsTable`` with ``KRISHIV_UNSUPPORTED_FEATURE``; ``overwrite`` of an
-    existing table in ``saveAsTable`` and ``insertInto`` and writing ``text``
-    fail with ``KRISHIV_UNSUPPORTED_FEATURE`` as well. Unknown formats fail the
+    ``saveAsTable`` with ``KRISHIV_UNSUPPORTED_FEATURE``; so does writing ``text``.
+    ``saveAsTable`` in ``overwrite`` mode drops and recreates the table (a query
+    reading it fails with ``UNSUPPORTED_OVERWRITE.TABLE``) and ``insertInto`` in
+    ``overwrite`` mode is ``INSERT OVERWRITE``. Unknown formats fail the
     same way and unknown modes with ``INVALID_SAVE_MODE``."""
 
     def __init__(self, df: DataFrame) -> None:

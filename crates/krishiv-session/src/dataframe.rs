@@ -2205,8 +2205,7 @@ impl DataFrameWriter {
 
     /// Inserts the rows into the existing table `table` by position
     /// (PySpark's `insertInto`). `errorifexists`, `ignore` and `append` all
-    /// append, as in Spark; `overwrite` is `INSERT OVERWRITE`, which fails
-    /// with `KRISHIV_UNSUPPORTED_FEATURE`.
+    /// append, as in Spark; `overwrite` is `INSERT OVERWRITE` by position.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;

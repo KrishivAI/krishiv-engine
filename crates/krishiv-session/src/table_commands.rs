@@ -2199,26 +2199,43 @@ impl Session {
 
     /// `DataFrameWriter.insertInto`: `errorifexists`, `ignore` and `append`
     /// are all `INSERT INTO` by position (Spark's `insertInto` ignores the
-    /// first two); `overwrite` is `INSERT OVERWRITE`, which the session does
-    /// not run yet.
+    /// first two); `overwrite` is `INSERT OVERWRITE` by position, as the SQL
+    /// statement runs it.
     pub(crate) async fn exec_insert_into(
         &self,
         df: &DataFrame,
         table: &str,
         mode: krishiv_io::SaveMode,
     ) -> Result<(), KrishivError> {
-        if mode == krishiv_io::SaveMode::Overwrite {
-            return Err(unsupported("INSERT OVERWRITE"));
-        }
-        let spec = V2WriteSpec {
-            table: table.to_owned(),
-            provider: None,
-            options: BTreeMap::new(),
-            properties: BTreeMap::new(),
-            partitioned_by: Vec::new(),
-            cluster_by: Vec::new(),
+        let overwrite = mode == krishiv_io::SaveMode::Overwrite;
+        let env = self.query_env();
+        let name = self.writer_table_name(table, &env)?;
+        self.authorize_equivalent(
+            &name,
+            if overwrite {
+                "INSERT OVERWRITE TABLE {} SELECT 1"
+            } else {
+                "INSERT INTO {} SELECT 1"
+            },
+            &env,
+        )
+        .await?;
+        let found = self.table_for_write(
+            &name,
+            if overwrite {
+                "INSERT OVERWRITE"
+            } else {
+                "INSERT"
+            },
+            &env,
+        )?;
+        let target = InsertTarget {
+            listed: &[],
+            by_name: false,
+            overwrite,
+            statics: &[],
         };
-        self.exec_write_v2(df, spec, V2Mode::Append).await
+        self.insert_rows(&name, &found, df, &target).await
     }
 
     /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`

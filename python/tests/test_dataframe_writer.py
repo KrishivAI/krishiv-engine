@@ -408,9 +408,8 @@ def test_save_as_table_modes_and_insert_into(spark: SparkSession, df: DataFrame)
     with pytest.raises(errors.PySparkException) as self_read:
         spark.table("saved").write.mode("overwrite").saveAsTable("saved")
     assert error_class(self_read.value) == "UNSUPPORTED_OVERWRITE.TABLE"
-    with pytest.raises(errors.PySparkException) as insert_overwrite:
-        df.write.insertInto("saved", overwrite=True)
-    assert error_class(insert_overwrite.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    df.filter("id = 1").write.insertInto("saved", overwrite=True)
+    assert spark.table("saved").count() == 1
     with pytest.raises(errors.PySparkException) as missing:
         df.write.insertInto("missing")
     assert error_class(missing.value) == "TABLE_OR_VIEW_NOT_FOUND"
