@@ -565,12 +565,13 @@ pub fn hunt_cli(
         std::time::Instant::now(),
         std::time::Duration::from_secs(seconds),
     );
-    let (mut checked, mut bad) = (0_usize, 0_usize);
+    let (mut checked, mut bad, mut failed) = (0_usize, 0_usize, 0_usize);
     let mut next = seed;
     while start.elapsed() < budget {
         let h = hunt(&mut runner, next, 25);
         next += 1;
         checked += h.checked * 4;
+        failed += h.errors.len();
         for e in &h.errors {
             writeln!(out, "engine error (seed {next}): {e}").map_err(|e| e.to_string())?;
         }
@@ -584,8 +585,10 @@ pub fn hunt_cli(
     let rate = checked as f64 / start.elapsed().as_secs_f64().max(1e-9);
     writeln!(
         out,
-        "queries_checked_per_s {rate:.1} ({checked} checks, {bad} violations)"
+        "queries_checked_per_s {rate:.1} ({checked} checks, {bad} violations, {failed} engine errors)"
     )
     .map_err(|e| e.to_string())?;
-    Ok(bad == 0)
+    // An engine error on a generated query is a failure too: on a clean build it is a bug or a
+    // resource limit to look at, not a pass.
+    Ok(bad == 0 && failed == 0)
 }

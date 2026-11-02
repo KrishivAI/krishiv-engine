@@ -112,6 +112,7 @@ jobs:
             --out "$RUNNER_TEMP/diff/expr-mismatches.json"
       - name: TLP and NoREC hunt (one hour)
         run: |
+          set -o pipefail
           cargo run -p krishiv-testkit --release --locked --bin metamorphic-hunt -- \
             --data crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet \
             --seed "$SEED" --seconds 3600 | tee "$RUNNER_TEMP/diff/metamorphic.txt"
