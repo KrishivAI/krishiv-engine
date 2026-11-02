@@ -54,7 +54,9 @@ use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::runtime_filter::ScanFilter;
-use krishiv_io::split::{FilePartition, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile};
+use krishiv_io::split::{
+    FilePartition, KeptUnit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
+};
 use krishiv_io::{
     ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
     MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions, ScanRequest,
@@ -779,22 +781,104 @@ impl FileScanSource {
     /// when the scan reports a `row_index` that isn't positional (a text
     /// format would count the lines before every piece again), else pieces
     /// no smaller than `spark.sql.files.openCostInBytes`.
-    fn morsels(&self, ctx: &TaskContext) -> Vec<Vec<MorselSplit>> {
+    ///
+    /// When pruning at scan start (`request`'s predicate and the runtime
+    /// filters already published) keeps at most half the bytes, the
+    /// morsels share the rows left instead ([`Self::pruned_morsels`]): byte
+    /// morsels of clustered data would leave those rows on a driver or two.
+    fn morsels(&self, ctx: &TaskContext, request: &ScanRequest) -> Vec<Vec<MorselSplit>> {
         let caps = self.format.capabilities(&self.format_options);
-        let target = if self.request.metadata_cols.row_index && caps.random_access.is_none() {
-            u64::MAX
-        } else {
-            krishiv_io::split::morsel_bytes(
-                &self.partitions,
-                ctx.executor().parallelism(),
-                self.min_morsel_bytes,
-            )
-        };
-        krishiv_io::split::morsels(&self.partitions, target, |f| {
+        let splittable = |f: usize| {
             self.files
                 .get(f)
                 .is_some_and(|f| caps.is_splittable(f.path.as_ref()))
-        })
+        };
+        let drivers = ctx.executor().parallelism();
+        if self.request.metadata_cols.row_index && caps.random_access.is_none() {
+            return krishiv_io::split::morsels(&self.partitions, u64::MAX, splittable);
+        }
+        if let Some(m) = self.pruned_morsels(request, drivers, &splittable) {
+            return m;
+        }
+        let target =
+            krishiv_io::split::morsel_bytes(&self.partitions, drivers, self.min_morsel_bytes);
+        krishiv_io::split::morsels(&self.partitions, target, splittable)
+    }
+
+    /// [`MORSELS_PER_DRIVER`] morsels per driver of about equal rows kept by
+    /// `request`'s pruning, or `None` when a pruning predicate is missing,
+    /// pruning keeps more than half the bytes, or a split's file is not
+    /// splittable or its footer (with its units) is not cached: the planner
+    /// read every footer, so it normally is. Pruning here only weighs the
+    /// morsels: each reader prunes its pieces again and counts what it
+    /// skips. Also `None` when a filter conjunct above may raise: a small
+    /// file stays one morsel, so the first row in file order that raises
+    /// is the one reported.
+    fn pruned_morsels(
+        &self,
+        request: &ScanRequest,
+        drivers: usize,
+        splittable: &impl Fn(usize) -> bool,
+    ) -> Option<Vec<Vec<MorselSplit>>> {
+        if !request.row_level.runtime_filters() {
+            return None;
+        }
+        let mut conjuncts: Vec<PushdownExpr> = request.predicate.iter().cloned().collect();
+        conjuncts.extend(request.dynamic.iter().filter_map(ScanFilter::predicate));
+        let predicate = match conjuncts.len() {
+            0 => return None,
+            1 => conjuncts.pop()?,
+            _ => PushdownExpr::And(conjuncts),
+        };
+        // Without runtime filters, so no filter counts a unit skipped here.
+        let mut req = request.clone();
+        req.dynamic = Vec::new();
+        req.predicate = Some(predicate);
+        let (mut bytes, mut kept_bytes, mut kept_rows) = (0_u64, 0_u64, 0_u64);
+        let mut kept = Vec::with_capacity(self.partitions.len());
+        for p in self.partitions.iter() {
+            let mut splits = Vec::with_capacity(p.splits.len());
+            for s in &p.splits {
+                if !splittable(s.file) {
+                    return None;
+                }
+                let file = self.files.get(s.file)?;
+                let needs = self.scan_options.needs;
+                let meta = self.io.cached_metadata(
+                    self.format.as_ref(),
+                    file,
+                    needs,
+                    &self.format_options,
+                )?;
+                meta.unit_count()?;
+                let plan = self.format.plan_units(meta.as_ref(), &s.range, &req).ok()?;
+                bytes = bytes.saturating_add(s.range.len());
+                let units: Vec<KeptUnit> = plan
+                    .units
+                    .iter()
+                    .map(|u| {
+                        kept_bytes = kept_bytes.saturating_add(u.bytes.end - u.bytes.start);
+                        kept_rows = kept_rows.saturating_add(u.rows);
+                        KeptUnit {
+                            start: u.bytes.start,
+                            rows: u.rows,
+                        }
+                    })
+                    .collect();
+                splits.push(units);
+            }
+            kept.push(splits);
+        }
+        if kept_bytes.saturating_mul(2) > bytes {
+            return None;
+        }
+        let morsels = (drivers.max(1) as u64).saturating_mul(MORSELS_PER_DRIVER);
+        let target = kept_rows.div_ceil(morsels);
+        Some(krishiv_io::split::pruned_morsels(
+            &self.partitions,
+            &kept,
+            target,
+        ))
     }
 
     /// Starts reading the footer of the file after piece `next` of
@@ -1280,7 +1364,7 @@ impl Source for FileScanSource {
             request.dynamic = self.runtime.scan_filters(table);
             partition_filters = self.partition_filters();
         }
-        let morsels = self.morsels(ctx);
+        let morsels = self.morsels(ctx, &request);
         Ok(Arc::new(FileScanGlobal {
             request,
             partition_filters,

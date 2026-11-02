@@ -243,6 +243,32 @@ fn finer_morsels_keep_the_file_order() {
     }
 }
 
+/// A file too small for more than one byte morsel, filtered to a stretch
+/// of 5 of its 32 row groups: the scan cuts its morsels by the rows that
+/// pruning keeps, so each kept row group is a morsel a driver can take, and
+/// the rows still come back in file order. A filter that prunes nothing
+/// keeps the byte morsels.
+#[test]
+fn pruned_morsels_spread_the_kept_row_groups_in_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sorted.parquet");
+    write_groups(&path, 0, 32);
+    let stretch = format!(
+        "SELECT id FROM parquet.`{}` WHERE id >= 50000 AND id < 62500",
+        path.display()
+    );
+    let all = format!(
+        "SELECT id FROM parquet.`{}` WHERE id % 3 != 1",
+        path.display()
+    );
+    let want: Vec<i64> = (50_000..62_500).collect();
+    let s = session(8);
+    assert_eq!(scan_splits(&s, &all), 1);
+    let pieces = scan_splits(&s, &stretch);
+    assert!(pieces >= 5, "{pieces} pieces");
+    repeat_under_load(&s, &stretch, &want);
+}
+
 /// Writes `groups` row groups of 2,500 rows, ids from `first`, and returns
 /// the row groups' `(ids, byte range)` as the reader plans them.
 fn write_groups(path: &Path, first: i64, groups: i64) -> Vec<(Range<i64>, Range<u64>)> {

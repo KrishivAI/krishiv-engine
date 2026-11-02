@@ -252,5 +252,66 @@ pub fn morsels(
     out
 }
 
+/// A unit that pruning keeps, as [`pruned_morsels`] weighs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeptUnit {
+    /// The unit's first byte in its file.
+    pub start: u64,
+    /// Its rows.
+    pub rows: u64,
+}
+
+/// The morsels for `partitions` once pruning is known, so that drivers
+/// share the rows that are left rather than the bytes: `kept[p][s]` holds
+/// the units split `s` of partition `p` keeps after pruning, in file order.
+/// A morsel ends before the unit that would take it past `target_rows`
+/// (it always holds one), cutting the split at that unit's first byte; the
+/// units a split prunes stay in its pieces, where its reader skips them
+/// again. As with [`morsels`], a morsel never spans two partitions and
+/// reading the morsels in order reads every partition's rows in its order:
+/// a unit's midpoint is never before the cut at its own start, and every
+/// earlier unit ends at or before it.
+#[must_use]
+pub fn pruned_morsels(
+    partitions: &[FilePartition],
+    kept: &[Vec<Vec<KeptUnit>>],
+    target_rows: u64,
+) -> Vec<Vec<MorselSplit>> {
+    let target_rows = target_rows.max(1);
+    let mut out = Vec::new();
+    for (p, kept) in partitions.iter().zip(kept) {
+        let mut current: Vec<MorselSplit> = Vec::new();
+        let mut rows: u64 = 0;
+        for (s, units) in p.splits.iter().zip(kept) {
+            let mut start = s.range.start;
+            for u in units {
+                if rows > 0 && rows.saturating_add(u.rows) > target_rows {
+                    let cut = u.start.clamp(start, s.range.end);
+                    if cut > start {
+                        current.push(MorselSplit {
+                            file: s.file,
+                            range: ByteRange::new(start, cut),
+                            split: s.range,
+                        });
+                    }
+                    out.push(std::mem::take(&mut current));
+                    rows = 0;
+                    start = cut;
+                }
+                rows = rows.saturating_add(u.rows);
+            }
+            current.push(MorselSplit {
+                file: s.file,
+                range: ByteRange::new(start, s.range.end),
+                split: s.range,
+            });
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;
