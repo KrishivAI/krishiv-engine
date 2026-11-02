@@ -157,29 +157,43 @@ fn check_brackets(text: &str) -> Result<(), String> {
 fn match_segment(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
-    match_at(&p, &t)
+    match_at(&p, &t, &mut std::collections::HashSet::new())
 }
 
-fn match_at(p: &[char], t: &[char]) -> bool {
-    let Some((&c, rest)) = p.split_first() else {
-        return t.is_empty();
-    };
-    match c {
-        '*' => (0..=t.len()).any(|n| match_at(rest, &t[n..])),
-        '?' => !t.is_empty() && match_at(rest, &t[1..]),
-        '\\' => match rest.split_first() {
-            Some((&lit, rest)) => t.first() == Some(&lit) && match_at(rest, &t[1..]),
-            None => false,
-        },
-        '[' => {
-            let Some(&ch) = t.first() else { return false };
-            let Some((hit, after)) = class(rest, ch) else {
-                return false;
-            };
-            hit && match_at(after, &t[1..])
-        }
-        lit => t.first() == Some(&lit) && match_at(rest, &t[1..]),
+/// Whether `p` matches all of `t`. `failed` holds the (pattern left, text left) states already known not to
+/// match, so a pattern with many stars costs at most pattern length times text length steps instead of
+/// trying every split of the text among the stars.
+fn match_at(
+    p: &[char],
+    t: &[char],
+    failed: &mut std::collections::HashSet<(usize, usize)>,
+) -> bool {
+    if failed.contains(&(p.len(), t.len())) {
+        return false;
     }
+    let hit = match p.split_first() {
+        None => t.is_empty(),
+        Some((&c, rest)) => match c {
+            '*' => (0..=t.len()).any(|n| match_at(rest, &t[n..], failed)),
+            '?' => !t.is_empty() && match_at(rest, &t[1..], failed),
+            '\\' => match rest.split_first() {
+                Some((&lit, rest)) => t.first() == Some(&lit) && match_at(rest, &t[1..], failed),
+                None => false,
+            },
+            '[' => match t.first() {
+                Some(&ch) => match class(rest, ch) {
+                    Some((hit, after)) => hit && match_at(after, &t[1..], failed),
+                    None => false,
+                },
+                None => false,
+            },
+            lit => t.first() == Some(&lit) && match_at(rest, &t[1..], failed),
+        },
+    };
+    if !hit {
+        failed.insert((p.len(), t.len()));
+    }
+    hit
 }
 
 /// Whether `ch` is in the class that starts after `[`, and what follows `]`.

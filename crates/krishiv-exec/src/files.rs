@@ -540,6 +540,21 @@ impl FileReads {
         // A glob under a logged directory expands over its committed files only: an abandoned
         // append's files would otherwise come back as roots of their own.
         let outer = Box::pin(self.committed_files(&at)).await?.map(Arc::new);
+        // The committed files this glob covers: each must still be there, or a concurrent overwrite
+        // deleted some and the read would silently lose rows.
+        let mut expected: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        if let Some(files) = &outer {
+            for rel in files.keys() {
+                let names: Vec<&str> = rel.split('/').collect();
+                if names.iter().any(|n| hidden(n)) {
+                    continue;
+                }
+                if (1..=names.len()).any(|n| glob.matches(&names[..n])) {
+                    expected.insert(rel.as_str());
+                }
+            }
+        }
+        let mut found = 0_usize;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<String> = meta
                 .location
@@ -547,10 +562,14 @@ impl FileReads {
                 .skip(base)
                 .map(|p| p.as_ref().to_owned())
                 .collect();
-            if let Some(files) = &outer
-                && !files.contains_key(&below.join("/"))
-            {
-                continue;
+            if let Some(files) = &outer {
+                let rel = below.join("/");
+                if !files.contains_key(&rel) {
+                    continue;
+                }
+                if expected.contains(rel.as_str()) {
+                    found += 1;
+                }
             }
             // The file and each directory above it are candidates; a hidden name (`_krishiv_log`,
             // `.staging`) is never a root of its own, and nothing below one is a candidate.
@@ -565,6 +584,13 @@ impl FileReads {
                         .or_insert_with(|| Path::from_iter(meta.location.parts().take(base + n)));
                 }
             }
+        }
+        if found < expected.len() {
+            return Err(krishiv_common::error::KrishivConcurrentCommit {
+                root: at.display.clone(),
+                version: "the version this read started at".to_owned(),
+            }
+            .into());
         }
         if matched.is_empty() {
             return Err(PathNotFound {

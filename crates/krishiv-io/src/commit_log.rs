@@ -110,11 +110,15 @@ impl<'a> CommitLog<'a> {
             .io
             .put_if_absent(&self.store, &path, Bytes::from_static(b"probe"))
             .await?;
+        if first == PutIfAbsent::Unsupported {
+            return Ok(false);
+        }
         let second = self
             .io
             .put_if_absent(&self.store, &path, Bytes::from_static(b"probe"))
             .await?;
         self.io.delete(&self.store, &path).await?;
+        // A store that rejects the operation (`Unsupported`) simply has no put-if-absent.
         Ok(first == PutIfAbsent::Created && second == PutIfAbsent::Exists)
     }
 
@@ -237,6 +241,12 @@ impl<'a> CommitLog<'a> {
                         }
                     }
                     return Ok(version);
+                }
+                PutIfAbsent::Unsupported => {
+                    return Err(crate::error::unsupported(format!(
+                        "the commit log on a store without put-if-absent ({})",
+                        self.display
+                    )));
                 }
                 PutIfAbsent::Exists => {
                     if entry.mode == CommitMode::Overwrite {

@@ -654,6 +654,8 @@ pub enum PutIfAbsent {
     Created,
     /// The object was already there, written by someone else.
     Exists,
+    /// The store rejects conditional creation (it does not implement `If-None-Match` / `PutMode::Create`).
+    Unsupported,
 }
 
 /// A query's handle on the scheduler (cheap to clone).
@@ -1233,6 +1235,10 @@ impl IoContext {
                     self.count(|c| &c.bytes_written, bytes.len() as u64);
                     return Ok(PutIfAbsent::Created);
                 }
+                Ok(Err(
+                    object_store::Error::NotImplemented { .. }
+                    | object_store::Error::NotSupported { .. },
+                )) => return Ok(PutIfAbsent::Unsupported),
                 Ok(Err(object_store::Error::AlreadyExists { .. })) => {
                     // After an unanswered attempt the object may be ours.
                     if maybe_landed && self.get_object(store, path).await?.as_ref() == Some(&bytes)

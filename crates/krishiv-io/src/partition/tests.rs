@@ -173,3 +173,12 @@ fn partition_columns_of_different_lengths_are_refused() {
     let e = partition_segments(&[a, b], Some(0)).unwrap_err();
     assert!(e.to_string().contains("different lengths"), "{e}");
 }
+
+#[test]
+fn many_stars_before_a_missing_suffix_stay_cheap() {
+    // 4 million calls without memoization; a few hundred with it.
+    let glob = crate::partition::glob::Glob::parse("********b").unwrap();
+    let name = "a".repeat(40);
+    assert!(!glob.matches(&[name.as_str()]));
+    assert!(glob.matches(&[format!("{name}b").as_str()]));
+}

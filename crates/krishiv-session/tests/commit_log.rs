@@ -238,3 +238,27 @@ fn a_wildcard_over_partition_directories_of_a_logged_root_skips_uncommitted_file
     std::fs::copy(&data, part.join("part-99999-dead.c000.snappy.parquet")).unwrap();
     assert_eq!(ids(&s, &format!("{path}/p=*")), [1]);
 }
+
+#[test]
+fn a_wildcard_read_notices_a_committed_file_that_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = session_with(&[1]);
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    // One committed file disappears (as a concurrent overwrite's cleanup would do it).
+    let mut files: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .collect();
+    files.sort();
+    std::fs::remove_file(&files[0]).unwrap();
+    let df = block_on(s.sql(&format!("SELECT id FROM parquet.`{path}/*`")));
+    let err = match df {
+        Ok(df) => block_on(df.collect()).unwrap_err(),
+        Err(e) => e,
+    };
+    assert_eq!(err.error_class().name(), "KRISHIV_CONCURRENT_COMMIT");
+}
