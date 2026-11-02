@@ -52,7 +52,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         "json_array_length" => array_length(args),
         "json_object_keys" => object_keys(args),
         "get_json_object" => get_object(args),
-        "schema_of_json" => schema_of(args),
+        "schema_of_json" => schema_of(args, opts),
         "from_json" => from(args, opts),
         "to_json" => to(args, opts),
         _ => return Some((listed, Err(bad_types(listed, args)))),
@@ -105,7 +105,7 @@ fn get_object(args: &[BindArg]) -> Result<Binding, KrishivError> {
 /// (Jackson's default `MAX_JSON_DEPTH`), which no DDL string could name
 /// back; malformed JSON fails with `KRISHIV_MALFORMED_JSON`, as Spark
 /// raises a parse error instead of returning `NULL`).
-fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
+fn schema_of(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     let (json, options) = match args {
         [json] => (json, None),
         [json, options] => (json, Some(options)),
@@ -114,7 +114,7 @@ fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
     if !is_string(&json.data_type()) {
         return Err(bad_types("schema_of_json", args));
     }
-    let options = read_options(options)?;
+    let options = read_options(options, opts.legacy_time_parser)?;
     let drop = options.drop_field_if_all_null;
     Ok(Binding::new(ArrowDataType::Utf8, move |x: &Inputs<'_>| {
         let inferred = infer_json(&x.strings(0)?, &options)?;
@@ -226,7 +226,7 @@ fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
         return Err(bad_types("from_json", args));
     }
     let target = krishiv_types::arrow::client_arrow_type(&read_schema(schema)?.to_arrow());
-    let options = read_options(options)?;
+    let options = read_options(options, opts.legacy_time_parser)?;
     if matches!(
         options.mode,
         krishiv_kernels::json::ParseMode::DropMalformed
@@ -261,7 +261,7 @@ fn to(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     ) {
         return Err(bad_types("to_json", args));
     }
-    let options = read_options(options)?;
+    let options = read_options(options, opts.legacy_time_parser)?;
     let zone = Arc::clone(&opts.time_zone);
     Ok(Binding::new(ArrowDataType::Utf8, move |x: &Inputs<'_>| {
         write_json(&x.column(0)?, &options, zone.as_ref())
@@ -285,7 +285,7 @@ fn read_schema(arg: &BindArg) -> Result<DataType, KrishivError> {
 }
 
 /// The options argument's compiled form (absent is the defaults).
-fn read_options(arg: Option<&BindArg>) -> Result<JsonOptions, KrishivError> {
+fn read_options(arg: Option<&BindArg>, legacy: bool) -> Result<JsonOptions, KrishivError> {
     let Some(arg) = arg else {
         return Ok(JsonOptions::new());
     };
@@ -324,5 +324,5 @@ fn read_options(arg: Option<&BindArg>) -> Result<JsonOptions, KrishivError> {
         }
         options.insert(keys.value(row).to_owned(), values.value(row).to_owned());
     }
-    JsonOptions::from_map(&options)
+    JsonOptions::from_map_with(&options, legacy)
 }

@@ -101,23 +101,39 @@ impl JsonOptions {
     /// `timestampNTZFormat` value Spark rejects. Unknown options and the
     /// file-only options are ignored.
     pub fn from_map(options: &BTreeMap<String, String>) -> Result<Self, KrishivError> {
+        Self::from_map_with(options, false)
+    }
+
+    /// [`Self::from_map`], with the datetime patterns compiled as the legacy
+    /// `SimpleDateFormat`/`FastDateFormat` ones when `legacy`
+    /// (`spark.sql.legacy.timeParserPolicy=LEGACY`).
+    ///
+    /// # Errors
+    /// As [`Self::from_map`].
+    pub fn from_map_with(
+        options: &BTreeMap<String, String>,
+        legacy: bool,
+    ) -> Result<Self, KrishivError> {
         let mut out = Self::new();
         for (name, value) in options {
             match name.as_str() {
                 "dateFormat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
+                    let pattern = DateTimePattern::new_with(value, Purpose::Parse, legacy)?;
                     out.date_format = Some(pattern);
-                    out.date_output = Some(DateTimePattern::new(value, Purpose::Format)?);
+                    out.date_output =
+                        Some(DateTimePattern::new_with(value, Purpose::Format, legacy)?);
                 }
                 "timestampFormat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
+                    let pattern = DateTimePattern::new_with(value, Purpose::Parse, legacy)?;
                     out.timestamp_format = Some(pattern);
-                    out.timestamp_output = Some(DateTimePattern::new(value, Purpose::Format)?);
+                    out.timestamp_output =
+                        Some(DateTimePattern::new_with(value, Purpose::Format, legacy)?);
                 }
                 "timestampNTZFormat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
+                    let pattern = DateTimePattern::new_with(value, Purpose::Parse, legacy)?;
                     out.timestamp_ntz_format = Some(pattern);
-                    out.timestamp_ntz_output = Some(DateTimePattern::new(value, Purpose::Format)?);
+                    out.timestamp_ntz_output =
+                        Some(DateTimePattern::new_with(value, Purpose::Format, legacy)?);
                 }
                 "primitivesAsString" => out.primitives_as_string = is_true(value),
                 "prefersDecimal" => out.prefers_decimal = is_true(value),
