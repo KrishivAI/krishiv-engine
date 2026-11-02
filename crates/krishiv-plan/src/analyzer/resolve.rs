@@ -700,8 +700,9 @@ impl Resolver<'_> {
                 anchor,
                 recursive,
                 max_level,
+                limit,
                 ..
-            } => self.union_loop(p, *id, anchor, recursive, *max_level, env),
+            } => self.union_loop(p, *id, anchor, recursive, *max_level, *limit, env),
             PlanNode::UnionLoopRef { id, .. } => self.loop_ref(p, *id),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Pivot {

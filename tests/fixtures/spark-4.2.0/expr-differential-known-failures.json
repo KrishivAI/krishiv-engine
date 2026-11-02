@@ -1,0 +1,9 @@
+[
+  "1|date_add(DATE'2000-02-29', i)",
+  "1|date_add(DATE'2024-03-31', i)",
+  "1|date_sub(DATE'2000-02-29', i)",
+  "1|date_sub(DATE'9999-12-31', i)",
+  "1|date_sub(dt, 2147483647)",
+  "1|date_sub(dt, i)",
+  "1|ln(m)"
+]

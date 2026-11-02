@@ -282,6 +282,19 @@ fn explain_and_estimate_do_not_run_the_loop() {
 }
 
 #[test]
+fn a_loop_in_an_unreachable_branch_does_not_run() {
+    let s = Session::new().unwrap();
+    // The loop would exceed its level limit if it ran: it is only a branch
+    // of a CASE that is never taken (Spark returns 1).
+    let got = rows(
+        &s,
+        "SELECT CASE WHEN false THEN (WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+         SELECT n + 1 FROM r) SELECT count(*) FROM r) ELSE 1 END",
+    );
+    assert_eq!(got, vec![vec!["1".to_owned()]]);
+}
+
+#[test]
 fn limit_all_on_every_read_lifts_the_row_limit() {
     let s = Session::new().unwrap();
     block_on(s.sql("SET spark.sql.cteRecursionRowLimit=50")).unwrap();
@@ -344,18 +357,19 @@ fn a_nested_loop_reading_the_enclosing_round_runs_within_it() {
 }
 
 #[test]
-fn the_rows_a_recursion_keeps_count_against_the_memory_limit() {
+fn the_rows_a_recursion_keeps_spill_under_the_memory_limit() {
     let s = Session::builder()
         .config("krishiv.memory.limit", "4MB")
         .build()
         .unwrap();
-    // Wide rows: each round fits, the accumulated rows do not.
-    let class = class_of(
+    // Wide rows: each round fits, the rows of all rounds (10 MB) do not. The
+    // working table spills, the result is still complete.
+    let got = column(rows(
         &s,
         "WITH RECURSIVE r(n, pad) MAX RECURSION LEVEL 100 AS (SELECT 1, repeat('x', 100000) \
          UNION ALL SELECT n + 1, pad FROM r WHERE n < 100) SELECT count(*) FROM r",
-    );
-    assert_eq!(class, ErrorClass::UnableToAcquireMemory);
+    ));
+    assert_eq!(got, ["100"]);
 }
 
 #[test]
@@ -546,4 +560,88 @@ fn explain_verbose_and_warnings_do_not_run_the_loop() {
         .unwrap();
     let df = block_on(s.sql(q)).unwrap();
     block_on(df.warnings()).unwrap();
+}
+
+#[test]
+fn case_sensitive_cte_names_are_distinct_from_the_recursive_one() {
+    // `R` and `r` are different CTEs under spark.sql.caseSensitive=true, so
+    // the second one is not recursive; by default it is INVALID_RECURSIVE_CTE.
+    let q = "WITH RECURSIVE R AS (SELECT 1 AS n), r AS (SELECT * FROM R) SELECT * FROM r";
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.caseSensitive=true"))
+        .and_then(|d| block_on(d.collect()))
+        .unwrap();
+    assert_eq!(rows(&s, q), vec![vec!["1".to_owned()]]);
+}
+
+#[test]
+fn recursive_term_types_follow_the_anchor() {
+    let s = Session::new().unwrap();
+    // A narrower recursive term is cast to the anchor's type.
+    assert_eq!(
+        column(rows(
+            &s,
+            "WITH RECURSIVE t(n) AS (SELECT CAST(1 AS BIGINT) UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT * FROM t"
+        )),
+        vec!["1", "2", "3"]
+    );
+    // A wider or different one cannot merge with the anchor.
+    for q in [
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 0.5 FROM t WHERE n < 3) SELECT * FROM t",
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT CAST(n + 1 AS BIGINT) FROM t WHERE n < 3) SELECT * FROM t",
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT CAST(n + 1 AS STRING) FROM t WHERE n < 3) SELECT * FROM t",
+    ] {
+        assert_eq!(
+            class_of(&s, q),
+            ErrorClass::CannotMergeIncompatibleDataType,
+            "{q}"
+        );
+    }
+}
+
+#[test]
+fn a_stored_view_keeps_the_case_sensitive_cte_names_it_was_created_with() {
+    let s = Session::new().unwrap();
+    for stmt in [
+        "SET spark.sql.caseSensitive=true",
+        "CREATE VIEW v_case AS WITH RECURSIVE R AS (SELECT 1 AS n), r AS (SELECT * FROM R) SELECT * FROM r",
+    ] {
+        block_on(s.sql(stmt))
+            .and_then(|d| block_on(d.collect()))
+            .unwrap_or_else(|e| panic!("{stmt}: {e}"));
+    }
+    assert_eq!(rows(&s, "SELECT * FROM v_case"), vec![vec!["1".to_owned()]]);
+}
+
+#[test]
+fn a_nondeterministic_cte_read_twice_inside_the_recursive_term_runs() {
+    let s = Session::new().unwrap();
+    // `b` is shared by its two reads and reads the recursive reference.
+    let q = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+             (WITH b AS (SELECT n + 1 AS m, rand() AS x FROM r WHERE n < 3) \
+              SELECT a.m FROM b a JOIN b c ON a.x = c.x)) SELECT * FROM r";
+    assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
+}
+
+#[test]
+fn a_nondeterministic_recursive_cte_read_twice_outside_the_loop_runs() {
+    let s = Session::new().unwrap();
+    // The loop's own references are bound by the loop: the shared `r` is
+    // built, not deferred as if it read an outer loop.
+    let q = "WITH RECURSIVE r(n, x) AS (SELECT 1, rand() UNION ALL \
+             SELECT n + 1, x FROM r WHERE n < 3) \
+             SELECT a.n FROM r a JOIN r b ON a.n = b.n ORDER BY 1";
+    assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
+}
+
+#[test]
+fn a_round_local_shared_cte_inside_a_shared_recursive_cte_runs() {
+    let s = Session::new().unwrap();
+    // `b` waits for the loop `r`, which the producer of `r` binds itself:
+    // `r` is built (and shared by its two outer reads), not deferred too.
+    let q = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+             (WITH b AS (SELECT n + 1 AS m, rand() AS x FROM r WHERE n < 3) \
+              SELECT a.m FROM b a JOIN b c ON a.x = c.x)) \
+             SELECT a.n FROM r a JOIN r c ON a.n = c.n ORDER BY 1";
+    assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
 }
