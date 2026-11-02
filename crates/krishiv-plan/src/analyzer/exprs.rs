@@ -1745,6 +1745,23 @@ impl Resolver<'_> {
                     ));
                 }
             }
+            // `m.k` on a map is the lookup `m['k']` (Spark's `ExtractValue`).
+            ExprNode::Field { base: _, name }
+                if matches!(kids[0].ty.data_type, Some(DataType::Map(_))) =>
+            {
+                let call = Expr::function(
+                    "__subscript",
+                    vec![
+                        Expr::clone(&kids[0].expr),
+                        Expr::new(ExprNode::Literal(Literal::String(name.clone())))
+                            .with_origin(e.origin),
+                    ],
+                )
+                .with_origin(e.origin);
+                let mut b = self.expr(&Arc::new(call), cx)?;
+                b.carry_markers(kids);
+                return Ok(b);
+            }
             ExprNode::Field { base: _, name } => {
                 let (expr, ty) = self.struct_field(e, &kids[0], name)?;
                 Bound {
@@ -5224,10 +5241,10 @@ impl Resolver<'_> {
                         && self.serves_path(&k, &c.name[k_used..])
                     {
                         self.used(&k);
-                        return self.resolve_attr(&k, k_used, &c.name, origin, None);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None, cx);
                     }
                     self.used(&a);
-                    return self.resolve_attr(&a, used, &c.name, origin, None);
+                    return self.resolve_attr(&a, used, &c.name, origin, None, cx);
                 }
                 Ok(None) => {
                     lenient_dup = lenient_dup || lenient;
@@ -5318,7 +5335,7 @@ impl Resolver<'_> {
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level));
+                return self.resolve_attr(&a, used, &c.name, origin, Some(level), cx);
             }
         }
         // The parameters of the SQL function being resolved rank after
@@ -5727,6 +5744,7 @@ impl Resolver<'_> {
         parts: &[String],
         origin: Origin,
         outer: Option<usize>,
+        cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
         let mut col = a.col.clone();
@@ -5750,7 +5768,19 @@ impl Resolver<'_> {
         let mut ty = column(&col);
         let mut base = Arc::new(Expr::new(node).with_origin(origin));
         let mut parent = parts[used - 1].clone();
-        for part in &parts[used..] {
+        for (i, part) in parts.iter().enumerate().skip(used) {
+            // A map below the path: the rest are lookups (`m.a.b` is `m['a']['b']`).
+            if matches!(ty.data_type, Some(DataType::Map(_))) {
+                let mut chain = Expr::clone(&base);
+                for rest in &parts[i..] {
+                    chain = Expr::new(ExprNode::Field {
+                        base: Arc::new(chain),
+                        name: rest.clone(),
+                    })
+                    .with_origin(origin);
+                }
+                return self.expr(&Arc::new(chain), cx);
+            }
             let st = match &ty.data_type {
                 Some(DataType::Struct(st)) => st.clone(),
                 _ => {
