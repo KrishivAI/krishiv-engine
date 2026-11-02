@@ -101,7 +101,16 @@ impl Resolver<'_> {
         qualifier: Option<&String>,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let c = self.child(input, env)?;
+        let child = self.child(input, env)?;
+        // The merged-away `USING` columns stay readable above the node: the
+        // generator reads them through a widened child and gives them back.
+        let c = if child.hidden.is_empty() {
+            child.clone()
+        } else {
+            let mut wide = self.widened(&child, &child.hidden)?;
+            wide.hidden = Arc::clone(&child.hidden);
+            wide
+        };
         let rels = [&c];
         let cx = Self::cx(&c.out, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
@@ -170,7 +179,19 @@ impl Resolver<'_> {
             names: Vec::new(),
             qualifier: None,
         };
-        Ok(self.make(origin, node, out, &[&below]))
+        let made = self.make(origin, node, out, &[&below]);
+        if child.hidden.is_empty() {
+            return Ok(made);
+        }
+        let visible: Vec<Attr> = made
+            .out
+            .iter()
+            .filter(|a| !child.hidden.iter().any(|h| h.col.id == a.col.id))
+            .cloned()
+            .collect();
+        let mut kept = self.restore(&made, &visible);
+        kept.hidden = Arc::clone(&child.hidden);
+        Ok(kept)
     }
 
     /// `items` with each `stack(..)` select item (aliased or not) replaced

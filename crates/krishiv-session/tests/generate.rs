@@ -978,3 +978,28 @@ fn a_generator_arity_error_names_the_function_in_lower_case() {
         );
     }
 }
+
+// Spark 4.2: generators beside a USING join read the merged-away column of
+// either side (golden generators-resolution-edge-cases).
+#[test]
+fn generators_read_the_columns_a_using_join_merged_away() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(array(t1.c1, t2.c1)) as x1, explode(array(t1.c1)) as x2 \
+             from (values (1), (2), (3)) as t1(c1) \
+             full outer join (values (2), (3), (4)) as t2(c1) using (c1) order by x1 nulls last, x2 nulls last"
+        ),
+        table(&[
+            &["1", "1"],
+            &["2", "2"],
+            &["2", "2"],
+            &["3", "3"],
+            &["3", "3"],
+            &["4", "NULL"],
+            &["NULL", "1"],
+            &["NULL", "NULL"]
+        ])
+    );
+}

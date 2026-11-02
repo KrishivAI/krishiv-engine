@@ -820,7 +820,7 @@ impl Resolver<'_> {
     }
 
     /// A projection of `out` over `r`: drops what a rewrite added.
-    fn restore(&self, r: &Rel, out: &[Attr]) -> Rel {
+    pub(super) fn restore(&self, r: &Rel, out: &[Attr]) -> Rel {
         let exprs = out
             .iter()
             .map(|a| col_expr(&a.col, Origin::UNKNOWN))
@@ -1255,7 +1255,7 @@ impl Resolver<'_> {
 
     /// `r` outputting `missing` too (attributes [`Self::below`] found),
     /// each relation on the way down adding what the ones above need.
-    fn widened(&mut self, r: &Rel, missing: &[Attr]) -> Result<Rel, AnalysisError> {
+    pub(super) fn widened(&mut self, r: &Rel, missing: &[Attr]) -> Result<Rel, AnalysisError> {
         // Down: each relation, how it widens and what it must add.
         let mut path: Vec<(Rel, Arc<Widen>, Vec<Attr>)> = Vec::new();
         let mut cur = r.clone();
