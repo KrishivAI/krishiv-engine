@@ -699,6 +699,49 @@ fn floor(limit: Option<usize>, reserve: usize) -> usize {
     limit.map_or(0, |l| reserve.min(l.min(MAX_BYTES) / FLOOR_LIMIT_DIVISOR))
 }
 
+/// One pool or consumer of a [`PoolSnapshot`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolEntry {
+    /// `/`-separated names from the process root.
+    pub path: String,
+    /// The path of the pool above, `None` for the root of the snapshot.
+    pub parent: Option<String>,
+    /// A consumer (otherwise a pool).
+    pub is_consumer: bool,
+    /// Bytes held (a pool: its subtree; a consumer: what it was granted).
+    pub reserved: usize,
+    /// The most a pool's subtree has held at once; a consumer's current
+    /// grant (consumers keep no high-water mark).
+    pub peak: usize,
+    /// The pool's own limit.
+    pub limit: Option<usize>,
+    /// The consumer can be asked to spill.
+    pub spillable: bool,
+}
+
+/// The pools and consumers of a tree as plain data (`system.memory`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolSnapshot {
+    /// Pools before the consumers below them, parents first.
+    pub entries: Vec<PoolEntry>,
+}
+
+/// The `/`-joined names from the root down to `node`.
+fn node_path(node: &Arc<Node>) -> String {
+    let mut names = Vec::new();
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        names.push(if n.parent.is_none() {
+            "process"
+        } else {
+            n.name.as_str()
+        });
+        cur = n.parent.as_ref();
+    }
+    names.reverse();
+    names.join("/")
+}
+
 static NEXT_CONSUMER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The pool-tree implementation of [`MemoryPool`]. The root's children are
@@ -943,6 +986,69 @@ impl MemoryPool for TreePool {
 
     fn reserved(&self) -> usize {
         self.node.reserved()
+    }
+
+    fn snapshot(&self) -> PoolSnapshot {
+        let live = self.node.shared.consumers();
+        // Consumers of this subtree, each with the pools above it up to here.
+        let mut pools: Vec<Arc<Node>> = vec![Arc::clone(&self.node)];
+        let mut consumers = Vec::new();
+        for c in live {
+            let Some(node) = c.node.upgrade() else {
+                continue;
+            };
+            let mut chain = Vec::new();
+            let mut cur = Some(Arc::clone(&node));
+            let mut inside = false;
+            while let Some(n) = cur {
+                if Arc::ptr_eq(&n, &self.node) {
+                    inside = true;
+                    break;
+                }
+                cur = n.parent.clone();
+                chain.push(n);
+            }
+            if !inside {
+                continue;
+            }
+            for n in chain {
+                if !pools.iter().any(|p| Arc::ptr_eq(p, &n)) {
+                    pools.push(n);
+                }
+            }
+            consumers.push((c, node));
+        }
+        pools.sort_by_key(|n| (n.depth, node_path(n)));
+        consumers.sort_by_key(|(c, _)| c.id);
+        let mut entries: Vec<PoolEntry> = pools
+            .iter()
+            .map(|n| PoolEntry {
+                path: node_path(n),
+                parent: n
+                    .parent
+                    .as_ref()
+                    .filter(|_| !Arc::ptr_eq(n, &self.node))
+                    .map(node_path),
+                is_consumer: false,
+                reserved: n.reserved(),
+                peak: n.peak(),
+                limit: n.limit(),
+                spillable: false,
+            })
+            .collect();
+        for (c, node) in consumers {
+            let granted = lock(&c.usage).granted;
+            entries.push(PoolEntry {
+                path: format!("{}/{}", node_path(&node), c.name),
+                parent: Some(node_path(&node)),
+                is_consumer: true,
+                reserved: granted,
+                peak: granted,
+                limit: None,
+                spillable: c.spill.as_ref().and_then(Weak::upgrade).is_some(),
+            });
+        }
+        PoolSnapshot { entries }
     }
 
     fn peak_reserved(&self) -> usize {

@@ -37,6 +37,7 @@ pub use krishiv_session::{
     OptimizerStep, QueryProfile, RecordBatchStream, ReturnField, RuntimeConf, ScalarUdf, Session,
     SessionBuilder, Signature, StorageLevel, TextOptions, UdfArg, UdfError, UdfInputType,
     UdfLibrary, UdfProperties, agent, dot_of_profile, functions, mermaid_of_profile,
+    register_build_features,
 };
 /// Spark SQL data types, for [`Column::cast`].
 pub use krishiv_types::DataType;
