@@ -104,6 +104,16 @@ struct HistoryEntry {
     full: String,
 }
 
+/// One call waiting in the queue; dropping it (the call got its turn, or the
+/// caller cancelled) frees the place.
+struct WaitGuard<'a>(&'a AtomicUsize);
+
+impl Drop for WaitGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// A tool's answer: the text and whether it is an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
@@ -336,7 +346,11 @@ impl Tools {
         let sql = match name {
             "list_catalogs" => {
                 check_args(args, &[])?;
-                "SHOW CATALOGS".to_owned()
+                // `SHOW CATALOGS` is not supported SQL: the session has the
+                // session catalog and the reserved `system` catalog.
+                return Ok(Answer::ok(
+                    "-- catalogs\nspark_catalog\nsystem\n".to_owned(),
+                ));
             }
             "list_tables" => {
                 check_args(args, &["namespace"])?;
@@ -523,8 +537,11 @@ impl Tools {
             self.waiting.fetch_sub(1, Ordering::AcqRel);
             return arg_err("too many queries are waiting; retry later".to_owned());
         }
+        // Released when the permit arrives or when the caller drops this
+        // future while it waits.
+        let waiting = WaitGuard(&self.waiting);
         let permit = self.running.acquire().await;
-        self.waiting.fetch_sub(1, Ordering::AcqRel);
+        drop(waiting);
         let Ok(_permit) = permit else {
             return arg_err("the server is shutting down".to_owned());
         };
@@ -559,12 +576,35 @@ impl Tools {
                 &estimate.plan,
             )));
         }
-        let df = session.sql(sql).await?;
-        let schema = df.schema().await?;
-        let mut stream = df.execute_stream().await?;
         let deadline = Duration::try_from_secs_f64(limits.max_seconds)
             .ok()
             .and_then(|d| start.checked_add(d));
+        // `EXPLAIN ANALYZE` runs the query inside `sql`, before any stream
+        // exists: the deadline covers that too, and dropping the future
+        // cancels the query.
+        let prepared = async {
+            let df = session.sql(sql).await?;
+            let schema = df.schema().await?;
+            let stream = df.execute_stream().await?;
+            Ok::<_, KrishivError>((df, schema, stream))
+        };
+        let (df, schema, mut stream) = match deadline {
+            Some(at) => {
+                match tokio::time::timeout(at.saturating_duration_since(Instant::now()), prepared)
+                    .await
+                {
+                    Ok(done) => done?,
+                    Err(_) => {
+                        return Ok(Answer::err(format!(
+                            "-- the statement ran past max_seconds ({}s) before it produced \
+                             rows and was cancelled; ask for less work or a larger max_seconds",
+                            limits.max_seconds
+                        )));
+                    }
+                }
+            }
+            None => prepared.await?,
+        };
         let (mut batches, mut seen, mut stop) = (Vec::new(), 0usize, None);
         loop {
             let next = match deadline {
@@ -597,10 +637,21 @@ impl Tools {
         let zone = session_zone(session.conf().get("spark.sql.session.timeZone").as_deref())
             .map_err(|e| KrishivError::from(krishiv_common::error::InternalError { message: e }))?;
         let tables = df.input_tables();
+        let plan_text = limits.explain
+            || sql
+                .trim_start()
+                .get(..7)
+                .is_some_and(|w| w.eq_ignore_ascii_case("explain"));
         let agent_limits = AgentLimits {
             max_rows: limits.max_rows,
             max_bytes: limits.max_bytes,
-            max_cell_chars: DEFAULT_MAX_CELL_CHARS,
+            // A plan or profile is one long text cell: keep it whole, under
+            // the byte cap.
+            max_cell_chars: if plan_text {
+                limits.max_bytes
+            } else {
+                DEFAULT_MAX_CELL_CHARS
+            },
             max_seconds: Some(limits.max_seconds),
         };
         let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
@@ -730,5 +781,30 @@ mod tests {
                 Some(&Value::Bool(false))
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    /// A caller that drops its call while it waits gives its place back.
+    #[tokio::test]
+    async fn cancelled_waiters_free_their_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = Tools::new(McpConfig::new(dir.path()));
+        let held = tools.running.acquire().await.unwrap();
+        for _ in 0..(QUEUE_DEPTH * 2) {
+            let waited = tokio::time::timeout(
+                Duration::from_millis(5),
+                tools.run("SELECT 1", &Limits::new(&tools.config)),
+            )
+            .await;
+            assert!(waited.is_err(), "the call should still be queued");
+        }
+        assert_eq!(tools.waiting.load(Ordering::Acquire), 0);
+        drop(held);
+        let answer = tools.run("SELECT 1", &Limits::new(&tools.config)).await;
+        assert!(!answer.is_error, "{}", answer.text);
     }
 }

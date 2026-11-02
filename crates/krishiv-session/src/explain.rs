@@ -256,7 +256,15 @@ impl Session {
         let statement = krishiv_sql::parse_statement(&resolved, &env.parser).map_err(|e| {
             crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
         })?;
-        let source = match &statement {
+        // `EXPLAIN ANALYZE` runs its statement: what it reads is what the
+        // statement reads.
+        let mut statement = &statement;
+        while let Statement::Explain(e) = statement
+            && e.mode == krishiv_sql::ast::ExplainMode::Analyze
+        {
+            statement = &e.statement;
+        }
+        let source = match statement {
             Statement::Query(q) => q,
             Statement::Insert(i) if i.source.is_none() && i.clauses.len() == 1 => {
                 &i.clauses[0].query

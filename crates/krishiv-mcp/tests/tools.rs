@@ -248,3 +248,84 @@ async fn variable_substitution_cannot_read_the_environment() {
     let path = std::env::var("PATH").unwrap_or_default();
     assert!(path.is_empty() || !text.contains(&path), "{text}");
 }
+
+#[tokio::test]
+async fn list_catalogs_answers_without_sql() {
+    let (_d, t) = fixture();
+    let (text, err) = call(&t, "list_catalogs", json!({})).await;
+    assert!(
+        !err && text.contains("spark_catalog") && text.contains("system"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn the_scan_gate_covers_explain_analyze() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let s = Session::new().unwrap();
+    let df = futures::executor::block_on(s.sql("SELECT id FROM range(1, 1000)")).unwrap();
+    futures::executor::block_on(
+        df.write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(data.join("nums").to_str().unwrap()),
+    )
+    .unwrap();
+    let mut config = McpConfig::new(&data);
+    config.gate_bytes = 1;
+    let t = Tools::new(config);
+    for (tool, a) in [
+        (
+            "explain_analyze",
+            json!({"sql": "SELECT count(*) FROM nums"}),
+        ),
+        (
+            "run_query",
+            json!({"sql": "EXPLAIN ANALYZE SELECT count(*) FROM nums"}),
+        ),
+    ] {
+        let (text, err) = call(&t, tool, a).await;
+        assert!(!err && text.starts_with("-- not run"), "{tool}: {text}");
+    }
+}
+
+#[tokio::test]
+async fn the_deadline_covers_explain_analyze_execution() {
+    let (d, _) = fixture();
+    let mut config = McpConfig::new(d.path().join("data"));
+    config.max_seconds = 0.5;
+    config.gate_bytes = u64::MAX;
+    let t = Tools::new(config);
+    let started = std::time::Instant::now();
+    let (text, err) = call(
+        &t,
+        "explain_analyze",
+        json!({"sql": "SELECT count(*) FROM range(0, 100000000000) a JOIN range(0, 100000000000) b ON a.id = b.id", "allow_heavy": true}),
+    )
+    .await;
+    assert!(err && text.contains("max_seconds"), "{text}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_long_plan_is_not_cut_at_a_cell() {
+    let (_d, t) = fixture();
+    let (text, err) = call(
+        &t,
+        "explain_analyze",
+        json!({"sql": "SELECT a.id, count(*) FROM nums a JOIN nums b ON a.id = b.id GROUP BY a.id ORDER BY 2 DESC LIMIT 5"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert!(
+        text.len() > 500 && !text.contains('…'),
+        "{} {text}",
+        text.len()
+    );
+}
