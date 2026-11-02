@@ -115,7 +115,8 @@ jobs:
           set -o pipefail
           cargo run -p krishiv-testkit --release --locked --bin metamorphic-hunt -- \
             --data crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet \
-            --seed "$SEED" --seconds 3600 | tee "$RUNNER_TEMP/diff/metamorphic.txt"
+            --seed "$SEED" --seconds 3600 \
+            --regressions "$RUNNER_TEMP/diff/regressions" | tee "$RUNNER_TEMP/diff/metamorphic.txt"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

@@ -59,6 +59,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MAX_REQUEST_BYTES,
     &IO_PREFETCH_BYTES,
     &IO_LATE_MATERIALIZATION,
+    &IO_PARQUET_PAGE_INDEX_ENABLED,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_MULTIPART_PART_BYTES,
@@ -222,6 +223,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
+    ),
+    (
+        "krishiv.io.parquet.pageIndex.enabled",
+        &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.bloom.maxBytes",
@@ -948,6 +953,20 @@ pub static IO_PREFETCH_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(64 * MIB)),
     doc: "Bytes a file scan may fetch ahead of decoding, per scan driver. Prefetched bytes are \
           reserved from the query's memory pool and dropped first under memory pressure.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.parquet.pageIndex.enabled`.
+pub static IO_PARQUET_PAGE_INDEX_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.pageIndex.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Parquet scan reads the page index of the row groups its statistics could not \
+          decide and skips the pages the pushed filter rules out. Returned rows are the same \
+          either way: the index only prunes, and an index that fails a check is ignored. Files \
+          without a page index pay nothing.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

@@ -1,0 +1,6 @@
+{
+  "oracle": "tlp-where",
+  "source": 0,
+  "predicate": "n.a NOT IN (1, NULL)",
+  "found": "seed: the planted NOT-over-IN-with-NULL bug of tests/metamorphic.rs (NULLs dropped from the list under WHERE NOT); holds on the engine"
+}

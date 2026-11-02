@@ -327,9 +327,11 @@ pub async fn krishiv_session::DataFrame::warnings(&self) -> core::result::Result
 pub fn krishiv_session::DataFrame::where_(&self, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::with_column(&self, &str, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::write(&self) -> krishiv_session::DataFrameWriter
+pub async fn krishiv_session::DataFrame::write_table_with(&self, bool, &str, core::option::Option<&str>, &str, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<alloc::string::String>, core::option::Option<(i32, alloc::vec::Vec<alloc::string::String>)>, core::option::Option<alloc::vec::Vec<alloc::string::String>>) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::write_to(&self, &str, &str, &str, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<alloc::string::String>) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::write_to_table(&self, &str) -> krishiv_session::DataFrameWriterV2
 pub async fn krishiv_session::DataFrame::write_to_table_with(&self, &str, core::option::Option<alloc::string::String>, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<alloc::string::String>, &str, core::option::Option<alloc::string::String>) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::write_to_with(&self, &str, &str, &str, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<alloc::string::String>, core::option::Option<(i32, alloc::vec::Vec<alloc::string::String>)>, core::option::Option<alloc::vec::Vec<alloc::string::String>>) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::collect_with_profile(&self) -> core::result::Result<(alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_exec::profile::QueryProfile), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_analyze(&self) -> core::result::Result<krishiv_exec::profile::QueryProfile, krishiv_common::error::KrishivError>
@@ -357,8 +359,10 @@ impl core::fmt::Debug for krishiv_session::DataFrameReader
 pub fn krishiv_session::DataFrameReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::DataFrameWriter
 impl krishiv_session::DataFrameWriter
+pub fn krishiv_session::DataFrameWriter::bucket_by(self, i32, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
 pub async fn krishiv_session::DataFrameWriter::csv(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrameWriter::format(self, &str) -> Self
+pub async fn krishiv_session::DataFrameWriter::insert_into(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrameWriter::json(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrameWriter::mode(self, &str) -> Self
 pub fn krishiv_session::DataFrameWriter::option(self, &str, &str) -> Self
@@ -366,6 +370,9 @@ pub fn krishiv_session::DataFrameWriter::options(self, impl core::iter::traits::
 pub async fn krishiv_session::DataFrameWriter::parquet(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrameWriter::partition_by(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
 pub async fn krishiv_session::DataFrameWriter::save(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrameWriter::save_as_table(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::DataFrameWriter::sort_by(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
+pub async fn krishiv_session::DataFrameWriter::text(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::DataFrameWriter
 pub fn krishiv_session::DataFrameWriter::clone(&self) -> krishiv_session::DataFrameWriter
 impl core::fmt::Debug for krishiv_session::DataFrameWriter

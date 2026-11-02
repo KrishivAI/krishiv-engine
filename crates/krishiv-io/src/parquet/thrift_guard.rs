@@ -55,6 +55,10 @@ enum Schema {
     DictPage,
     /// `DataPageHeaderV2`.
     DataPageV2,
+    /// A page index's `ColumnIndex`: walked by wire type like `Any`, except
+    /// for field 1, `null_pages`, a boolean list the decoder reads a byte
+    /// per element of (an unknown field's boolean list it skips unread).
+    ColumnIndex,
 }
 
 /// How arrow-rs reads a field of a known struct.
@@ -65,6 +69,9 @@ enum Known {
     Bool,
     /// A nested known struct, whatever the wire type.
     Struct(Schema),
+    /// A list the decoder reads: booleans take a byte each (the other
+    /// element types are walked as any list).
+    List,
     /// Not read: skipped by wire type.
     Skipped,
 }
@@ -81,6 +88,7 @@ fn known(schema: Schema, id: i16) -> Known {
         (Schema::Page, 7) => Known::Struct(Schema::DictPage),
         (Schema::Page, 8) => Known::Struct(Schema::DataPageV2),
         (Schema::DictPage, 3) | (Schema::DataPageV2, 7) => Known::Bool,
+        (Schema::ColumnIndex, 1) => Known::List,
         _ => Known::Skipped,
     }
 }
@@ -111,6 +119,51 @@ const fn any_struct() -> Frame {
 pub(super) fn check(footer: &[u8]) -> Result<(), &'static str> {
     let limit = footer.len().saturating_mul(8).saturating_add(1024);
     walk_struct(footer, Schema::Any, &mut 0, limit).map(|_| ())
+}
+
+/// Checks the `ColumnIndex` at `bytes`: as [`check`], but walking its
+/// boolean `null_pages` list the way the decoder reads it (a byte per
+/// element), so the collections after it are reached at the right bytes.
+///
+/// # Errors
+/// What [`check`] reports.
+pub(super) fn check_column_index(bytes: &[u8]) -> Result<(), &'static str> {
+    let limit = bytes.len().saturating_mul(8).saturating_add(1024);
+    walk_struct(bytes, Schema::ColumnIndex, &mut 0, limit).map(|_| ())
+}
+
+/// The `numBytes` of the `BloomFilterHeader` at the start of `buf` and the
+/// header's length. The header is walked first (counts, depth, work), then
+/// read: its first field must be the `i32` `numBytes`, which the format
+/// writes first.
+///
+/// # Errors
+/// What is wrong with the walk, or that the struct does not start with
+/// `numBytes`, or that `numBytes` is negative.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Bloom stage and the sparse fetch of P2-T080b use it"
+    )
+)]
+pub(super) fn bloom_header(buf: &[u8]) -> Result<(u32, usize), &'static str> {
+    let limit = buf.len().saturating_mul(8).saturating_add(1024);
+    let walked = walk_struct(buf, Schema::Any, &mut 0, limit)?;
+    // Field 1, type i32: delta 1 in the high nibble, type 5 in the low.
+    if buf.first() != Some(&0x15) {
+        return Err("a Bloom header that does not start with numBytes");
+    }
+    let mut walk = Walk {
+        buf,
+        pos: 1,
+        work: &mut 0,
+        limit,
+        page_header: false,
+    };
+    let raw = walk.varint()?;
+    let num_bytes = u32::try_from(unzigzag(raw)).map_err(|_| "a negative Bloom bitset size")?;
+    Ok((num_bytes, walked.len))
 }
 
 /// What [`walk_struct`] found: the bytes the struct takes, and the value of
@@ -188,6 +241,23 @@ fn walk_struct(
                         stack.push(Frame::Struct {
                             schema: child,
                             last: 0,
+                        });
+                        continue;
+                    }
+                    Known::List => {
+                        // The decoder reads this field as a list whatever
+                        // the wire type says.
+                        let (count, elem) = walk.list_header()?;
+                        if elem == BOOL_TRUE || elem == BOOL_FALSE {
+                            walk.skip(count)?;
+                            continue;
+                        }
+                        if stack.len() >= MAX_DEPTH {
+                            return Err(TOO_DEEP);
+                        }
+                        stack.push(Frame::Items {
+                            left: count,
+                            ty: elem,
                         });
                         continue;
                     }
@@ -387,6 +457,20 @@ impl Walk<'_> {
     /// does the same: walking by the specification would put this check at
     /// other bytes than the decoder's, and let it miss what the decoder
     /// then reads (a map of tens of millions of entries, say).
+    /// A list or set header: the element count (checked against the bytes
+    /// left) and the element type.
+    fn list_header(&mut self) -> Result<(u64, u8), &'static str> {
+        let header = self.byte()?;
+        let mut count = u64::from(header >> 4);
+        if count == 15 {
+            count = self.varint()?;
+        }
+        if count > self.left() as u64 {
+            return Err(COUNT_TOO_LARGE);
+        }
+        Ok((count, header & 0x0f))
+    }
+
     fn value(&mut self, ty: u8, _in_list: bool) -> Result<Option<Frame>, &'static str> {
         self.budget()?;
         match ty {
@@ -415,15 +499,7 @@ impl Walk<'_> {
                 self.skip(16)?;
             }
             LIST | SET => {
-                let header = self.byte()?;
-                let mut count = u64::from(header >> 4);
-                if count == 15 {
-                    count = self.varint()?;
-                }
-                let ty = header & 0x0f;
-                if count > self.left() as u64 {
-                    return Err(COUNT_TOO_LARGE);
-                }
+                let (count, ty) = self.list_header()?;
                 return Ok(Some(Frame::Items { left: count, ty }));
             }
             MAP => {
