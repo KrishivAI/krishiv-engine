@@ -26,7 +26,7 @@ use tokio::sync::Semaphore;
 use crate::gate::{SetupLock, check_read};
 
 /// Tools of this server, in `tools/list` order.
-pub const TOOL_NAMES: [&str; 9] = [
+pub const TOOL_NAMES: [&str; 10] = [
     "list_catalogs",
     "list_tables",
     "search_tables",
@@ -35,6 +35,7 @@ pub const TOOL_NAMES: [&str; 9] = [
     "explain",
     "explain_analyze",
     "query_history",
+    "get_query_profile",
     "sql_reference",
 ];
 
@@ -89,6 +90,9 @@ pub struct Tools {
 /// Most queries `query_history` remembers.
 const HISTORY_DEPTH: usize = 50;
 
+/// Most characters of a statement kept for `get_query_profile`.
+const HISTORY_SQL_CHARS: usize = 20_000;
+
 /// One finished query, as `query_history` shows it.
 #[derive(Debug)]
 struct HistoryEntry {
@@ -96,6 +100,8 @@ struct HistoryEntry {
     millis: u64,
     ok: bool,
     sql: String,
+    /// The statement as run (bounded), for `get_query_profile`.
+    full: String,
 }
 
 /// A tool's answer: the text and whether it is an error.
@@ -224,6 +230,23 @@ pub fn definitions() -> Vec<(&'static str, String, Map<String, Value>)> {
                 "List the most recent queries this server ran: id, milliseconds, ok or error, statement.",
             ),
             schema(&[], &[]),
+        ),
+        (
+            "get_query_profile",
+            d(
+                "Profile a query this server ran earlier (an id from query_history or a run_query result): the plan with row counts and timings per operator. The statement is run again under the same caps and scan gate.",
+            ),
+            schema(
+                &[
+                    ("query_id", "string", "An id such as q3."),
+                    (
+                        "allow_heavy",
+                        "boolean",
+                        "Run even when the scan estimate is above the gate.",
+                    ),
+                ],
+                &["query_id"],
+            ),
         ),
         (
             "sql_reference",
@@ -411,6 +434,29 @@ impl Tools {
                 check_args(args, &[])?;
                 return Ok(Answer::ok(self.history_text()));
             }
+            "get_query_profile" => {
+                check_args(args, &["query_id", "allow_heavy"])?;
+                let id = str_arg(args, "query_id")?
+                    .ok_or_else(|| arg_err("`query_id` is required".to_owned()))?;
+                let sql = {
+                    let h = self
+                        .history
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    h.iter().find(|e| e.id == id).map(|e| e.full.clone())
+                };
+                let Some(sql) = sql else {
+                    return Err(arg_err(format!(
+                        "no query `{id}` in this server's history (it keeps the last {HISTORY_DEPTH})"
+                    )));
+                };
+                limits.allow_heavy = match args.get("allow_heavy") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(arg_err("`allow_heavy` must be a boolean".to_owned())),
+                };
+                format!("EXPLAIN ANALYZE {sql}")
+            }
             "sql_reference" => {
                 check_args(args, &["function"])?;
                 return Ok(Answer::ok(function_reference(str_arg(args, "function")?)));
@@ -440,6 +486,7 @@ impl Tools {
             millis: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
             ok,
             sql: one_line,
+            full: sql.chars().take(HISTORY_SQL_CHARS).collect(),
         });
     }
 

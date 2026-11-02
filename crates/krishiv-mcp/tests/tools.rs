@@ -218,3 +218,14 @@ async fn query_history_lists_recent_queries_newest_first() {
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn get_query_profile_reprofiles_a_remembered_query() {
+    let (_d, t) = fixture();
+    call(&t, "run_query", json!({"sql": "SELECT count(*) FROM nums"})).await;
+    let (text, err) = call(&t, "get_query_profile", json!({"query_id": "q1"})).await;
+    assert!(!err, "{text}");
+    assert!(text.to_lowercase().contains("rows"), "{text}");
+    let (text, err) = call(&t, "get_query_profile", json!({"query_id": "q99"})).await;
+    assert!(err && text.contains("no query `q99`"), "{text}");
+}
