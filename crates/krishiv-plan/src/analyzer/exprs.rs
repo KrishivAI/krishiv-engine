@@ -34,8 +34,8 @@ use krishiv_common::error::{
     KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1104, NamedParametersNotSupported,
     NestedAggregateFunction, NonFoldableArgument, RequiredParameterNotFound, UnexpectedInputType,
     UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
-    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithSuggestion,
-    WrongNumArgsWithoutSuggestion,
+    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, UnsupportedGroupingExpression,
+    WrongNumArgsWithSuggestion, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
 use krishiv_types::{ArrayType, DataType, DecimalType, StructField, StructType};
@@ -1326,6 +1326,52 @@ impl Resolver<'_> {
                 (name, expr)
             })
             .collect())
+    }
+
+    /// `t.*` in a subquery where `t` is no relation of its own scope but
+    /// the enclosing query's: the outer references to that relation's
+    /// columns (Spark 4.2 expands an outer star). `None` when the star
+    /// is anything else.
+    pub(super) fn outer_star(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Option<Vec<Bound>>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        if s.plan_id.is_some()
+            || s.qualifier.is_empty()
+            || s.position.is_some()
+            || !s.except.is_empty()
+            || !s.replace.is_empty()
+            || !cx.outer
+            || cx
+                .scope
+                .iter()
+                .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+        {
+            return Ok(None);
+        }
+        // Only the immediately enclosing query, as for a column.
+        let Some(level) = cx.env.outer.len().checked_sub(1) else {
+            return Ok(None);
+        };
+        let attrs: Vec<Attr> = cx.env.outer[level]
+            .scope
+            .iter()
+            .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            .cloned()
+            .collect();
+        if attrs.is_empty() {
+            return Ok(None);
+        }
+        let mut out = Vec::with_capacity(attrs.len());
+        for a in &attrs {
+            self.used(a);
+            let parts = [a.col.name.clone()];
+            out.push(self.resolve_attr(a, 1, &parts, origin, Some(level))?);
+        }
+        Ok(Some(out))
     }
 
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
@@ -2708,8 +2754,11 @@ impl Resolver<'_> {
                 };
                 let level = cx.env.outer.len();
                 let expr = rebuilt(ExprNode::Subquery { kind, plan });
+                let shown = shown_call(&expr, kids, &values);
+                let expr = self.null_in_subquery(expr);
+                let expr = self.in_global_aggregate(expr);
                 Bound {
-                    shown: shown_call(&expr, kids, &values),
+                    shown,
                     expr,
                     outer: [outer, rel.outer.filter(|&l| l < level)]
                         .into_iter()
@@ -2744,6 +2793,98 @@ impl Resolver<'_> {
             ));
         }
         Ok(b)
+    }
+
+    /// `v IN (correlated global aggregate)`: the aggregate has exactly one
+    /// row for each outer row (a count of nothing is 0), so the `IN` is
+    /// `v = (scalar subquery)`, which the scalar path decorrelates with
+    /// its count-bug handling. Any other `IN` is returned as it came.
+    fn in_global_aggregate(&self, e: Arc<Expr>) -> Arc<Expr> {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &e.node
+        else {
+            return e;
+        };
+        let [value] = &values[..] else { return e };
+        if !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+            || !super::subquery::one_row_aggregate(plan)
+        {
+            return e;
+        }
+        let scalar = Arc::new(
+            Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::Scalar,
+                plan: Arc::clone(plan),
+            })
+            .with_origin(e.origin),
+        );
+        let nullable = super::subquery::typed(value).1 || super::subquery::typed(&scalar).1;
+        Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::Eq),
+                    kind: FunctionKind::Scalar,
+                    args: vec![Arc::clone(value), scalar],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: DataType::Boolean,
+                    nullable,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(e.origin),
+        )
+    }
+
+    /// `NULL IN (subquery)`: Spark folds it by whether the subquery has
+    /// rows. It is `exists(subquery) AND NULL`: NULL over rows, false over
+    /// none (NULL either way under
+    /// `spark.sql.legacy.nullInEmptyListBehavior`). Any other `IN` is
+    /// returned as it came.
+    fn null_in_subquery(&self, e: Arc<Expr>) -> Arc<Expr> {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &e.node
+        else {
+            return e;
+        };
+        let [value] = &values[..] else { return e };
+        if !super::subquery::null_literal(value) {
+            return e;
+        }
+        let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
+            DataType::Boolean,
+        )))));
+        if self.ctx.conf.legacy_null_in_empty_list {
+            return null;
+        }
+        let exists = Arc::new(
+            Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::Exists,
+                plan: Arc::clone(plan),
+            })
+            .with_origin(e.origin),
+        );
+        Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::And),
+                    kind: FunctionKind::Scalar,
+                    args: vec![exists, null],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: DataType::Boolean,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(e.origin),
+        )
     }
 
     /// `b` implicitly cast to `to`, if given (named and shown as `b`).
@@ -5037,6 +5178,18 @@ impl Resolver<'_> {
             col
         };
         if c.plan_id.is_none()
+            && let [name, _, ..] = &c.name[..]
+            && let Some(var) = self.lambda_var(name)
+        {
+            // `x.field` of a lambda variable `x`: a field of its struct.
+            let attr = Attr {
+                col: var,
+                qual: Arc::from(Vec::new()),
+                source: None,
+            };
+            return self.resolve_attr_as(&attr, 1, &c.name, origin, None, true);
+        }
+        if c.plan_id.is_none()
             && let [name] = &c.name[..]
             && let Some(var) = self.lambda_var(name)
         {
@@ -5169,6 +5322,17 @@ impl Resolver<'_> {
                 return self.resolve_attr(&a, used, &c.name, origin, Some(level));
             }
         }
+        // `grouping__id` is the grouping id Spark's aggregate rule reads
+        // before a function parameter of that name can: outside a grouping
+        // context it is `UNSUPPORTED_GROUPING_EXPRESSION`.
+        if let [name] = &c.name[..]
+            && name.eq_ignore_ascii_case("grouping__id")
+            && !cx.grouping
+            && !self.ctx.conf.udf_parameter_shadows_function
+            && self.has_parameter(name)
+        {
+            return Err(AnalysisError::new(UnsupportedGroupingExpression {}, origin));
+        }
         // The parameters of the SQL function being resolved rank after
         // everything else, but before a session variable.
         if let Some(b) = self.parameter(&c.name, origin, cx.env.outer.len())? {
@@ -5208,10 +5372,18 @@ impl Resolver<'_> {
         if self.parameter_attrs().is_empty() {
             return Err(unresolved(&c.name, cx.scope, origin));
         }
+        // A parameter the name matches is out of reach here (the body
+        // nests deeper than a parameter is visible), and Spark proposes
+        // nothing for it.
+        let cs = self.ctx.conf.case_sensitive;
         let candidates: Vec<Attr> = cx
             .scope
             .iter()
-            .chain(self.parameter_attrs())
+            .chain(
+                self.parameter_attrs()
+                    .iter()
+                    .filter(|a| !matches!(&c.name[..], [n] if same(&a.col.name, n, cs))),
+            )
             .cloned()
             .collect();
         Err(unresolved(&c.name, &candidates, origin))
@@ -5542,7 +5714,7 @@ impl Resolver<'_> {
     /// or the struct fields the leftover parts name below it (Spark's
     /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
     /// `outer` is `Some` for a column of the enclosing query.
-    fn resolve_attr(
+    pub(super) fn resolve_attr(
         &mut self,
         a: &Attr,
         used: usize,
@@ -5550,10 +5722,25 @@ impl Resolver<'_> {
         origin: Origin,
         outer: Option<usize>,
     ) -> Result<Bound, AnalysisError> {
+        self.resolve_attr_as(a, used, parts, origin, outer, false)
+    }
+
+    /// [`Self::resolve_attr`]; `lambda` makes the base a lambda variable
+    /// (`x.field` inside a higher-order function's lambda).
+    fn resolve_attr_as(
+        &mut self,
+        a: &Attr,
+        used: usize,
+        parts: &[String],
+        origin: Origin,
+        outer: Option<usize>,
+        lambda: bool,
+    ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
         let mut col = a.col.clone();
         col.name.clone_from(&parts[used - 1]);
         let node = match outer {
+            _ if lambda => ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
             None => ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
             Some(_) => ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
         };

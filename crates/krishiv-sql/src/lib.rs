@@ -58,6 +58,19 @@ pub use lower::{
 pub use params::{ParameterMarker, parameter_markers};
 pub use redact::redact_sql;
 
+/// Spark's check that a temporary function's name takes no database
+/// (`INVALID_TEMP_OBJ_QUALIFIER`), for a name an `IDENTIFIER(...)` clause
+/// supplied after parsing.
+///
+/// # Errors
+/// `INVALID_TEMP_OBJ_QUALIFIER` at `span`.
+pub fn check_temporary_function_name(
+    name: &ast::ObjectName,
+    span: ast::Span,
+) -> Result<(), ParseError> {
+    parser::check_temporary_function_name(name, span)
+}
+
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
 /// `FAILED_TO_PARSE_TOO_COMPLEX` at the span of the whole statement (Spark's

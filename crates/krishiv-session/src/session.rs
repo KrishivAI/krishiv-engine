@@ -529,10 +529,21 @@ impl Session {
         // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
         // run with the names they stand for.
         let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        // Spark refuses a database on a temporary function named by an
+        // `IDENTIFIER(...)` clause when it drops it; the parser sees only the
+        // evaluated name.
+        if named_by_clause
+            && let Statement::DropFunction(f) = &statement
+            && f.temporary
+        {
+            krishiv_sql::check_temporary_function_name(&f.name, f.span)
+                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
         let class = krishiv_sql::classify(&statement);

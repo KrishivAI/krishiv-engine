@@ -3,11 +3,11 @@
 //! FUNCTION`: SQL-bodied user functions (Spark's
 //! `createUserDefinedFunction` and `dropFunction` rules).
 
-use super::{Close, PR, Parser, QUERY_START};
+use super::{Close, Fail, PR, Parser, QUERY_START};
 use crate::ast::{
     CreateFunction, DropFunction, FunctionBody, FunctionBodyKind, FunctionReturns,
-    FunctionReturnsKind, ReturnColumn, RoutineCharacteristics, Span, SqlDataAccess, SqlSecurity,
-    Statement,
+    FunctionReturnsKind, ObjectName, ReturnColumn, RoutineCharacteristics, Span, SqlDataAccess,
+    SqlSecurity, Statement,
 };
 use crate::error;
 use crate::lexer::Sym;
@@ -34,6 +34,28 @@ impl Parser<'_> {
                 false
             };
             let name = p.object_name()?;
+            // `AS 'class' [USING {JAR | FILE | ARCHIVE} 'path', ...]`: a
+            // function implemented by a JVM class, which the engine has no
+            // runtime for.
+            if temporary && p.kw_at(0, "AS") {
+                p.pos += 1;
+                p.string_lit().ok_or(Fail::Syntax)?;
+                if p.eat_kw("USING") {
+                    loop {
+                        if !(p.eat_kw("JAR") || p.eat_kw("FILE") || p.eat_kw("ARCHIVE")) {
+                            return p.fail();
+                        }
+                        p.string_lit().ok_or(Fail::Syntax)?;
+                        if !p.eat_sym(Sym::Comma) {
+                            break;
+                        }
+                    }
+                }
+                let span = p.span_from(start);
+                p.command_end()?;
+                p.temp_function_qualifier(&name, span)?;
+                return Self::fatal(error::unsupported_function_class(span));
+            }
             p.expect_sym(Sym::LParen)?;
             let params_start = p.start();
             let params = if p.sym_at(0, Sym::RParen) {
@@ -243,5 +265,40 @@ impl Parser<'_> {
             name,
             span,
         }))
+    }
+}
+
+/// `normalizeFuncIdentifier`: a temporary function is qualified only by
+/// `session` or `system.session`.
+///
+/// # Errors
+/// `INVALID_TEMP_OBJ_QUALIFIER` at `span`.
+pub(crate) fn check_temporary_function_name(
+    name: &ObjectName,
+    span: Span,
+) -> Result<(), crate::error::ParseError> {
+    let words: Vec<&str> = name.parts.iter().map(|p| p.value.as_str()).collect();
+    let allowed = match words.as_slice() {
+        [_] => true,
+        [s, _] => s.eq_ignore_ascii_case("session"),
+        [c, s, _] => c.eq_ignore_ascii_case("system") && s.eq_ignore_ascii_case("session"),
+        _ => false,
+    };
+    if allowed {
+        return Ok(());
+    }
+    let quote = |w: &str| format!("`{}`", w.replace('`', "``"));
+    let (last, init) = words.split_last().unwrap_or((&"", &[]));
+    Err(error::invalid_temp_obj_qualifier(
+        "FUNCTION",
+        quote(last),
+        init.iter().map(|w| quote(w)).collect::<Vec<_>>().join("."),
+        span,
+    ))
+}
+
+impl Parser<'_> {
+    fn temp_function_qualifier(&self, name: &ObjectName, span: Span) -> PR<()> {
+        check_temporary_function_name(name, span).or_else(Self::fatal)
     }
 }

@@ -79,6 +79,7 @@ fn func(name: &str, params: Vec<SqlParam>, returns: Option<DataType>, body: Expr
         source: SourceId(1),
         deterministic: true,
         reads_data: false,
+        ansi: None,
     }
 }
 
@@ -565,7 +566,8 @@ fn scalar_subquery(plan: LogicalPlan) -> Expr {
 #[test]
 fn parameters_are_visible_in_the_bodys_subqueries() {
     // `(SELECT x)`: a constant argument at any depth; a column argument
-    // one subquery down is an outer reference; two down is refused.
+    // one subquery down is an outer reference; two down is an unresolved
+    // column, whatever the argument (Spark's `sql-udf` 2.2.1).
     let one = func(
         "one",
         vec![param("x", DataType::Integer, None)],
@@ -585,19 +587,27 @@ fn parameters_are_visible_in_the_bodys_subqueries() {
         "{}",
         r.plan.root()
     );
-    let two = func(
-        "two",
-        vec![param("x", DataType::Integer, None)],
-        Some(DataType::Integer),
-        scalar_subquery(
-            LogicalPlan::new(crate::PlanNode::OneRowRelation).project(vec![scalar_subquery(
-                LogicalPlan::new(crate::PlanNode::OneRowRelation).project(vec![c("x")]),
-            )]),
-        ),
-    );
-    assert!(call(vec![f("two", vec![int(3)])], vec![two.clone()]).is_ok());
-    let (class, _) = err(&call(vec![f("two", vec![c("a")])], vec![two]));
-    assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE");
+    let two =
+        func(
+            "two",
+            vec![param("x", DataType::Integer, None)],
+            Some(DataType::Integer),
+            f(
+                "+",
+                vec![
+                    int(1),
+                    scalar_subquery(LogicalPlan::new(crate::PlanNode::OneRowRelation).project(
+                        vec![scalar_subquery(
+                            LogicalPlan::new(crate::PlanNode::OneRowRelation).project(vec![c("x")]),
+                        )],
+                    )),
+                ],
+            ),
+        );
+    for arg in [int(3), c("a")] {
+        let (class, _) = err(&call(vec![f("two", vec![arg])], vec![two.clone()]));
+        assert!(class.starts_with("UNRESOLVED_COLUMN"), "{class}");
+    }
 }
 
 #[test]

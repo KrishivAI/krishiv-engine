@@ -2,10 +2,6 @@
   "cases": {
     "query-features": [
       28
-    ],
-    "subqueries": [
-      16,
-      17
     ]
   },
   "file": "group-by-alias",

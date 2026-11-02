@@ -122,6 +122,10 @@ pub struct SqlFunction {
     /// that does. A function declared `CONTAINS SQL` may call none that
     /// does (Spark: `INVALID_SQL_FUNCTION_DATA_ACCESS`).
     pub reads_data: bool,
+    /// `spark.sql.ansi.enabled` when the function was created: Spark
+    /// resolves the body under the configuration captured then, whatever the
+    /// caller's. `None` follows the caller's.
+    pub ansi: Option<bool>,
 }
 
 impl SqlFunction {
@@ -167,6 +171,8 @@ pub(super) struct Frame {
     /// The parameters as attributes, for `UNRESOLVED_COLUMN` proposals
     /// only (their ids are never used).
     attrs: Vec<Attr>,
+    /// Whether the body is one scalar subquery.
+    bare_query: bool,
 }
 
 struct FrameParam {
@@ -343,7 +349,15 @@ impl Resolver<'_> {
         // The body sees no lambda variable of the calling query.
         let outer_lambdas = std::mem::take(&mut self.lambdas);
         let outer = self.frame.replace(Arc::clone(&frame));
+        // The body resolves under the ANSI mode captured at creation.
+        let flip = def.ansi.is_some_and(|a| a != self.ctx.conf.ansi);
+        if flip {
+            std::mem::swap(&mut self.ctx, &mut self.flipped);
+        }
         let resolved = self.body(def, e);
+        if flip {
+            std::mem::swap(&mut self.ctx, &mut self.flipped);
+        }
         self.frame = outer;
         self.lambdas = outer_lambdas;
         let body = resolved?;
@@ -397,10 +411,20 @@ impl Resolver<'_> {
                 source: None,
             })
             .collect();
+        // A body that is one scalar subquery is the function's query, as
+        // `RETURN SELECT ..` is: its own subquery level does not count.
+        let bare_query = matches!(
+            &def.body.node,
+            ExprNode::Subquery {
+                kind: crate::SubqueryKind::Scalar,
+                ..
+            }
+        );
         Arc::new(Frame {
             name: def.name.clone(),
             params,
             attrs,
+            bare_query,
         })
     }
 
@@ -762,6 +786,11 @@ impl Resolver<'_> {
         let Some(p) = frame.params.iter().find(|p| same(&p.name, name, cs)) else {
             return Ok(None);
         };
+        // Spark resolves a parameter one scalar subquery down only; deeper
+        // it is an unresolved column.
+        if depth > 1 + usize::from(frame.bare_query) {
+            return Ok(None);
+        }
         p.reads.fetch_add(1, Ordering::Relaxed);
         // A parameter substituted by its argument runs wherever it is read:
         // once per element of a lambda and once per row of a subquery. Spark

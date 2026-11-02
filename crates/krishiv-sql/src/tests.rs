@@ -1445,14 +1445,24 @@ fn set_errors_follow_spark() {
     let e = fail("SET k'x = 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 5..6);
-    // An `INTERVAL` time zone is a supported grammar form the engine does
-    // not implement.
+    // An `INTERVAL` time zone holds hours, minutes and seconds only.
     let e = fail("SET TIME ZONE INTERVAL '1' DAY");
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::InvalidIntervalFormatTimezoneIntervalOutOfRange
+    );
+    assert!(e.error.to_string().contains("'1'"), "{e:?}");
+    // A temporary function takes no database, with or without a class.
+    let e = fail("CREATE TEMPORARY FUNCTION a.f AS 'x.Y'");
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
+    let e = fail("CREATE TEMPORARY FUNCTION f AS 'x.Y' USING JAR 'a.jar'");
     assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.error.to_string().contains("INTERVAL"), "{e:?}");
-    // A missing zone is a syntax error.
+    // A missing zone, or text that is no zone, is the catch-all alternative.
     let e = fail("SET TIME ZONE");
-    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0045);
+    assert_eq!(e.span.range(), 0..13);
+    let e = fail("SET TIME ZONE INTERVAL 10 HOURS 'GMT+1'");
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0045);
     // Anything after the value's `;` is extra input, as for queries.
     let e = fail("SET x = 1; SELECT 2");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);

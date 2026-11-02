@@ -1280,3 +1280,48 @@ fn a_table_function_takes_named_arguments() {
     // A built-in table function takes none.
     fails(&s, "SELECT * FROM range(end => 3)");
 }
+
+/// Spark's sql-udf-name-precedence golden: a parameter named `grouping__id`
+/// loses to the grouping id, which is unsupported outside an aggregate, so the
+/// function is never created.
+#[test]
+fn a_parameter_named_grouping_id_is_refused() {
+    let s = session();
+    let e = fails(
+        &s,
+        "CREATE OR REPLACE TEMPORARY FUNCTION g(grouping__id INT) RETURNS INT RETURN grouping__id",
+    );
+    assert!(
+        format!("{e:?}").contains("UnsupportedGroupingExpression"),
+        "{e:?}"
+    );
+    let e = fails(&s, "SELECT g(42)");
+    assert!(format!("{e:?}").contains("UnresolvedRoutine"), "{e:?}");
+    let e = fails(&s, "DROP TEMPORARY FUNCTION g");
+    assert!(format!("{e:?}").contains("RoutineNotFound"), "{e:?}");
+}
+
+/// Spark's sql-udf golden (foo3_2e1): a lambda variable in a function body
+/// takes a field, and a parameter hidden below the subquery depth it is
+/// visible at is reported without proposals.
+#[test]
+fn a_lambda_variable_takes_a_field_in_a_function_body() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION first_start(occ ARRAY<STRUCT<t: INT, id: STRING>>) \
+         RETURNS INT RETURN aggregate(transform(occ, x -> x.t + 1), 0, (a, b) -> a + b)",
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_start(array(named_struct('t', 1, 'id', 'a'), named_struct('t', 2, 'id', 'b')))"
+        ),
+        ["5"]
+    );
+    let e = fails(
+        &s,
+        "CREATE TEMPORARY FUNCTION deep(a INT) RETURNS INT RETURN 1 + (SELECT (SELECT a))",
+    );
+    assert!(format!("{e:?}").contains("WithoutSuggestion"), "{e:?}");
+}

@@ -1782,7 +1782,7 @@ impl Parser<'_> {
     /// after the first (Spark's `errorCapturing...Interval`) is kept as
     /// `trailing`.
     #[inline(never)]
-    fn interval(&mut self) -> PR<Literal> {
+    pub(super) fn interval(&mut self) -> PR<Literal> {
         let start = self.start();
         let keyword = self.keyword_ident();
         let single = self.interval_value_len(0) == Some(1) && self.single_string_at(0);
