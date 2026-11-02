@@ -372,20 +372,18 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        // Only the immediately enclosing query, as Spark 4.2 resolves, and
-        // the left sides of the lateral joins it sits in.
-        let last = cx.env.outer.len().wrapping_sub(1);
-        let levels = cx
-            .env
-            .outer
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(i, l)| *i == last || l.lateral);
+        // Only the immediately enclosing query, as Spark 4.2 resolves (a
+        // nested lateral join's right side sees its own left side only).
+        let levels = cx.env.outer.iter().enumerate().rev().take(1);
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level), false);
+                let b = self.resolve_attr(&a, used, &c.name, origin, Some(level), false)?;
+                return Ok(if outer.lateral && used == c.name.len() {
+                    qualify_lateral(b, &a)
+                } else {
+                    b
+                });
             }
         }
         // The parameters of the SQL function being resolved rank after
@@ -951,4 +949,24 @@ impl Resolver<'_> {
         );
         Ok((expr, ty))
     }
+}
+
+/// The outer reference `b` to `a`, a column of a lateral join's left side,
+/// named as Spark prints it inside a name: `outer(t.c)`, qualified.
+fn qualify_lateral(mut b: Bound, a: &Attr) -> Bound {
+    let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &b.expr.node else {
+        return b;
+    };
+    let mut col = c.clone();
+    let qual: Vec<&str> = a.qual.iter().map(String::as_str).collect();
+    col.name = format!(
+        "outer({}{}{})",
+        qual.join("."),
+        if qual.is_empty() { "" } else { "." },
+        c.name
+    );
+    b.expr = Arc::new(
+        Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(col))).with_origin(b.expr.origin),
+    );
+    b
 }

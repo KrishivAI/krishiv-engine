@@ -39,6 +39,16 @@ pub(in crate::analyzer) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String
         }
         done.insert(addr(x), s);
     }
+    // A bare lateral reference is named by its column, as Spark's
+    // `OuterReference` is.
+    if let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+        && let Some(inner) = c
+            .name
+            .strip_prefix("outer(")
+            .and_then(|n| n.strip_suffix(')'))
+    {
+        return inner.rsplit('.').next().unwrap_or(inner).to_owned();
+    }
     done.remove(&addr(e)).unwrap_or_default()
 }
 

@@ -889,7 +889,27 @@ impl Rewriter {
             },
             p.origin,
         );
-        Ok(columns(joined, &out))
+        // The right side's columns come back under the attributes the plan
+        // above reads them as, where the join renumbered them.
+        let exprs = out
+            .iter()
+            .map(|c| {
+                let id = renumber.id(c.id);
+                if id == c.id {
+                    col_expr(c, Origin::UNKNOWN)
+                } else {
+                    let read = BoundColumn { id, ..c.clone() };
+                    alias(col_expr(&read, Origin::UNKNOWN), c)
+                }
+            })
+            .collect();
+        Ok(node(
+            PlanNode::Project {
+                input: joined,
+                exprs,
+            },
+            Origin::UNKNOWN,
+        ))
     }
 
     /// Whether `e` holds a correlated subquery.
@@ -1280,64 +1300,7 @@ impl Rewriter {
     ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
         let unsupported_limit =
             || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
-        // The analyzer puts a Project between the Limit and the Sort when
-        // the sort columns are not selected: the window ranks below it.
-        let ordered = |sort: &Arc<LogicalPlan>| match &sort.node {
-            PlanNode::Sort { input, order, .. }
-                if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
-            {
-                Some((Arc::clone(input), order.clone()))
-            }
-            _ => None,
-        };
-        // The projection moves above the ranking filter, so a nondeterministic
-        // one would see only the kept rows.
-        if let PlanNode::Project { exprs, .. } = &input.node
-            && !exprs.iter().all(super::sqlfn::is_deterministic)
-        {
-            return Err(unsupported_limit());
-        }
-        // The select lists and derived tables above the sort rebuild above
-        // the ranking; they keep its order.
-        let mut layers = Vec::new();
-        let mut at = input;
-        loop {
-            match &at.node {
-                PlanNode::Project { input, exprs }
-                    if !exprs.iter().any(|e| has_outer(Node::Expr(e))) =>
-                {
-                    layers.push(at);
-                    at = input;
-                }
-                PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
-                    layers.push(at);
-                    at = input;
-                }
-                _ => break,
-            }
-        }
-        let (below, order) = match ordered(at) {
-            Some((below, order)) => {
-                let moves = |l: &&Arc<LogicalPlan>| match &l.node {
-                    PlanNode::Project { exprs, .. } => {
-                        !exprs.iter().all(super::sqlfn::is_deterministic)
-                    }
-                    _ => false,
-                };
-                if layers.iter().any(moves) {
-                    return Err(unsupported_limit());
-                }
-                (below, order)
-            }
-            None => {
-                layers.clear();
-                (Arc::clone(input), Vec::new())
-            }
-        };
-        // `pull` drops a sort, which is right only with no limit above it.
-        if order.is_empty() && sorts(&below) {
-            return Err(unsupported_limit());
-        }
+        let (below, order, layers) = peel_limit(plan, input)?;
         let (inner, corr) = self.pull(&below, true)?;
         let mut partition_by = Vec::new();
         for c in &corr {
@@ -1358,6 +1321,46 @@ impl Rewriter {
                 _ => return Err(unsupported_limit()),
             }
         }
+        let extra: Vec<BoundColumn> = corr.iter().flat_map(inner_columns).collect();
+        let out_plan = self.rank(plan, inner, partition_by, order, limit, &layers, &extra)?;
+        Ok((out_plan, corr))
+    }
+
+    /// `LIMIT limit` over `input` on a lateral join's correlation path: the
+    /// rows ranked up to `limit` within each domain value, in `input`'s
+    /// order. Returns the plan and the domain columns' renumbering.
+    fn limited_domain(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        limit: &Arc<Expr>,
+        distinct: &Arc<LogicalPlan>,
+        domain: &[BoundColumn],
+    ) -> R<(Arc<LogicalPlan>, Renumber)> {
+        let (below, order, layers) = peel_limit(plan, input)?;
+        let (inner, renumber) = self.domained(&below, distinct, domain)?;
+        let extra = domain_columns(domain, renumber);
+        let partition_by = extra.iter().map(|c| col_expr(c, Origin::UNKNOWN)).collect();
+        let out_plan = self.rank(plan, inner, partition_by, order, limit, &layers, &extra)?;
+        Ok((out_plan, renumber))
+    }
+
+    /// The rows of `inner` ranked up to `limit` within each `partition_by`,
+    /// in `order`, under the `layers` the limit's input had; the `extra`
+    /// columns pass through the layers' projections.
+    #[expect(clippy::too_many_arguments, reason = "one step of two callers")]
+    fn rank(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        inner: Arc<LogicalPlan>,
+        partition_by: Vec<Arc<Expr>>,
+        order: Vec<SortOrder>,
+        limit: &Arc<Expr>,
+        layers: &[Arc<LogicalPlan>],
+        extra: &[BoundColumn],
+    ) -> R<Arc<LogicalPlan>> {
+        let unsupported_limit =
+            || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
         let Some((id, kind)) = self.row_number.clone() else {
             return Err(unsupported_limit());
         };
@@ -1414,16 +1417,14 @@ impl Rewriter {
             plan.origin,
         );
         let mut out_plan = columns(filtered, &out);
-        for layer in layers.into_iter().rev() {
+        for layer in layers.iter().rev() {
             let rebuilt = match &layer.node {
                 PlanNode::Project { exprs, .. } => {
                     let mut exprs = exprs.clone();
                     let mut have: HashSet<AttrId> = output(layer)?.iter().map(|c| c.id).collect();
-                    for c in &corr {
-                        for col in inner_columns(c) {
-                            if have.insert(col.id) {
-                                exprs.push(col_expr(&col, Origin::UNKNOWN));
-                            }
+                    for col in extra {
+                        if have.insert(col.id) {
+                            exprs.push(col_expr(col, Origin::UNKNOWN));
                         }
                     }
                     PlanNode::Project {
@@ -1440,7 +1441,7 @@ impl Rewriter {
             };
             out_plan = node(rebuilt, layer.origin);
         }
-        Ok((out_plan, corr))
+        Ok(out_plan)
     }
 
     /// `right`, renumbered where its attribute ids would meet `left`'s (so
@@ -1999,6 +2000,11 @@ impl Rewriter {
                 };
                 Ok((node(generate, plan.origin), renumber))
             }
+            PlanNode::Limit { input, limit }
+                if self.lateral && positive_literal(limit) && !has_outer(Node::Expr(limit)) =>
+            {
+                self.limited_domain(plan, input, limit, distinct, domain)
+            }
             PlanNode::ReplicateRows { input, count } => {
                 let (inner, renumber) = self.domained(input, distinct, domain)?;
                 let replicate = PlanNode::ReplicateRows {
@@ -2352,10 +2358,11 @@ fn needs_domain(p: &LogicalPlan) -> bool {
             if exprs.iter().any(|e| has_outer(Node::Expr(e))))
 }
 
-/// [`needs_domain`], or a global aggregate: one row for every outer row,
-/// matches or not.
+/// [`needs_domain`], a limit (ranked within each domain value) or a global
+/// aggregate: one row for every outer row, matches or not.
 fn lateral_hit(p: &LogicalPlan) -> bool {
     needs_domain(p)
+        || matches!(&p.node, PlanNode::Limit { .. })
         || matches!(&p.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(keys), .. }
             if keys.is_empty())
 }
@@ -2381,6 +2388,7 @@ fn on_path_through(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool, global: 
         | PlanNode::Filter { input, .. }
         | PlanNode::Generate { input, .. }
         | PlanNode::Sort { input, .. } => on_path_through(input, hit, global),
+        PlanNode::Limit { input, .. } if global => on_path_through(input, hit, global),
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             on_path_through(input, hit, global)
         }
@@ -2487,6 +2495,75 @@ fn over_no_rows(e: &Arc<Expr>) -> R<Arc<Expr>> {
         }
         _ => Ok(x),
     })
+}
+
+/// A `LIMIT`'s input split for ranking: what the limit reads rows of, the
+/// order it takes them in, and the select lists and derived tables above
+/// the sort, outermost first, which rebuild above the ranking.
+type PeeledLimit = (Arc<LogicalPlan>, Vec<SortOrder>, Vec<Arc<LogicalPlan>>);
+
+fn peel_limit(plan: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> R<PeeledLimit> {
+    let unsupported_limit =
+        || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
+    // The analyzer puts a Project between the Limit and the Sort when
+    // the sort columns are not selected: the window ranks below it.
+    let ordered = |sort: &Arc<LogicalPlan>| match &sort.node {
+        PlanNode::Sort { input, order, .. }
+            if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
+        {
+            Some((Arc::clone(input), order.clone()))
+        }
+        _ => None,
+    };
+    // The projection moves above the ranking filter, so a nondeterministic
+    // one would see only the kept rows.
+    if let PlanNode::Project { exprs, .. } = &input.node
+        && !exprs.iter().all(super::sqlfn::is_deterministic)
+    {
+        return Err(unsupported_limit());
+    }
+    // The select lists and derived tables above the sort rebuild above
+    // the ranking; they keep its order.
+    let mut layers = Vec::new();
+    let mut at = input;
+    loop {
+        match &at.node {
+            PlanNode::Project { input, exprs }
+                if !exprs.iter().any(|e| has_outer(Node::Expr(e))) =>
+            {
+                layers.push(Arc::clone(at));
+                at = input;
+            }
+            PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+                layers.push(Arc::clone(at));
+                at = input;
+            }
+            _ => break,
+        }
+    }
+    let (below, order) = match ordered(at) {
+        Some((below, order)) => {
+            let moves = |l: &Arc<LogicalPlan>| match &l.node {
+                PlanNode::Project { exprs, .. } => {
+                    !exprs.iter().all(super::sqlfn::is_deterministic)
+                }
+                _ => false,
+            };
+            if layers.iter().any(moves) {
+                return Err(unsupported_limit());
+            }
+            (below, order)
+        }
+        None => {
+            layers.clear();
+            (Arc::clone(input), Vec::new())
+        }
+    };
+    // `pull` drops a sort, which is right only with no limit above it.
+    if order.is_empty() && sorts(&below) {
+        return Err(unsupported_limit());
+    }
+    Ok((below, order, layers))
 }
 
 /// Whether `right` reads a column of `left`: a lateral join's right side.
