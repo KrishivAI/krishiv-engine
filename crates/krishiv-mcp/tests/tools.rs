@@ -387,3 +387,34 @@ async fn a_profile_of_an_explain_replays_the_underlying_query() {
     let (text, err) = call(&t, "get_query_profile", json!({"query_id": "q2"})).await;
     assert!(!err, "profiling a profile: {text}");
 }
+
+#[tokio::test]
+async fn colliding_table_names_are_refused_and_dotted_directories_stay_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let s = Session::new().unwrap();
+    for year in ["sales.2025", "sales.2026"] {
+        let df = futures::executor::block_on(s.sql("SELECT id FROM range(1, 4)")).unwrap();
+        futures::executor::block_on(
+            df.write()
+                .mode("overwrite")
+                .format("parquet")
+                .save(data.join(year).to_str().unwrap()),
+        )
+        .unwrap();
+    }
+    // Two datasets that meet under one name are ambiguous, not merged.
+    std::fs::create_dir_all(data.join("Sales")).unwrap();
+    std::fs::write(data.join("sales.parquet"), b"").unwrap();
+    let t = Tools::new(McpConfig::new(&data));
+    let (text, err) = call(&t, "run_query", json!({"sql": "SELECT 1"})).await;
+    assert!(err && text.contains("both name the table"), "{text}");
+    // Without the collision, `sales.2025` and `sales.2026` are two tables.
+    std::fs::remove_dir_all(data.join("Sales")).unwrap();
+    std::fs::remove_file(data.join("sales.parquet")).unwrap();
+    let (text, _) = call(&t, "list_tables", json!({})).await;
+    assert!(
+        text.contains("sales.2025") && text.contains("sales.2026"),
+        "{text}"
+    );
+}

@@ -618,10 +618,39 @@ impl Tools {
 
     async fn execute(&self, sql: &str, limits: &Limits, id: &str) -> Result<Answer, KrishivError> {
         let start = Instant::now();
-        let session = child_session(&self.config.data).await?;
-        if !limits.explain
-            && !limits.allow_heavy
-            && let Some(estimate) = session.estimate_sql(sql).await?
+        let deadline = Duration::try_from_secs_f64(limits.max_seconds)
+            .ok()
+            .and_then(|d| start.checked_add(d));
+        let past_deadline = || {
+            Answer::err(format!(
+                "-- the statement ran past max_seconds ({}s) before it produced \
+                 rows and was cancelled; ask for less work or a larger max_seconds",
+                limits.max_seconds
+            ))
+        };
+        // Discovering the tables and estimating the scan can be slow on a big
+        // directory: they run under the deadline too.
+        let setup = Box::pin(async {
+            let session = child_session(&self.config.data).await?;
+            let estimate = if limits.explain || limits.allow_heavy {
+                None
+            } else {
+                session.estimate_sql(sql).await?
+            };
+            Ok::<_, KrishivError>((session, estimate))
+        });
+        let (session, estimate) = match deadline {
+            Some(at) => {
+                match tokio::time::timeout(at.saturating_duration_since(Instant::now()), setup)
+                    .await
+                {
+                    Ok(done) => done?,
+                    Err(_) => return Ok(past_deadline()),
+                }
+            }
+            None => setup.await?,
+        };
+        if let Some(estimate) = estimate
             && let Some(scan) = estimate.scan_bytes.filter(|b| *b >= self.config.gate_bytes)
         {
             return Ok(Answer::ok(render_estimate(
@@ -631,9 +660,6 @@ impl Tools {
                 &estimate.plan,
             )));
         }
-        let deadline = Duration::try_from_secs_f64(limits.max_seconds)
-            .ok()
-            .and_then(|d| start.checked_add(d));
         // `EXPLAIN ANALYZE` runs the query inside `sql`, before any stream
         // exists: the deadline covers that too, and dropping the future
         // cancels the query.
@@ -649,13 +675,7 @@ impl Tools {
                     .await
                 {
                     Ok(done) => done?,
-                    Err(_) => {
-                        return Ok(Answer::err(format!(
-                            "-- the statement ran past max_seconds ({}s) before it produced \
-                             rows and was cancelled; ask for less work or a larger max_seconds",
-                            limits.max_seconds
-                        )));
-                    }
+                    Err(_) => return Ok(past_deadline()),
                 }
             }
             None => prepared.await?,
@@ -790,7 +810,7 @@ async fn child_session(data: &Path) -> Result<Session, KrishivError> {
     session
         .conf()
         .set("spark.sql.variable.substitute", "false")?;
-    for (name, path) in data_tables(data) {
+    for (name, path) in data_tables(data)? {
         let df = session.read().parquet([path.as_str()]);
         df.create_or_replace_temp_view(&name).await?;
     }
@@ -800,24 +820,43 @@ async fn child_session(data: &Path) -> Result<Session, KrishivError> {
 
 /// `(view name, path)` of every parquet file and directory directly under
 /// `data`, by name without extension.
-fn data_tables(data: &Path) -> Vec<(String, String)> {
+fn data_tables(data: &Path) -> Result<Vec<(String, String)>, KrishivError> {
     let Ok(dir) = std::fs::read_dir(data) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut out: Vec<(String, String)> = dir
         .filter_map(Result::ok)
         .filter_map(|e| {
             let path = e.path();
-            let is_parquet = path.extension().is_some_and(|x| x == "parquet");
-            if !(is_parquet || path.is_dir()) {
+            // A directory keeps its whole name (`sales.2025` is not
+            // `sales`); a parquet file loses its extension.
+            let name = if path.is_dir() {
+                path.file_name()?.to_str()?.to_owned()
+            } else if path.extension().is_some_and(|x| x == "parquet") {
+                path.file_stem()?.to_str()?.to_owned()
+            } else {
                 return None;
-            }
-            let name = path.file_stem()?.to_str()?.to_owned();
+            };
             Some((name, path.canonicalize().ok()?.to_str()?.to_owned()))
         })
         .collect();
     out.sort();
-    out
+    // The session catalog matches names without case: two entries that
+    // meet are ambiguous, and neither may silently replace the other.
+    for pair in out.windows(2) {
+        if pair[0].0.eq_ignore_ascii_case(&pair[1].0) {
+            return Err(krishiv_common::error::InvalidParameterValueString {
+                parameter: "--data".to_owned(),
+                function_name: "krishiv mcp".to_owned(),
+                invalid_value: format!(
+                    "{} and {} both name the table {}; rename one",
+                    pair[0].1, pair[1].1, pair[0].0
+                ),
+            }
+            .into());
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

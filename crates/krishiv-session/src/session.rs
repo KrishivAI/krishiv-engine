@@ -511,12 +511,17 @@ impl Session {
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let (session, text) = (self.clone(), query.to_owned());
+        let started = self.state.queries.started();
         let result = self
             .on_executor(async move { session.sql_here(&text).await })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
         // row of `system.queries` too, with the text as the session may show it.
-        if let Err(error) = &result {
+        // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
+        // that failed while it ran): that one has its row.
+        if let Err(error) = &result
+            && self.state.queries.started() == started
+        {
             self.state
                 .queries
                 .record_refused(krishiv_sql::redact_sql(query).as_str(), error);

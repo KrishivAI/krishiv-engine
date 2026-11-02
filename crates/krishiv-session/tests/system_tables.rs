@@ -423,3 +423,21 @@ fn queries_count_result_rows_and_io() {
     );
     assert_eq!(r, ["7|true"], "{r:?}");
 }
+
+#[test]
+fn an_eager_failure_is_one_row_not_two() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT 1 / 0 FROM range(2)"));
+    drop(df);
+    let before = strings_in(&s, "SELECT CAST(count(*) AS STRING) FROM system.queries");
+    // `EXPLAIN ANALYZE` runs the query inside `sql`; a failure there already has its row.
+    let _ = block_on(s.sql("EXPLAIN ANALYZE SELECT CAST('x' AS INT) FROM range(2)"));
+    let after = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE query_text LIKE 'EXPLAIN ANALYZE SELECT CAST%'",
+    );
+    assert!(
+        after[0].parse::<u32>().unwrap() <= 1,
+        "{before:?} {after:?}"
+    );
+}

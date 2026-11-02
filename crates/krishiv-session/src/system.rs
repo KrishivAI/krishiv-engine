@@ -804,6 +804,8 @@ pub(crate) struct Totals {
 pub(crate) struct QueryLog {
     rows: Mutex<VecDeque<QueryRow>>,
     counter: AtomicU64,
+    /// Rows begun, evictions aside.
+    begun: AtomicU64,
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
@@ -900,6 +902,7 @@ impl QueryLog {
     pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
         let ms = now_ms();
         let id = self.next_id(ms);
+        self.begun.fetch_add(1, Ordering::AcqRel);
         let (text, truncated) = match text {
             None => (None, false),
             Some(t) if t.len() <= TEXT_BYTES => (Some(t.to_owned()), false),
@@ -954,6 +957,11 @@ impl QueryLog {
             workers: None,
         });
         id
+    }
+
+    /// How many queries have begun (a row each) so far.
+    pub(crate) fn started(&self) -> u64 {
+        self.begun.load(Ordering::Acquire)
     }
 
     /// Records a statement that failed before it ran: parsing, analysis or
