@@ -288,3 +288,59 @@ fn a_partition_subdirectory_read_with_base_path_shows_only_committed_files() {
     let n = block_on(df.count()).unwrap();
     assert_eq!(n, 1, "the abandoned file is outside the root's log");
 }
+
+/// Writes `p=a` (one committed file) under a logged root and copies an abandoned file beside it.
+fn logged_partition_with_a_stray_file() -> (tempfile::TempDir, std::path::PathBuf, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+    block_on(
+        df.write()
+            .partition_by(["p"])
+            .mode("append")
+            .parquet(root.to_str().unwrap()),
+    )
+    .unwrap();
+    let part = root.join("p=a");
+    let data = std::fs::read_dir(&part)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, part.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    (dir, root, s)
+}
+
+#[test]
+fn a_glob_inside_a_base_path_root_shows_only_committed_files() {
+    let (_dir, root, s) = logged_partition_with_a_stray_file();
+    let path = root.to_str().unwrap();
+    let df = s
+        .read()
+        .option("basePath", path)
+        .parquet([format!("{path}/p=a/*.parquet").as_str()]);
+    let n = block_on(df.count()).unwrap();
+    assert_eq!(n, 1, "the abandoned file is outside the root's log");
+}
+
+#[test]
+fn a_base_path_read_notices_a_committed_file_that_is_gone() {
+    let (_dir, root, s) = logged_partition_with_a_stray_file();
+    let path = root.to_str().unwrap();
+    for entry in std::fs::read_dir(root.join("p=a")).unwrap() {
+        let p = entry.unwrap().path();
+        if p.extension().is_some_and(|e| e == "parquet") && !p.to_string_lossy().contains("dead") {
+            std::fs::remove_file(p).unwrap();
+        }
+    }
+    let df = s
+        .read()
+        .option("basePath", path)
+        .parquet([format!("{path}/p=a").as_str()]);
+    let err = block_on(df.count()).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_CONCURRENT_COMMIT");
+}

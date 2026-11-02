@@ -89,8 +89,32 @@ fn unescape(s: &str) -> String {
 /// Most patterns `{a,b}` groups may expand to: repeated groups multiply, and the expansion is eager.
 const MAX_ALTERNATIVES: usize = 4096;
 
+/// Most `{` a pattern may hold: the expansion recurses once per group, so a
+/// pattern of thousands of single-alternative groups (`{}{}{}...`), which
+/// never reaches `MAX_ALTERNATIVES`, would exhaust the stack.
+const MAX_BRACE_GROUPS: usize = 64;
+
 /// `a{b,c{d,e}}f` → `abf`, `acdf`, `acef`.
 fn expand_braces(pattern: &str) -> Result<Vec<String>, String> {
+    let mut opens = 0usize;
+    let mut escaped = false;
+    for c in pattern.chars() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '{' => opens += 1,
+            _ => {}
+        }
+    }
+    if opens > MAX_BRACE_GROUPS {
+        return Err(format!(
+            "more than {MAX_BRACE_GROUPS} brace groups in the pattern"
+        ));
+    }
+    expand_groups(pattern)
+}
+
+fn expand_groups(pattern: &str) -> Result<Vec<String>, String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut open = None;
     let mut i = 0;
@@ -133,7 +157,7 @@ fn expand_braces(pattern: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for pair in cuts.windows(2) {
         let body: String = chars[pair[0] + 1..pair[1]].iter().collect();
-        out.extend(expand_braces(&format!("{head}{body}{tail}"))?);
+        out.extend(expand_groups(&format!("{head}{body}{tail}"))?);
         if out.len() > MAX_ALTERNATIVES {
             return Err(format!(
                 "more than {MAX_ALTERNATIVES} alternatives in the braces of the pattern"
@@ -278,6 +302,15 @@ mod tests {
         assert_eq!(g.literal_prefix(), ["data", "year=2024"]);
         let g = Glob::parse("/data/{a,b}/x").unwrap();
         assert_eq!(g.literal_prefix(), ["data"]);
+    }
+
+    #[test]
+    fn thousands_of_brace_groups_are_refused_not_recursed_into() {
+        assert!(Glob::parse(&"{}".repeat(4000)).is_err());
+        assert!(Glob::parse(&format!("/a/{}", "{x}".repeat(64))).is_ok());
+        assert!(Glob::parse(&format!("/a/{}", "{x}".repeat(65))).is_err());
+        // Escaped braces are literals and do not count.
+        assert!(Glob::parse(&"\\{".repeat(4000)).is_ok());
     }
 
     #[test]

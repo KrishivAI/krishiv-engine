@@ -555,14 +555,42 @@ impl FileReads {
         let base = at.path.parts().count();
         let mut matched = std::collections::BTreeMap::new();
         // A glob under a logged directory expands over its committed files only: an abandoned
-        // append's files would otherwise come back as roots of their own.
-        let outer = Box::pin(self.committed_files(&at)).await?.map(Arc::new);
+        // append's files would otherwise come back as roots of their own. With a `basePath` whose
+        // root holds the log (`root/p=a/*.parquet`), that root's log applies.
+        let logged: Option<(
+            usize,
+            Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
+        )> = match Box::pin(self.committed_files(&at)).await? {
+            Some(files) => Some((base, Arc::new(files))),
+            None => match &mode.base {
+                Some(root) if at.path.prefix_matches(&root.path) => {
+                    Box::pin(self.committed_files(root))
+                        .await?
+                        .map(|files| (root.path.parts().count(), Arc::new(files)))
+                }
+                _ => None,
+            },
+        };
+        // The names between the log's root and `at`.
+        let pre: Vec<String> = logged.as_ref().map_or_else(Vec::new, |(root, _)| {
+            at.path
+                .parts()
+                .skip(*root)
+                .map(|p| p.as_ref().to_owned())
+                .collect()
+        });
         // The committed files this glob covers: each must still be there, or a concurrent overwrite
         // deleted some and the read would silently lose rows.
         let mut expected: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        if let Some(files) = &outer {
+        if let Some((_, files)) = &logged {
             for rel in files.keys() {
                 let names: Vec<&str> = rel.split('/').collect();
+                if names.len() <= pre.len()
+                    || names[..pre.len()].iter().zip(&pre).any(|(a, b)| a != b)
+                {
+                    continue;
+                }
+                let names = &names[pre.len()..];
                 if names.iter().any(|n| hidden(n)) {
                     continue;
                 }
@@ -579,8 +607,14 @@ impl FileReads {
                 .skip(base)
                 .map(|p| p.as_ref().to_owned())
                 .collect();
-            if let Some(files) = &outer {
-                let rel = below.join("/");
+            if let Some((root, files)) = &logged {
+                let rel = meta
+                    .location
+                    .parts()
+                    .skip(*root)
+                    .map(|p| p.as_ref().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 if !files.contains_key(&rel) {
                     continue;
                 }
@@ -618,7 +652,7 @@ impl FileReads {
         let inner = ListMode {
             recursive: mode.recursive,
             base: mode.base.clone(),
-            logged: outer.map(|files| (base, files)),
+            logged,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
@@ -763,6 +797,7 @@ impl FileReads {
             _ => None,
         };
         let mut seen = 0;
+        let mut seen_inherited = 0_usize;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
@@ -790,6 +825,7 @@ impl FileReads {
                 if !files.contains_key(&rel) {
                     continue;
                 }
+                seen_inherited += 1;
             }
             let dirs = below.len().saturating_sub(1);
             let names: Vec<String> = below[..dirs]
@@ -798,6 +834,31 @@ impl FileReads {
                 .collect();
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
+        }
+        // The snapshot's files under `at` (the inherited log's, not hidden): each must still be there.
+        if let Some((root_base, files)) = &inherited {
+            let pre: Vec<String> = at
+                .path
+                .parts()
+                .skip(*root_base)
+                .map(|p| p.as_ref().to_owned())
+                .collect();
+            let expected = files
+                .keys()
+                .filter(|rel| {
+                    let names: Vec<&str> = rel.split('/').collect();
+                    names.len() > pre.len()
+                        && names[..pre.len()].iter().zip(&pre).all(|(a, b)| a == b)
+                        && !names[pre.len()..].iter().any(|n| hidden(n))
+                })
+                .count();
+            if seen_inherited < expected {
+                return Err(krishiv_common::error::KrishivConcurrentCommit {
+                    root: at.display.clone(),
+                    version: "the version this read started at".to_owned(),
+                }
+                .into());
+            }
         }
         if let Some(files) = &committed
             && seen < files.len()

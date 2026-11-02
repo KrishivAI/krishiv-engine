@@ -1651,7 +1651,12 @@ impl Session {
                 // As Spark's `CreateDataSourceTableAsSelectCommand`: a failed CTAS removes the directory of
                 // the managed table it was creating (checked above not to exist before), including a commit
                 // log that the failed write started, so the statement can be retried.
-                if let Some(dir) = managed_dir {
+                // Only a directory this statement created: `PATH_ALREADY_EXISTS` is the write refusing a
+                // directory that a concurrent CTAS of the same table created first, which is not ours to
+                // remove (it holds that statement's data and commit log).
+                if e.error_class().name() != "PATH_ALREADY_EXISTS"
+                    && let Some(dir) = managed_dir
+                {
                     drop(std::fs::remove_dir_all(dir));
                 }
                 return Err(e);

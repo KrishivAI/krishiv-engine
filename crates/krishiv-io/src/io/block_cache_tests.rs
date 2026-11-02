@@ -63,9 +63,9 @@ fn rig(disk_bytes: u64, memory_bytes: u64, cached: bool) -> Rig {
     }
 }
 
-fn pattern(len: usize, salt: u8) -> Vec<u8> {
+fn pattern(len: usize, phase: u8) -> Vec<u8> {
     (0..len)
-        .map(|i| u8::try_from((i * 7 + usize::from(salt)) % 251).unwrap())
+        .map(|i| u8::try_from((i * 7 + usize::from(phase)) % 251).unwrap())
         .collect()
 }
 
@@ -282,6 +282,33 @@ async fn a_damaged_payload_is_a_miss() {
         let got = r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
         assert_eq!(got[0], Bytes::from(data[..100_000].to_vec()));
         assert!(r.sched.block_cache_stats().unwrap().errors > 0);
+    }
+}
+
+/// A forgotten (damaged) block leaves no recency entry behind: after it is
+/// fetched again and the cap is pressed, eviction still keeps the disk under
+/// its cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forgotten_block_leaves_no_stale_recency_entry() {
+    let r = rig(4 * BLOCK, 0, true);
+    let data = pattern(4 << 20, 9);
+    let f = put(&r, "g", data.clone()).await;
+    let cache = r.sched.block_cache.clone().unwrap();
+    r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
+    for entry in std::fs::read_dir(cache_files(&r)).unwrap() {
+        let path = entry.unwrap().path();
+        let mut body = std::fs::read(&path).unwrap();
+        let last = body.len() - 1;
+        body[last] ^= 0xff;
+        std::fs::write(&path, body).unwrap();
+    }
+    // The damaged block is dropped and fetched again, then the whole object
+    // streams through a cache far smaller than it.
+    for start in (0..4_000_000_u64).step_by(150_000) {
+        r.io.get_ranges(&f, &[start..start + 150_000])
+            .await
+            .unwrap();
+        assert!(cache.disk_used() <= 5 * BLOCK, "{}", cache.disk_used());
     }
 }
 

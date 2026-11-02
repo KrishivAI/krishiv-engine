@@ -294,6 +294,22 @@ fn ctas_writes_then_adds_the_table() {
     assert_eq!(class(&s, "SELECT * FROM bad"), "TABLE_OR_VIEW_NOT_FOUND");
 }
 
+/// A CTAS that fails while writing removes the directory it made, so the
+/// same statement can be retried (and then succeeds).
+#[test]
+fn a_failed_ctas_leaves_no_directory_and_can_be_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled = true");
+    let _ = err(
+        &s,
+        "CREATE TABLE w USING parquet AS SELECT CAST('x' AS INT) AS a",
+    );
+    assert!(!dir.path().join("w").exists());
+    run(&s, "CREATE TABLE w USING parquet AS SELECT 1 AS a");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM w"), ["1"]);
+}
+
 #[test]
 fn create_table_like_copies_columns() {
     let dir = tempfile::tempdir().unwrap();

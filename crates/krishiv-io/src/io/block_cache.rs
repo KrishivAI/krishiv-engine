@@ -288,7 +288,10 @@ impl BlockCache {
 
     fn forget_disk(&self, name: u128) {
         let mut st = lock(&self.state);
-        if let Some((_, size)) = st.disk.entries.remove(&name) {
+        // The recency entry goes with the block: a stale tick would later
+        // evict the refetched copy and stop eviction at the missing key.
+        if let Some((tick, size)) = st.disk.entries.remove(&name) {
+            st.disk.order.remove(&tick);
             st.disk.used = st.disk.used.saturating_sub(size);
         }
         drop(st);
