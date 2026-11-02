@@ -1978,6 +1978,27 @@ impl Rewriter {
                 };
                 Ok((node(agg, plan.origin), renumber))
             }
+            PlanNode::Generate {
+                input,
+                kind,
+                outer,
+                arg,
+                output,
+                names,
+                qualifier,
+            } => {
+                let (inner, renumber) = self.domained(input, distinct, domain)?;
+                let generate = PlanNode::Generate {
+                    input: inner,
+                    kind: *kind,
+                    outer: *outer,
+                    arg: renumber.outer(arg),
+                    output: output.clone(),
+                    names: names.clone(),
+                    qualifier: qualifier.clone(),
+                };
+                Ok((node(generate, plan.origin), renumber))
+            }
             PlanNode::ReplicateRows { input, count } => {
                 let (inner, renumber) = self.domained(input, distinct, domain)?;
                 let replicate = PlanNode::ReplicateRows {
@@ -2358,6 +2379,7 @@ fn on_path_through(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool, global: 
     match &p.node {
         PlanNode::Project { input, .. }
         | PlanNode::Filter { input, .. }
+        | PlanNode::Generate { input, .. }
         | PlanNode::Sort { input, .. } => on_path_through(input, hit, global),
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             on_path_through(input, hit, global)
