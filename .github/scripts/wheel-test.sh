@@ -30,6 +30,14 @@ for dep in pyarrow polars duckdb; do
     echo "::notice::$dep has no wheel for this target ($flavour, $("$py" -c 'import sysconfig; print(sysconfig.get_platform())')); its tests are skipped"
   fi
 done
+# P2-T130: the stub checks (`mypy --strict` over the examples, stubtest against
+# the extension) run on the abi3 wheel, with the version python/README.md names.
+# Installing mypy must succeed there, and the tests then fail instead of skip.
+require_mypy=0
+if [ "$flavour" = abi3 ]; then
+  "$py" -m pip install --quiet "mypy==2.4.0"
+  require_mypy=1
+fi
 cd "$work"
 "$py" - "$flavour" <<'PY'
 import sys
@@ -58,5 +66,5 @@ PY
 if [ "$flavour" = cp314t ]; then
   PYTHON_GIL=0 "$py" -m pytest -q -rs "$repo/python/tests"
 else
-  "$py" -m pytest -q -rs "$repo/python/tests"
+  KRISHIV_REQUIRE_MYPY=$require_mypy "$py" -m pytest -q -rs "$repo/python/tests"
 fi
