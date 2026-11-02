@@ -285,3 +285,42 @@ fn queries_name_the_statement_class() {
     );
     assert_eq!(r, ["READ"], "{r:?}");
 }
+
+#[test]
+fn caches_counts_the_relation_cache_and_the_file_metadata_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let path = dir.path().join("t");
+    block_on(async {
+        s.sql("SELECT id FROM range(100)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(path.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    // A file read loads (and then re-uses) the file's metadata.
+    for _ in 0..2 {
+        run_all(
+            &s,
+            &format!("SELECT count(*) FROM parquet.`{}`", path.display()),
+        )
+        .unwrap();
+    }
+    run_all(&s, "CACHE TABLE c AS SELECT id FROM range(10)").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT concat_ws('|', cache, CAST(entries AS STRING), CAST(hits >= 0 AS STRING)) FROM system.caches ORDER BY cache",
+    );
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert!(
+        r[0].starts_with("file_metadata|") && r[1].starts_with("relation|"),
+        "{r:?}"
+    );
+    let n: u64 = r[0].split('|').nth(1).unwrap().parse().unwrap();
+    assert!(n >= 1, "file metadata entries: {r:?}");
+    let n: u64 = r[1].split('|').nth(1).unwrap().parse().unwrap();
+    assert!(n >= 1, "relation entries: {r:?}");
+}

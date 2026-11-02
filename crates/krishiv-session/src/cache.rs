@@ -129,6 +129,16 @@ impl Drop for FillReservation {
     }
 }
 
+/// What `system.caches` shows of the relation cache.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RelationStats {
+    pub(crate) entries: u64,
+    pub(crate) bytes: u64,
+    pub(crate) hits: u64,
+    pub(crate) misses: u64,
+    pub(crate) invalidations: u64,
+}
+
 /// The session relation cache: snapshots under the `relation_cache` pool.
 #[derive(Debug)]
 pub(crate) struct RelationCache {
@@ -138,6 +148,10 @@ pub(crate) struct RelationCache {
     /// Bumped by every invalidation, so a fill that started before one is
     /// not stored after it (it may hold rows the invalidation meant to drop).
     generation: AtomicU64,
+    /// Queries whose plan found a cached subplan, and queries that looked
+    /// while the cache held entries but found none.
+    hits: AtomicU64,
+    misses: AtomicU64,
     state: Mutex<CacheState>,
 }
 
@@ -151,6 +165,8 @@ impl RelationCache {
             consumer,
             hidden: AtomicU64::new(0),
             generation: AtomicU64::new(0),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
             state: Mutex::new(CacheState::default()),
         }
     }
@@ -355,6 +371,18 @@ impl RelationCache {
         state.names.retain(|_, k| live.contains(k));
     }
 
+    /// The cache's size and counters now, for `system.caches`.
+    pub(crate) fn stats(&self) -> RelationStats {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        RelationStats {
+            entries: state.entries.len() as u64,
+            bytes: state.used as u64,
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            invalidations: self.generation.load(Ordering::Acquire),
+        }
+    }
+
     /// Bytes reserved from the pool for the cache, rounded up to the pool's
     /// grant size (the cap is checked against exact bytes).
     pub(crate) fn reserved(&self) -> usize {
@@ -420,8 +448,10 @@ impl RelationCache {
             })
             .unwrap_or(Arc::clone(&root));
         if Arc::ptr_eq(&out, &root) {
+            self.misses.fetch_add(1, Ordering::Relaxed);
             None
         } else {
+            self.hits.fetch_add(1, Ordering::Relaxed);
             Some(Substituted { plan: out, tables })
         }
     }

@@ -1148,6 +1148,8 @@ impl Session {
             crate::system::Sources {
                 memory: Arc::clone(&self.state.memory),
                 queries: Arc::clone(&self.state.queries),
+                io: Arc::clone(&self.state.io),
+                relations: Arc::clone(&self.state.cache),
             },
         ));
         let resolution = {

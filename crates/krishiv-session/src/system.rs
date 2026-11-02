@@ -42,7 +42,7 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 4] = ["capabilities", "memory", "operators", "queries"];
+const TABLES: [&str; 5] = ["capabilities", "caches", "memory", "operators", "queries"];
 
 /// Whether `name` is the reserved catalog name, in any letter case.
 pub(crate) fn is_system(name: &str) -> bool {
@@ -137,6 +137,18 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("peak_bytes", Long, false),
             ("limit_bytes", Long, true),
             ("spillable", Flag, false),
+        ],
+        "caches" => vec![
+            ("worker_id", Text, false),
+            ("cache", Text, false),
+            ("entries", Long, false),
+            ("bytes", Long, false),
+            ("capacity_bytes", Long, true),
+            ("hits", Long, false),
+            ("misses", Long, false),
+            ("evictions", Long, false),
+            ("invalidations", Long, false),
+            ("loads_in_flight", Long, false),
         ],
         "operators" => vec![
             ("query_id", Text, false),
@@ -268,6 +280,49 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             )),
         ];
     }
+    if table.eq_ignore_ascii_case("caches") {
+        let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+        let meta = sources.io.cache().stats();
+        let io = sources.io.totals();
+        let relation = sources.relations.stats();
+        let rows = [
+            CacheRow {
+                cache: "file_metadata",
+                entries: n(meta.entries),
+                bytes: n(meta.bytes),
+                capacity: Some(n(meta.limit)),
+                hits: n(krishiv_io::IoCounters::get(&io.cache_hits)),
+                misses: n(krishiv_io::IoCounters::get(&io.cache_misses)),
+                evictions: n(meta.evictions),
+                invalidations: n(meta.invalidations),
+                loads_in_flight: n(meta.loads_in_flight),
+            },
+            CacheRow {
+                cache: "relation",
+                entries: n(relation.entries),
+                bytes: n(relation.bytes),
+                capacity: None,
+                hits: n(relation.hits),
+                misses: n(relation.misses),
+                evictions: 0,
+                invalidations: n(relation.invalidations),
+                loads_in_flight: 0,
+            },
+        ];
+        let l = |f: fn(&CacheRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
+        return vec![
+            text(rows.iter().map(|_| Some(LOCAL_WORKER))),
+            text(rows.iter().map(|r| Some(r.cache))),
+            l(|r| r.entries),
+            l(|r| r.bytes),
+            long(rows.iter().map(|r| r.capacity)),
+            l(|r| r.hits),
+            l(|r| r.misses),
+            l(|r| r.evictions),
+            l(|r| r.invalidations),
+            l(|r| r.loads_in_flight),
+        ];
+    }
     if table.eq_ignore_ascii_case("operators") {
         let rows = sources.queries.operators();
         let l = |f: fn(&OperatorRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
@@ -341,12 +396,29 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     ]
 }
 
+/// One row of `system.caches`.
+struct CacheRow {
+    cache: &'static str,
+    entries: i64,
+    bytes: i64,
+    capacity: Option<i64>,
+    hits: i64,
+    misses: i64,
+    evictions: i64,
+    invalidations: i64,
+    loads_in_flight: i64,
+}
+
 /// What the tables read: the process's state.
 pub(crate) struct Sources {
     /// The session's memory pool tree.
     pub(crate) memory: Arc<dyn MemoryPool>,
     /// The queries the session ran.
     pub(crate) queries: Arc<QueryLog>,
+    /// The I/O scheduler: the file-metadata cache and the request counters.
+    pub(crate) io: Arc<krishiv_io::IoScheduler>,
+    /// The relation cache.
+    pub(crate) relations: Arc<crate::cache::RelationCache>,
 }
 
 /// Most queries `system.queries` remembers; the oldest finished go first.
@@ -731,9 +803,13 @@ mod tests {
         let rows = capability_rows();
         assert!(rows.iter().any(|r| r[0] == "build" && r[1] == "engine"));
         assert!(rows.iter().any(|r| r[0] == "feature" && r[1] == "cloud"));
+        let memory: Arc<dyn MemoryPool> =
+            krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
         let sources = Sources {
-            memory: krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
             queries: Arc::new(QueryLog::default()),
+            io: krishiv_io::IoScheduler::new(krishiv_io::IoConfig::default()),
+            relations: Arc::new(crate::cache::RelationCache::new(&memory)),
+            memory,
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
