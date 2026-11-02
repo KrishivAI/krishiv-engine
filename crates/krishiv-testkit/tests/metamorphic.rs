@@ -4,8 +4,8 @@
 #![forbid(unsafe_code)]
 
 use krishiv_testkit::metamorphic::{
-    Cmp, NULLS_SETUP, Oracle, Pred, Rng, SOURCES, check, gen_pred, hunt, hunt_cli, reduce, report,
-    tokens,
+    Cmp, NULLS_SETUP, Oracle, Pred, Rng, SOURCES, check, gen_pred, hunt, hunt_cli, reduce,
+    reduce_finding, regression_file, replay_regression, report, tokens,
 };
 use krishiv_testkit::query_oracle::{QueryRunner, SessionRunner};
 
@@ -183,5 +183,52 @@ fn hunt_command_runs_a_budget_and_reports_usage_errors() -> R {
     assert!(hunt_cli(Vec::new(), &mut Vec::new()).is_err());
     assert!(hunt_cli(["--nope".to_owned(), "1".to_owned()], &mut Vec::new()).is_err());
     assert!(hunt_cli(["--seed".to_owned(), "x".to_owned()], &mut Vec::new()).is_err());
+    Ok(())
+}
+
+#[test]
+fn a_reduced_finding_is_written_and_replays_as_failing_then_passing() -> R {
+    // Found on the planted-bug engine: the file replays as a failure there and passes on the clean one.
+    let mut bugged = NullInIgnored(runner()?);
+    let h = hunt(&mut bugged, 1, 30);
+    let f = h.findings.first().ok_or("no finding")?;
+    let small = reduce_finding(&mut bugged, f);
+    let (name, body) = regression_file(f.oracle, f.source, &small, &f.detail);
+    assert!(
+        name.starts_with(f.oracle.name()) && name.ends_with(".json"),
+        "{name}"
+    );
+    assert_eq!(name, regression_file(f.oracle, f.source, &small, "other").0);
+    assert!(replay_regression(&mut bugged, &body)?.is_some());
+    assert!(replay_regression(&mut runner()?, &body)?.is_none());
+    assert!(replay_regression(&mut bugged, "{}").is_err());
+    assert!(
+        replay_regression(
+            &mut bugged,
+            "{\"oracle\":\"norec\",\"source\":99,\"predicate\":\"1=1\"}"
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+/// The committed regression files hold on the engine.
+#[test]
+fn regressions_hold() -> R {
+    let dir = krishiv_testkit::tests_dir().join("fixtures/metamorphic/regressions");
+    let mut r = runner()?;
+    let mut failed = Vec::new();
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            seen += 1;
+            if let Some(why) = replay_regression(&mut r, &std::fs::read_to_string(&path)?)? {
+                failed.push(format!("{}: {why}", path.display()));
+            }
+        }
+    }
+    assert!(seen > 0, "no regression files in {}", dir.display());
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
     Ok(())
 }
