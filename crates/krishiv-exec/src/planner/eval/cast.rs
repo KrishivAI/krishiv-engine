@@ -6,6 +6,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray as _;
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType as ArrowType;
+use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_plan::CastMode;
 use krishiv_types::{DataType, DayTimeField, YearMonthField};
@@ -575,11 +576,16 @@ fn string_to_interval(a: &ArrayRef, to: &DataType, try_cast: bool) -> Result<Arr
             let mut out = IntervalMonthDayNanoBuilder::with_capacity(strings.len());
             for v in strings {
                 match v.map(parse_string) {
-                    Some(Ok((c, _))) => out.append_value(IntervalMonthDayNano::new(
-                        c.months,
-                        c.days,
-                        c.micros.saturating_mul(1_000),
-                    )),
+                    Some(Ok((c, _))) => {
+                        let nanos = c.micros.checked_mul(1_000).ok_or_else(|| {
+                            KrishivUnsupportedFeature {
+                                feature: "a calendar interval whose microseconds overflow the \
+                                          nanosecond field of its Arrow type"
+                                    .to_owned(),
+                            }
+                        })?;
+                        out.append_value(IntervalMonthDayNano::new(c.months, c.days, nanos));
+                    }
                     _ => out.append_null(),
                 }
             }
