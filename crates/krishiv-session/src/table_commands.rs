@@ -1644,7 +1644,19 @@ impl Session {
             df.clone()
         };
         // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        let dirs = self.write_table_rows(&table, &df, "errorifexists").await?;
+        let managed_dir = table.managed.then(|| table.location.clone());
+        let dirs = match self.write_table_rows(&table, &df, "errorifexists").await {
+            Ok(dirs) => dirs,
+            Err(e) => {
+                // As Spark's `CreateDataSourceTableAsSelectCommand`: a failed CTAS removes the directory of
+                // the managed table it was creating (checked above not to exist before), including a commit
+                // log that the failed write started, so the statement can be retried.
+                if let Some(dir) = managed_dir {
+                    drop(std::fs::remove_dir_all(dir));
+                }
+                return Err(e);
+            }
+        };
         self.add_table(table, mode, true).await?;
         // `RepairTableCommand`: the partitions written, with their file statistics.
         self.register_partitions(&name, &dirs, true);

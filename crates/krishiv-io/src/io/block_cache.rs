@@ -162,6 +162,10 @@ fn name_of(text: &str) -> u128 {
 
 const MAGIC: &[u8; 4] = b"KBC1";
 
+/// The longest one fetch of blocks may take before its readers are told it failed (they fall back
+/// to the store); it also ends the in-flight entry of a request that never answers.
+const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// `n` as an index (a block number or offset within a request that already fits in memory).
 fn at(n: u64) -> usize {
     usize::try_from(n).unwrap_or(usize::MAX)
@@ -174,7 +178,15 @@ impl BlockCache {
     /// The disk directory cannot be created.
     pub fn new(mut cfg: BlockCacheConfig) -> std::io::Result<Arc<Self>> {
         cfg.block_bytes = cfg.block_bytes.max(4096);
-        let dir = cfg.dir.join(format!("p{}", std::process::id()));
+        // One directory per cache (a process runs many sessions, each with its own cache): the
+        // process id plus a sequence number. Directories of processes that are gone are removed.
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let pid = std::process::id();
+        let dir = cfg.dir.join(format!(
+            "p{pid}-{}",
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        purge_dead(&cfg.dir, pid);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -331,6 +343,14 @@ impl BlockCache {
         if size > self.cfg.disk_bytes {
             return;
         }
+        // The file first, then the index: a lookup never sees an entry whose file is not there yet.
+        let (path, dir) = (self.file(name), self.dir.clone());
+        let wrote =
+            tokio::task::spawn_blocking(move || write_block(&dir, &path, &key, &bytes)).await;
+        if !matches!(wrote, Ok(Ok(()))) {
+            bump(&self.counters.errors, 1);
+            return;
+        }
         let victims = {
             let mut st = lock(&self.state);
             let tick = Self::next_tick(&mut st);
@@ -352,17 +372,42 @@ impl BlockCache {
             victims
         };
         let victim_files: Vec<PathBuf> = victims.iter().map(|k| self.file(*k)).collect();
-        let (path, dir) = (self.file(name), self.dir.clone());
-        let wrote = tokio::task::spawn_blocking(move || {
-            for v in victim_files {
-                let _ = std::fs::remove_file(v);
-            }
-            write_block(&dir, &path, &key, &bytes)
-        })
-        .await;
-        if !matches!(wrote, Ok(Ok(()))) {
-            bump(&self.counters.errors, 1);
-            self.forget_disk(name);
+        drop(
+            tokio::task::spawn_blocking(move || {
+                for v in victim_files {
+                    let _ = std::fs::remove_file(v);
+                }
+            })
+            .await,
+        );
+    }
+}
+
+impl Drop for BlockCache {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.dir));
+    }
+}
+
+/// Removes the cache directories (`p<pid>-<n>`, or the older `p<pid>`) of processes that no longer
+/// run. Only where the process table can be read (`/proc`); elsewhere they stay.
+fn purge_dead(root: &std::path::Path, own: u32) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix('p')) else {
+            continue;
+        };
+        let Ok(pid) = rest.split('-').next().unwrap_or("").parse::<u32>() else {
+            continue;
+        };
+        if pid != own
+            && std::path::Path::new("/proc/self").exists()
+            && !std::path::Path::new(&format!("/proc/{pid}")).exists()
+        {
+            drop(std::fs::remove_dir_all(entry.path()));
         }
     }
 }
@@ -388,9 +433,11 @@ fn write_block(
     key: &str,
     bytes: &[u8],
 ) -> std::io::Result<()> {
+    static TMP: AtomicU64 = AtomicU64::new(0);
     let tmp = dir.join(format!(
-        "{}.tmp",
-        path.file_stem().and_then(|s| s.to_str()).unwrap_or("block")
+        "{}.{}.tmp",
+        path.file_stem().and_then(|s| s.to_str()).unwrap_or("block"),
+        TMP.fetch_add(1, Ordering::Relaxed)
     ));
     let mut file = std::fs::File::create(&tmp)?;
     let key_len = u32::try_from(key.len())
@@ -504,8 +551,8 @@ impl CachingStore {
             ..GetOptions::default()
         };
         let location = location.clone();
-        async move {
-            let result = async {
+        let task = tokio::spawn(async move {
+            let result = tokio::time::timeout(FETCH_TIMEOUT, async {
                 let got = inner.get_opts(&location, opts).await?;
                 if got.meta.size != size {
                     return Err(object_store::Error::Generic {
@@ -514,8 +561,14 @@ impl CachingStore {
                     });
                 }
                 got.bytes().await
-            }
-            .await;
+            })
+            .await
+            .unwrap_or_else(|_| {
+                Err(object_store::Error::Generic {
+                    store: "block cache",
+                    source: "a block fetch timed out".into(),
+                })
+            });
             let outcome: RunResult = match result {
                 Ok(bytes) if bytes.len() as u64 == end - start => {
                     bump(&cache.counters.misses, keys.len() as u64);
@@ -527,7 +580,9 @@ impl CachingStore {
                         })
                         .collect();
                     for ((name, key), block) in keys.iter().zip(&blocks) {
-                        cache.remember(*name, block);
+                        // Its own allocation: a slice would keep the whole run's buffer alive while
+                        // the pool is charged for the block only.
+                        cache.remember(*name, &Bytes::copy_from_slice(block));
                         cache.persist(*name, key.clone(), block.clone()).await;
                     }
                     Ok(Arc::new(blocks))
@@ -545,6 +600,16 @@ impl CachingStore {
             }
             drop(flight);
             outcome
+        });
+        // The fetch runs as a task of its own, so a reader that is dropped (a timeout, a cancelled
+        // query) neither stalls it nor leaves its entries behind; it ends by `FETCH_TIMEOUT` at the latest.
+        async move {
+            task.await.unwrap_or_else(|e| {
+                Err(Arc::new(object_store::Error::Generic {
+                    store: "block cache",
+                    source: e.to_string().into(),
+                }))
+            })
         }
         .boxed()
         .shared()

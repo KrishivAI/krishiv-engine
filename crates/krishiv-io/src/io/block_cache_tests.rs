@@ -303,17 +303,25 @@ async fn keys_and_files_hold_no_credential() {
 #[test]
 fn the_disk_part_is_emptied_at_start() {
     let dir = tempfile::tempdir().unwrap();
-    let mine = dir.path().join(format!("p{}", std::process::id()));
-    std::fs::create_dir_all(&mine).unwrap();
-    std::fs::write(mine.join("stale.blk"), b"old").unwrap();
-    let _cache = BlockCache::new(BlockCacheConfig {
+    // A directory of a process that is gone (pid 4294967294 is never in use) is removed.
+    let dead = dir.path().join("p4294967294-0");
+    std::fs::create_dir_all(&dead).unwrap();
+    std::fs::write(dead.join("stale.blk"), b"old").unwrap();
+    let config = || BlockCacheConfig {
         dir: FsPath::new(dir.path()).to_path_buf(),
         disk_bytes: 1 << 20,
         memory_bytes: 0,
         block_bytes: BLOCK,
-    })
-    .unwrap();
-    assert_eq!(std::fs::read_dir(&mine).unwrap().count(), 0);
+    };
+    let first = BlockCache::new(config()).unwrap();
+    assert!(!dead.exists());
+    // A second cache (another session) has a directory of its own and does not empty the first's.
+    let second = BlockCache::new(config()).unwrap();
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    // A cache takes its directory away when it is dropped.
+    drop(first);
+    drop(second);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 
 /// The memory tier is charged to the memory manager (I11): it holds only what the pool grants, and
