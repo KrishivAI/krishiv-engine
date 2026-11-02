@@ -811,6 +811,14 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {})", to.sql())));
         }
+        ExprNode::MultiAlias { expr, names } => {
+            out.push(Piece::Expr(expr));
+            let names = names
+                .iter()
+                .map(|n| Name(std::slice::from_ref(n)).to_string())
+                .collect::<Vec<_>>();
+            out.push(Piece::Owned(format!(" AS ({})", names.join(", "))));
+        }
         ExprNode::Alias { expr, name } => {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(

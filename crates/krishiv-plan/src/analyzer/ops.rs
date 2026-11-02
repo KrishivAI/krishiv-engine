@@ -1569,6 +1569,32 @@ impl Resolver<'_> {
             return self.grouping_sets(p, input, grouping, aggregates, env);
         };
         let c = self.child(input, env)?;
+        // `generator(..) AS (a, b)`: the names are kept for the generator
+        // and the item is aliased by the first, as the lone written name is.
+        // Any other multi-name alias stays and fails when it is bound.
+        let mut multi: Vec<String> = Vec::new();
+        let renamed: Vec<Arc<Expr>> = aggregates
+            .iter()
+            .map(|e| match &e.node {
+                ExprNode::MultiAlias { expr, names }
+                    if multi.is_empty()
+                        && matches!(&expr.node, ExprNode::Function(f)
+                        if super::generate::is_generator_name(&f.name)
+                            || f.unqualified() == Some("stack")) =>
+                {
+                    multi.clone_from(names);
+                    Arc::new(
+                        Expr::new(ExprNode::Alias {
+                            expr: Arc::clone(expr),
+                            name: names[0].clone(),
+                        })
+                        .with_origin(e.origin),
+                    )
+                }
+                _ => Arc::clone(e),
+            })
+            .collect();
+        let aggregates = &renamed[..];
         // A select item `stack(..)` is `inline` over its array of rows,
         // as in a plain select list.
         let stacked = self.stack_items(&c, aggregates, env)?;
@@ -1581,15 +1607,19 @@ impl Resolver<'_> {
         // item's place in the aggregate, the generator runs above it.
         // A written alias of the generator (the analyzer names every item,
         // so the written one is read from the unresolved list).
-        let written = aggregates.iter().find_map(|e| match &e.node {
-            ExprNode::Alias { name, expr }
-                if matches!(&expr.node, ExprNode::Function(f)
-                if super::generate::is_generator_name(&f.name)) =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        });
+        let written = aggregates
+            .iter()
+            .find_map(|e| match &e.node {
+                ExprNode::Alias { name, expr }
+                    if matches!(&expr.node, ExprNode::Function(f)
+                    if super::generate::is_generator_name(&f.name)) =>
+                {
+                    Some(vec![name.clone()])
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        let written = if multi.is_empty() { written } else { multi };
         let (items, generator) = self.extract_generator(p.origin, items, written)?;
         // `GROUP BY ALL`: a lone unqualified `all` in SQL groups by the select
         // list, unless a column or a select-list alias named `all` takes it
