@@ -920,3 +920,15 @@ fn an_ambiguous_generator_column_prints_without_the_internal_qualifier() {
         assert!(!text.contains("__krishiv"), "{text}");
     }
 }
+
+#[test]
+fn a_stack_with_an_alias_list_runs_beside_group_by() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select stack(2, k, k + 1) as (v) from values (1), (2) t(k) group by k order by v"
+        ),
+        table(&[&["1"], &["2"], &["2"], &["3"]])
+    );
+}

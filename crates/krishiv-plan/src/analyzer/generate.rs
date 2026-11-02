@@ -186,9 +186,10 @@ impl Resolver<'_> {
         let cx = Self::cx(&c.out, &rels, env, "Aggregate");
         let mut out = Vec::with_capacity(items.len());
         for item in items {
-            let (inner, alias) = match &item.node {
-                ExprNode::Alias { expr, name } => (expr, Some(name)),
-                _ => (item, None),
+            let (inner, alias, names) = match &item.node {
+                ExprNode::Alias { expr, name } => (expr, Some(name), None),
+                ExprNode::MultiAlias { expr, names } => (expr, None, Some(names)),
+                _ => (item, None, None),
             };
             let is_stack = matches!(&inner.node, ExprNode::Function(f)
                 if f.unqualified() == Some("stack") && f.args.len() >= 2);
@@ -200,15 +201,22 @@ impl Resolver<'_> {
             let call = Arc::new(
                 Expr::function("inline", vec![(*array).clone()]).with_origin(inner.origin),
             );
-            out.push(match alias {
-                Some(name) => Arc::new(
+            out.push(match (alias, names) {
+                (_, Some(names)) => Arc::new(
+                    Expr::new(ExprNode::MultiAlias {
+                        expr: call,
+                        names: names.clone(),
+                    })
+                    .with_origin(item.origin),
+                ),
+                (Some(name), None) => Arc::new(
                     Expr::new(ExprNode::Alias {
                         expr: call,
                         name: name.clone(),
                     })
                     .with_origin(item.origin),
                 ),
-                None => call,
+                (None, None) => call,
             });
         }
         Ok(out)

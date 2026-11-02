@@ -733,7 +733,7 @@ impl Parsed {
         year_ok
             && self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1)
             && self.dom.is_none_or(|(v, _)| v == i64::from(d))
-            && self.doy.is_none_or(|(v, _)| v == doy)
+            && self.doy.is_none_or(|(v, _)| v == hdoy)
             && self
                 .woy
                 .is_none_or(|(v, _)| v == week_of_year(real, y, hdoy))
@@ -743,7 +743,7 @@ impl Parsed {
             && self
                 .dowim
                 .is_none_or(|(v, _)| v == (i64::from(d) - 1) / 7 + 1)
-            && self.dow.is_none_or(|(v, _)| v == dow_sun1(days))
+            && self.dow.is_none_or(|(v, _)| v == dow_sun1(real))
     }
 
     fn resolve(self) -> Option<(i64, Option<Zone_>)> {
@@ -810,18 +810,20 @@ impl Parsed {
             self.week_date(year, mode)?
         } else if matches!(mode, Mode::Doy) {
             let (d, _) = self.doy?;
-            let len = if is_leap(year) { 366 } else { 365 };
-            if !(1..=len).contains(&d) {
+            if !(1..=hybrid_year_len(year)).contains(&d) {
                 return None;
             }
-            let (m, dd) = month_day_of(year, d);
+            // 1582 lacks the labels 10-05..10-14, so its ordinals past
+            // October 4 count ten labels further.
+            let (m, dd) = month_day_of(year, if year == 1582 && d > 277 { d + 10 } else { d });
             // The other date fields that were set must agree.
             if self.month0.is_some_and(|(v, _)| v != i64::from(m) - 1)
                 || self.dom.is_some_and(|(v, _)| v != i64::from(dd))
             {
                 return None;
             }
-            days_from_civil(year, m, dd)?
+            // A Julian-only leap day (1500-02-29) reads as March 1.
+            days_from_civil(year, m, dd).or_else(|| days_from_civil(year, 3, 1))?
         } else {
             let m = self.month0.map_or(0, |(v, _)| v);
             let d = self.dom.map_or(1, |(v, _)| v);
@@ -899,7 +901,12 @@ fn dow_sun1(days: i64) -> i64 {
 /// `(month, day)` of the 1-based `doy` of `year`.
 fn month_day_of(year: i64, mut doy: i64) -> (u32, u32) {
     for m in 1..=12u32 {
-        let len = i64::from(days_in_month(year, m));
+        // Julian leap years (every fourth) before the cutover year.
+        let len = if m == 2 && year < 1582 {
+            28 + i64::from(year.rem_euclid(4) == 0)
+        } else {
+            i64::from(days_in_month(year, m))
+        };
         if doy <= len {
             return (m, u32::try_from(doy).unwrap_or(1));
         }
@@ -1152,6 +1159,20 @@ mod tests {
         assert!(local(p, "2024-01-01 at 12:30").is_some());
         assert!(local("yyyy-MM-dd HH:mm", "2024-01-01  12:30").is_some());
         assert_eq!(local("yyyy-MM-dd HH:mm", "2024-01-0112:30"), None);
+    }
+
+    // Codex-reported cases against the hybrid calendar; the weekday and the
+    // 1582 ordinals agree with the formatter (probed: D=278 on 1582-10-15,
+    // 355 on 12-31, 'Thu' on 1582-05-31).
+    #[test]
+    fn day_of_year_and_weekday_parse_on_the_hybrid_calendar() {
+        let d = |m, dd| days_from_civil(1582, m, dd).unwrap() * MICROS_PER_DAY;
+        assert_eq!(local("yyyy-DDD", "1582-278"), Some(d(10, 15)));
+        assert_eq!(local("yyyy-DDD", "1582-355"), Some(d(12, 31)));
+        assert_eq!(local("yyyy-DDD", "1582-356"), None);
+        assert_eq!(local("yyyy-DDD", "1582-277"), Some(d(10, 4)));
+        assert_eq!(local("yyyy-MM-dd E", "1582-05-31 Thu"), Some(d(5, 31)));
+        assert_eq!(local("yyyy-MM-dd E", "1582-05-31 Mon"), None);
     }
 
     #[test]
