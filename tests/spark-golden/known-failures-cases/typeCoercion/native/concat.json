@@ -1,9 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      12,
-      13
-    ],
     "query-features": [
       2,
       4,
