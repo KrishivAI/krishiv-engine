@@ -1477,3 +1477,67 @@ fn a_script_is_authorized_by_its_strongest_statement() {
         assert_eq!(class(block_on(s.sql(sql))), "OK", "{sql}");
     }
 }
+
+fn all_but_create(_: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Create {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// The table writers of a DataFrame (`saveAsTable`, `insertInto`, `writeTo`) make the checks of
+/// the statements they stand for: `Create` for a new table, `Modify` for rows added to one.
+#[test]
+fn dataframe_table_writers_are_authorized_like_their_statements() {
+    // Creating a table needs Create in its namespace.
+    let s = session(Policy::new(all_but_create));
+    let tables = s.temp_table_names();
+    assert_eq!(
+        class(block_on(s.table("t").write().save_as_table("made"))),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(s.table("t").write_to_table("made2").create())),
+        DENIED
+    );
+    assert_eq!(s.temp_table_names(), tables, "no catalog change");
+    assert_eq!(
+        class(block_on(s.table("made").count())),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+
+    // Writing rows, into a new table or an existing one, needs Modify on it
+    // (as `CREATE TABLE ... AS SELECT` and `INSERT INTO` do).
+    let s = session(Policy::new(all_but_modify));
+    let tables = s.temp_table_names();
+    assert_eq!(
+        class(block_on(s.table("t").write().save_as_table("made"))),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(s.table("t").write().insert_into("made"))),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(s.table("t").write_to_table("made").append())),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("append").save_as_table("made")
+        )),
+        DENIED
+    );
+    assert_eq!(s.temp_table_names(), tables, "no catalog change");
+    assert_eq!(
+        class(block_on(s.table("made").count())),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+
+    // Everything allowed: the same calls work.
+    let s = session(Policy::new(allow));
+    block_on(s.table("t").write().save_as_table("made")).unwrap();
+    block_on(s.table("t").write().insert_into("made")).unwrap();
+    assert_eq!(block_on(s.table("made").count()).unwrap(), 6);
+}

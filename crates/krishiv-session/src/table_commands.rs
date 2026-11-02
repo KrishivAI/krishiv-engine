@@ -2027,6 +2027,34 @@ impl Session {
         Ok(())
     }
 
+    /// The access check the SQL path makes for the statement a table write
+    /// stands for: `CREATE TABLE ... AS SELECT` (`Create` in the namespace) or
+    /// `INSERT INTO` (`Modify` on the table). The DataFrame writers reach
+    /// the command path without a statement, so the equivalent one is parsed
+    /// and asked about through the same `authorize_statement`; the table name
+    /// is quoted part by part, so it cannot add to the statement. The reads of
+    /// the DataFrame are checked by its own analysis.
+    async fn authorize_table_write(
+        &self,
+        name: &TableName,
+        create: bool,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let quoted = format!(
+            "`{}`.`{}`",
+            name.namespace.replace('`', "``"),
+            name.name.replace('`', "``")
+        );
+        let text = if create {
+            format!("CREATE TABLE {quoted} AS SELECT 1")
+        } else {
+            format!("INSERT INTO {quoted} SELECT 1")
+        };
+        let statement = krishiv_sql::parse_statement(&text, &env.parser).map_err(|e| e.error)?;
+        let class = krishiv_sql::classify(&statement);
+        self.authorize_statement(&statement, class, env).await
+    }
+
     /// The table a `DataFrameWriter` call names.
     fn writer_table_name(&self, table: &str, env: &QueryEnv) -> Result<TableName, KrishivError> {
         let parsed = krishiv_sql::parse_multipart_identifier(table, &self.parser_options())
@@ -2160,6 +2188,8 @@ impl Session {
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
         let name = TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?;
+        self.authorize_table_write(&name, mode != V2Mode::Append, &env)
+            .await?;
         match mode {
             // An append ignores the layout the builder was given: the
             // existing table's layout rules.
