@@ -2284,6 +2284,7 @@ mod tests {
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 

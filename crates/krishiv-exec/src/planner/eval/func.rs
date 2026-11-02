@@ -72,6 +72,7 @@ pub(super) fn compile_udf(
             view,
             relabel: false,
             nullable: f.nullable,
+            partition_shift: 0,
         }),
         canonical,
     ))
@@ -261,9 +262,22 @@ pub(super) fn compile(
             view,
             relabel,
             nullable: f.nullable,
+            partition_shift: if is_stateful(name) {
+                input.env.partition_shift
+            } else {
+                0
+            },
         }),
         canonical,
     ))
+}
+
+/// Functions whose value stream is drawn per partition (see
+/// `krishiv_functions::scalar::random`).
+fn is_stateful(name: &str) -> bool {
+    ["rand", "random", "randn", "uniform", "randstr", "uuid"]
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// A bound registry function over its arguments.
@@ -277,6 +291,8 @@ struct Call {
     /// Give the result the analyzer's nested field flags.
     relabel: bool,
     nullable: bool,
+    /// Added to the partition the function draws its stream for.
+    partition_shift: u32,
 }
 
 impl PhysExpr for Call {
@@ -299,9 +315,11 @@ impl PhysExpr for Call {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let out = self
-            .function
-            .invoke_in(&args, batch.num_rows(), partition)?;
+        let out = self.function.invoke_in(
+            &args,
+            batch.num_rows(),
+            partition.saturating_add(self.partition_shift),
+        )?;
         let out = if self.relabel {
             relabeled(&out, &self.out)?
         } else {

@@ -221,8 +221,9 @@ impl UnionLoopSource {
             let detached = Arc::clone(&self.detached);
             let recursive = Arc::clone(&self.recursive);
             let loops = HashMap::from([(self.id, prev)]);
+            let shift = st.level - 1;
             let (node, _schema) = run_blocking(&*g.executor, move || {
-                detached.instantiate(&recursive, loops)
+                detached.instantiate(&recursive, loops, shift)
             })
             .await?;
             node
