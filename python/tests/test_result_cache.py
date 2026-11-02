@@ -52,5 +52,5 @@ def test_the_settings_are_ordinary_session_settings(spark: SparkSession) -> None
     assert spark.conf.get("krishiv.deterministicOrder") == "false"
     spark.conf.set("krishiv.deterministicOrder", "true")
     assert spark.conf.get("krishiv.deterministicOrder") == "true"
-    with pytest.raises(Exception, match="krishiv.resultCache.ttl"):
+    with pytest.raises(Exception, match=r"krishiv\.resultCache\.ttl"):
         spark.conf.set("krishiv.resultCache.ttl", "not a duration")
