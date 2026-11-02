@@ -1201,3 +1201,26 @@ fn except_alias_beats_struct_column_and_null_struct_is_rebuilt() -> R {
     assert!(!arrow_array::cast::AsArray::as_boolean(b[0].column(0)).value(0));
     Ok(())
 }
+
+/// A `HAVING` subquery reading a column the aggregate does not group by is
+/// a correlated reference Spark refuses (`first(t1.col2)` resolves against
+/// the aggregate's input, then fails the check), not an unresolved column.
+#[test]
+fn having_subquery_over_a_non_grouping_column_is_a_correlated_reference() -> R {
+    let s = Session::new()?;
+    block_on(async {
+        s.sql("CREATE TEMPORARY VIEW t1(col1, col2) AS VALUES (1, 'a')")
+            .await?;
+        let e = s
+            .sql("SELECT col1 FROM t1 GROUP BY col1 HAVING EXISTS (SELECT first(t1.col2) == 0)")
+            .await
+            .map(|_| ())
+            .expect_err("must fail");
+        assert_eq!(
+            e.error_class().name(),
+            "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+            "{e}"
+        );
+        Ok(())
+    })
+}

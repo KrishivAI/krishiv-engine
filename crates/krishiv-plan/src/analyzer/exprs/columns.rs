@@ -931,6 +931,9 @@ impl Resolver<'_> {
         let mut scope = cx.scope.to_vec();
         if cx.agg_scope.is_some() {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
+            // Spark resolves a reference to an input column that is no
+            // grouping column too; the check after analysis refuses it.
+            scope.extend(cx.agg_scope.unwrap_or_default().iter().cloned());
         }
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
