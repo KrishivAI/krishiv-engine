@@ -739,12 +739,14 @@ impl JsonDecoder {
         });
         let source = if opts.multi_line {
             Source::Whole {
-                reader: WholeReader::new(m.size, split),
+                reader: WholeReader::new(m.size, split).compressed(m.codec),
                 text: None,
                 pos: 0,
             }
         } else {
-            Source::Lines(LineReader::new(m.size, split, true, opts.line_sep.clone()))
+            Source::Lines(
+                LineReader::new(m.size, split, true, opts.line_sep.clone()).compressed(m.codec),
+            )
         };
         let metrics = ScanUnitMetrics {
             units: units.units.len() as u64,

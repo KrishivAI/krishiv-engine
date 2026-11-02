@@ -781,6 +781,74 @@ async fn try_avg_overflows_to_null() {
     }
 }
 
+/// `sum`, `avg` and their `try_` forms of intervals through partial states:
+/// the same values as one phase, a raised overflow stays raised, and an
+/// overflowed `try_` partial stays NULL once a later partial brings the sum
+/// back in range.
+#[tokio::test]
+async fn interval_sums_merge_partial_states() {
+    use arrow_array::{DurationMicrosecondArray, IntervalYearMonthArray};
+    use arrow_schema::{IntervalUnit, TimeUnit};
+    let months =
+        |v: &[Option<i32>]| -> ArrayRef { Arc::new(IntervalYearMonthArray::from(v.to_vec())) };
+    let micros =
+        |v: &[Option<i64>]| -> ArrayRef { Arc::new(DurationMicrosecondArray::from(v.to_vec())) };
+    async fn both(
+        s: &SchemaRef,
+        f: &AggregateFunction,
+        batches: Vec<Vec<ArrayRef>>,
+    ) -> Vec<String> {
+        let sp = spec(s, vec![], vec![agg(f, 0, s)]);
+        let one = run_rows(node(scan(s, batches.clone()), sp.clone())).await;
+        let (plan, _) = two_phase_of(scan(s, batches), sp, BypassPolicy::default(), None);
+        assert_eq!(run_rows(plan).await, one, "{f:?}");
+        one
+    }
+    let ym = schema(vec![("x", DataType::Interval(IntervalUnit::YearMonth))]);
+    let dt = schema(vec![("x", DataType::Duration(TimeUnit::Microsecond))]);
+    let m = vec![vec![months(&[Some(1), None])], vec![months(&[Some(2)])]];
+    assert_eq!(both(&ym, &AggregateFunction::Sum, m.clone()).await, ["3"]);
+    assert_eq!(both(&ym, &TrySum, m.clone()).await, ["3"]);
+    assert_eq!(both(&ym, &AggregateFunction::Avg, m.clone()).await, ["2"]);
+    assert_eq!(both(&ym, &TryAvg, m).await, ["2"]);
+    let d = vec![vec![micros(&[Some(-1)])], vec![micros(&[Some(-2)])]];
+    assert_eq!(both(&dt, &AggregateFunction::Sum, d.clone()).await, ["-3"]);
+    assert_eq!(both(&dt, &AggregateFunction::Avg, d).await, ["-2"]);
+    assert_eq!(
+        both(&dt, &AggregateFunction::Sum, vec![vec![micros(&[None])]]).await,
+        ["NULL"]
+    );
+
+    // Sticky: the partials are MAX + 1 (over) and -1.
+    let over = vec![
+        vec![months(&[Some(i32::MAX), Some(1)])],
+        vec![months(&[Some(-1)])],
+    ];
+    assert_eq!(both(&ym, &TrySum, over.clone()).await, ["NULL"]);
+    assert_eq!(both(&ym, &TryAvg, over).await, ["NULL"]);
+    let over = vec![
+        vec![micros(&[Some(i64::MAX), Some(1)])],
+        vec![micros(&[Some(-1)])],
+    ];
+    assert_eq!(both(&dt, &TrySum, over).await, ["NULL"]);
+
+    // Two partials that fit overflow when merged: raised, ANSI on or off.
+    for ansi in [true, false] {
+        let batches = vec![vec![months(&[Some(i32::MAX)])], vec![months(&[Some(1)])]];
+        let mut sp = spec(&ym, vec![], vec![agg(&AggregateFunction::Sum, 0, &ym)]);
+        sp.ansi = ansi;
+        let (plan, _) = two_phase_of(scan(&ym, batches), sp, BypassPolicy::default(), None);
+        let e = exec(plan, Opts::default())
+            .await
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            e.is_some_and(|e| e.contains("INTERVAL_ARITHMETIC_OVERFLOW")),
+            "ansi {ansi}"
+        );
+    }
+}
+
 /// One partition and eight partitions agree exactly for `try_sum` and
 /// `try_avg` (including sticky overflow).
 #[tokio::test]

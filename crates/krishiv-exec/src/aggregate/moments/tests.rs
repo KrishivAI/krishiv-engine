@@ -39,6 +39,7 @@ fn expr(f: &AggregateFunction) -> AggregateExpr {
         arg_type: DataType::Float64,
         mask: None,
         name: "m".to_owned(),
+        element: None,
     }
 }
 

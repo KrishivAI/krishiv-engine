@@ -47,12 +47,12 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, ListArray, UInt32Array};
 use arrow_buffer::{OffsetBuffer, ScalarBuffer};
-use arrow_schema::{DataType, Field, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use arrow_select::concat::concat;
 use arrow_select::take::take;
 
@@ -570,6 +570,8 @@ impl ModeAcc {
             | DataType::Date32
             | DataType::Int64
             | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Interval(IntervalUnit::YearMonth)
+            | DataType::Duration(TimeUnit::Microsecond)
             | DataType::Boolean
             | DataType::Decimal64(..)
             | DataType::Decimal128(..) => int_key(x, ar)?.cmp(&int_key(y, br)?),
@@ -605,6 +607,12 @@ fn spark_hash(col: &ArrayRef, row: usize, t: &DataType) -> Result<i32> {
         DataType::Int64 => long_hash(col.as_primitive::<Int64Type>().value(row)),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             long_hash(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            col.as_primitive::<IntervalYearMonthType>().value(row)
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            long_hash(col.as_primitive::<DurationMicrosecondType>().value(row))
         }
         DataType::Boolean => {
             if col.as_boolean().value(row) {
@@ -667,6 +675,12 @@ fn int_key(a: &ArrayRef, i: usize) -> Result<i128> {
         DataType::Int64 => i128::from(a.as_primitive::<Int64Type>().value(i)),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             i128::from(a.as_primitive::<TimestampMicrosecondType>().value(i))
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            i128::from(a.as_primitive::<IntervalYearMonthType>().value(i))
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            i128::from(a.as_primitive::<DurationMicrosecondType>().value(i))
         }
         DataType::Boolean => i128::from(a.as_boolean().value(i)),
         DataType::Decimal64(..) => i128::from(a.as_primitive::<Decimal64Type>().value(i)),

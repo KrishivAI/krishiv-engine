@@ -167,6 +167,7 @@ fn agg(function: AggregateFunction, arg: Option<usize>) -> WindowFunction {
             None => DataType::Null,
         },
         name: "a".to_owned(),
+        element: None,
     })
 }
 
@@ -864,6 +865,7 @@ fn decimal_window(function: AggregateFunction, frame: WindowFrame, p: u8, ansi: 
                 mask: None,
                 arg_type: DataType::Decimal128(p, 0),
                 name: "s".to_owned(),
+                element: None,
             }),
             frame,
             filter: None,
@@ -987,6 +989,7 @@ async fn filters_and_ignore_nulls() {
             mask: None,
             arg_type: DataType::Int64,
             name: "x".to_owned(),
+            element: None,
         }),
         frame,
         filter,
@@ -1256,6 +1259,7 @@ async fn string_results_share_the_input_buffers() {
                 mask: None,
                 arg_type: DataType::Utf8View,
                 name: "m".to_owned(),
+                element: None,
             }),
             frame: WindowFrame::running(FrameUnits::Rows),
             filter: None,
@@ -1579,6 +1583,7 @@ async fn exact_and_string_frames_from_disk() {
                     mask: None,
                     arg_type: DataType::Decimal128(20, 0),
                     name: "d".to_owned(),
+                    element: None,
                 }),
                 frame: *frame,
                 filter: None,
