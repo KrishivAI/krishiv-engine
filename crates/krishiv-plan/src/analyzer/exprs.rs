@@ -7428,7 +7428,8 @@ fn call(
     if super::is_aes_function(name) && k.len() >= 2 {
         let mut shown: Vec<&str> = k.to_vec();
         shown[1] = "***";
-        return format!("{name}({})", shown.join(", "));
+        let d = if distinct { "DISTINCT " } else { "" };
+        return format!("{name}({d}{})", shown.join(", "));
     }
     let infix = |sym: &str| format!("({} {sym} {})", k[0], k[1]);
     // `[NOT] LIKE|ILIKE ANY|SOME|ALL` with literal patterns: Spark's

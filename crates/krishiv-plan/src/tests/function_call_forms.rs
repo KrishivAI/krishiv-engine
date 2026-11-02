@@ -471,4 +471,7 @@ fn a_literal_factorial_folds_where_a_constant_is_required() {
         &[(None, super::dsl::dec("1.2345")), (None, scale)],
     )]);
     assert_eq!(class_and_params(&r).0, "OK");
+    // Scale 2 (factorial(2) = 2): DECIMAL(5,4) rounds to DECIMAL(4,2), as Spark's `round`.
+    let want = DataType::Decimal(krishiv_types::DecimalType::try_new(4, 2).unwrap());
+    assert_eq!(r.unwrap().output[0].data_type, want);
 }

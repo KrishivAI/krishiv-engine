@@ -295,6 +295,8 @@ fn datepart_reads_the_time_precision_like_date_part() {
         "SELECT CAST(date_part('SECOND', CAST('09:08:01.987654' AS TIME(1))) AS STRING)",
     )
     .unwrap();
+    // Spark 4.2.0: TIME(1) keeps one fractional digit, so SECOND is 1.9 as DECIMAL(8,6).
+    assert_eq!(a, "1.900000");
     assert_eq!(a, b);
 }
 
@@ -355,10 +357,11 @@ fn a_column_input_draws_a_fresh_iv_for_every_row() {
 #[test]
 fn a_qualified_call_hides_the_key_too() {
     let s = Session::new().unwrap();
-    let df = block_on(s.sql(&format!("SELECT builtin.aes_encrypt(1, {K})")));
-    let msg = match df {
-        Ok(df) => format!("{:?}", block_on(df.collect()).map(|_| ())),
-        Err(e) => e.to_string(),
-    };
-    assert!(!msg.contains("abcdefghijklmnop"), "{msg}");
+    // Spark 4.2.0: DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE on the first argument.
+    let err = one(&s, &format!("SELECT builtin.aes_encrypt(1, {K})")).unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    );
+    assert!(!err.to_string().contains("abcdefghijklmnop"), "{err}");
 }

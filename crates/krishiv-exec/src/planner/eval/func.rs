@@ -256,6 +256,7 @@ pub(super) fn compile(
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
     let args_constant = args.iter().all(|a| a.is_constant());
+    let is_aes_encrypt = name.eq_ignore_ascii_case("aes_encrypt");
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
             unsupported_expr(e)
@@ -292,12 +293,11 @@ pub(super) fn compile(
             // `aes_encrypt` of constants is folded once for the query, as
             // Spark's constant folding does: one IV for every row and batch
             // (a column argument draws an IV per row).
-            folded: (name == "aes_encrypt" && args_constant).then(OnceLock::new),
+            folded: (is_aes_encrypt && args_constant).then(OnceLock::new),
             // A pure function of constants (`unhex('..')`) is one value for
             // every row, so an enclosing call over it folds too.
             constant: args_constant
-                && (name == "aes_encrypt"
-                    || krishiv_functions::scalar::is_constant_of_constants(name)),
+                && (is_aes_encrypt || krishiv_functions::scalar::is_constant_of_constants(name)),
             secret_arg: ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
                 .iter()
                 .any(|f| name.eq_ignore_ascii_case(f))
