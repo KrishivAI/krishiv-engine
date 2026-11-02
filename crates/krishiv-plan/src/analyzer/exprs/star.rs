@@ -268,6 +268,13 @@ impl Resolver<'_> {
                 .scope
                 .iter()
                 .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            // A `USING` join merges columns away from the scope but the
+            // relation is still this query's: it shadows the outer one.
+            || cx.rels.iter().any(|r| {
+                r.hidden
+                    .iter()
+                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            })
         {
             return Ok(None);
         }

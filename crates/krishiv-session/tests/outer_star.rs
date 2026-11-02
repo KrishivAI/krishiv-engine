@@ -32,6 +32,24 @@ fn an_outer_star_reads_the_enclosing_relation() -> R {
     Ok(())
 }
 
+/// A relation whose columns a local `USING` join merged away still shadows
+/// the enclosing query's relation of the same alias.
+#[test]
+fn a_using_join_relation_shadows_the_outer_one() -> R {
+    let s = Session::new()?;
+    let batches = block_on(async {
+        s.sql(
+            "select (select t1.* from values (2) as t2(k) join values (2) as t1(k) using (k)) \
+             from values (1) as t1(k)",
+        )
+        .await?
+        .collect()
+        .await
+    })?;
+    assert_eq!(batches[0].column(0).as_primitive::<Int32Type>().value(0), 2);
+    Ok(())
+}
+
 #[test]
 fn a_temporary_function_named_by_identifier_takes_no_database() {
     let s = Session::new().unwrap();
