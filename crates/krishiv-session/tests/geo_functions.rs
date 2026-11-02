@@ -158,6 +158,22 @@ fn casts_follow_the_spatial_rules() {
         "CAST(ST_GeomFromWKB(X'010100000000000000000069400000000000005940', 4326) AS GEOGRAPHY(4326))",
     );
     assert!(e.contains("Invalid coordinate value found"), "{e}");
+    // TRY_CAST gives NULL for the invalid value and keeps the valid ones.
+    let bad = "ST_GeomFromWKB(X'010100000000000000000069400000000000005940', 4326)";
+    assert!(
+        run(&format!(
+            "SELECT hex(ST_AsBinary(TRY_CAST({bad} AS GEOGRAPHY(4326))))"
+        ))
+        .unwrap()
+        .is_none()
+    );
+    let ok = "ST_GeomFromWKB(X'0101000000000000000000F03F0000000000000040', 4326)";
+    assert_eq!(
+        text(&format!(
+            "hex(ST_AsBinary(TRY_CAST({ok} AS GEOGRAPHY(4326))))"
+        )),
+        point
+    );
 }
 
 #[test]

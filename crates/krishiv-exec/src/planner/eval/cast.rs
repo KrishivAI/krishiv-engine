@@ -383,6 +383,16 @@ fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
     }
 }
 
+/// `TRY_CAST`: `a` with every row that holds an invalid geography (of the
+/// Spark type `t`) replaced by NULL; valid rows are kept.
+fn null_invalid_geography(a: &ArrayRef, t: &DataType) -> Result<ArrayRef> {
+    let keep: arrow_array::BooleanArray = (0..a.len())
+        .map(|i| Some(check_geography_in(&a.slice(i, 1), t).is_ok()))
+        .collect();
+    let nulls = arrow_array::new_null_array(a.data_type(), a.len());
+    arrow_select::zip::zip(&keep, a, &nulls).map_err(|e| internal(&e.to_string()))
+}
+
 /// Fails with `WKB_PARSE_ERROR` on a value of `spatial` (the struct of a
 /// geometry or geography) with a coordinate outside longitude and latitude.
 fn check_geography(spatial: &ArrayRef) -> Result<()> {
@@ -516,9 +526,14 @@ impl PhysExpr for Cast {
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let v = self.e.eval(batch, partition)?;
-        let out = apply(&self.parts, v.array())?;
-        if let Some(to) = &self.geography {
-            check_geography_in(&out, to)?;
+        let mut out = apply(&self.parts, v.array())?;
+        if let Some(to) = &self.geography
+            && check_geography_in(&out, to).is_err()
+        {
+            if self.parts.mode != KernelMode::Try {
+                check_geography_in(&out, to)?;
+            }
+            out = null_invalid_geography(&out, to)?;
         }
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),
