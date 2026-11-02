@@ -1155,13 +1155,15 @@ fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
     let id: String = text[pos..e].iter().collect();
     // A standard-time display name is that fixed offset all year, as
     // `SimpleDateFormat` reads it (not the region's seasonal rules).
+    // Daylight names (`PDT`, ...) are the saving-time offset, also all year.
     let fixed = match id.as_str() {
-        "PST" => Some(-8),
-        "MST" => Some(-7),
-        "CST" => Some(-6),
-        "EST" => Some(-5),
-        "AKST" => Some(-9),
         "HST" => Some(-10),
+        "AKST" => Some(-9),
+        "PST" | "AKDT" => Some(-8),
+        "MST" | "PDT" => Some(-7),
+        "CST" | "MDT" => Some(-6),
+        "EST" | "CDT" => Some(-5),
+        "EDT" => Some(-4),
         _ => None,
     };
     if let Some(h) = fixed {
@@ -1439,6 +1441,16 @@ mod tests {
         assert!(!ok("yyyy-MM-dd XX", "2024-03-05 +05"));
         assert!(ok("yyyy-MM-dd XXX", "2024-03-05 +05:30"));
         assert!(!ok("yyyy-MM-dd XXX", "2024-03-05 +0530"));
+    }
+
+    #[test]
+    fn daylight_zone_names_are_their_saving_time_offset() {
+        let utc = crate::datetime::resolve_zone("UTC").unwrap();
+        let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
+        let at = |s: &str| p.parse_timestamp(s, &utc).unwrap().unwrap();
+        assert_eq!(at("2024-07-01 12:00 PDT"), micros(2024, 7, 1, 19, 0, 0, 0));
+        assert_eq!(at("2024-01-01 12:00 EDT"), micros(2024, 1, 1, 16, 0, 0, 0));
+        assert_eq!(at("2024-07-01 12:00 AKDT"), micros(2024, 7, 1, 20, 0, 0, 0));
     }
 
     #[test]
