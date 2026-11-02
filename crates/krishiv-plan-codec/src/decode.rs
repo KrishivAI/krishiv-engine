@@ -1057,6 +1057,14 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
         mask: a.mask.map(usize_of).transpose()?,
+        element: if a.result_element.is_empty() {
+            None
+        } else {
+            match schema_from(&a.result_element)?.fields().iter().as_slice() {
+                [field] => Some(Arc::clone(field)),
+                _ => return Err(corrupt("an aggregate element that is not one field")),
+            }
+        },
     })
 }
 
