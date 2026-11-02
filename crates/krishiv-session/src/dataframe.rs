@@ -2013,7 +2013,15 @@ impl DataFrameWriter {
                 let a = df.analysis().await?;
                 // A write reads the cache like any other action.
                 let (physical, _) = df.physical_cached(&a).await?;
-                df.session.write_files(physical, &a.env, target).await
+                let types: Vec<_> = a
+                    .analyzed
+                    .output
+                    .iter()
+                    .map(|c| c.data_type.clone())
+                    .collect();
+                df.session
+                    .write_files(physical, &a.env, target, &types)
+                    .await
             })
             .await
     }

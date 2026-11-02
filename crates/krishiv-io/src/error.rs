@@ -194,6 +194,66 @@ pub(crate) fn unsupported(feature: impl Into<String>) -> KrishivError {
     .into()
 }
 
+/// `UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE` for column `f` of a `format` file.
+pub(crate) fn unsupported_column(format: &str, f: &arrow_schema::Field) -> FormatError {
+    let column_type = krishiv_types::DataType::from_arrow_field(f)
+        .map_or_else(|_| f.data_type().to_string(), |t| t.sql());
+    FormatError::Other(
+        krishiv_common::error::UnsupportedDataTypeForDatasource {
+            format: format.to_owned(),
+            column_name: format!("`{}`", f.name()),
+            column_type: format!("\"{column_type}\""),
+        }
+        .into(),
+    )
+}
+
+/// Refuses a calendar interval at any depth of `schema`: no data source stores
+/// one (`DataSourceUtils.verifySchema`).
+///
+/// # Errors
+/// `UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE` naming the first such column.
+pub(crate) fn refuse_calendar_intervals(
+    format: &str,
+    schema: &arrow_schema::Schema,
+) -> FormatResult<()> {
+    fn holds(t: &arrow_schema::DataType) -> bool {
+        use arrow_schema::DataType as D;
+        match t {
+            D::Interval(arrow_schema::IntervalUnit::MonthDayNano) => true,
+            D::Struct(f) => f.iter().any(|c| holds(c.data_type())),
+            D::List(e) | D::LargeList(e) | D::Map(e, _) => holds(e.data_type()),
+            _ => false,
+        }
+    }
+    match schema.fields().iter().find(|f| holds(f.data_type())) {
+        Some(f) => Err(unsupported_column(format, f)),
+        None => Ok(()),
+    }
+}
+
+/// [`refuse_calendar_intervals`] by provider name, for a declared schema: a
+/// table's columns or a reader's schema.
+///
+/// # Errors
+/// `UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE` naming the first such column.
+pub fn check_declared_schema(provider: &str, schema: &arrow_schema::Schema) -> Result<()> {
+    let format = match provider.to_ascii_lowercase().as_str() {
+        "parquet" => "Parquet",
+        "csv" => "CSV",
+        "json" => "JSON",
+        "orc" => "ORC",
+        "text" => "Text",
+        "avro" => "Avro",
+        "xml" => "XML",
+        _ => return Ok(()),
+    };
+    refuse_calendar_intervals(format, schema).map_err(|e| match e {
+        FormatError::Other(e) => e,
+        other => internal(other.to_string()),
+    })
+}
+
 /// `INTERNAL_ERROR`, for a broken invariant (not a user error).
 pub(crate) fn internal(message: impl Into<String>) -> KrishivError {
     InternalError {

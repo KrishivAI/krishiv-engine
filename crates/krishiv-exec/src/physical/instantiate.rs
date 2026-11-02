@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use arrow_schema::SchemaRef;
+use arrow_schema::{Field, Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_io::{
@@ -951,10 +951,27 @@ impl Instantiation<'_> {
         };
         let (options, _) = format.options().parse(&write.options, config)?;
         let input = self.node(input)?;
+        let mut fields: Vec<Arc<Field>> = input.schema.fields().to_vec();
+        for (column, spark_type) in &write.column_types {
+            let f = fields.get_mut(*column).ok_or_else(|| {
+                internal(format!(
+                    "write column type of column {column}, out of range"
+                ))
+            })?;
+            *f = Arc::new(spark_type.to_arrow_field_with_storage(
+                f.name(),
+                f.data_type().clone(),
+                f.is_nullable(),
+            )?);
+        }
+        let written = Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        ));
         let sink = Arc::new(FileWriteSink::try_new(
             Arc::clone(&format),
             io,
-            Arc::clone(&input.schema),
+            written,
             options,
             WriteOptions {
                 store: StoreId::new(&write.store),

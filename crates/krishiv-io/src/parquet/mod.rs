@@ -39,6 +39,7 @@
 
 mod calendar;
 mod decode;
+mod intervals;
 mod meta;
 mod row_filter;
 mod thrift_guard;

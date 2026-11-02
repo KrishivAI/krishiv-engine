@@ -151,6 +151,7 @@ registry! {
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
     (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
     (window_range_bounds, WindowRangeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds at a value distance from the current row's ordering key (`RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`)."),
+    (write_column_types, WriteColumnTypes, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` naming the Spark types of input columns whose Arrow type doesn't say them (an interval's fields): without them a file's footer and text forms would use other fields."),
     (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
 
@@ -327,7 +328,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
             PhysNode::WriteFiles { write, .. } => write.as_ref().map(|w| {
-                if w.partition_by.is_empty() {
+                if !w.column_types.is_empty() {
+                    Feature::WriteColumnTypes
+                } else if w.partition_by.is_empty() {
                     Feature::WritePlan
                 } else {
                     Feature::PartitionedWrites

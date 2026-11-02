@@ -140,7 +140,7 @@ impl CsvDecoder {
                     .ok_or_else(|| crate::error::internal(format!("no column {}", f.name())))?;
                 outs.push(Out::Data {
                     index,
-                    kind: Kind::of(f.data_type())?,
+                    kind: Kind::of_field(f)?,
                 });
             }
         }

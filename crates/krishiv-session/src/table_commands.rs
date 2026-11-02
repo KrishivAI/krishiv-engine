@@ -1193,6 +1193,16 @@ impl Session {
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
+                krishiv_io::check_declared_schema(
+                    &table.provider,
+                    &arrow_schema::Schema::new(
+                        table
+                            .columns
+                            .iter()
+                            .map(|c| c.data_type.to_arrow_field(&c.name, true))
+                            .collect::<Vec<_>>(),
+                    ),
+                )?;
                 table.layout = crate::partitions::table_layout(
                     &name,
                     &mut table.columns,

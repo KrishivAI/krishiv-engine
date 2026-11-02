@@ -53,7 +53,7 @@ mod write;
 pub use avro::AvroFormat;
 pub use commit::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
 pub use csv::CsvFormat;
-pub use error::{FormatError, FormatResult, Result};
+pub use error::{FormatError, FormatResult, Result, check_declared_schema};
 pub use format::{
     AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds,
     PushReadAt, ReadAt, ScanUnit, ScanUnitMetrics, Splittable, Step, UnitPlan, WrittenFile,

@@ -485,6 +485,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_mode_regr_bit_listagg"
             | "aggregate_listagg"
             | "write_files_partitioned"
+            | "write_files_column_types"
             | "aggregate_percentiles" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.

@@ -443,6 +443,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     );
     let write = WritePlan {
         partition_by: vec![0],
+        column_types: std::collections::BTreeMap::new(),
         ..base
     };
     let node = node_of(write);
@@ -603,6 +604,27 @@ fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
             missing: vec!["aggregate_filter".to_owned()]
         }
     );
+}
+
+#[test]
+fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "write_files_column_types")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::WritePlan, Feature::IntervalTypes]);
+    assert!(!reader.contains(Feature::WriteColumnTypes));
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["write_column_types".to_owned()]
+        }
+    );
+    assert_eq!(Feature::WriteColumnTypes.kind(), FeatureKind::Semantic);
 }
 
 #[test]

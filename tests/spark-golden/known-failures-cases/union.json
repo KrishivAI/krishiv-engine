@@ -1,9 +1,5 @@
 {
-  "cases": {
-    "depends-on-command": [
-      15
-    ]
-  },
+  "cases": {},
   "file": "union",
   "format_version": 1
 }
