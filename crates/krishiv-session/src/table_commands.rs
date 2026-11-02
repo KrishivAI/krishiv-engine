@@ -2287,7 +2287,11 @@ impl Session {
             .table(&name.namespace, &name.name)
             .is_some();
         match (mode, exists) {
-            (SaveMode::Ignore, true) => Ok(()),
+            (SaveMode::Ignore, true) => {
+                // A no-op create is still authorized, as the SQL path does, so a denial
+                // cannot tell an existing table from a missing one.
+                self.authorize_table_write(&name, true, &env).await
+            }
             (SaveMode::Append, true) => {
                 let table = self.table_for_write(&name, "INSERT", &env)?;
                 // Spark refuses an append whose format or partitioning differs
@@ -2330,9 +2334,14 @@ impl Session {
                         "saveAsTable append with column names that differ from the table's",
                     ));
                 }
-                // Quoted, so a name with dots or a star is one plain column.
+                // Built directly: a name with dots or a star is one plain column.
                 let by_name = df.select(order.iter().map(|h| {
-                    crate::column::Column::named(&format!("`{}`", h.replace('`', "``")), None)
+                    crate::column::Column::new(krishiv_plan::Expr::new(
+                        krishiv_plan::ExprNode::Column(krishiv_plan::ColumnRef {
+                            name: vec![h.clone()],
+                            plan_id: None,
+                        }),
+                    ))
                 }));
                 self.exec_write_v2(&by_name, spec, V2Mode::Append).await
             }

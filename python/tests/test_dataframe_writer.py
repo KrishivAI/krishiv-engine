@@ -446,3 +446,24 @@ def test_bucket_by_and_sort_by_reject_a_list_with_more_columns(df: DataFrame) ->
     assert error_class(both.value) == "CANNOT_SET_TOGETHER"
     with pytest.raises(errors.PySparkValueError):
         df.write.sortBy(["id"], "name")
+
+
+def test_bucket_by_and_sort_by_validate_their_arguments(df: DataFrame) -> None:
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.bucketBy("2", "id")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.bucketBy(2, 5)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.sortBy(["id", 5])  # ty: ignore[invalid-argument-type]
+    assert df.write.bucketBy(2, ("id", "name")) is not None
+    assert df.write.sortBy(("name",)) is not None
+
+
+def test_save_as_table_takes_format_mode_partition_by_and_options(spark: SparkSession, df: DataFrame) -> None:
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.saveAsTable(5)  # ty: ignore[invalid-argument-type]
+    df.write.saveAsTable("fm", format="parquet", mode="error", compression=None)
+    assert spark.table("fm").count() == 3
+    with pytest.raises(errors.PySparkException) as parted:
+        df.write.saveAsTable("pm", partitionBy="id")
+    assert error_class(parted.value) == "KRISHIV_UNSUPPORTED_FEATURE"

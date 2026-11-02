@@ -1587,3 +1587,23 @@ fn dataframe_overwrites_need_drop_and_modify() {
         DENIED
     );
 }
+
+/// `ignore` on an existing table is still authorized: a denial must not tell an existing table
+/// from a missing one.
+#[test]
+fn ignore_mode_on_an_existing_table_is_authorized_like_a_create() {
+    let s = session(Policy::new(all_but_create));
+    // `t` is a registered table, so the target exists; the CTAS check denies both alike.
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("ignore").save_as_table("t")
+        )),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("ignore").save_as_table("missing")
+        )),
+        DENIED
+    );
+}

@@ -1703,6 +1703,8 @@ impl Session {
         unique_columns(schema, env.analysis.conf.case_sensitive)?;
         let format = self.writable_format(format)?;
         format.options().parse(options, &env.config)?;
+        // The framework options the format schema skips (`maxRecordsPerFile`).
+        max_records_per_file(options, format.name())?;
         Ok(())
     }
 

@@ -417,3 +417,28 @@ fn the_default_format_is_spark_sql_sources_default() {
     );
     block_on(s.table("people").write().mode("append").save_as_table("c")).unwrap();
 }
+
+#[test]
+fn an_invalid_file_option_does_not_destroy_the_table_it_would_replace() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    let w = s
+        .table("people")
+        .write()
+        .option("maxRecordsPerFile", "many")
+        .mode("overwrite");
+    assert!(block_on(w.save_as_table("t")).is_err());
+    assert_eq!(count(&s, "t"), 3, "the table survived");
+}
+
+#[test]
+fn a_column_named_star_appends_as_a_plain_column() {
+    let s = session();
+    let starred = s
+        .table("people")
+        .select_expr(["id AS `*`", "name"])
+        .unwrap();
+    block_on(starred.write().save_as_table("st")).unwrap();
+    block_on(starred.write().mode("append").save_as_table("st")).unwrap();
+    assert_eq!(count(&s, "st"), 6);
+}
