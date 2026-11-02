@@ -1179,6 +1179,13 @@ impl FileFormat for MockFormat {
                 plan.pruned_by_statistics += 1;
                 continue;
             }
+            if req
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.within(u.first_row..u.first_row + u.rows).is_empty())
+            {
+                continue;
+            }
             plan.units.push(ScanUnit {
                 index: i,
                 first_row: u.first_row,
