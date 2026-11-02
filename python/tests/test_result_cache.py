@@ -31,7 +31,9 @@ def test_a_query_over_a_table_misses_then_hits(spark: SparkSession) -> None:
     assert "hit (metadata_age_ms=" in explain(spark, query)
     # The store's counters follow the first line.
     counters = explain(spark, query).split("== Result Cache ==\n")[1].splitlines()[1]
-    assert counters.startswith("store: ") and " hits, " in counters and counters.endswith(" invalidated")
+    assert counters.startswith("store: ")
+    assert " hits, " in counters
+    assert counters.endswith(" invalidated")
     # Writes through the engine drop the entry.
     spark.sql("INSERT INTO rc_t VALUES (9)")
     assert "== Result Cache ==\nmiss" in explain(spark, query)
