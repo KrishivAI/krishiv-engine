@@ -11,7 +11,10 @@
 //! memory is not corruption the C data interface lets a consumer detect, so it is not generated.
 //! Importing must return a batch or an error, never panic, abort or read out of bounds.
 #![no_main]
-#![allow(dead_code, reason = "ffi.rs is the production file; the target uses part of it")]
+#![allow(
+    dead_code,
+    reason = "ffi.rs is the production file; the target uses part of it"
+)]
 
 #[path = "../../crates/krishiv-python/src/stream/ffi.rs"]
 mod ffi;
@@ -75,7 +78,10 @@ const MAX_NODES: usize = 64;
 
 fn batch(kind: u8) -> StructArray {
     let col = |name: &str, a: ArrayRef, nullable| {
-        (Arc::new(Field::new(name, a.data_type().clone(), nullable)), a)
+        (
+            Arc::new(Field::new(name, a.data_type().clone(), nullable)),
+            a,
+        )
     };
     let ids: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
     let names: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None, Some("ccc")]));
@@ -91,8 +97,10 @@ fn batch(kind: u8) -> StructArray {
             StructArray::from(vec![col("l", Arc::new(list), true)])
         }
         2 => {
-            let d: DictionaryArray<Int8Type> =
-                DictionaryArray::new(Int8Array::from(vec![0, 1, 0]), Arc::new(StringArray::from(vec!["x", "y"])));
+            let d: DictionaryArray<Int8Type> = DictionaryArray::new(
+                Int8Array::from(vec![0, 1, 0]),
+                Arc::new(StringArray::from(vec!["x", "y"])),
+            );
             let full: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
             StructArray::from(vec![col("d", Arc::new(d), true), col("id", full, false)])
         }
@@ -135,7 +143,11 @@ unsafe fn schema_nodes(root: *mut CSch, out: &mut Vec<*mut CSch>) {
 }
 
 fn lowered(v: i64, current: i64) -> i64 {
-    if current <= 0 { current } else { i64::try_from(v.unsigned_abs() % (current as u64 + 1)).unwrap_or(0) }
+    if current <= 0 {
+        current
+    } else {
+        i64::try_from(v.unsigned_abs() % (current as u64 + 1)).unwrap_or(0)
+    }
 }
 
 fn quiet_panics() {
@@ -202,7 +214,9 @@ fuzz_target!(|data: &[u8]| {
                 5 => {
                     let n = usize::try_from((*a).n_buffers).unwrap_or(0);
                     if n > 0 {
-                        let slot = (*a).buffers.add(usize::try_from(v.unsigned_abs()).unwrap_or(0) % n);
+                        let slot = (*a)
+                            .buffers
+                            .add(usize::try_from(v.unsigned_abs()).unwrap_or(0) % n);
                         slot.cast_mut().write(std::ptr::null());
                     }
                 }
@@ -211,9 +225,14 @@ fuzz_target!(|data: &[u8]| {
                 8 => (*s).n_children = lowered(v, (*s).n_children),
                 9 => {
                     // Always from the node's original format: swaps must not compose into a wider one.
-                    let original = saved.iter().find(|(n, _)| *n == s).map_or((*s).format, |(_, c)| c.format);
+                    let original = saved
+                        .iter()
+                        .find(|(n, _)| *n == s)
+                        .map_or((*s).format, |(_, c)| c.format);
                     let options = swaps(CStr::from_ptr(original));
-                    (*s).format = options[usize::try_from(v.unsigned_abs()).unwrap_or(0) % options.len()].as_ptr();
+                    (*s).format = options
+                        [usize::try_from(v.unsigned_abs()).unwrap_or(0) % options.len()]
+                    .as_ptr();
                 }
                 _ => (*s).dictionary = std::ptr::null(),
             }
