@@ -107,6 +107,20 @@ pub enum Builtin {
     TimestampAddYmInterval,
     /// A timestamp plus a day-time interval (`TimestampAddInterval`).
     TimestampAddInterval,
+    /// A date plus a calendar interval (`DateAddInterval`); its third argument
+    /// is Spark's `ansiEnabled`, a boolean literal, as for the calendar operators
+    /// below.
+    DateAddInterval,
+    /// A calendar interval times a number (`MultiplyInterval`).
+    MultiplyInterval,
+    /// A calendar interval over a number (`DivideInterval`).
+    DivideInterval,
+    /// `+` of two calendar intervals.
+    CalendarAdd,
+    /// `-` of two calendar intervals.
+    CalendarSubtract,
+    /// Unary `-` of a calendar interval; its second argument is the flag.
+    CalendarNegate,
     /// How Spark's `DatetimeSub` shows `l - r` in a name; only ever in a
     /// bound expression's shown form, never evaluated.
     DatetimeSub,
@@ -134,7 +148,7 @@ pub struct QuantifiedLike {
 
 impl Builtin {
     /// Every operator, in declaration order.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 47] = [
         Self::Eq,
         Self::EqNullSafe,
         Self::Lt,
@@ -171,6 +185,12 @@ impl Builtin {
         Self::DateAddYmInterval,
         Self::TimestampAddYmInterval,
         Self::TimestampAddInterval,
+        Self::DateAddInterval,
+        Self::MultiplyInterval,
+        Self::DivideInterval,
+        Self::CalendarAdd,
+        Self::CalendarSubtract,
+        Self::CalendarNegate,
         Self::DatetimeSub,
         Self::SubtractDates,
         Self::SubtractTimestamps,
@@ -187,6 +207,12 @@ impl Builtin {
             Self::DateAddYmInterval
                 | Self::TimestampAddYmInterval
                 | Self::TimestampAddInterval
+                | Self::DateAddInterval
+                | Self::MultiplyInterval
+                | Self::DivideInterval
+                | Self::CalendarAdd
+                | Self::CalendarSubtract
+                | Self::CalendarNegate
                 | Self::DatetimeSub
                 | Self::SubtractDates
                 | Self::SubtractTimestamps
@@ -235,6 +261,12 @@ impl Builtin {
             Self::DateAddYmInterval => "date_add_ym_interval",
             Self::TimestampAddYmInterval => "timestamp_add_ym_interval",
             Self::TimestampAddInterval => "timestamp_add_interval",
+            Self::DateAddInterval => "date_add_interval",
+            Self::MultiplyInterval => "multiply_interval",
+            Self::DivideInterval => "divide_interval",
+            Self::CalendarAdd => "calendar_add",
+            Self::CalendarSubtract => "calendar_subtract",
+            Self::CalendarNegate => "calendar_negate",
             Self::DatetimeSub => "datetime_sub",
             Self::SubtractDates => "subtract_dates",
             Self::SubtractTimestamps => "subtract_timestamps",
