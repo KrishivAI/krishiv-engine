@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{Int32Array, RecordBatch, StringArray};
+use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
@@ -362,4 +362,58 @@ fn a_table_of_another_namespace_with_the_same_name_is_not_the_target() {
         )),
         "UNSUPPORTED_OVERWRITE.TABLE"
     );
+}
+
+fn describe_text(s: &Session, table: &str) -> String {
+    let df = block_on(s.sql(&format!("DESCRIBE TABLE EXTENDED {table}"))).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let mut out = String::new();
+    for b in &batches {
+        for col in b.columns() {
+            for i in 0..col.len() {
+                if col.is_null(i) {
+                    continue;
+                }
+                match col.data_type() {
+                    ArrowType::Utf8View => out.push_str(col.as_string_view().value(i)),
+                    ArrowType::LargeUtf8 => out.push_str(col.as_string::<i64>().value(i)),
+                    ArrowType::Utf8 => out.push_str(col.as_string::<i32>().value(i)),
+                    _ => continue,
+                }
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_default_format_is_spark_sql_sources_default() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("p")).unwrap();
+    assert!(describe_text(&s, "p").to_lowercase().contains("parquet"));
+    s.conf().set("spark.sql.sources.default", "csv").unwrap();
+    block_on(s.table("people").write().save_as_table("c")).unwrap();
+    let text = describe_text(&s, "c").to_lowercase();
+    assert!(text.contains("csv") && !text.contains("parquet"), "{text}");
+    // An explicit format wins over the default, and appending with another one than the table's is refused.
+    block_on(
+        s.table("people")
+            .write()
+            .format("parquet")
+            .save_as_table("e"),
+    )
+    .unwrap();
+    assert!(describe_text(&s, "e").to_lowercase().contains("parquet"));
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .format("parquet")
+                .mode("append")
+                .save_as_table("c")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    block_on(s.table("people").write().mode("append").save_as_table("c")).unwrap();
 }
