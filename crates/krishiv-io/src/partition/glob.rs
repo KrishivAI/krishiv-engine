@@ -86,10 +86,10 @@ fn unescape(s: &str) -> String {
     out
 }
 
-/// `a{b,c{d,e}}f` → `abf`, `acdf`, `acef`.
 /// Most patterns `{a,b}` groups may expand to: repeated groups multiply, and the expansion is eager.
 const MAX_ALTERNATIVES: usize = 4096;
 
+/// `a{b,c{d,e}}f` → `abf`, `acdf`, `acef`.
 fn expand_braces(pattern: &str) -> Result<Vec<String>, String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut open = None;

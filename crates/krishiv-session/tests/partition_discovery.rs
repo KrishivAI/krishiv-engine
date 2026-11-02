@@ -470,6 +470,17 @@ fn overlapping_glob_roots_read_each_file_once() {
         &format!("SELECT CAST(id AS STRING) FROM parquet.`{root}/year=2020{{,/region=eu}}`"),
     );
     assert_eq!(both, [["1"]]);
+    // The file keeps the nearest root's partition values: the outer root's `region` is not a column.
+    let df = s
+        .read()
+        .parquet([format!("{root}/year=2020{{,/region=eu}}").as_str()]);
+    let names: Vec<String> = block_on(df.schema())
+        .unwrap()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert_eq!(names, ["id"]);
 }
 
 #[test]

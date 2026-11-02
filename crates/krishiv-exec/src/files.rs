@@ -424,7 +424,15 @@ impl FileReads {
             let at = self.paths.locate_with_options(text, options)?;
             Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await?;
         }
-        listed.sort_by(|a, b| a.0.path.as_ref().cmp(b.0.path.as_ref()));
+        // By store, then path; of a file reached through overlapping roots the entry with the fewest partition
+        // segments (the nearest root's) comes first and is the one kept.
+        listed.sort_by(|a, b| {
+            a.0.store
+                .key()
+                .cmp(b.0.store.key())
+                .then_with(|| a.0.path.as_ref().cmp(b.0.path.as_ref()))
+                .then_with(|| a.1.len().cmp(&b.1.len()))
+        });
         // Overlapping roots (`/d/{a,a/b}`, or a glob and a plain path) reach a file twice: it is read once.
         listed.dedup_by(|a, b| a.0.path == b.0.path && a.0.store == b.0.store);
         let format = match self.formats.get(format) {
