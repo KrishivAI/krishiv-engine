@@ -40,6 +40,14 @@
 mod bloom_probe;
 mod calendar;
 mod decode;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "stage 2b of P2-T080b; T085 decides when to fetch the dictionary and calls it"
+    )
+)]
+mod dict_probe;
 mod index_guard;
 mod intervals;
 mod meta;
