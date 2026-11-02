@@ -185,6 +185,35 @@
   },
   "$defs": {
     "u64": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
-    "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+    "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "explainVerbose": {
+      "type": "object",
+      "description": "The second root of this file, selected by `format` = `krishiv.explain-verbose` (EXPLAIN VERBOSE as JSON): planning only, no run. The same minor/must-ignore rule applies.",
+      "required": ["format", "version", "parsed", "analyzed", "steps", "optimized", "physical"],
+      "additionalProperties": false,
+      "properties": {
+        "format": { "const": "krishiv.explain-verbose" },
+        "version": { "const": 1 },
+        "parsed": { "type": "string" },
+        "analyzed": { "type": "string" },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["batch", "round", "rule", "plan", "diff"],
+            "additionalProperties": false,
+            "properties": {
+              "batch": { "type": "string" },
+              "round": { "$ref": "#/$defs/u64" },
+              "rule": { "type": "string" },
+              "plan": { "type": "string" },
+              "diff": { "type": "string" }
+            }
+          }
+        },
+        "optimized": { "type": "string" },
+        "physical": { "type": "string" }
+      }
+    }
   }
 }

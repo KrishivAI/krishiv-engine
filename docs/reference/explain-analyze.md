@@ -92,13 +92,18 @@ by name. A name ending in `_bytes` is a size.
 [`query-profile-v1.schema.json`](query-profile-v1.schema.json). Times are
 integer nanoseconds (`*_ns`) and sizes integer bytes. The plan is a flat
 list in pre-order, each node naming its inputs by position, so deep plans
-stay shallow. `QueryProfile::from_json` reads it back exactly and rejects
-another format or version, missing or mistyped members, unknown roles or
-metric kinds, duplicate ids and a plan that is not one tree. A change that
-removes or retypes a member bumps the version.
+stay shallow. `minor` (absent = 0) counts additive changes within version 1:
+1 adds `usage` (measured sums of the operators' counters: wall and compute
+time, sink rows, peak memory, spill and scan bytes) and `environment` (the
+writing build; never configuration values). Both are derived, so a reader
+recomputes them. `QueryProfile::from_json` rejects another format or
+version, missing or mistyped members it knows, an unknown role, duplicate
+ids and a plan that is not one tree, but ignores members it does not know
+and keeps an unknown metric kind as text, so a document of a later minor
+loads. A change that removes or retypes a member bumps the version.
 
 `EXPLAIN VERBOSE`'s document has `"format": "krishiv.explain-verbose"`,
-`"version": 1` and the members `parsed`, `analyzed`, `steps` (each with
+`"version": 1` (a second root of the same schema file, `$defs/explainVerbose`) and the members `parsed`, `analyzed`, `steps` (each with
 `batch`, `round`, `rule`, `plan` and `diff`), `optimized` and `physical`.
 
 ## Metrics are data

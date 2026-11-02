@@ -412,6 +412,51 @@ impl DataFrame {
 mod tests {
     use super::*;
 
+    /// The writer's members are exactly the schema's `explainVerbose` root.
+    #[test]
+    fn verbose_document_matches_the_schema() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/reference/query-profile-v1.schema.json"
+        );
+        let schema: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default())
+                .unwrap_or_default();
+        let root = &schema["$defs"]["explainVerbose"];
+        let v = ExplainVerbose {
+            parsed: "p".into(),
+            analyzed: "a".into(),
+            steps: vec![OptimizerStep {
+                batch: "Rewrite".into(),
+                round: 1,
+                rule: "r".into(),
+                plan: "x".into(),
+                diff: "- y\n".into(),
+            }],
+            optimized: "o".into(),
+            physical: "ph".into(),
+        };
+        let doc: Value = serde_json::from_str(&v.to_json()).unwrap_or_default();
+        let keys = |v: &Value| {
+            let mut k: Vec<String> = v
+                .as_object()
+                .map_or_else(Vec::new, |o| o.keys().cloned().collect());
+            k.sort();
+            k
+        };
+        assert_eq!(keys(&root["properties"]), keys(&doc));
+        assert_eq!(
+            keys(&root["properties"]["steps"]["items"]["properties"]),
+            keys(&doc["steps"][0])
+        );
+        assert_eq!(root["properties"]["format"]["const"], VERBOSE_FORMAT);
+        // A later minor adds members; the reader ignores them.
+        let mut later = doc;
+        later["minor"] = 3.into();
+        later["extra"] = serde_json::json!([1]);
+        assert_eq!(ExplainVerbose::from_json(&later.to_string()).ok(), Some(v));
+    }
+
     #[test]
     fn line_diffs() {
         assert_eq!(line_diff("a\nb\nc", "a\nc"), "- b\n");
