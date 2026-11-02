@@ -8,10 +8,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gate;
 pub mod protocol;
 pub mod server;
+pub mod tools;
 
 pub use protocol::{HANDSHAKE_VERSION, PINNED_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS};
 pub use server::{
     KrishivMcpServer, TOOL_SERVER_STATUS, dispatch_tool, server_status_payload, status_tool,
 };
+pub use tools::{McpConfig, Tools};
