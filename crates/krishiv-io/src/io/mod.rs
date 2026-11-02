@@ -49,7 +49,9 @@ use krishiv_common::config::{
 use krishiv_common::secret::{OptionValue, SecretString};
 use krishiv_memory::{ConsumerHandle, MemoryPool, Reservation};
 use object_store::path::Path;
-use object_store::{GetOptions, GetRange, ObjectMeta, ObjectStore, PutOptions, PutPayload};
+use object_store::{
+    GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload,
+};
 use tokio::sync::Semaphore;
 
 pub use self::cache::{CacheKey, MetadataCache};
@@ -645,6 +647,15 @@ impl fmt::Debug for PinnedStore {
     }
 }
 
+/// The outcome of [`IoContext::put_if_absent`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PutIfAbsent {
+    /// This call created the object.
+    Created,
+    /// The object was already there, written by someone else.
+    Exists,
+}
+
 /// A query's handle on the scheduler (cheap to clone).
 #[derive(Clone)]
 pub struct IoContext {
@@ -1181,6 +1192,94 @@ impl IoContext {
         let display = format!("{store}/{path}");
         self.put(&s, &lane, path, &display, PutPayload::from_bytes(bytes))
             .await
+    }
+
+    /// Creates the object `path` only if there is none (`If-None-Match: *`
+    /// / `PutMode::Create`): the primitive of the commit log. A transient
+    /// failure or a timed-out response is never retried blind: the object
+    /// is read back, and one holding exactly `bytes` means the write
+    /// landed, so it counts as created.
+    ///
+    /// # Errors
+    /// `TASK_WRITE_FAILED` if the store refuses or after retries.
+    pub async fn put_if_absent(
+        &self,
+        store: &StoreId,
+        path: &Path,
+        bytes: Bytes,
+    ) -> Result<PutIfAbsent> {
+        let (s, lane) = self.sched.store(store)?;
+        let cfg = &self.sched.config;
+        let display = format!("{store}/{path}");
+        let mut attempt = 0;
+        let mut maybe_landed = false;
+        loop {
+            let r = {
+                let _permit = lane.admit(Direction::Write, path).await?;
+                self.count(|c| &c.requests, 1);
+                let opts = PutOptions {
+                    mode: PutMode::Create,
+                    extensions: ScheduledRequest.into_extensions(),
+                    ..PutOptions::default()
+                };
+                tokio::time::timeout(
+                    cfg.request_timeout,
+                    s.put_opts(path, PutPayload::from_bytes(bytes.clone()), opts),
+                )
+                .await
+            };
+            let retry_after = match r {
+                Ok(Ok(_)) => {
+                    self.count(|c| &c.bytes_written, bytes.len() as u64);
+                    return Ok(PutIfAbsent::Created);
+                }
+                Ok(Err(object_store::Error::AlreadyExists { .. })) => {
+                    // After an unanswered attempt the object may be ours.
+                    if maybe_landed && self.get_object(store, path).await?.as_ref() == Some(&bytes)
+                    {
+                        return Ok(PutIfAbsent::Created);
+                    }
+                    return Ok(PutIfAbsent::Exists);
+                }
+                Ok(Err(e)) => match transient(&e) {
+                    Some(retry_after) => {
+                        maybe_landed = true;
+                        retry_after
+                    }
+                    None => return Err(write_failed(&display, &e.to_string())),
+                },
+                Err(_elapsed) => {
+                    maybe_landed = true;
+                    None
+                }
+            };
+            if attempt >= cfg.max_retries {
+                return Err(write_failed(&display, "gave up after retries"));
+            }
+            self.count(|c| &c.retries, 1);
+            tokio::time::sleep(self.sched.backoff(attempt, retry_after)).await;
+            attempt += 1;
+        }
+    }
+
+    /// The whole object `path` of `store`, or `None` if there is none.
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn get_object(&self, store: &StoreId, path: &Path) -> Result<Option<Bytes>> {
+        let (s, lane) = self.sched.store(store)?;
+        self.metadata_request(&lane, store, path, || async {
+            let opts = GetOptions {
+                extensions: ScheduledRequest.into_extensions(),
+                ..GetOptions::default()
+            };
+            match s.get_opts(path, opts).await {
+                Ok(r) => r.bytes().await.map(Some),
+                Err(object_store::Error::NotFound { .. }) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+        .await
     }
 
     /// Every object under the directory `prefix` of `store`, at any depth.

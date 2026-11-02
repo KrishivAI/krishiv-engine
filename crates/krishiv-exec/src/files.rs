@@ -25,7 +25,7 @@
 //! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
 //! [`StoreRegistry`]) are supported. Not yet supported, failing with
-//! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories that are
+//! `KRISHIV_UNSUPPORTED_FEATURE`: subdirectories that are
 //! not `name=value` partition directories, paths with any other scheme, file sources Spark
 //! knows but the engine has no [`FileFormat`] for, and merging the files'
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
@@ -39,7 +39,8 @@ use arrow_schema::{FieldRef, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
+    CannotMergeIncompatibleDataType, KrishivError, KrishivUnsupportedFeature, PathNotFound,
+    UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
@@ -404,27 +405,22 @@ impl FileReads {
         options: &BTreeMap<String, OptionValue>,
         known: Option<SchemaRef>,
     ) -> Result<FileListing> {
-        // Both change which directories are partitions or files.
-        if let Some(name) = ["recursiveFileLookup", "basePath"]
-            .iter()
-            .find(|n| options.keys().any(|k| k.eq_ignore_ascii_case(n)))
-        {
-            return Err(unsupported(format!("the {name} read option")));
-        }
+        let mode = self.list_mode(options)?;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
         for p in paths {
             let Some(text) = p.as_plain() else {
                 return Err(unsupported("paths with credentials".to_owned()));
             };
-            if text.contains(['*', '?', '[', '{']) {
-                return Err(unsupported("glob patterns in paths".to_owned()));
+            if krishiv_io::partition::glob::has_glob(text) {
+                self.list_glob(text, options, &mode, &mut listed).await?;
+                continue;
             }
             // The store is instantiated from the plan's option values
             // (plans stay pure data): the read's `fs.*` options override
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
-            self.list_path(&at, &mut listed).await?;
+            self.list_path(&at, &mode, &mut listed).await?;
         }
         listed.sort_by(|a, b| a.0.path.as_ref().cmp(b.0.path.as_ref()));
         let format = match self.formats.get(format) {
@@ -436,11 +432,7 @@ impl FileReads {
                 return Err(e);
             }
         };
-        if self.merges_schemas(format.name(), options) {
-            return Err(unsupported(
-                "merging the schemas of files (mergeSchema)".to_owned(),
-            ));
-        }
+        let merge = self.merges_schemas(format.name(), options);
         let (options, _) = format.options().parse(options, &self.session)?;
         let discovered: Vec<(String, Vec<Segment>)> = listed
             .iter()
@@ -468,10 +460,30 @@ impl FileReads {
             }
             .into());
         }
-        let schema = format
-            .infer_schema(&self.io, &files, &options)
-            .await
-            .map_err(|e| e.into_error(&files[0].display_path()))?;
+        let schema = if merge {
+            // Every file's own schema, merged by column name in first-seen order.
+            let mut merged: Option<SchemaRef> = None;
+            for file in &files {
+                let one = format
+                    .infer_schema(&self.io, std::slice::from_ref(file), &options)
+                    .await
+                    .map_err(|e| e.into_error(&file.display_path()))?;
+                merged = Some(match merged {
+                    None => one,
+                    Some(m) => merge_schemas(&m, &one)?,
+                });
+            }
+            merged.ok_or_else(|| {
+                KrishivError::from(UnableToInferSchema {
+                    format: display_name(format.name()),
+                })
+            })?
+        } else {
+            format
+                .infer_schema(&self.io, &files, &options)
+                .await
+                .map_err(|e| e.into_error(&files[0].display_path()))?
+        };
         let schema = with_partition_columns(schema, &partition_columns)?;
         Ok(FileListing {
             format,
@@ -508,14 +520,155 @@ impl FileReads {
 
     /// Adds the files `at` names to `out`, each with the `name=value`
     /// directories between `at` and the file.
+    /// The files under every path `text` (a Hadoop glob) matches; each match
+    /// is a root of its own, as in Spark, so partition discovery starts there.
+    async fn list_glob(
+        &self,
+        text: &str,
+        options: &BTreeMap<String, OptionValue>,
+        mode: &ListMode,
+        out: &mut Vec<(FileRef, Vec<Segment>)>,
+    ) -> Result<()> {
+        let first = text.find(['*', '?', '[', '{']).unwrap_or(text.len());
+        let cut = text[..first].rfind('/').map_or(0, |i| i + 1);
+        let (prefix, rest) = text.split_at(cut);
+        let glob = krishiv_io::partition::glob::Glob::parse(rest)
+            .map_err(|e| unsupported(format!("the glob pattern {text}: {e}")))?;
+        let at = self.paths.locate_with_options(prefix, options)?;
+        let base = at.path.parts().count();
+        let mut matched = std::collections::BTreeMap::new();
+        for meta in self.io.list(&at.store, &at.path).await? {
+            let below: Vec<String> = meta
+                .location
+                .parts()
+                .skip(base)
+                .map(|p| p.as_ref().to_owned())
+                .collect();
+            // The file and each directory above it are candidates.
+            for n in 1..=below.len() {
+                let names: Vec<&str> = below[..n].iter().map(String::as_str).collect();
+                if glob.matches(&names) {
+                    matched
+                        .entry(below[..n].to_vec())
+                        .or_insert_with(|| Path::from_iter(meta.location.parts().take(base + n)));
+                }
+            }
+        }
+        if matched.is_empty() {
+            return Err(PathNotFound {
+                path: format!("{}{rest}", at.display.trim_end_matches('/')),
+            }
+            .into());
+        }
+        for (names, path) in matched {
+            let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
+            let found = LocatedPath {
+                store: at.store.clone(),
+                path,
+                display,
+            };
+            self.list_path(&found, mode, out).await?;
+        }
+        Ok(())
+    }
+
+    /// The `recursiveFileLookup` and `basePath` read options.
+    fn list_mode(&self, options: &BTreeMap<String, OptionValue>) -> Result<ListMode> {
+        let get = |name: &str| {
+            options
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v)
+        };
+        let recursive = get("recursiveFileLookup")
+            .and_then(OptionValue::as_plain)
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+        let base = match get("basePath") {
+            Some(v) => {
+                let Some(text) = v.as_plain() else {
+                    return Err(unsupported("paths with credentials".to_owned()));
+                };
+                Some(self.paths.locate_with_options(text, options)?)
+            }
+            None => None,
+        };
+        Ok(ListMode { recursive, base })
+    }
+
+    /// The `name=value` directories from `mode`'s base path down to the
+    /// directories of `dirs` (those below `at`, already split).
+    fn base_segments(at: &LocatedPath, mode: &ListMode, dirs: &[String]) -> Result<Vec<Segment>> {
+        if mode.recursive {
+            return Ok(Vec::new());
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut display = at.display.clone();
+        if let Some(base) = &mode.base {
+            let base_parts: Vec<String> =
+                base.path.parts().map(|p| p.as_ref().to_owned()).collect();
+            let at_parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+            if at_parts.len() < base_parts.len() || at_parts[..base_parts.len()] != base_parts[..] {
+                return Err(unsupported(format!(
+                    "the basePath {} is not a parent of the path {}",
+                    base.display, at.display
+                )));
+            }
+            names.extend(at_parts[base_parts.len()..].iter().cloned());
+            display = base.display.clone();
+        }
+        names.extend(dirs.iter().cloned());
+        names
+            .iter()
+            .map(|dir| {
+                parse_segment(dir).ok_or_else(|| {
+                    unsupported(format!(
+                        "reading the subdirectory {display}/{dir} (it is not a name=value partition directory)"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    /// The files the commit log of the directory `at` shows, `None` when it
+    /// has no log.
+    async fn committed_files(
+        &self,
+        at: &LocatedPath,
+    ) -> Result<Option<BTreeMap<String, krishiv_io::commit_log::AddedFile>>> {
+        let log = krishiv_io::commit_log::CommitLog::new(
+            &self.io,
+            at.store.clone(),
+            at.path.clone(),
+            at.display.clone(),
+        );
+        if log.exists().await? {
+            Ok(Some(log.snapshot().await?.files))
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn list_path(
         &self,
         at: &LocatedPath,
+        mode: &ListMode,
         out: &mut Vec<(FileRef, Vec<Segment>)>,
     ) -> Result<()> {
         if let Some(meta) = self.io.head(&at.store, &at.path).await? {
             if !at.path.filename().is_some_and(hidden) {
-                out.push((FileRef::from_meta(at.store.clone(), &meta), Vec::new()));
+                // The file's own directories above `at` count only with a basePath.
+                let parent = at.path.parts().count().saturating_sub(1);
+                let probe = LocatedPath {
+                    store: at.store.clone(),
+                    path: Path::from_iter(at.path.parts().take(parent)),
+                    display: at.display.clone(),
+                };
+                let segs = if mode.base.is_some() {
+                    Self::base_segments(&probe, mode, &[])?
+                } else {
+                    Vec::new()
+                };
+                out.push((FileRef::from_meta(at.store.clone(), &meta), segs));
             }
             return Ok(());
         }
@@ -526,27 +679,112 @@ impl FileReads {
             .into());
         }
         let base = at.path.parts().count();
+        // A directory with a commit log shows only the files committed there.
+        // Boxed: the listing future sits on deep recursion paths (nested
+        // scripts), so it must stay small.
+        let committed = Box::pin(self.committed_files(at)).await?;
+        let mut seen = 0;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
                 continue;
             }
-            let dirs = below.len().saturating_sub(1);
-            let mut segments = Vec::with_capacity(dirs);
-            for dir in &below[..dirs] {
-                let Some(segment) = parse_segment(dir.as_ref()) else {
-                    return Err(unsupported(format!(
-                        "reading the subdirectory {}/{} (it is not a name=value partition directory)",
-                        at.display,
-                        dir.as_ref()
-                    )));
-                };
-                segments.push(segment);
+            if let Some(files) = &committed {
+                let rel = below
+                    .iter()
+                    .map(AsRef::as_ref)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if !files.contains_key(&rel) {
+                    continue;
+                }
+                seen += 1;
             }
+            let dirs = below.len().saturating_sub(1);
+            let names: Vec<String> = below[..dirs]
+                .iter()
+                .map(|p| p.as_ref().to_owned())
+                .collect();
+            let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
+        }
+        if let Some(files) = &committed
+            && seen < files.len()
+        {
+            // A committed file is gone (a concurrent overwrite deleted it).
+            return Err(krishiv_common::error::KrishivConcurrentCommit {
+                root: at.display.clone(),
+                version: "the version this read started at".to_owned(),
+            }
+            .into());
         }
         Ok(())
     }
+}
+
+/// Spark's `StructType.merge`: the columns of `a`, then those only in `b`;
+/// a column in both keeps its type (structs merge field by field) and is
+/// nullable if either is.
+///
+/// # Errors
+/// `CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE` when a column has two types.
+fn merge_schemas(a: &SchemaRef, b: &SchemaRef) -> Result<SchemaRef> {
+    let fields = merge_fields(a.fields(), b.fields())?;
+    Ok(Arc::new(arrow_schema::Schema::new_with_metadata(
+        fields,
+        a.metadata().clone(),
+    )))
+}
+
+fn merge_fields(a: &arrow_schema::Fields, b: &arrow_schema::Fields) -> Result<Vec<FieldRef>> {
+    let mut out: Vec<FieldRef> = Vec::with_capacity(a.len());
+    for f in a {
+        match b.iter().find(|g| g.name() == f.name()) {
+            None => out.push(Arc::clone(f)),
+            Some(g) => out.push(merge_field(f, g)?),
+        }
+    }
+    out.extend(
+        b.iter()
+            .filter(|g| !a.iter().any(|f| f.name() == g.name()))
+            .cloned(),
+    );
+    Ok(out)
+}
+
+fn merge_field(a: &FieldRef, b: &FieldRef) -> Result<FieldRef> {
+    let nullable = a.is_nullable() || b.is_nullable();
+    let data_type = match (a.data_type(), b.data_type()) {
+        (x, y) if x == y => x.clone(),
+        (arrow_schema::DataType::Struct(x), arrow_schema::DataType::Struct(y)) => {
+            arrow_schema::DataType::Struct(merge_fields(x, y)?.into())
+        }
+        (x, y) => {
+            let sql = |f: &FieldRef, t: &arrow_schema::DataType| {
+                DataType::from_arrow_field(&arrow_schema::Field::new(f.name(), t.clone(), true))
+                    .map_or_else(|_| format!("{t}"), |d| d.sql())
+            };
+            return Err(CannotMergeIncompatibleDataType {
+                left: format!("\"{}\"", sql(a, x)),
+                right: format!("\"{}\"", sql(b, y)),
+            }
+            .into());
+        }
+    };
+    Ok(Arc::new(
+        a.as_ref()
+            .clone()
+            .with_data_type(data_type)
+            .with_nullable(nullable),
+    ))
+}
+
+/// How a read lists files: `recursiveFileLookup` (every file below the
+/// paths, no partition discovery) and `basePath` (where partition discovery
+/// starts).
+struct ListMode {
+    recursive: bool,
+    base: Option<LocatedPath>,
 }
 
 /// `schema` followed by `partitions`.

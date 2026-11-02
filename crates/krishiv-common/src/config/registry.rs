@@ -49,6 +49,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &FILES_MIN_PARTITION_NUM,
     &FILES_MAX_PARTITION_NUM,
     &PARTITION_OVERWRITE_MODE,
+    &FILES_COMMIT_PROTOCOL,
     &BUCKETING_MAX_BUCKETS,
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
@@ -159,6 +160,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
+    ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
     (
         "spark.sql.cteRecursionLevelLimit",
@@ -1300,6 +1302,23 @@ pub static PARTITION_OVERWRITE_MODE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.sources.partitionOverwriteMode"),
+};
+
+/// `krishiv.sql.files.commitProtocol`.
+pub static FILES_COMMIT_PROTOCOL: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.files.commitProtocol",
+    value_type: ValueType::Enum(&["AUTO", "LOG", "NONE"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("NONE"))),
+    doc: "How a write to a plain directory is committed: `LOG` records every commit in \
+          `_krishiv_log/` (put-if-absent, so concurrent writers cannot both take a version), and \
+          Krishiv readers of the directory then see only committed files; `NONE` is Spark's plain \
+          commit (files under their final names, `_SUCCESS`; the default until the log is the \
+          default); `AUTO` uses the log \
+          where the store supports put-if-absent and the plain commit, with a warning, where it \
+          does not.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
 };
 
 /// `krishiv.agent.gateBytes`.

@@ -113,11 +113,49 @@ async fn a_put_creates_parents_and_leaves_no_staging_file() {
 }
 
 #[tokio::test]
-async fn put_modes_other_than_overwrite_are_refused() {
+async fn create_mode_publishes_once_and_never_overwrites() {
+    let f = fixture();
+    let s = store(&f, false);
+    let create = || PutOptions {
+        mode: object_store::PutMode::Create,
+        ..PutOptions::default()
+    };
+    s.put_opts(
+        &obj(&f, "t/log/0"),
+        PutPayload::from_static(b"one"),
+        create(),
+    )
+    .await
+    .unwrap();
+    let e = s
+        .put_opts(
+            &obj(&f, "t/log/0"),
+            PutPayload::from_static(b"two"),
+            create(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, object_store::Error::AlreadyExists { .. }),
+        "{e}"
+    );
+    assert_eq!(std::fs::read(f.root.join("a/t/log/0")).unwrap(), b"one");
+    assert_eq!(
+        tree(&f.root.join("a/t/log")).len(),
+        1,
+        "no staging file is left"
+    );
+}
+
+#[tokio::test]
+async fn put_modes_other_than_overwrite_and_create_are_refused() {
     let f = fixture();
     let s = store(&f, false);
     let opts = PutOptions {
-        mode: object_store::PutMode::Create,
+        mode: object_store::PutMode::Update(object_store::UpdateVersion {
+            e_tag: None,
+            version: None,
+        }),
         ..PutOptions::default()
     };
     let e = s
@@ -137,10 +175,26 @@ async fn put_modes_other_than_overwrite_are_refused() {
         .await,
         Err(object_store::Error::NotImplemented { .. })
     ));
-    assert!(matches!(
-        s.get_opts(&obj(&f, "t/x"), GetOptions::default()).await,
-        Err(object_store::Error::NotImplemented { .. })
-    ));
+}
+
+#[tokio::test]
+async fn a_body_reads_whole_and_a_missing_object_is_not_found() {
+    let f = fixture();
+    let s = store(&f, false);
+    put(&s, &obj(&f, "t/x"), b"hello").await.unwrap();
+    let got = s
+        .get_opts(&obj(&f, "t/x"), GetOptions::default())
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(&got[..], b"hello");
+    let e = s
+        .get_opts(&obj(&f, "t/none"), GetOptions::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, object_store::Error::NotFound { .. }), "{e}");
 }
 
 #[tokio::test]

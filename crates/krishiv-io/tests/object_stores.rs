@@ -324,3 +324,38 @@ async fn azure_round_trip() {
     )
     .await;
 }
+
+/// The commit log relies on `PutMode::Create` (`If-None-Match: *`): of two
+/// creates of one object, the second must fail as "exists", and the first
+/// writer's bytes must stay (P2-T082b).
+#[tokio::test]
+async fn s3_put_if_absent_is_exclusive() {
+    let Some(endpoint) = endpoint("KRISHIV_TEST_S3_ENDPOINT") else {
+        return;
+    };
+    let config = test_config(&[
+        ("fs.s3a.endpoint", endpoint.as_str()),
+        ("fs.s3a.access.key", "minioadmin"),
+        ("fs.s3a.secret.key", "minioadmin"),
+        ("fs.s3a.path.style.access", "true"),
+        ("fs.s3a.endpoint.region", "us-east-1"),
+    ]);
+    let url = format!("s3a://krishiv-test/{}/log/0.json", unique_dir());
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let (store, path, _) = registry.ensure(&sched, &url).unwrap();
+    let io = sched.context();
+    let first = io
+        .put_if_absent(&store, &path, Bytes::from_static(b"one"))
+        .await
+        .unwrap();
+    let second = io
+        .put_if_absent(&store, &path, Bytes::from_static(b"two"))
+        .await
+        .unwrap();
+    assert_eq!(first, krishiv_io::PutIfAbsent::Created);
+    assert_eq!(second, krishiv_io::PutIfAbsent::Exists);
+    let got = io.get_object(&store, &path).await.unwrap().unwrap();
+    assert_eq!(&got[..], b"one");
+    io.delete(&store, &path).await.unwrap();
+}

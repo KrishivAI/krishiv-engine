@@ -1568,20 +1568,36 @@ fn time_zones_and_formats() {
         Some("2020-01-02"),
         "dates write in the default pattern"
     );
-    // A region zone fails only timestamp conversions.
+    // A region zone shifts by its rules (New York is UTC-5 in January).
     let o = options(&serde_json::json!({"timeZone": "America/New_York"}));
-    let ints = ScanRequest::all(ddl("a int"));
+    let got = read(
+        b"{\"ts\":\"2020-01-01 10:00:00\"}\n",
+        &o,
+        &ScanRequest::all(ddl("ts timestamp")),
+    )
+    .expect("region zone");
+    let micros = got[0]
+        .column(0)
+        .as_primitive::<TimestampMicrosecondType>()
+        .value(0);
     assert_eq!(
-        rows_of(&read(b"{\"a\":1}\n", &o, &ints).expect("no timestamps")).len(),
-        1
+        micros,
+        chrono::NaiveDate::from_ymd_opt(2020, 1, 1)
+            .expect("date")
+            .and_hms_opt(15, 0, 0)
+            .expect("time")
+            .and_utc()
+            .timestamp_micros()
     );
+    // An unknown zone is INVALID_TIMEZONE, as in Spark.
+    let o = options(&serde_json::json!({"timeZone": "Foo/Bar"}));
     let e = read(
         b"{\"ts\":\"2020-01-01 10:00:00\"}\n",
         &o,
         &ScanRequest::all(ddl("ts timestamp")),
     )
     .expect_err("zone");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(e.error_class(), ErrorClass::InvalidTimezone);
 }
 
 #[test]
