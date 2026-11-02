@@ -84,6 +84,24 @@ fn srid_and_binary_round_trip() {
 }
 
 #[test]
+fn endianness_may_be_a_column() {
+    let g = format!("ST_GeomFromWKB({POINT})");
+    let from = |v: &str| format!("(VALUES ({v})) t(e)");
+    let q = |v: &str| format!("SELECT hex(ST_AsBinary({g}, e)) FROM {}", from(v));
+    assert_eq!(
+        run(&q("'xdr'")).unwrap().unwrap(),
+        "00000000013FF00000000000004000000000000000"
+    );
+    assert_eq!(
+        run(&q("'NDR'")).unwrap().unwrap(),
+        "0101000000000000000000F03F0000000000000040"
+    );
+    assert_eq!(run(&q("CAST(NULL AS STRING)")).unwrap(), None);
+    let e = run(&q("'big'")).unwrap_err();
+    assert!(e.contains("ST_INVALID_ENDIANNESS_VALUE"), "{e}");
+}
+
+#[test]
 fn bad_input_is_refused_as_spark_refuses_it() {
     let e = error("ST_GeogFromWKB(X'6F')");
     assert!(e.contains("WKB_PARSE_ERROR"), "{e}");
@@ -154,7 +172,11 @@ fn spatial_values_are_no_keys() {
     let m = format!("ST_GeomFromWKB({POINT})");
     let e = error(&format!("{m} = {m}"));
     assert!(e.contains("INVALID_ORDERING_TYPE"), "{e}");
-    for q in [format!("max({m})"), format!("min({m})")] {
+    for q in [
+        format!("max({m})"),
+        format!("min({m})"),
+        format!("count(DISTINCT {m})"),
+    ] {
         let e = error(&q);
         assert!(e.contains("GEOMETRY or GEOGRAPHY"), "{q}: {e}");
     }

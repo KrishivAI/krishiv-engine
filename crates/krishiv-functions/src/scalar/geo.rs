@@ -162,7 +162,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             };
             // A NULL endianness literal makes every row NULL.
             let null_order = order.is_none() && matches!(args.get(1), Some(BindArg::Literal(_)));
-            let order = order.or(null_order.then_some(ByteOrder::Ndr));
+            // A column of endianness values is read per row.
+            let per_row = order.is_none() && !null_order;
+            let order = order.or(Some(ByteOrder::Ndr));
             order.map(|order| {
                 Binding::new(DataType::BinaryView, move |x: &Inputs<'_>| {
                     let column = x.column(0)?;
@@ -171,7 +173,28 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                         (0..column.len()).for_each(|_| out.append_null());
                     } else {
                         let (_, wkb) = parts(&column)?;
+                        let ends = if per_row { Some(x.strings(1)?) } else { None };
                         for row in 0..column.len() {
+                            let order = match &ends {
+                                Some(ends) if ends.is_valid(row) => {
+                                    let e = ends.value(row);
+                                    if e.eq_ignore_ascii_case("NDR") {
+                                        ByteOrder::Ndr
+                                    } else if e.eq_ignore_ascii_case("XDR") {
+                                        ByteOrder::Xdr
+                                    } else {
+                                        return Err(StInvalidEndiannessValue {
+                                            endianness: e.to_owned(),
+                                        }
+                                        .into());
+                                    }
+                                }
+                                Some(_) => {
+                                    out.append_null();
+                                    continue;
+                                }
+                                None => order,
+                            };
                             if column.is_null(row) {
                                 out.append_null();
                             } else if order == ByteOrder::Ndr {

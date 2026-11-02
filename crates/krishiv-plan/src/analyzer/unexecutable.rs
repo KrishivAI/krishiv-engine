@@ -72,7 +72,8 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
         Node::Expr(e) => match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(f))
                 if f.kind == crate::FunctionKind::Aggregate
-                    && matches!(f.id.name(), "min" | "max" | "min_by" | "max_by" | "mode")
+                    && (f.distinct
+                        || matches!(f.id.name(), "min" | "max" | "min_by" | "max_by" | "mode"))
                     && f.args.iter().any(|a| is_spatial(expr_type(a))) =>
             {
                 Some((KEY, e.origin))
