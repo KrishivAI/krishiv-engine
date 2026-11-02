@@ -51,7 +51,14 @@ fn names_a_function(sql: &str) -> bool {
         return false;
     };
     (at(0, "CREATE") || at(0, "DROP")) && f < 6 && {
-        let name = if at(f + 1, "IF") { f + 3 } else { f + 1 };
+        // `IF [NOT] EXISTS` (CREATE has `IF NOT EXISTS`, DROP `IF EXISTS`).
+        let name = if at(f + 1, "IF") && at(f + 2, "NOT") {
+            f + 4
+        } else if at(f + 1, "IF") {
+            f + 3
+        } else {
+            f + 1
+        };
         at(name, "IDENTIFIER") && at(name + 1, "(")
     }
 }

@@ -184,7 +184,10 @@ impl QueryUsage {
         };
         for e in m.operators.values() {
             u.cpu = u.cpu.saturating_add(e.metrics.compute_time);
-            u.spill_bytes = u.spill_bytes.saturating_add(e.metrics.spilled_bytes);
+            u.spill_bytes = u
+                .spill_bytes
+                .saturating_add(e.metrics.spilled_bytes)
+                .saturating_add(e.metrics.spill_write_bytes);
             if e.role == OperatorRole::Sink {
                 u.rows_out = u.rows_out.saturating_add(e.metrics.rows_in);
             }

@@ -606,7 +606,7 @@ fn parameters_are_visible_in_the_bodys_subqueries() {
         );
     for arg in [int(3), c("a")] {
         let (class, _) = err(&call(vec![f("two", vec![arg])], vec![two.clone()]));
-        assert!(class.starts_with("UNRESOLVED_COLUMN"), "{class}");
+        assert_eq!(class, "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION", "{class}");
     }
 }
 

@@ -1930,7 +1930,11 @@ impl<'s> Parser<'s> {
                     }
                 };
                 match offset {
-                    Ok(zone) => (TimeZone::Named(zone), self.span_from(from)),
+                    Ok(zone) => {
+                        // `from` is a token index; the span starts at the byte.
+                        let begin = self.toks.get(from).map_or(start, |t| t.span.start);
+                        (TimeZone::Named(zone), self.span_from(begin))
+                    }
                     Err(e) => return Self::fatal(e),
                 }
             }

@@ -260,6 +260,7 @@ impl Resolver<'_> {
         if s.plan_id.is_some()
             || s.qualifier.is_empty()
             || s.position.is_some()
+            || s.regex.is_some()
             || !s.except.is_empty()
             || !s.replace.is_empty()
             || !cx.outer

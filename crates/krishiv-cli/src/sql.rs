@@ -187,6 +187,13 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
         );
         return 2;
     }
+    if args.planning && explain_format(args) != ExplainFormat::Json {
+        let _ = writeln!(
+            io::stderr(),
+            "error: '--planning' needs JSON output: add '--json' or '--explain-format json'\n\nFor more information, try '--help'."
+        );
+        return 2;
+    }
     if args.execute.is_none() && args.file.is_none() && io::stdin().is_terminal() {
         return run_repl_command(args);
     }
@@ -352,9 +359,6 @@ fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<
     // second rendering that can drift.
     let format = explain_format(args);
     let text = if args.explain_analyze && args.planning {
-        if format != ExplainFormat::Json {
-            return Err("--planning needs JSON output (--json)".to_owned());
-        }
         futures::executor::block_on(df.explain_analyze_verbose())
             .map_err(|e| e.to_string())?
             .to_json()

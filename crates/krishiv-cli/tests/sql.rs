@@ -348,8 +348,9 @@ fn explain_analyze_planning_adds_the_stages() {
     let planning = p.planning.expect("planning member");
     assert!(planning["steps"].as_array().is_some_and(|a| !a.is_empty()));
     let o = krishiv(&["sql", "--explain-analyze", "--planning", "-e", q], None);
-    assert!(!o.status.success());
-    assert!(err(&o).contains("--planning needs JSON"), "{}", err(&o));
+    // A usage error (exit 2) before any statement runs.
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("needs JSON output"), "{}", err(&o));
 }
 
 #[test]

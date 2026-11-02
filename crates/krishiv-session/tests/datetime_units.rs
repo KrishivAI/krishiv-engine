@@ -603,8 +603,17 @@ fn a_sql_function_keeps_the_ansi_mode_it_was_created_under() {
         let e = format!("{:?}", r.expect_err(f));
         assert!(e.contains("CastInvalidInput"), "{f}: {e}");
     }
+    // Without ANSI the invalid cast is NULL, and NULL + 0 is NULL: one row.
     let r = block_on(async { s.sql("SELECT cast_plain(0)").await?.collect().await });
-    assert!(r.is_ok(), "{r:?}");
+    let batches = r.unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
+    assert!(batches[0].column(0).is_null(0), "{batches:?}");
 }
 
 /// A parameter is visible one scalar subquery down; two down it is an
