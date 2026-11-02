@@ -1518,3 +1518,50 @@ fn a_logged_write_killed_before_its_commit_leaves_the_old_state_visible() {
     env.write_logged("t", SaveMode::Append, "job-4", 1, true);
     assert_eq!(env.visible("t").len(), 2);
 }
+
+/// A concurrent overwrite replaces only the files its base snapshot shows: the task files of an append that
+/// has not committed yet are never in it, so they survive (and the append can still commit).
+#[test]
+fn a_logged_overwrite_leaves_the_uncommitted_files_of_a_concurrent_append() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    // The append has written its files and not committed.
+    let w = env.begin("t", SaveMode::Append, "job-2").unwrap().unwrap();
+    let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+    let pending = env.names("t");
+    drop(w);
+    env.write_logged("t", SaveMode::Append, "job-2", 3, false);
+    // The overwrite lists everything, the pending files included, and commits first.
+    env.write_logged("t", SaveMode::Overwrite, "job-3", 2, true);
+    let on_store = env.names("t");
+    assert!(
+        on_store.iter().any(|n| n.contains("job-2")),
+        "{on_store:?} (before: {pending:?})"
+    );
+    assert!(
+        !on_store.iter().any(|n| n.contains("job-1")),
+        "{on_store:?}"
+    );
+    assert_eq!(env.visible("t").len(), 1);
+}
+
+/// Adoption uses the reads' hidden-name rule: a copy in progress is not data.
+#[test]
+fn adoption_skips_copy_in_progress_files() {
+    let env = Env::memory();
+    env.put("t/part-00000.parquet._COPYING_");
+    env.put("t/_hidden");
+    env.put("t/part-00001.parquet");
+    env.write_logged("t", SaveMode::Append, "job-1", 1, true);
+    let visible = env.visible("t");
+    assert!(
+        visible.contains(&"part-00001.parquet".to_owned()),
+        "{visible:?}"
+    );
+    assert!(
+        !visible
+            .iter()
+            .any(|n| n.contains("_COPYING_") || n.contains("_hidden")),
+        "{visible:?}"
+    );
+}

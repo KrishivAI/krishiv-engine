@@ -537,6 +537,9 @@ impl FileReads {
         let at = self.paths.locate_with_options(prefix, options)?;
         let base = at.path.parts().count();
         let mut matched = std::collections::BTreeMap::new();
+        // A glob under a logged directory expands over its committed files only: an abandoned
+        // append's files would otherwise come back as roots of their own.
+        let outer = Box::pin(self.committed_files(&at)).await?.map(Arc::new);
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<String> = meta
                 .location
@@ -544,6 +547,11 @@ impl FileReads {
                 .skip(base)
                 .map(|p| p.as_ref().to_owned())
                 .collect();
+            if let Some(files) = &outer
+                && !files.contains_key(&below.join("/"))
+            {
+                continue;
+            }
             // The file and each directory above it are candidates; a hidden name (`_krishiv_log`,
             // `.staging`) is never a root of its own, and nothing below one is a candidate.
             for n in 1..=below.len() {
@@ -564,6 +572,11 @@ impl FileReads {
             }
             .into());
         }
+        let inner = ListMode {
+            recursive: mode.recursive,
+            base: mode.base.clone(),
+            logged: outer.map(|files| (base, files)),
+        };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
             let found = LocatedPath {
@@ -571,7 +584,7 @@ impl FileReads {
                 path,
                 display,
             };
-            self.list_path(&found, mode, out).await?;
+            self.list_path(&found, &inner, out).await?;
         }
         Ok(())
     }
@@ -596,7 +609,11 @@ impl FileReads {
             }
             None => None,
         };
-        Ok(ListMode { recursive, base })
+        Ok(ListMode {
+            recursive,
+            base,
+            logged: None,
+        })
     }
 
     /// The `name=value` directories from `mode`'s base path down to the
@@ -703,6 +720,18 @@ impl FileReads {
                     continue;
                 }
                 seen += 1;
+            } else if let Some((root_base, files)) = &mode.logged {
+                // Below a logged directory a glob matched: only its committed files.
+                let rel = meta
+                    .location
+                    .parts()
+                    .skip(*root_base)
+                    .map(|p| p.as_ref().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if !files.contains_key(&rel) {
+                    continue;
+                }
             }
             let dirs = below.len().saturating_sub(1);
             let names: Vec<String> = below[..dirs]
@@ -757,14 +786,17 @@ fn merge_fields(a: &arrow_schema::Fields, b: &arrow_schema::Fields) -> Result<Ve
 }
 
 fn merge_field(a: &FieldRef, b: &FieldRef) -> Result<FieldRef> {
+    use arrow_schema::DataType as Arrow;
     let nullable = a.is_nullable() || b.is_nullable();
     let data_type = match (a.data_type(), b.data_type()) {
         (x, y) if x == y => x.clone(),
-        (arrow_schema::DataType::Struct(x), arrow_schema::DataType::Struct(y)) => {
-            arrow_schema::DataType::Struct(merge_fields(x, y)?.into())
-        }
+        (Arrow::Struct(x), Arrow::Struct(y)) => Arrow::Struct(merge_fields(x, y)?.into()),
+        // Collections merge their element (or key and value) types the same way.
+        (Arrow::List(x), Arrow::List(y)) => Arrow::List(merge_field(x, y)?),
+        (Arrow::LargeList(x), Arrow::LargeList(y)) => Arrow::LargeList(merge_field(x, y)?),
+        (Arrow::Map(x, sorted), Arrow::Map(y, _)) => Arrow::Map(merge_field(x, y)?, *sorted),
         (x, y) => {
-            let sql = |f: &FieldRef, t: &arrow_schema::DataType| {
+            let sql = |f: &FieldRef, t: &Arrow| {
                 DataType::from_arrow_field(&arrow_schema::Field::new(f.name(), t.clone(), true))
                     .map_or_else(|_| format!("{t}"), |d| d.sql())
             };
@@ -789,6 +821,12 @@ fn merge_field(a: &FieldRef, b: &FieldRef) -> Result<FieldRef> {
 struct ListMode {
     recursive: bool,
     base: Option<LocatedPath>,
+    /// Set while a glob under a directory with a commit log is expanded: how many path parts that
+    /// directory has, and the files committed in it. Matched roots below it list only those files.
+    logged: Option<(
+        usize,
+        Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
+    )>,
 }
 
 /// `schema` followed by `partitions`.

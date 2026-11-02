@@ -385,3 +385,29 @@ fn merge_schema_unions_the_columns_of_the_files() {
         "CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE"
     );
 }
+
+#[test]
+fn merge_schema_merges_the_element_types_of_collections() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let root = dir.path().join("merged");
+    let root = root.to_str().unwrap().to_owned();
+    let one = block_on(
+        s.sql("SELECT array(named_struct('a', 1)) AS x, map('k', named_struct('m', 1)) AS y"),
+    )
+    .unwrap();
+    block_on(one.write().parquet(&format!("{root}/p1"))).unwrap();
+    let two = block_on(s.sql("SELECT array(named_struct('a', 2, 'b', 's')) AS x, map('k', named_struct('m', 2, 'n', 't')) AS y")).unwrap();
+    block_on(two.write().parquet(&format!("{root}/p2"))).unwrap();
+    let df = s
+        .read()
+        .option("mergeSchema", "true")
+        .option("recursiveFileLookup", "true")
+        .parquet([root.as_str()]);
+    let schema = block_on(df.schema()).unwrap();
+    let text = format!("{schema:?}");
+    // Both the array's struct and the map's value struct have the fields of both files.
+    for field in ["\"b\"", "\"n\""] {
+        assert!(text.contains(field), "{field} missing from {text}");
+    }
+}

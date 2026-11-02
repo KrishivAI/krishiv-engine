@@ -238,17 +238,6 @@ impl DirectoryWrite {
         )
     }
 
-    /// The relative path of a file this write made: its `Path` holds the
-    /// escaped directory names (`%2F`) as text, which a listing returns as
-    /// the file-system names, so each part is decoded once to match.
-    fn relative_written(&self, path: &Path) -> String {
-        self.relative(path)
-            .split('/')
-            .map(crate::partition::discover::unescape_partition_value)
-            .collect::<Vec<_>>()
-            .join("/")
-    }
-
     /// `path` relative to the root, `/`-separated.
     fn relative(&self, path: &Path) -> String {
         path.prefix_match(&self.dir)
@@ -350,6 +339,19 @@ impl DirectoryWrite {
         } else {
             self.replaced.clone()
         };
+        // A logged overwrite replaces only what its base snapshot shows: another writer's task files
+        // (written, not yet committed) are never in it, so a concurrent append's files survive it.
+        let replaced: Vec<Path> = match &self.log {
+            Some(state) => {
+                let visible: std::collections::HashSet<&str> =
+                    state.visible.iter().map(String::as_str).collect();
+                replaced
+                    .into_iter()
+                    .filter(|p| visible.contains(self.relative(p).as_str()))
+                    .collect()
+            }
+            None => replaced,
+        };
         if let Some(state) = &self.log {
             // The entry exists before any old object is deleted: a reader
             // of the log never sees a file that is gone.
@@ -374,7 +376,7 @@ impl DirectoryWrite {
             let add: Vec<AddedFile> = files
                 .iter()
                 .map(|f| {
-                    let rel = self.relative_written(&f.path);
+                    let rel = self.relative(&f.path);
                     AddedFile {
                         partition: partition_of(&rel),
                         path: rel,
@@ -525,7 +527,10 @@ impl DirectoryWrite {
 
 /// Spark's hidden-name rule for one path component.
 fn is_hidden(name: &str) -> bool {
-    name.starts_with('.') || (name.starts_with('_') && !name.contains('='))
+    // The same rule as the reads' (`krishiv-exec` `hidden`), or adopted files would vanish from them.
+    name.starts_with('.')
+        || (name.starts_with('_') && !name.contains('='))
+        || name.ends_with("._COPYING_")
 }
 
 /// The `name=value` directories of the relative file path `rel`.

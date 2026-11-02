@@ -1833,7 +1833,7 @@ impl Session {
                 let below: Vec<String> = f
                     .path
                     .prefix_match(&at.path)
-                    .map(|parts| parts.map(|p| percent_decoded(p.as_ref())).collect())
+                    .map(|parts| parts.map(|p| p.as_ref().to_owned()).collect())
                     .unwrap_or_default();
                 if let Some((_, leaf)) = below.split_last()
                     && !leaf.is_empty()
@@ -2096,7 +2096,10 @@ fn committed_files(
             let rows = u64::try_from(rows.value(i))
                 .map_err(|_| internal(format!("a written file of {} rows", rows.value(i))))?;
             out.push(krishiv_io::WrittenFileInfo {
-                path: object_store::path::Path::from(path.value(i)),
+                // As the writer made it (`Path::parse`: the escaped directory names stay as text), so it names
+                // the key a listing returns; `Path::from` would encode the `%` of `%2F` a second time.
+                path: object_store::path::Path::parse(path.value(i))
+                    .map_err(|e| internal(format!("a written file with an invalid path ({e})")))?,
                 size,
                 rows,
                 statistics: FileStatistics::with_rows(Precision::Exact(rows)),
@@ -2462,30 +2465,6 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
-}
-
-/// An object-store path part as the file system names it: object_store percent-encodes characters it does
-/// not keep in a part (`%` among them), so `13%253A33` is the directory `13%3A33`.
-fn percent_decoded(part: &str) -> String {
-    let bytes = part.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = |b: u8| char::from(b).to_digit(16);
-        if bytes[i] == b'%'
-            && let (Some(Some(h)), Some(Some(l))) = (
-                bytes.get(i + 1).map(|b| hex(*b)),
-                bytes.get(i + 2).map(|b| hex(*b)),
-            )
-        {
-            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]

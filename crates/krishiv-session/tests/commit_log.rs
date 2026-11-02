@@ -200,3 +200,41 @@ fn a_wildcard_read_of_a_logged_root_skips_the_log_directory() {
     block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
     assert_eq!(ids(&s, &format!("{path}/*")), [4, 5]);
 }
+
+#[test]
+fn a_wildcard_read_of_a_logged_root_skips_uncommitted_files_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = session_with(&[4, 5]);
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    let data = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, root.join("part-99999-dead-c000.snappy.parquet")).unwrap();
+    assert_eq!(ids(&s, &path), [4, 5]);
+    assert_eq!(ids(&s, &format!("{path}/*")), [4, 5]);
+}
+
+#[test]
+fn a_wildcard_over_partition_directories_of_a_logged_root_skips_uncommitted_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    let part = root.join("p=a");
+    let data = std::fs::read_dir(&part)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, part.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    assert_eq!(ids(&s, &format!("{path}/p=*")), [1]);
+}
