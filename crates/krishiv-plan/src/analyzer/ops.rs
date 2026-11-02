@@ -2832,7 +2832,7 @@ impl Resolver<'_> {
         // Columns an earlier `USING` join merged away stay reachable above this join, and its
         // condition may read them (`a NATURAL JOIN b JOIN c ON b.k = c.k`): the inputs are
         // revealed, the join runs over the wide inputs and a projection restores the output.
-        let wide = if keys.is_none() && !matches!(kind, JoinKind::Existence(_)) {
+        let wide = if !matches!(kind, JoinKind::Existence(_)) {
             let (wl, wr) = (self.reveal_hidden(&l)?, self.reveal_hidden(&r)?);
             (wl.out.len() != l.out.len() || wr.out.len() != r.out.len()).then_some((wl, wr))
         } else {
@@ -2860,16 +2860,42 @@ impl Resolver<'_> {
             res.hidden = Self::carried_hidden(wl, wr, kind, (ln, rn)).into();
             return Ok(res);
         };
-        let j = self.make(Origin::UNKNOWN, node, out, &[&l, &r]);
-        let mut res = self.using_project(p.origin, &j, kind, &keys, env)?;
+        // Over wide inputs (an earlier `USING` join's merged-away columns revealed), the join
+        // keeps them reachable; the projection shows only what the narrow join would.
+        let (j, visible, hidden_in) = if let Some((wl, wr)) = &wide {
+            let mut wide_out: Vec<Attr> = wl.out.iter().map(|a| nullable(a, ln)).collect();
+            if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                wide_out.extend(wr.out.iter().map(|a| nullable(a, rn)));
+            }
+            let visible: HashSet<AttrId> = out.iter().map(|a| a.col.id).collect();
+            (
+                self.make(Origin::UNKNOWN, node, wide_out, &[wl, wr]),
+                Some(visible),
+                true,
+            )
+        } else {
+            (
+                self.make(Origin::UNKNOWN, node, out, &[&l, &r]),
+                None,
+                false,
+            )
+        };
+        let mut res = self.using_project(p.origin, &j, kind, &keys, env, visible.as_ref())?;
         let shown: HashSet<AttrId> = res.out.iter().map(|a| a.col.id).collect();
-        let hidden: Vec<Attr> = l
-            .hidden
-            .iter()
-            .map(|a| nullable(a, ln))
-            .chain(r.hidden.iter().map(|a| nullable(a, rn)))
-            .chain(j.out.iter().filter(|a| !shown.contains(&a.col.id)).cloned())
-            .collect();
+        let hidden: Vec<Attr> = if hidden_in {
+            j.out
+                .iter()
+                .filter(|a| !shown.contains(&a.col.id))
+                .cloned()
+                .collect()
+        } else {
+            l.hidden
+                .iter()
+                .map(|a| nullable(a, ln))
+                .chain(r.hidden.iter().map(|a| nullable(a, rn)))
+                .chain(j.out.iter().filter(|a| !shown.contains(&a.col.id)).cloned())
+                .collect()
+        };
         res.hidden = hidden.into();
         Ok(res)
     }
@@ -3028,6 +3054,7 @@ impl Resolver<'_> {
         kind: JoinKind,
         keys: &[(Attr, Attr)],
         env: &Arc<Env>,
+        visible: Option<&HashSet<AttrId>>,
     ) -> Result<Rel, AnalysisError> {
         // A key as the join outputs it (nullable as the join made it). A
         // semi or anti join outputs the left side only, its keys included
@@ -3072,7 +3099,9 @@ impl Resolver<'_> {
                 }
             }
         }
-        for a in j.out.iter().filter(|a| !key_ids.contains(&a.col.id)) {
+        for a in j.out.iter().filter(|a| {
+            !key_ids.contains(&a.col.id) && visible.is_none_or(|v| v.contains(&a.col.id))
+        }) {
             exprs.push(col_expr(&a.col, Origin::UNKNOWN));
             out.push(a.clone());
         }

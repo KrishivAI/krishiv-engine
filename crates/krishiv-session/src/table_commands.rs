@@ -668,8 +668,12 @@ impl Session {
             ));
         }
         let mut options = options_of(&v.options, original);
-        let paths = options
-            .remove("path")
+        let path_key = options
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("path"))
+            .cloned();
+        let paths = path_key
+            .and_then(|k| options.remove(&k))
             .map(|p| vec![OptionValue::from_user("path", p)])
             .unwrap_or_default();
         // Spark resolves the data source when the view is created.
@@ -713,6 +717,8 @@ impl Session {
                 known: true,
             },
         );
+        // A replaced view must not keep serving the rows of the old one.
+        self.state.cache.invalidate_table(name);
         self.empty_frame().await
     }
 

@@ -50,3 +50,31 @@ fn the_format_and_path_are_checked_when_the_view_is_created() {
     );
     block_on(s.sql("CREATE TEMPORARY VIEW q(e int) USING org.apache.spark.sql.parquet")).unwrap();
 }
+
+#[test]
+fn the_path_option_is_read_in_any_case() {
+    let s = Session::new().unwrap();
+    let e = block_on(
+        s.sql("CREATE TEMPORARY VIEW v(e int) USING parquet OPTIONS (PATH '/nonexistent/krishiv')"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::PathNotFound
+    );
+}
+
+#[test]
+fn a_later_using_join_still_reaches_the_first_joins_merged_columns() {
+    let s = Session::new().unwrap();
+    let sql = "SELECT b.k FROM (SELECT 1 AS k) a JOIN (SELECT 1 AS k) b USING (k) \
+               JOIN (SELECT 1 AS k) c USING (k)";
+    assert_eq!(count(&s, sql), 1);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT * FROM (SELECT 1 AS k) a JOIN (SELECT 1 AS k) b USING (k) JOIN (SELECT 1 AS k) c USING (k)"
+        ),
+        1
+    );
+}

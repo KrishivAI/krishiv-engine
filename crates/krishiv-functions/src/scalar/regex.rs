@@ -169,6 +169,17 @@ struct Compiled {
 
 impl Compiled {
     fn new(pattern: &str, function: &'static str) -> Result<Self, KrishivError> {
+        Self::with_anchors(pattern, function, false)
+    }
+
+    /// Like [`Compiled::new`]; with `whole`, the translated regex must match all of the input.
+    /// The anchors go around the translation, so a Java pattern that runs to its end (`\Qfoo`,
+    /// a `(?x)` comment) cannot swallow them.
+    fn with_anchors(
+        pattern: &str,
+        function: &'static str,
+        whole: bool,
+    ) -> Result<Self, KrishivError> {
         let invalid = || -> KrishivError {
             InvalidParameterValuePattern {
                 function_name: function.to_owned(),
@@ -178,8 +189,15 @@ impl Compiled {
             .into()
         };
         let plain = java::translate(pattern, false).map_err(|_| invalid())?;
+        let anchor = |t: &str| {
+            if whole {
+                format!("\\A(?:{t})\\z")
+            } else {
+                t.to_owned()
+            }
+        };
         let build = |p: &str| {
-            RegexBuilder::new(p)
+            RegexBuilder::new(&anchor(p))
                 .backtrack_limit(BACKTRACK_LIMIT)
                 .build()
                 .map_err(|_| invalid())
@@ -256,8 +274,11 @@ impl FullMatch {
     /// translate).
     pub fn new(pattern: &str, ignore_case: bool) -> Result<Self, KrishivError> {
         let flags = if ignore_case { "(?i)" } else { "" };
-        let wrapped = format!("{flags}\\A(?:{pattern})\\z");
-        let compiled = Compiled::new(&wrapped, "`quotedRegexColumnNames`")?;
+        let compiled = Compiled::with_anchors(
+            &format!("{flags}{pattern}"),
+            "`quotedRegexColumnNames`",
+            true,
+        )?;
         Ok(Self(compiled))
     }
 
