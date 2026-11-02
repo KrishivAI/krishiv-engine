@@ -447,6 +447,58 @@ fn main_baseline_script_selects_the_merge_base_measurement() {
     );
 }
 
+/// An approval label stays valid across pushes while the measured value stays within the margin
+/// recorded when it was applied; the shell test covers the rule, this the wiring.
+#[test]
+fn approval_labels_survive_pushes_within_the_recorded_margin() {
+    let script = root().join(".github/scripts/test-approval-label.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let policy = read(".github/workflows/pr-policy.yml");
+    for needle in [
+        "cargo xtask pr-size-value --base",
+        "VALUES_FILE: ${{ runner.temp }}/size.values",
+        ".github/scripts/approval-values.sh budgets",
+        ".github/scripts/approval-values.sh wheels",
+        "VALUES_FILE: ${{ runner.temp }}/budgets.values",
+        "VALUES_FILE: ${{ runner.temp }}/wheels.values",
+        "METRIC_FILTER: ^unsafe:",
+        "pull-requests: write",
+    ] {
+        assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
+    }
+    // New unsafe stays strict: any growth ends the approval.
+    let unsafe_step = policy
+        .split("- name: Resolve unsafe-reviewed label")
+        .nth(1)
+        .and_then(|rest| rest.split("- name:").next())
+        .unwrap();
+    assert!(
+        unsafe_step.contains("STRICT: \"true\""),
+        "unsafe-reviewed must be strict"
+    );
+    // The size command prints one value and never fails on the cap.
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["pr-size-value", "--base", "HEAD", "--head", "HEAD"])
+        .current_dir(root())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "counted_lines 0"
+    );
+}
+
 #[test]
 fn large_file_guard_rejects_new_large_files() {
     let script = root().join(".github/scripts/test-check-large-files.sh");
