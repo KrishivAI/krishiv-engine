@@ -17,6 +17,7 @@
 use std::fmt::{self, Write as _};
 use std::io::Write;
 
+use crate::metamorphic_reduce::{PythonSpark, Verdict, reduce_rows, render, spark_verdict};
 use crate::query_oracle::{QueryRunner, normalise};
 
 /// The NULL- and NaN-heavy table every source can read.
@@ -25,6 +26,34 @@ pub const NULLS_SETUP: &str = "CREATE TEMPORARY VIEW nulls AS SELECT * FROM VALU
  (NULL, 4, -0.0D, '', 1), (5, 5, CAST('Infinity' AS DOUBLE), 'a', NULL), (NULL, NULL, NULL, NULL, NULL), \
  (0, 0, 0.0D, 'ab', 2), (-1, 7, -2.5D, 'A', 2), (7, -1, 100.0D, ' a', 3), (7, 7, 1.5D, 'a%', 3) \
  AS nulls(a, b, d, s, g)";
+
+/// The rows of [`NULLS_SETUP`], one `VALUES` tuple each, so a reduction can drop rows.
+pub const NULLS_ROWS: [&str; 10] = [
+    "(1, 1, 1.5D, 'a', 0)",
+    "(2, NULL, NULL, 'B', 0)",
+    "(3, 3, CAST('NaN' AS DOUBLE), NULL, 1)",
+    "(NULL, 4, -0.0D, '', 1)",
+    "(5, 5, CAST('Infinity' AS DOUBLE), 'a', NULL)",
+    "(NULL, NULL, NULL, NULL, NULL)",
+    "(0, 0, 0.0D, 'ab', 2)",
+    "(-1, 7, -2.5D, 'A', 2)",
+    "(7, -1, 100.0D, ' a', 3)",
+    "(7, 7, 1.5D, 'a%', 3)",
+];
+
+/// The statement that (re)defines the `nulls` view over the rows `keep` of [`NULLS_ROWS`].
+#[must_use]
+pub fn nulls_setup(keep: &[usize]) -> String {
+    let rows: Vec<&str> = keep
+        .iter()
+        .filter_map(|i| NULLS_ROWS.get(*i))
+        .copied()
+        .collect();
+    format!(
+        "CREATE OR REPLACE TEMPORARY VIEW nulls AS SELECT * FROM VALUES {} AS nulls(a, b, d, s, g)",
+        rows.join(", ")
+    )
+}
 
 /// The kind of a column, which fixes the comparisons and literals drawn for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,9 +351,9 @@ pub struct Finding {
     pub detail: String,
 }
 
-type Rows = Vec<Vec<String>>;
+pub(crate) type Rows = Vec<Vec<String>>;
 
-fn canonical(mut rows: Rows) -> Rows {
+pub(crate) fn canonical(mut rows: Rows) -> Rows {
     for r in &mut rows {
         for c in r.iter_mut() {
             *c = normalise(c);
@@ -334,7 +363,7 @@ fn canonical(mut rows: Rows) -> Rows {
     rows
 }
 
-fn number(cell: &str) -> Option<f64> {
+pub(crate) fn number(cell: &str) -> Option<f64> {
     cell.parse().ok()
 }
 
@@ -592,7 +621,7 @@ pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error
 }
 
 /// A predicate given as SQL text.
-struct Raw(String);
+pub(crate) struct Raw(pub(crate) String);
 
 impl fmt::Display for Raw {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -611,6 +640,20 @@ pub fn regression_file(
     small: &Pred,
     detail: &str,
 ) -> (String, String) {
+    regression_file_with(oracle, source, small, detail, None, None)
+}
+
+/// [`regression_file`] with the rows of the `nulls` view the finding needs (`rows`, indices
+/// into [`NULLS_ROWS`]; absent means all) and Spark's verdict text.
+#[must_use]
+pub fn regression_file_with(
+    oracle: Oracle,
+    source: usize,
+    small: &Pred,
+    detail: &str,
+    rows: Option<&[usize]>,
+    spark: Option<&str>,
+) -> (String, String) {
     let predicate = small.to_string();
     // FNV-1a over the identifying parts.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -619,15 +662,26 @@ pub fn regression_file(
         .bytes()
         .chain(source.to_le_bytes())
         .chain(predicate.bytes())
+        .chain(
+            rows.unwrap_or_default()
+                .iter()
+                .flat_map(|i| i.to_le_bytes()),
+        )
     {
         h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
     }
-    let text = serde_json::json!({
+    let mut text = serde_json::json!({
         "oracle": oracle.name(),
         "source": source,
         "predicate": predicate,
         "found": detail,
     });
+    if let (Some(rows), Some(obj)) = (rows, text.as_object_mut()) {
+        obj.insert("rows".to_owned(), serde_json::json!(rows));
+    }
+    if let (Some(spark), Some(obj)) = (spark, text.as_object_mut()) {
+        obj.insert("spark".to_owned(), serde_json::json!(spark));
+    }
     (
         format!("{}-{h:016x}.json", oracle.name()),
         format!(
@@ -658,7 +712,21 @@ pub fn replay_regression(r: &mut dyn QueryRunner, text: &str) -> Result<Option<S
         .get("predicate")
         .and_then(serde_json::Value::as_str)
         .ok_or("missing `predicate`")?;
-    check(r, oracle, source, &Raw(predicate.to_owned()))
+    let rows: Option<Vec<usize>> = v
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i.as_u64().and_then(|i| usize::try_from(i).ok()))
+                .collect()
+        });
+    let Some(rows) = rows.filter(|_| source == 0) else {
+        return check(r, oracle, source, &Raw(predicate.to_owned()));
+    };
+    r.run(&nulls_setup(&rows))?;
+    let out = check(r, oracle, source, &Raw(predicate.to_owned()));
+    r.run(&nulls_setup(&(0..NULLS_ROWS.len()).collect::<Vec<_>>()))?;
+    out
 }
 
 /// The `metamorphic-hunt` command over `args` (without the program name); `Ok(true)` when no
@@ -671,16 +739,19 @@ pub fn hunt_cli(
     out: &mut dyn Write,
 ) -> Result<bool, String> {
     let (mut data, mut seed, mut seconds, mut regressions) = (None, 1_u64, 60_u64, None);
+    let mut spark_cmd: Option<Vec<String>> = None;
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
         let v = args.next().ok_or(
-            "usage: metamorphic-hunt --data DIR [--seed N] [--seconds N] [--regressions DIR]",
+            "usage: metamorphic-hunt --data DIR [--seed N] [--seconds N] [--regressions DIR] [--spark CMD]",
         )?;
         match flag.as_str() {
             "--data" => data = Some(std::path::PathBuf::from(v)),
             "--seed" => seed = v.parse().map_err(|e| format!("--seed: {e}"))?,
             "--seconds" => seconds = v.parse().map_err(|e| format!("--seconds: {e}"))?,
             "--regressions" => regressions = Some(std::path::PathBuf::from(v)),
+            // The command that runs `tests/scripts/spark_answers.py` (script path last).
+            "--spark" => spark_cmd = Some(v.split_whitespace().map(str::to_owned).collect()),
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
@@ -702,13 +773,41 @@ pub fn hunt_cli(
             writeln!(out, "engine error (seed {next}): {e}").map_err(|e| e.to_string())?;
         }
         for f in &h.findings {
-            bad += 1;
             let small = reduce_finding(&mut runner, f);
-            let text = render_report(f, &small).map_err(|e| e.to_string())?;
+            let kept = reduce_rows(&mut runner, f, &small)?;
+            let verdict = spark_cmd.as_ref().map(|command| {
+                spark_verdict(
+                    &mut runner,
+                    &mut PythonSpark {
+                        command: command.clone(),
+                        data: data.clone(),
+                    },
+                    f,
+                    &small,
+                    &kept,
+                )
+            });
+            let artefact = verdict == Some(Verdict::OracleArtefact);
+            if !artefact {
+                bad += 1;
+            }
+            let text = match &verdict {
+                Some(v) => render(f, &small, &kept, v),
+                None => render_report(f, &small).map_err(|e| e.to_string())?,
+            };
             writeln!(out, "VIOLATION (seed batch {}):\n{text}", next - 1)
                 .map_err(|e| e.to_string())?;
-            if let Some(dir) = &regressions {
-                let (name, body) = regression_file(f.oracle, f.source, &small, &f.detail);
+            if let (Some(dir), false) = (&regressions, artefact) {
+                let rows = (f.source == 0).then_some(kept.as_slice());
+                let spark = verdict.as_ref().map(ToString::to_string);
+                let (name, body) = regression_file_with(
+                    f.oracle,
+                    f.source,
+                    &small,
+                    &f.detail,
+                    rows,
+                    spark.as_deref(),
+                );
                 std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
                 let path = dir.join(name);
                 std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
