@@ -355,3 +355,17 @@ fn a_cast_checks_only_the_rows_it_keeps() {
     let b = block_on(async { s.sql(sql).await?.collect().await });
     assert!(b.is_ok(), "{b:?}");
 }
+
+#[test]
+fn spatial_values_do_not_become_strings_or_compare_through_nullif() {
+    let m = format!("ST_GeomFromWKB({POINT})");
+    for q in [format!("upper({m})"), format!("{m} LIKE 'a'")] {
+        let e = error(&q);
+        assert!(
+            e.contains("DATATYPE_MISMATCH") || e.contains("INVALID_ORDERING_TYPE"),
+            "{q}: {e}"
+        );
+    }
+    let e = error(&format!("NULLIF({m}, {m})"));
+    assert!(e.contains("INVALID_ORDERING_TYPE"), "{e}");
+}

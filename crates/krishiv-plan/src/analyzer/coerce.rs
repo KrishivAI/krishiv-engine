@@ -686,7 +686,7 @@ fn operator_types(
             if let Some((i, a)) = args
                 .iter()
                 .enumerate()
-                .find(|(_, a)| a.ty.is_some_and(DataType::is_nested))
+                .find(|(_, a)| a.ty.is_some_and(|t| t.is_nested() || is_spatial(t)))
             {
                 return Err(unexpected(i, i, a.ty, r#""STRING""#));
             }
@@ -1089,6 +1089,10 @@ pub(super) fn inputs(
                     common_in(a, b, true, Rules::of(call), Nested::Tightest)
                         .ok_or_else(|| Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()))?;
                 }
+                // A type that does not order does not compare either.
+                if let Some(t) = [a.ty, b.ty].into_iter().flatten().find(|t| !orderable(t)) {
+                    return Err(Mismatch::InvalidOrdering(t.clone()));
+                }
             }
             Ok(vec![None; args.len()])
         }
@@ -1396,6 +1400,11 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
         (None, InputType::Map) => Some(Some(null_map())),
         (None, InputType::Array) => Some(Some(null_array())),
+        // A geometry or geography reaches only a spatial parameter, by the
+        // cast rules of `CAST` (never a string).
+        (Some(f), InputType::Exact(t)) if is_spatial(f) || is_spatial(t) => {
+            spatial_cast(f, t).then(|| Some(t.clone()))
+        }
         // A nested type casts to another only element by element, where a
         // target that may not hold NULL needs a source that has none.
         (Some(f), InputType::Exact(t)) if f.is_nested() && t.is_nested() => {

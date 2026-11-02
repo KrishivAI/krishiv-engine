@@ -193,7 +193,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 })
             })
         }
-        ("st_asbinary", [g] | [g, DataType::Utf8 | DataType::Utf8View]) if spatial_or_null(g) => {
+        ("st_asbinary", [g] | [g, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8])
+            if spatial_or_null(g) =>
+        {
             // An invalid literal fails only when a row evaluates it: the call
             // may sit in a branch that never runs.
             let mut bad_literal: Option<String> = None;
