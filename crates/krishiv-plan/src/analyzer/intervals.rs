@@ -114,11 +114,11 @@ fn nondeterministic(e: &Arc<Expr>) -> Arc<Expr> {
 }
 
 /// The shown form of `id(kids)`, over the operands as written.
-fn shown(id: Builtin, kids: [&Bound; 2], origin: Origin) -> Arc<Expr> {
+fn shown(id: Builtin, data_type: DataType, kids: [&Bound; 2], origin: Origin) -> Arc<Expr> {
     call(
         id,
         kids.iter().map(|k| k.shown()).collect(),
-        DataType::Boolean,
+        data_type,
         true,
         origin,
     )
@@ -367,7 +367,12 @@ impl Resolver<'_> {
             ),
             (Kind::Calendar, Kind::String) => {
                 let m = Mismatch::DiffTypes(l.ty.data_type.clone(), r.ty.data_type.clone());
-                let name = shown(Builtin::Subtract, [l, r], origin);
+                let name = shown(
+                    Builtin::Subtract,
+                    DataType::CalendarInterval,
+                    [l, r],
+                    origin,
+                );
                 return Err(self.mismatch(m, &name, &[l.clone(), r.clone()], "-", origin));
             }
             (Kind::Date, Kind::Calendar) => date_add_calendar(origin, l, r, true, exact),
@@ -389,7 +394,7 @@ impl Resolver<'_> {
                 bound(
                     expr,
                     DataType::Timestamp,
-                    shown(Builtin::DatetimeSub, [l, r], origin),
+                    shown(Builtin::DatetimeSub, DataType::Timestamp, [l, r], origin),
                     &[l.clone(), r.clone()],
                 )
             }
@@ -411,8 +416,8 @@ impl Resolver<'_> {
                 );
                 bound(
                     expr,
-                    t,
-                    shown(Builtin::DatetimeSub, [l, r], origin),
+                    t.clone(),
+                    shown(Builtin::DatetimeSub, t, [l, r], origin),
                     &[l.clone(), r.clone()],
                 )
             }
@@ -528,7 +533,7 @@ impl Resolver<'_> {
         bound(
             expr,
             DataType::Timestamp,
-            shown(id, [date, i], origin),
+            shown(id, DataType::Timestamp, [date, i], origin),
             &[date.clone(), i.clone()],
         )
     }
@@ -547,7 +552,12 @@ impl Resolver<'_> {
         bound(
             expr,
             DataType::Timestamp,
-            shown(Builtin::TimestampAddInterval, [date, null], origin),
+            shown(
+                Builtin::TimestampAddInterval,
+                DataType::Timestamp,
+                [date, null],
+                origin,
+            ),
             &[date.clone(), null.clone()],
         )
     }
@@ -565,8 +575,8 @@ impl Resolver<'_> {
         );
         bound(
             expr,
-            t,
-            shown(Builtin::TimestampAddInterval, [ts, null], origin),
+            t.clone(),
+            shown(Builtin::TimestampAddInterval, t, [ts, null], origin),
             &[ts.clone(), null.clone()],
         )
     }
@@ -586,7 +596,7 @@ impl Resolver<'_> {
         } else {
             Builtin::TimestampAddInterval
         };
-        let name = shown(id, [l, i], origin);
+        let name = shown(id, DataType::Timestamp, [l, i], origin);
         let kids = [l.clone(), i.clone()];
         match kind(l) {
             Kind::Timestamp | Kind::String => {}
@@ -597,7 +607,7 @@ impl Resolver<'_> {
                     call(
                         Builtin::TimestampAddInterval,
                         vec![l.shown(), negative_shown(i, origin)],
-                        DataType::Boolean,
+                        DataType::Timestamp,
                         true,
                         origin,
                     )
@@ -656,7 +666,12 @@ impl Resolver<'_> {
             return Err(legacy_difference(origin));
         }
         let kids = [l.clone(), r.clone()];
-        let name = shown(Builtin::Subtract, [l, r], origin);
+        let name = shown(
+            Builtin::Subtract,
+            DataType::DEFAULT_DAY_TIME_INTERVAL,
+            [l, r],
+            origin,
+        );
         for (arg, side) in kids.iter().enumerate() {
             // Only ANSI reads a string as a timestamp.
             let refused = kind(side) == Kind::String && !self.ctx.conf.ansi;
@@ -711,8 +726,12 @@ impl Resolver<'_> {
         if self.ctx.conf.legacy_interval {
             return Err(legacy_difference(origin));
         }
+        let out = DataType::DayTimeInterval {
+            start: DayTimeField::Day,
+            end: DayTimeField::Day,
+        };
         let kids = [l.clone(), r.clone()];
-        let name = shown(Builtin::Subtract, [l, r], origin);
+        let name = shown(Builtin::Subtract, out.clone(), [l, r], origin);
         for (arg, side) in kids.iter().enumerate() {
             if !matches!(kind(side), Kind::Date | Kind::String | Kind::Null) {
                 let m = Mismatch::Unexpected {
@@ -730,10 +749,6 @@ impl Resolver<'_> {
         );
         // With ANSI off, a string that doesn't read as a date is NULL.
         let nullable = a.ty.nullable || b.ty.nullable;
-        let out = DataType::DayTimeInterval {
-            start: DayTimeField::Day,
-            end: DayTimeField::Day,
-        };
         let expr = call(
             Builtin::SubtractDates,
             vec![Arc::clone(&a.expr), Arc::clone(&b.expr)],
@@ -770,8 +785,8 @@ impl Resolver<'_> {
         );
         bound(
             expr,
-            t,
-            shown(shown_id, [l, r], origin),
+            t.clone(),
+            shown(shown_id, t, [l, r], origin),
             &[l.clone(), r.clone()],
         )
     }
@@ -786,7 +801,7 @@ impl Resolver<'_> {
         by: &Bound,
         exact: bool,
     ) -> Result<Bound, AnalysisError> {
-        let name = shown(id, [interval, by], origin);
+        let name = shown(id, DataType::CalendarInterval, [interval, by], origin);
         let kids = [interval.clone(), by.clone()];
         if !numeric(by) && !matches!(kind(by), Kind::String | Kind::Null) {
             let m = Mismatch::Unexpected {
@@ -823,7 +838,7 @@ impl Resolver<'_> {
         null: &Bound,
         i: &Bound,
     ) -> AnalysisError {
-        let name = shown(id, [null, i], origin);
+        let name = shown(id, DataType::Timestamp, [null, i], origin);
         let error = DatatypeMismatchCastWithoutSuggestion {
             sql_expr: format!("\"{}\"", pretty(&name, self.ctx.conf.session_zone)),
             src_type: "\"TIMESTAMP\"".to_owned(),
@@ -851,7 +866,12 @@ impl Resolver<'_> {
             true,
             origin,
         );
-        bound(expr, t, shown(id, [l, r], origin), &[l.clone(), r.clone()])
+        bound(
+            expr,
+            t.clone(),
+            shown(id, t, [l, r], origin),
+            &[l.clone(), r.clone()],
+        )
     }
 
     /// `interval * number` or `interval / number`, of the default fields.
@@ -862,13 +882,13 @@ impl Resolver<'_> {
         interval: &Bound,
         by: &Bound,
     ) -> Result<Bound, AnalysisError> {
-        let name = shown(id, [interval, by], origin);
-        let kids = [interval.clone(), by.clone()];
         let out = if kind(interval) == Kind::YearMonth {
             DataType::DEFAULT_YEAR_MONTH_INTERVAL
         } else {
             DataType::DEFAULT_DAY_TIME_INTERVAL
         };
+        let name = shown(id, out.clone(), [interval, by], origin);
+        let kids = [interval.clone(), by.clone()];
         let number = if numeric(by) {
             by.clone()
         } else if matches!(kind(by), Kind::String | Kind::Null) {
@@ -940,7 +960,7 @@ fn date_add_calendar(origin: Origin, date: &Bound, i: &Bound, negate: bool, exac
     bound(
         expr,
         DataType::Date,
-        shown(shown_id, [date, i], origin),
+        shown(shown_id, DataType::Date, [date, i], origin),
         &[date.clone(), i.clone()],
     )
 }
@@ -986,8 +1006,8 @@ fn add_months(id: Builtin, origin: Origin, start: &Bound, i: &Bound) -> Bound {
     );
     bound(
         expr,
-        t,
-        shown(id, [start, i], origin),
+        t.clone(),
+        shown(id, t, [start, i], origin),
         &[start.clone(), i.clone()],
     )
 }
@@ -1007,5 +1027,10 @@ fn same_family(id: Builtin, origin: Origin, l: &Bound, r: &Bound) -> Bound {
         l.ty.nullable || r.ty.nullable,
         origin,
     );
-    bound(expr, t, shown(id, [l, r], origin), &[l.clone(), r.clone()])
+    bound(
+        expr,
+        t.clone(),
+        shown(id, t, [l, r], origin),
+        &[l.clone(), r.clone()],
+    )
 }
