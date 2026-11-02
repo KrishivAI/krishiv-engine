@@ -2358,13 +2358,35 @@ fn needs_domain(p: &LogicalPlan) -> bool {
             if exprs.iter().any(|e| has_outer(Node::Expr(e))))
 }
 
-/// [`needs_domain`], a limit (ranked within each domain value) or a global
-/// aggregate: one row for every outer row, matches or not.
+/// [`needs_domain`], a limit (ranked within each domain value), a global
+/// aggregate (one row for every outer row, matches or not) or a grouped
+/// aggregate over a correlation that is not an equality (`pull` would group
+/// by the correlated column, which only an equality allows).
 fn lateral_hit(p: &LogicalPlan) -> bool {
     needs_domain(p)
         || matches!(&p.node, PlanNode::Limit { .. })
-        || matches!(&p.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(keys), .. }
-            if keys.is_empty())
+        || matches!(&p.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(keys), input, .. }
+            if keys.is_empty() || non_equality_correlation(input))
+}
+
+/// Whether a filter on the correlation path from `p` down holds an outer
+/// reference outside an equality of an inner column and an outer expression.
+fn non_equality_correlation(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::Filter { input, predicate } => {
+            conjuncts(predicate)
+                .iter()
+                .any(|c| has_outer(Node::Expr(c)) && !is_outer_equality(c))
+                || non_equality_correlation(input)
+        }
+        PlanNode::Project { input, .. }
+        | PlanNode::Generate { input, .. }
+        | PlanNode::Sort { input, .. } => non_equality_correlation(input),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            non_equality_correlation(input)
+        }
+        _ => false,
+    }
 }
 
 /// Whether `hit` holds on the correlation path from `p` down, through what

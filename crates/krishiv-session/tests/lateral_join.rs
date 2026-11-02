@@ -265,3 +265,16 @@ fn only_inner_and_left_joins_may_be_lateral() -> R {
     }
     Ok(())
 }
+
+#[test]
+fn a_grouped_aggregate_over_a_non_equality_correlation() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "select * from t1, lateral (select c1, sum(c2) s from t4 where t1.c1 <= t4.c1 group by c1)"
+        )?,
+        ["0|1|0|3", "0|1|1|4", "1|2|1|4"]
+    );
+    Ok(())
+}
