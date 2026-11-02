@@ -126,6 +126,12 @@ struct State {
 #[derive(Debug, Default)]
 pub(crate) struct ResultCache {
     state: Mutex<State>,
+    /// Served from the store, run because nothing usable was stored, stored, and dropped by an
+    /// invalidation (counted per entry); for the process's whole life.
+    hits: AtomicU64,
+    misses: AtomicU64,
+    stores: AtomicU64,
+    invalidated: AtomicU64,
     /// Bumped by every invalidation, so a fill that started before one is not stored after it.
     generation: AtomicU64,
 }
@@ -150,14 +156,33 @@ impl ResultCache {
         ttl: Duration,
     ) -> Option<(Vec<RecordBatch>, Duration)> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let age = state.entries.get(key)?.stored.elapsed();
+        let Some(entry) = state.entries.get(key) else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
+        let age = entry.stored.elapsed();
         if !ttl.is_zero() && age >= ttl {
             if let Some(gone) = state.entries.remove(key) {
                 state.bytes = state.bytes.saturating_sub(gone.bytes);
             }
+            self.misses.fetch_add(1, Ordering::Relaxed);
             return None;
         }
+        self.hits.fetch_add(1, Ordering::Relaxed);
         state.entries.get(key).map(|e| (e.batches.clone(), age))
+    }
+
+    /// `(entries, bytes, hits, misses, stores, invalidated)` now.
+    pub(crate) fn stats(&self) -> (usize, usize, u64, u64, u64, u64) {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        (
+            state.entries.len(),
+            state.bytes,
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+            self.stores.load(Ordering::Relaxed),
+            self.invalidated.load(Ordering::Relaxed),
+        )
     }
 
     /// The age of the entry for `key` if it would be served (no batches copied).
@@ -225,6 +250,7 @@ impl ResultCache {
             })
             .collect();
         state.bytes += bytes;
+        self.stores.fetch_add(1, Ordering::Relaxed);
         state.entries.insert(
             key,
             Entry {
@@ -245,6 +271,7 @@ impl ResultCache {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.generation.fetch_add(1, Ordering::AcqRel);
         let mut freed = 0;
+        let before = state.entries.len();
         state.entries.retain(|_, e| {
             let hit = e.tables.iter().any(|t| *t == lowered || *t == short);
             if hit {
@@ -252,6 +279,8 @@ impl ResultCache {
             }
             !hit
         });
+        self.invalidated
+            .fetch_add((before - state.entries.len()) as u64, Ordering::Relaxed);
         state.bytes = state.bytes.saturating_sub(freed);
     }
 
@@ -278,6 +307,8 @@ impl ResultCache {
     pub(crate) fn clear(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.generation.fetch_add(1, Ordering::AcqRel);
+        self.invalidated
+            .fetch_add(state.entries.len() as u64, Ordering::Relaxed);
         state.entries.clear();
         state.bytes = 0;
     }
@@ -430,13 +461,17 @@ impl Session {
     /// The line `EXPLAIN` prints about the result cache, when it is enabled for the query.
     pub(crate) fn result_cache_note(&self, a: &Analysis) -> Option<String> {
         let settings = settings(&a.env)?;
-        Some(match self.result_verdict(a) {
+        let verdict = match self.result_verdict(a) {
             Err(why) => format!("not cached: {why}"),
             Ok(key) => match global().age(&key, settings.ttl) {
                 Some(age) => format!("hit (metadata_age_ms={})", age.as_millis()),
                 None => "miss (the result is stored when the query has run)".to_owned(),
             },
-        })
+        };
+        let (entries, bytes, hits, misses, stores, invalidated) = global().stats();
+        Some(format!(
+            "{verdict}\nstore: {entries} entries, {bytes} bytes; since start: {hits} hits, {misses} misses, {stores} stored, {invalidated} invalidated"
+        ))
     }
 }
 
@@ -797,7 +832,7 @@ mod tests {
         );
         run(&s, "CREATE TEMPORARY VIEW rc_ex_v AS SELECT 1 AS a");
         let text = explain(&s, "SELECT a FROM rc_ex_v");
-        assert!(!text.contains("hit"), "{text}");
+        assert!(!text.contains("hit (metadata_age_ms"), "{text}");
     }
 
     /// `add_one(x) = x + 1`, a session-registered function.
@@ -944,5 +979,44 @@ mod tests {
         assert!(cache.insert(k2, Vec::new(), 0, gen_, 2 * ENTRY_OVERHEAD, Duration::ZERO));
         assert_eq!(cache.len(), 1);
         assert!(cache.lookup(&k1, Duration::ZERO).is_none());
+    }
+
+    #[test]
+    fn the_store_counts_hits_misses_stores_and_invalidations() {
+        let cache = ResultCache::default();
+        let s = session_as("ana");
+        table(&s, "rc_cnt", "(1)");
+        let key = key_of(&s, "SELECT a FROM rc_cnt").unwrap();
+        assert!(cache.lookup(&key, Duration::ZERO).is_none());
+        assert!(cache.insert(
+            key.clone(),
+            Vec::new(),
+            10,
+            cache.generation(),
+            1 << 20,
+            Duration::ZERO
+        ));
+        assert!(cache.lookup(&key, Duration::ZERO).is_some());
+        assert!(
+            cache.lookup(&key, Duration::from_nanos(1)).is_none(),
+            "expired counts as a miss"
+        );
+        assert!(cache.insert(
+            key,
+            Vec::new(),
+            10,
+            cache.generation(),
+            1 << 20,
+            Duration::ZERO
+        ));
+        cache.invalidate_table("rc_cnt");
+        // entries, bytes, hits, misses, stores, invalidated
+        assert_eq!(cache.stats(), (0, 0, 1, 2, 2, 1));
+        cache.clear();
+        assert_eq!(
+            cache.stats().5,
+            1,
+            "clearing an empty store invalidates nothing"
+        );
     }
 }
