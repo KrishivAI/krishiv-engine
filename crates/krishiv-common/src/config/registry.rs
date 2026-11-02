@@ -61,6 +61,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_LATE_MATERIALIZATION,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
+    &IO_CACHE_ENABLED,
+    &IO_CACHE_PATH,
+    &IO_CACHE_DISK_BYTES,
+    &IO_CACHE_BLOCK_BYTES,
+    &IO_CACHE_MEMORY_BYTES,
     &IO_MULTIPART_PART_BYTES,
     &IO_MAX_RETRIES,
     &IO_REQUEST_TIMEOUT,
@@ -98,6 +103,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
+    ("krishiv.io.cache.path", &IO_CACHE_PATH),
     ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
     ("spark.network.timeout", &NETWORK_TIMEOUT),
     ("spark.sql.defaultPath", &SQL_DEFAULT_PATH),
@@ -111,6 +117,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
+    ("krishiv.io.cache.enabled", &IO_CACHE_ENABLED),
     ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),
     ("krishiv.io.prefetchBytes", &IO_PREFETCH_BYTES),
     ("krishiv.io.strictOptions", &IO_STRICT_OPTIONS),
@@ -122,13 +129,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
     ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
     ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
+    ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
@@ -987,6 +997,61 @@ pub static IO_METADATA_CACHE_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(64 * MIB)),
     doc: "Size of the in-memory cache of decoded file footers and metadata (least recently used \
           entries are evicted). `0` disables it.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.cache.enabled`.
+pub static IO_CACHE_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.cache.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Cache the byte ranges read from remote object stores (data pages, footers and page indexes alike) in aligned blocks on local disk, with a small in-memory tier in front. A block is keyed by the store, the path, the object's version (ETag or modification time) and the block index, so an overwritten object never serves old bytes. The disk part is emptied at start. Any cache failure falls back to the store. Local files are never cached.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.cache.path`.
+pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.cache.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Directory of the block cache's disk part (a local SSD). The process uses its own subdirectory and empties it at start. When unset: `krishiv-block-cache` under the system temp directory.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.cache.diskBytes`.
+pub static IO_CACHE_DISK_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.cache.diskBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(10 * 1024 * MIB)),
+    doc: "Size cap of the block cache's disk part; the least recently used blocks are removed to stay under it (it may exceed the cap by one block while a block is written).",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.cache.blockBytes`.
+pub static IO_CACHE_BLOCK_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.cache.blockBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(MIB)),
+    doc: "Size of the aligned blocks the cache stores and fetches; a read is served from the blocks it overlaps.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.cache.memoryBytes`.
+pub static IO_CACHE_MEMORY_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.cache.memoryBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Size of the block cache's in-memory tier (least recently used blocks). `0` keeps blocks on disk only.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
