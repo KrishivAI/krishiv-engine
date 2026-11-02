@@ -183,6 +183,7 @@ fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
 const LITERAL_FUNCTIONS: &[(&str, &str)] = &[
     ("current_date", "current_date"),
     ("current_timestamp", "current_timestamp"),
+    ("current_time", "current_time"),
     ("current_user", "current_user"),
     ("user", "current_user"),
     ("session_user", "current_user"),
@@ -2190,6 +2191,24 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 5)
+                } else if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
+                    && n == 1
+                {
+                    // `st_geomfromwkb(wkb)` is `st_geomfromwkb(wkb, 0)` and
+                    // `st_asbinary(g)` is `st_asbinary(g, 'NDR')`.
+                    owned = kids[..n].to_vec();
+                    owned.push(if entry.id.name() == "st_asbinary" {
+                        default_argument(
+                            Literal::String("NDR".to_owned()),
+                            DataType::String,
+                            false,
+                            e.origin,
+                        )
+                    } else {
+                        default_argument(Literal::Integer(0), DataType::Integer, false, e.origin)
+                    });
+                    (&owned[..], 2)
                 } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "locate" | "position")
                     && n == 2
