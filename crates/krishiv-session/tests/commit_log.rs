@@ -322,3 +322,32 @@ fn a_partition_read_with_base_path_notices_a_committed_file_that_is_gone() {
     let err = block_on(read(&s).count()).unwrap_err();
     assert_eq!(err.error_class().name(), "KRISHIV_CONCURRENT_COMMIT");
 }
+
+#[test]
+fn a_glob_below_a_base_path_root_shows_only_committed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    let part = root.join("p=a");
+    let data = std::fs::read_dir(&part)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, part.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    let df = s
+        .read()
+        .option("basePath", path.as_str())
+        .parquet([format!("{path}/p=a/*.parquet").as_str()]);
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is outside the root's log"
+    );
+}

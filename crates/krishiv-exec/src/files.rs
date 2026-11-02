@@ -554,20 +554,37 @@ impl FileReads {
         let at = self.paths.locate_with_options(prefix, options)?;
         let base = at.path.parts().count();
         let mut matched = std::collections::BTreeMap::new();
-        // A glob under a logged directory expands over its committed files only: an abandoned
-        // append's files would otherwise come back as roots of their own.
-        let outer = Box::pin(self.committed_files(&at)).await?.map(Arc::new);
+        // A glob under a logged directory (or below a logged `basePath`) expands over its committed
+        // files only: an abandoned append's files would otherwise come back as roots of their own.
+        // `outer` is the log's root depth and its files, keyed relative to that root.
+        let own = Box::pin(self.committed_files(&at)).await?;
+        let outer = match (own, &mode.base) {
+            (Some(files), _) => Some((base, Arc::new(files))),
+            (None, Some(root)) if at.path.prefix_matches(&root.path) => {
+                Box::pin(self.committed_files(root))
+                    .await?
+                    .map(|files| (root.path.parts().count(), Arc::new(files)))
+            }
+            _ => None,
+        };
         // The committed files this glob covers: each must still be there, or a concurrent overwrite
         // deleted some and the read would silently lose rows.
-        let mut expected: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        if let Some(files) = &outer {
+        let mut expected: std::collections::BTreeSet<Vec<String>> =
+            std::collections::BTreeSet::new();
+        if let Some((root_depth, files)) = &outer {
+            let at_parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
             for rel in files.keys() {
-                let names: Vec<&str> = rel.split('/').collect();
+                let mut all: Vec<String> = at_parts[..*root_depth].to_vec();
+                all.extend(rel.split('/').map(str::to_owned));
+                if all.len() <= base || all[..base] != at_parts[..] {
+                    continue;
+                }
+                let names: Vec<&str> = all[base..].iter().map(String::as_str).collect();
                 if names.iter().any(|n| hidden(n)) {
                     continue;
                 }
                 if (1..=names.len()).any(|n| glob.matches(&names[..n])) {
-                    expected.insert(rel.as_str());
+                    expected.insert(all);
                 }
             }
         }
@@ -579,12 +596,17 @@ impl FileReads {
                 .skip(base)
                 .map(|p| p.as_ref().to_owned())
                 .collect();
-            if let Some(files) = &outer {
-                let rel = below.join("/");
+            if let Some((root_depth, files)) = &outer {
+                let all: Vec<String> = meta
+                    .location
+                    .parts()
+                    .map(|p| p.as_ref().to_owned())
+                    .collect();
+                let rel = all[(*root_depth).min(all.len())..].join("/");
                 if !files.contains_key(&rel) {
                     continue;
                 }
-                if expected.contains(rel.as_str()) {
+                if expected.contains(&all) {
                     found += 1;
                 }
             }
@@ -618,7 +640,7 @@ impl FileReads {
         let inner = ListMode {
             recursive: mode.recursive,
             base: mode.base.clone(),
-            logged: outer.map(|files| (base, files)),
+            logged: outer,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
