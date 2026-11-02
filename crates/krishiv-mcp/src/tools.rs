@@ -678,6 +678,12 @@ async fn child_session(data: &Path) -> Result<Session, KrishivError> {
         .principal(Principal::local_user())
         .access_policy(Arc::clone(&lock) as Arc<_>)
         .build()?;
+    // `${env:NAME}` and `${system:NAME}` are replaced from the server's
+    // environment before the statement is parsed, past the gate: a client
+    // could read any secret the process holds. No substitution in this server.
+    session
+        .conf()
+        .set("spark.sql.variable.substitute", "false")?;
     for (name, path) in data_tables(data) {
         let df = session.read().parquet([path.as_str()]);
         df.create_or_replace_temp_view(&name).await?;

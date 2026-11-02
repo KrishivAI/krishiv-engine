@@ -229,3 +229,22 @@ async fn get_query_profile_reprofiles_a_remembered_query() {
     let (text, err) = call(&t, "get_query_profile", json!({"query_id": "q99"})).await;
     assert!(err && text.contains("no query `q99`"), "{text}");
 }
+
+#[tokio::test]
+async fn variable_substitution_cannot_read_the_environment() {
+    let (_d, t) = fixture();
+    // PATH is set in every test environment; it must come back as written.
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT '${env:PATH}' AS v, '${system:HOME}' AS h"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert!(
+        text.contains("${env:PATH}") && text.contains("${system:HOME}"),
+        "{text}"
+    );
+    let path = std::env::var("PATH").unwrap_or_default();
+    assert!(path.is_empty() || !text.contains(&path), "{text}");
+}
