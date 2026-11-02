@@ -71,3 +71,35 @@ fn arrays_of_untyped_nulls_compare() {
     assert_eq!(one("SELECT array(NULL, NULL) < array(NULL)"), "false");
     assert_eq!(one("SELECT array(NULL) < array(NULL, NULL)"), "true");
 }
+
+#[test]
+fn registered_arrow_string_arrays_compare_with_literals() {
+    use std::sync::Arc;
+
+    use arrow_array::builder::{ListBuilder, StringBuilder};
+    use arrow_array::{ArrayRef, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+
+    let mut b = ListBuilder::new(StringBuilder::new());
+    b.values().append_value("x");
+    b.append(true);
+    let col: ArrayRef = Arc::new(b.finish());
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "a",
+        col.data_type().clone(),
+        true,
+    )]));
+    assert!(matches!(col.data_type(), DataType::List(_)));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![col]).unwrap();
+    let s = Session::new().unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    let out = block_on(
+        block_on(s.sql("SELECT a = array('x'), a < array('y') FROM t"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    let b = &out[0];
+    assert!(arrow_array::cast::AsArray::as_boolean(b.column(0)).value(0));
+    assert!(arrow_array::cast::AsArray::as_boolean(b.column(1)).value(0));
+}

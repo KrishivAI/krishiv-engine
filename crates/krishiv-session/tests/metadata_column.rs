@@ -275,3 +275,21 @@ fn a_qualifier_naming_a_table_wins_over_a_struct_column_in_nested_except() {
         ["t"]
     );
 }
+
+#[test]
+fn struct_expansion_of_the_hidden_column_takes_except() {
+    let s = session();
+    assert_eq!(
+        names(
+            &s,
+            "SELECT _metadata.* EXCEPT (file_size, row_index) FROM p"
+        ),
+        [
+            "file_path",
+            "file_name",
+            "file_block_start",
+            "file_block_length",
+            "file_modification_time"
+        ]
+    );
+}

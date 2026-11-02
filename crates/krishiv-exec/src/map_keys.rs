@@ -113,7 +113,8 @@ fn sort_map(m: &MapArray) -> Result<ArrayRef> {
         m.offsets().clone(),
         entries,
         m.nulls().cloned(),
-        false,
+        // The input's flag: the type must not change.
+        matches!(m.data_type(), DataType::Map(_, true)),
     )
     .map_err(|e| internal(e.to_string()))?;
     Ok(Arc::new(out))
@@ -159,6 +160,28 @@ mod tests {
         assert_eq!(entries(&s, 2), []);
         assert_eq!(entries(&s, 3), [(1, 3)]);
         assert_eq!(s.data_type(), a.data_type());
+    }
+
+    #[test]
+    fn the_keys_sorted_flag_of_the_input_is_kept() {
+        let a = maps(&[Some(&[(2, 3), (1, 2)])]);
+        let m = a.as_map();
+        let DataType::Map(field, _) = m.data_type() else {
+            panic!("a map");
+        };
+        let flagged: ArrayRef = Arc::new(
+            MapArray::try_new(
+                Arc::clone(field),
+                m.offsets().clone(),
+                m.entries().clone(),
+                None,
+                true,
+            )
+            .unwrap(),
+        );
+        let s = sort_maps(&flagged).unwrap();
+        assert_eq!(s.data_type(), flagged.data_type());
+        assert_eq!(entries(&s, 0), [(1, 2), (2, 3)]);
     }
 
     #[test]

@@ -454,7 +454,18 @@ impl Resolver<'_> {
         {
             None
         } else {
-            match self.find(cx.scope, &s.qualifier, origin, false)? {
+            let hidden: &[Attr] = match cx.rels {
+                [r] => &r.hidden[..],
+                _ => &[],
+            };
+            let mut found = None;
+            for level in [cx.scope, hidden] {
+                if let Some(f) = self.find(level, &s.qualifier, origin, false)? {
+                    found = Some(f);
+                    break;
+                }
+            }
+            match found {
                 Some((a, used)) => {
                     let mut base = resolved(&a.col);
                     let mut ty = a.col.data_type.clone();

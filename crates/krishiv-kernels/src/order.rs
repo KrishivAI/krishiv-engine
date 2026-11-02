@@ -140,6 +140,43 @@ pub fn same_modulo_nullability(a: &DataType, b: &DataType) -> bool {
     }
 }
 
+/// [`same_modulo_nullability`] where the string types (`Utf8`, `LargeUtf8`,
+/// `Utf8View`) are one type and so are the binary ones: operands of one SQL
+/// type whose Arrow carriers differ (a registered `List<Utf8>` against a
+/// literal's `List<Utf8View>`).
+#[must_use]
+pub fn same_modulo_carrier(a: &DataType, b: &DataType) -> bool {
+    use DataType::{Binary, BinaryView, LargeBinary, LargeUtf8, Utf8, Utf8View};
+    match (a, b) {
+        (DataType::List(x), DataType::List(y))
+        | (DataType::LargeList(x), DataType::LargeList(y)) => {
+            same_modulo_carrier(x.data_type(), y.data_type())
+        }
+        (DataType::Struct(x), DataType::Struct(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|(p, q)| same_modulo_carrier(p.data_type(), q.data_type()))
+        }
+        (Utf8 | LargeUtf8 | Utf8View, Utf8 | LargeUtf8 | Utf8View)
+        | (Binary | LargeBinary | BinaryView, Binary | LargeBinary | BinaryView) => true,
+        _ => same_modulo_nullability(a, b),
+    }
+}
+
+/// The bytes of a string or binary element of any carrier.
+fn element_bytes(a: &dyn Array, i: usize) -> Option<&[u8]> {
+    Some(match a.data_type() {
+        DataType::Utf8 => a.as_string::<i32>().value(i).as_bytes(),
+        DataType::LargeUtf8 => a.as_string::<i64>().value(i).as_bytes(),
+        DataType::Utf8View => a.as_string_view().value(i).as_bytes(),
+        DataType::Binary => a.as_binary::<i32>().value(i),
+        DataType::LargeBinary => a.as_binary::<i64>().value(i),
+        DataType::BinaryView => a.as_binary_view().value(i),
+        _ => return None,
+    })
+}
+
 /// The total order Spark sorts and compares by (see the module doc): NULL
 /// is less than every value.
 ///
@@ -161,7 +198,12 @@ pub fn cmp_rows(
     }
     // Types differing only in nullability, however deep, compare; their
     // elements and fields are checked one by one below.
-    if !same_modulo_nullability(l.data_type(), r.data_type()) {
+    if l.data_type() != r.data_type()
+        && let (Some(a), Some(b)) = (element_bytes(l, li), element_bytes(r, ri))
+    {
+        return Ok(a.cmp(b));
+    }
+    if !same_modulo_carrier(l.data_type(), r.data_type()) {
         return Err(KernelError::internal(format!(
             "a comparison of {} with {}",
             l.data_type(),

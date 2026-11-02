@@ -233,7 +233,7 @@ pub(super) fn compare(
         || matches!(
             (lt, rt),
             (ArrowType::List(a), ArrowType::List(b))
-                if krishiv_kernels::order::same_modulo_nullability(a.data_type(), b.data_type())
+                if krishiv_kernels::order::same_modulo_carrier(a.data_type(), b.data_type())
         );
     if !comparable {
         return Err(internal(&format!("comparison of {lt} with {rt}")));
