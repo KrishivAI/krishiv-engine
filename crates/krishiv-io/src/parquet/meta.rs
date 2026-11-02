@@ -385,7 +385,25 @@ fn hint_field(
             let inner = Arc::new(Field::new(field.name(), value.as_ref().clone(), true));
             hint_field(&inner, path, descr, o).data_type().clone()
         }
-        DataType::Decimal32(p, s) | DataType::Decimal64(p, s) => DataType::Decimal128(*p, *s),
+        // arrow-rs decodes `BINARY` decimals only into `Decimal128`; the scan
+        // casts those to the carrier (design P2-T160).
+        DataType::Decimal32(p, s) | DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
+            let binary = |c: &parquet::schema::types::ColumnDescriptor| {
+                c.physical_type() == PhysicalType::BYTE_ARRAY
+                    && c.converted_type() == parquet::basic::ConvertedType::DECIMAL
+            };
+            // A nested leaf has no path here: any binary decimal in the file
+            // keeps the whole file's nested decimals on `Decimal128`.
+            let readable = match leaf() {
+                Some(c) => c.physical_type() != PhysicalType::BYTE_ARRAY,
+                None => !descr.columns().iter().any(|c| binary(c)),
+            };
+            if *p <= krishiv_types::arrow::DECIMAL64_MAX_PRECISION && readable {
+                DataType::Decimal64(*p, *s)
+            } else {
+                DataType::Decimal128(*p, *s)
+            }
+        }
         DataType::Timestamp(_, None)
             if o.int96_as_timestamp
                 && leaf().is_some_and(|c| c.physical_type() == PhysicalType::INT96) =>
@@ -553,7 +571,7 @@ fn scalar_bounds(
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 ScalarValue::TimestampMicros(v.checked_mul(micros_per_unit?)?)
             }
-            DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
+            DataType::Decimal64(p, sc) | DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
                 unscaled: i128::from(v),
                 precision: *p,
                 scale: *sc,
@@ -565,7 +583,7 @@ fn scalar_bounds(
         Some(match dt {
             DataType::Utf8View => ScalarValue::Utf8(std::str::from_utf8(b).ok()?.to_owned()),
             DataType::BinaryView => ScalarValue::Binary(b.to_vec()),
-            DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
+            DataType::Decimal64(p, sc) | DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
                 unscaled: be_i128(b)?,
                 precision: *p,
                 scale: *sc,

@@ -2,11 +2,11 @@
   "entries": [
     {
       "id": "to_varchar#36f98b6cd322/ansi_on",
-      "reason": "SELECT to_varchar(454, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
+      "reason": "SELECT to_varchar(454, INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
     },
     {
       "id": "to_varchar#36f98b6cd322/ansi_off",
-      "reason": "SELECT to_varchar(454, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
+      "reason": "SELECT to_varchar(454, INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
     },
     {
       "id": "to_varchar#4632c0405904/ansi_on",
@@ -17,14 +17,6 @@
       "reason": "SELECT to_varchar(454, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
     },
     {
-      "id": "to_varchar#563016f396de/ansi_on",
-      "reason": "SELECT to_varchar(INTERVAL '1 02:03:04' DAY TO SECOND, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#563016f396de/ansi_off",
-      "reason": "SELECT to_varchar(INTERVAL '1 02:03:04' DAY TO SECOND, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_varchar#7c5666d685bb/ansi_on",
       "reason": "SELECT to_varchar(454, TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
     },
@@ -33,20 +25,12 @@
       "reason": "SELECT to_varchar(454, TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
     },
     {
-      "id": "to_varchar#9f23b08b45e0/ansi_on",
-      "reason": "SELECT to_varchar(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#9f23b08b45e0/ansi_off",
-      "reason": "SELECT to_varchar(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_varchar#f1b538d4cc40/ansi_on",
-      "reason": "SELECT to_varchar(454, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
+      "reason": "SELECT to_varchar(454, INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
     },
     {
       "id": "to_varchar#f1b538d4cc40/ansi_off",
-      "reason": "SELECT to_varchar(454, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
+      "reason": "SELECT to_varchar(454, INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
     }
   ],
   "format_version": 1,

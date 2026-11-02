@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
@@ -363,9 +363,16 @@ pub(crate) fn cmp(
         ArrowType::Int64 => prim!(Int64Type),
         ArrowType::Float32 => prim!(Float32Type),
         ArrowType::Float64 => prim!(Float64Type),
+        ArrowType::Decimal64(..) => prim!(Decimal64Type),
         ArrowType::Decimal128(..) => prim!(Decimal128Type),
         ArrowType::Date32 => prim!(Date32Type),
         ArrowType::Timestamp(..) => prim!(TimestampMicrosecondType),
+        ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth) => {
+            prim!(arrow_array::types::IntervalYearMonthType)
+        }
+        ArrowType::Duration(arrow_schema::TimeUnit::Microsecond) => {
+            prim!(arrow_array::types::DurationMicrosecondType)
+        }
         ArrowType::Boolean => {
             let (a, b) = (bool_operand(l), bool_operand(r));
             match kind {
@@ -549,7 +556,7 @@ pub(super) fn bin_value(a: &dyn Array, i: usize) -> &[u8] {
 }
 
 /// The views and data buffers of a string or binary view array.
-fn view_parts(a: &dyn Array) -> (&[u128], &[arrow_buffer::Buffer]) {
+pub(super) fn view_parts(a: &dyn Array) -> (&[u128], &[arrow_buffer::Buffer]) {
     match a.data_type() {
         ArrowType::Utf8View => {
             let v = a.as_string_view();
@@ -588,7 +595,7 @@ fn views_equal(a: u128, ab: &[arrow_buffer::Buffer], b: u128, bb: &[arrow_buffer
 /// The bytes of a view of a value longer than 12 bytes, in its data buffer.
 #[inline]
 #[expect(clippy::cast_possible_truncation, reason = "a view's 32-bit fields")]
-fn long_bytes(v: u128, bufs: &[arrow_buffer::Buffer]) -> Option<&[u8]> {
+pub(super) fn long_bytes(v: u128, bufs: &[arrow_buffer::Buffer]) -> Option<&[u8]> {
     let (len, buffer, offset) = (
         v as u32 as usize,
         (v >> 64) as u32 as usize,
@@ -604,17 +611,20 @@ fn view_eq(equal: bool, l: &Value, r: &Value, rows: usize) -> BooleanArray {
     let (la, ra) = (l.array(), r.array());
     let ((lv, lb), (rv, rb)) = (view_parts(la.as_ref()), view_parts(ra.as_ref()));
     let (ls, rs) = (l.is_scalar(), r.is_scalar());
-    let at = |scalar: bool, i: usize| if scalar { 0 } else { i };
-    let values: BooleanBuffer = (0..rows)
-        .map(|i| {
-            let (x, y) = (at(ls, i), at(rs, i));
-            let same = match (lv.get(x), rv.get(y)) {
-                (Some(&a), Some(&b)) => views_equal(a, lb, b, rb),
-                _ => false,
-            };
-            same == equal
-        })
-        .collect();
+    let values = match (ls, rs, lv.first(), rv.first()) {
+        (false, true, _, Some(&b)) => view_eq_literal(equal, lv, lb, b, rb, rows),
+        (true, false, Some(&a), _) => view_eq_literal(equal, rv, rb, a, lb, rows),
+        _ => {
+            let at = |scalar: bool, i: usize| if scalar { 0 } else { i };
+            BooleanBuffer::collect_bool(rows, |i| {
+                let same = match (lv.get(at(ls, i)), rv.get(at(rs, i))) {
+                    (Some(&a), Some(&b)) => views_equal(a, lb, b, rb),
+                    _ => false,
+                };
+                same == equal
+            })
+        }
+    };
     let null_of = |a: &ArrayRef, scalar: bool| -> Option<NullBuffer> {
         if scalar {
             // A NULL scalar makes every row NULL.
@@ -625,6 +635,31 @@ fn view_eq(equal: bool, l: &Value, r: &Value, rows: usize) -> BooleanArray {
     };
     let nulls = NullBuffer::union(null_of(la, ls).as_ref(), null_of(ra, rs).as_ref());
     BooleanArray::new(values, nulls)
+}
+
+/// [`view_eq`] of a column and one value: a value of 12 bytes or fewer is
+/// decided by the whole view alone.
+#[expect(clippy::cast_possible_truncation, reason = "a view's 32-bit fields")]
+fn view_eq_literal(
+    equal: bool,
+    views: &[u128],
+    bufs: &[arrow_buffer::Buffer],
+    lit: u128,
+    lit_bufs: &[arrow_buffer::Buffer],
+    rows: usize,
+) -> BooleanBuffer {
+    let views = views.get(..rows).unwrap_or(views);
+    if lit as u32 <= 12 {
+        return BooleanBuffer::collect_bool(views.len(), |i| {
+            views.get(i).is_some_and(|&v| v == lit) == equal
+        });
+    }
+    BooleanBuffer::collect_bool(views.len(), |i| {
+        views
+            .get(i)
+            .is_some_and(|&v| views_equal(v, bufs, lit, lit_bufs))
+            == equal
+    })
 }
 
 /// Byte-wise comparison (Spark's `UTF8_BINARY` order for strings).

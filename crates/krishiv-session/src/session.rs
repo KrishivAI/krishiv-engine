@@ -53,6 +53,7 @@ use krishiv_types::DataType;
 use krishiv_types::batch::{Batch, Weights};
 use krishiv_udf_sdk::{UdfLibrary, guard_call};
 use object_store::ObjectStore;
+#[cfg(not(unix))]
 use object_store::local::LocalFileSystem;
 
 use crate::cache::RelationCache;
@@ -352,6 +353,12 @@ impl SessionBuilder {
         let io =
             IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
         io.attach_memory(&memory);
+        #[cfg(unix)]
+        io.register_whole_listing_store(
+            StoreId::new(LOCAL_STORE),
+            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        #[cfg(not(unix))]
         io.register_store(
             StoreId::new(LOCAL_STORE),
             Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
@@ -857,7 +864,11 @@ impl Session {
                 b.schema()
             )));
         }
-        let batches: Vec<Batch> = batches.into_iter().map(Batch::new).collect();
+        let schema = crate::carrier::canonical_schema(schema);
+        let batches = batches
+            .into_iter()
+            .map(|b| crate::carrier::recarried(&b, &schema).map(Batch::new))
+            .collect::<Result<Vec<Batch>, KrishivError>>()?;
         // The batches as content-addressed IPC in the session's store: the
         // table's scans split into batch ranges that workers resolve
         // through it. The table holds the lease but not the batches, so

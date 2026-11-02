@@ -469,10 +469,10 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
             }
         }
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
-            Cell::Str(krishiv_kernels::cast::format_time(
+            Cell::Time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()
                     .value(row),
-            ))
+            )
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
             Cell::Array(list_cells(col, row, element)?)
@@ -645,6 +645,12 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
         }
+        (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
+            Cell::Time(
+                col.as_primitive::<arrow_array::types::Time64NanosecondType>()
+                    .value(row),
+            )
+        }
         (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
             col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
                 .value(row),
@@ -694,7 +700,10 @@ fn fixture_batch(table: &Table) -> Result<Option<(Arc<Schema>, RecordBatch)>, En
         if ty.is_nested() {
             return Ok(None);
         }
-        fields.push(ty.to_arrow_field(&c.name, c.nullable));
+        // Decimals are handed in on `Decimal128`, as a client's are.
+        let field = ty.to_arrow_field(&c.name, c.nullable);
+        let wide = krishiv_types::arrow::client_arrow_type(field.data_type());
+        fields.push(field.with_data_type(wide));
         types.push(ty);
     }
     let schema = Arc::new(Schema::new(fields));
@@ -782,7 +791,7 @@ fn fixture_column(table: &Table, i: usize, ty: &DataType) -> Result<ArrayRef, En
                     other => return Err(bad(other)),
                 }
             }
-            let ArrowType::Decimal128(p, s) = ty.to_arrow() else {
+            let (ArrowType::Decimal64(p, s) | ArrowType::Decimal128(p, s)) = ty.to_arrow() else {
                 return Err(bad(&Cell::Null));
             };
             let _ = d;

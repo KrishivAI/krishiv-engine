@@ -52,3 +52,14 @@ def test_struct_json_with_collations_metadata() -> None:
     assert t["a"].dataType == ArrayType(StringType("UNICODE_CI"))
     assert t["m"].dataType == MapType(StringType("UTF8_LCASE"), StringType())
     assert t["m"].metadata == {"k": 1}
+
+
+def test_create_dataframe_refuses_collated_columns() -> None:
+    import pytest
+
+    pa = pytest.importorskip("pyarrow")
+    from krishiv.sql.session import _pa_type
+
+    assert _pa_type(StringType(), pa) == pa.string()
+    with pytest.raises(Exception, match="collate"):
+        _pa_type(StringType("UTF8_LCASE"), pa)

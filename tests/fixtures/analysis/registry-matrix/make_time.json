@@ -26,11 +26,11 @@
     },
     {
       "id": "make_time#257e082f768b/ansi_on",
-      "reason": "SELECT make_time(6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#257e082f768b/ansi_off",
-      "reason": "SELECT make_time(6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#2ab409ac87a6/ansi_on",
@@ -58,11 +58,11 @@
     },
     {
       "id": "make_time#4230a0869d26/ansi_on",
-      "reason": "SELECT make_time(6, 30, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, 30, INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#4230a0869d26/ansi_off",
-      "reason": "SELECT make_time(6, 30, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, 30, INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#4251b408e107/ansi_on",
@@ -130,19 +130,19 @@
     },
     {
       "id": "make_time#84e9e5a9baf3/ansi_on",
-      "reason": "SELECT make_time(6, 30, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, 30, INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#84e9e5a9baf3/ansi_off",
-      "reason": "SELECT make_time(6, 30, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, 30, INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#8ca4b1067c64/ansi_on",
-      "reason": "SELECT make_time(INTERVAL '1-2' YEAR TO MONTH, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(INTERVAL '1-2' YEAR TO MONTH, 30, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#8ca4b1067c64/ansi_off",
-      "reason": "SELECT make_time(INTERVAL '1-2' YEAR TO MONTH, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(INTERVAL '1-2' YEAR TO MONTH, 30, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#948df36b4528/ansi_on",
@@ -162,11 +162,11 @@
     },
     {
       "id": "make_time#b02fbdbfe898/ansi_on",
-      "reason": "SELECT make_time(6, INTERVAL '1-2' YEAR TO MONTH, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, INTERVAL '1-2' YEAR TO MONTH, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#b02fbdbfe898/ansi_off",
-      "reason": "SELECT make_time(6, INTERVAL '1-2' YEAR TO MONTH, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(6, INTERVAL '1-2' YEAR TO MONTH, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#d2179055efe5/ansi_on",
@@ -218,11 +218,11 @@
     },
     {
       "id": "make_time#f4ef91915e62/ansi_on",
-      "reason": "SELECT make_time(INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#f4ef91915e62/ansi_off",
-      "reason": "SELECT make_time(INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT make_time(INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_time#f93c742bcdcf/ansi_on",

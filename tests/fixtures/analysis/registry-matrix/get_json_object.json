@@ -74,11 +74,11 @@
     },
     {
       "id": "get_json_object#48648dc62f84/ansi_on",
-      "reason": "SELECT get_json_object(INTERVAL '1-2' YEAR TO MONTH, '$.a') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object(INTERVAL '1-2' YEAR TO MONTH, '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#48648dc62f84/ansi_off",
-      "reason": "SELECT get_json_object(INTERVAL '1-2' YEAR TO MONTH, '$.a') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object(INTERVAL '1-2' YEAR TO MONTH, '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#54c85710a81f/ansi_on",
@@ -138,11 +138,11 @@
     },
     {
       "id": "get_json_object#8a74cb0bb7f4/ansi_on",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1 02:03:04' DAY TO SECOND) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#8a74cb0bb7f4/ansi_off",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1 02:03:04' DAY TO SECOND) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#a45e068ececf/ansi_on",
@@ -202,11 +202,11 @@
     },
     {
       "id": "get_json_object#df4cb10fa22c/ansi_on",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1-2' YEAR TO MONTH) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#df4cb10fa22c/ansi_off",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object('{\"a\":\"b\"}', INTERVAL '1-2' YEAR TO MONTH) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#e0a619d975d1/ansi_on",
@@ -218,11 +218,11 @@
     },
     {
       "id": "get_json_object#e0edb85001f8/ansi_on",
-      "reason": "SELECT get_json_object(INTERVAL '1 02:03:04' DAY TO SECOND, '$.a') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object(INTERVAL '1 02:03:04' DAY TO SECOND, '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#e0edb85001f8/ansi_off",
-      "reason": "SELECT get_json_object(INTERVAL '1 02:03:04' DAY TO SECOND, '$.a') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT get_json_object(INTERVAL '1 02:03:04' DAY TO SECOND, '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#f55895989719/ansi_on",

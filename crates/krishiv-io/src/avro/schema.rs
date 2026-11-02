@@ -333,7 +333,7 @@ impl Writer {
             DataType::BinaryView | DataType::Binary | DataType::LargeBinary => {
                 r#""bytes""#.to_owned()
             }
-            DataType::Decimal128(p, s) => {
+            DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
                 let name = avro_name(&format!("{scope}_decimal"));
                 format!(
                     r#"{{"type":"fixed","name":{name},"size":{size},"logicalType":"decimal","precision":{p},"scale":{s}}}"#,

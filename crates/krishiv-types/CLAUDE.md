@@ -26,7 +26,7 @@ Paths are relative to this crate.
 
 ## Invariants
 - Type mapping and precision/scale rules follow Spark exactly per supported version.
-- 128-bit decimals with Spark precision/scale; binary-safe strings.
+- Decimals on `Decimal64` for precision 18 or less and `Decimal128` above it (`arrow.rs`, design P2-T160): one carrier per Spark type between operators; `canonical_arrow_type` and `client_arrow_type` map at the edges. Spark precision/scale; binary-safe strings.
 - `Batch`: no selection vector, no encoding enum; copy-on-filter. `Const(c)` never becomes a column except in
   `concat` of differing constants; operators route `Const(1)` to the no-weight path. A weight column has the row
   count and no nulls.

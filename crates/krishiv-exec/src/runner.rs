@@ -403,6 +403,7 @@ fn inputs(p: &Pipeline) -> Vec<OperatorId> {
     let mut ids: Vec<OperatorId> = p
         .input
         .iter()
+        .chain(&p.second_input)
         .chain(p.operator_inputs.iter().flatten())
         .copied()
         .collect();
@@ -478,6 +479,9 @@ fn start_group(
         let mut source_ctx = ctx((*source_id, source.name()));
         if let Some(input) = &pipeline.input {
             source_ctx = source_ctx.with_dependency(read(input)?);
+        }
+        if let Some(input) = &pipeline.second_input {
+            source_ctx = source_ctx.with_second_dependency(read(input)?);
         }
         let operator_deps = pipeline
             .operator_inputs
