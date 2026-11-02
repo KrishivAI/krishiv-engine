@@ -413,7 +413,12 @@ impl Session {
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
             .to_owned();
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -702,7 +707,12 @@ impl Session {
                 schema_binding: None,
                 ..
             } => {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -1122,7 +1132,7 @@ impl Session {
             }
             .into());
         }
-        let mut options = options_of(&t.options, original);
+        let options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
         let external = t.external || t.location.is_some();
         let location = match &t.location {
@@ -1135,11 +1145,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
-        }
         let mut table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1401,7 +1406,12 @@ impl Session {
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
     ) -> Result<(), KrishivError> {
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         self.create_table_from(table, &df, mode, layout).await
     }
@@ -1488,8 +1498,10 @@ impl Session {
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
         let source = self.table_name(&t.source, &env)?;
-        // Spark's `CreateTableLikeCommand` copies the partition columns and the bucket specification.
+        // Spark's `CreateTableLikeCommand` copies the partition columns, the bucket specification and the
+        // storage options, under any provider.
         let mut layout = TableLayout::default();
+        let mut options = BTreeMap::new();
         let (columns, source_provider) = if let Some(s) = self
             .state
             .catalog
@@ -1500,6 +1512,7 @@ impl Session {
                 .partition_columns
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
+            options.clone_from(&s.options);
             (s.columns.clone(), s.provider.clone())
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
@@ -1543,10 +1556,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        let mut options = BTreeMap::new();
-        if provider == "csv" {
-            options.insert("header".to_owned(), "true".to_owned());
-        }
         let table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1854,7 +1863,12 @@ impl Session {
                 .iter()
                 .for_each(|r| scalar_subqueries(r, &mut subqueries));
             for query in &subqueries {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 DataFrame::new(self.clone(), Arc::clone(plan.root()))
                     .analyzed_in(self.query_env())
                     .await?;
@@ -1866,7 +1880,12 @@ impl Session {
                 );
             }
         }
-        let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            &c.query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let listed: Vec<String> = c
             .columns
@@ -2062,11 +2081,6 @@ impl Session {
                 return Err(unsupported("secret table options"));
             };
             options.insert(k.clone(), text.to_owned());
-        }
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
         }
         let table = CatalogTable {
             namespace: name.namespace.clone(),

@@ -458,6 +458,28 @@ impl Decoder {
                 id: SharedId(s.id),
                 layout: layout(&s.layout),
             },
+            Kind::UnionLoop(u) => {
+                let limits = u
+                    .limits
+                    .as_ref()
+                    .ok_or_else(|| corrupt("a recursive loop without limits"))?;
+                PhysNode::UnionLoop {
+                    id: u.id,
+                    anchor: self.boxed(u.anchor)?,
+                    recursive: self.boxed(u.recursive)?,
+                    layout: layout(&u.layout),
+                    nullable: u.nullable.clone(),
+                    limits: krishiv_exec::physical::LoopLimits {
+                        level: limits.level,
+                        rows: limits.rows,
+                        pushed_limit: limits.pushed_limit,
+                    },
+                }
+            }
+            Kind::LoopRef(r) => PhysNode::LoopRef {
+                id: r.id,
+                layout: layout(&r.layout),
+            },
             Kind::Range(r) if r.step == 0 => return Err(corrupt("a range with step 0")),
             Kind::Range(r) if r.num_slices == Some(0) => {
                 return Err(corrupt("a range with 0 slices"));
@@ -1035,6 +1057,14 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
         mask: a.mask.map(usize_of).transpose()?,
+        element: if a.result_element.is_empty() {
+            None
+        } else {
+            match schema_from(&a.result_element)?.fields().iter().as_slice() {
+                [field] => Some(Arc::clone(field)),
+                _ => return Err(corrupt("an aggregate element that is not one field")),
+            }
+        },
     })
 }
 

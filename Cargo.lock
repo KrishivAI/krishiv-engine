@@ -2175,6 +2175,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "jiff",
  "krishiv-common",
+ "krishiv-types",
  "libm",
  "md-5 0.11.0",
  "memchr",

@@ -46,13 +46,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::builder::make_view;
 use arrow_array::{
-    ArrayRef, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray, StructArray,
+    Array, ArrayRef, Int64Array, RecordBatch, RecordBatchOptions, StringViewArray, StructArray,
     TimestampMicrosecondArray,
 };
 use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_io::runtime_filter::ScanFilter;
 use krishiv_io::split::{FilePartition, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile};
 use krishiv_io::{
     ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
@@ -374,6 +375,10 @@ struct FileScanGlobal {
     cursor: MorselCursor,
     /// The table-level request with the runtime filters attached.
     request: ScanRequest,
+    /// The runtime filters on partition columns, with the column's index
+    /// among the partition fields: a file whose value none passes is never
+    /// opened (dynamic partition pruning).
+    partition_filters: Vec<(usize, ScanFilter)>,
     /// Rows returned by every driver (for a limit hint).
     returned: AtomicU64,
 }
@@ -439,6 +444,18 @@ fn reads_partition_column(scan: &FileScan, filter: &PushedFilter) -> bool {
         e.columns()
             .iter()
             .any(|c| scan.partition_columns.iter().any(|p| p.name() == c.root()))
+    })
+}
+
+/// The runtime filter that no row of a file with these partition values
+/// passes, if any.
+fn dropping_filter<'a>(
+    filters: &'a [(usize, ScanFilter)],
+    values: &[ArrayRef],
+) -> Option<&'a ScanFilter> {
+    filters.iter().find_map(|(k, filter)| {
+        let mask = filter.evaluate(values.get(*k)?.as_ref())?;
+        (mask.is_valid(0) && !mask.value(0)).then_some(filter)
     })
 }
 
@@ -707,7 +724,13 @@ impl FileScanSource {
 
     /// Starts reading the footer of the file after piece `next` of
     /// `morsel` if it is another file and none is in flight for it.
-    fn read_ahead(&self, local: &mut FileScanLocal, morsel: &[MorselSplit], next: usize) {
+    fn read_ahead(
+        &self,
+        local: &mut FileScanLocal,
+        partition_filters: &[(usize, ScanFilter)],
+        morsel: &[MorselSplit],
+        next: usize,
+    ) {
         let Some(piece) = morsel.get(next + 1) else {
             return;
         };
@@ -717,6 +740,15 @@ impl FileScanSource {
             return;
         }
         if let Some(file) = self.files.get(wanted) {
+            // A file its partition's filter drops is never opened. (An error
+            // reading its path is reported by the open.)
+            let dropped = !partition_filters.is_empty()
+                && self
+                    .partition_values(file)
+                    .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
+            if dropped {
+                return;
+            }
             let fut = self.io.prefetch_metadata(
                 Arc::clone(&self.format),
                 file.clone(),
@@ -731,12 +763,20 @@ impl FileScanSource {
         &self,
         local: &mut FileScanLocal,
         request: &ScanRequest,
+        partition_filters: &[(usize, ScanFilter)],
         piece: MorselSplit,
     ) -> Result<()> {
         let MorselSplit { file, range, split } = piece;
         // Stage 0: a filter that drops every row skips the piece unopened.
         if let Some(f) = request.dynamic.iter().find(|f| f.drops_everything()) {
             f.filter().stats().add_split(range.len());
+            return Ok(());
+        }
+        let f = self.file(file)?.clone();
+        let partition_values = self.partition_values(&f)?;
+        // Dynamic partition pruning: no row of the file passes.
+        if let Some(filter) = dropping_filter(partition_filters, &partition_values) {
+            filter.filter().stats().add_split(range.len());
             return Ok(());
         }
         if let Some((f, _)) = &local.ahead
@@ -746,8 +786,6 @@ impl FileScanSource {
             // The read's own error (if any) is reported by the open below.
             drop(fut.await);
         }
-        let f = self.file(file)?.clone();
-        let partition_values = self.partition_values(&f)?;
         let row_filter_start = local
             .row_filter
             .and_then(|(last, on)| (last == file).then_some(on));
@@ -824,8 +862,9 @@ impl FileScanSource {
                 && let Some(piece) = g.morsels[m].get(next).copied()
             {
                 local.morsel = Some((m, next + 1));
-                self.read_ahead(local, &g.morsels[m], next);
-                self.open(local, &g.request, piece).await?;
+                self.read_ahead(local, &g.partition_filters, &g.morsels[m], next);
+                self.open(local, &g.request, &g.partition_filters, piece)
+                    .await?;
                 continue;
             }
             let Some((ordinal, m)) = g.cursor.claim_ordered() else {
@@ -843,6 +882,25 @@ impl FileScanSource {
                 local.rows.start_partition();
             }
         }
+    }
+
+    /// The runtime filters whose target is a partition column.
+    fn partition_filters(&self) -> Vec<(usize, ScanFilter)> {
+        self.runtime
+            .filters()
+            .into_iter()
+            .filter_map(|f| {
+                let k = self
+                    .partition_fields
+                    .iter()
+                    .position(|p| f.target().0.len() == 1 && p.name() == f.target().root())?;
+                let column = (
+                    f.target().clone(),
+                    self.partition_fields[k].data_type().clone(),
+                );
+                Some((k, ScanFilter::at(f, Some(column))))
+            })
+            .collect()
     }
 
     /// The values of `file`'s partition columns, one row each.
@@ -1086,16 +1144,19 @@ impl Source for FileScanSource {
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let mut request = self.request.clone();
+        let mut partition_filters = Vec::new();
         // With a filter conjunct that may raise, no runtime filter: Spark
         // evaluates its runtime filter as the filter's last conjunct, so it
         // skips no split, row group or row that conjunct still has to see.
         if request.row_level.runtime_filters() {
             let table = &self.request.table_schema;
             request.dynamic = self.runtime.scan_filters(table);
+            partition_filters = self.partition_filters();
         }
         let morsels = self.morsels(ctx);
         Ok(Arc::new(FileScanGlobal {
             request,
+            partition_filters,
             cursor: MorselCursor::new(morsels.len(), ctx.query().config().seed),
             morsels,
             returned: AtomicU64::new(0),

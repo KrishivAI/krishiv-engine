@@ -698,6 +698,19 @@ pub(super) fn snapshot_slots(part_start: &[bool], open: usize) -> (usize, usize)
     (held, len)
 }
 
+/// Whether `a` keeps a value per distinct row (an exact percentile's map,
+/// which `Accumulator::group_bytes` does not count).
+pub(super) fn keeps_values(a: &AggregateExpr) -> bool {
+    matches!(
+        a.function,
+        AggregateFunction::Percentile { .. } | AggregateFunction::PercentileDisc { .. }
+    )
+}
+
+/// The bytes an exact percentile's map may take for one row: an entry of two
+/// words, in a table that doubles (`ExactAcc::projected`).
+const KEPT_VALUE_BYTES: usize = 2 * 32;
+
 /// The view type a string or binary argument is read as.
 pub(super) fn view_type(t: &DataType) -> DataType {
     match t {
@@ -910,7 +923,13 @@ pub(super) fn cost(
                         0
                     };
                     let slots = if shape == Shape::Whole { 0 } else { rows * 4 };
+                    let kept = if keeps_values(a) {
+                        rows * KEPT_VALUE_BYTES
+                    } else {
+                        0
+                    };
                     ids + slots
+                        + kept
                         + snapshot_heap(a, shape, held)
                         + groups * state
                         + width(&out, segments)

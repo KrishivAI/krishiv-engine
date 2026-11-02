@@ -237,6 +237,7 @@ pub(crate) fn percentile_aggregate_exprs() -> Vec<AggregateExpr> {
         arg_type,
         name: "x".to_owned(),
         mask: None,
+        element: None,
     };
     vec![
         a(
@@ -289,6 +290,7 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
         arg_type,
         name: "x".to_owned(),
         mask: None,
+        element: None,
     };
     vec![
         AggregateExpr::count_star("n"),
@@ -314,6 +316,7 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
             arg_type: ArrowType::Int32,
             name: "merged".to_owned(),
             mask: None,
+            element: None,
         },
     ]
 }
@@ -328,6 +331,7 @@ pub(crate) fn collect_aggregate_exprs() -> Vec<AggregateExpr> {
         arg_type,
         name: "x".to_owned(),
         mask: None,
+        element: None,
     };
     vec![
         a(AggregateFunction::CollectList, ArrowType::Int32),
@@ -345,6 +349,7 @@ pub(crate) fn vector_aggregate_exprs() -> Vec<AggregateExpr> {
         arg_type,
         name: "x".to_owned(),
         mask: None,
+        element: None,
     };
     let floats = || ArrowType::List(Arc::new(Field::new("element", ArrowType::Float32, false)));
     vec![
@@ -363,6 +368,7 @@ pub(crate) fn mode_regr_bit_listagg_exprs() -> Vec<AggregateExpr> {
         arg_type,
         name: "x".to_owned(),
         mask: None,
+        element: None,
     };
     let pair = |function| AggregateExpr {
         function,
@@ -371,6 +377,7 @@ pub(crate) fn mode_regr_bit_listagg_exprs() -> Vec<AggregateExpr> {
         arg_type: ArrowType::Float64,
         name: "x".to_owned(),
         mask: None,
+        element: None,
     };
     vec![
         a(AggregateFunction::BitAnd, ArrowType::Int32),
@@ -764,6 +771,44 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 subqueries: Vec::new(),
             },
         ),
+        (
+            "union_loop",
+            PhysNode::UnionLoop {
+                id: 3,
+                anchor: boxed(scan()),
+                recursive: boxed(PhysNode::Union {
+                    inputs: vec![PhysNode::LoopRef {
+                        id: 3,
+                        layout: vec![AttrId(1)],
+                    }],
+                }),
+                layout: vec![AttrId(1)],
+                nullable: vec![true],
+                limits: krishiv_exec::physical::LoopLimits {
+                    level: 100,
+                    rows: 1_000_000,
+                    pushed_limit: Some(10),
+                },
+            },
+        ),
+        (
+            "union_loop_unbounded",
+            PhysNode::UnionLoop {
+                id: 4,
+                anchor: boxed(scan()),
+                recursive: boxed(PhysNode::LoopRef {
+                    id: 4,
+                    layout: vec![AttrId(1)],
+                }),
+                layout: vec![AttrId(1)],
+                nullable: vec![true],
+                limits: krishiv_exec::physical::LoopLimits {
+                    level: u32::MAX,
+                    rows: u64::MAX,
+                    pushed_limit: None,
+                },
+            },
+        ),
         ("expand_rollup", expand_rollup()),
         (
             "expand_single",
@@ -911,6 +956,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                             arg_type: ArrowType::Int32,
                             name: "masked".to_owned(),
                             mask: Some(1),
+                            element: None,
                         },
                         AggregateExpr {
                             function: AggregateFunction::Sum,
@@ -919,6 +965,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                             arg_type: ArrowType::Int32,
                             name: "plain".to_owned(),
                             mask: None,
+                            element: None,
                         },
                     ],
                     output: AggregateOutput::Final,
@@ -1693,11 +1740,46 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("interval_literals", interval_literals),
         ("interval_scan", PhysNode::Scan(interval_columns)),
         ("interval_nested", nested_intervals),
+        (
+            "interval_array_aggregate",
+            PhysNode::Aggregate {
+                input: Box::new(PhysNode::Scan(file_scan())),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![interval_percentiles()],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("time_nested", nested_times),
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
     ]
+}
+
+/// A percentile array over `interval hour`: the Arrow type holds no fields, so
+/// the element field's metadata names them.
+fn interval_percentiles() -> AggregateExpr {
+    let element = Field::new("element", ArrowType::Duration(TimeUnit::Microsecond), false)
+        .with_metadata(std::collections::HashMap::from([(
+            "krishiv.spark_type".to_owned(),
+            "interval hour".to_owned(),
+        )]));
+    AggregateExpr {
+        function: AggregateFunction::Percentile {
+            percentages: vec![0.5],
+            array: true,
+            reverse: false,
+        },
+        args: vec![0, 1],
+        input: AggInput::Raw,
+        arg_type: ArrowType::Duration(TimeUnit::Microsecond),
+        name: "x".to_owned(),
+        mask: None,
+        element: Some(Arc::new(element)),
+    }
 }
 
 /// The `listagg` aggregate of this change: it carries its delimiter and
@@ -1717,5 +1799,6 @@ pub(crate) fn listagg_aggregate_exprs() -> Vec<AggregateExpr> {
         ])),
         name: "x".to_owned(),
         mask: None,
+        element: None,
     }]
 }

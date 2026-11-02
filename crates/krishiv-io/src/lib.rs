@@ -60,6 +60,8 @@ pub use format::{
 };
 #[cfg(unix)]
 pub use io::beneath::{AnchorError, BeneathStore};
+#[cfg(unix)]
+pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{
     ByteRange, FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, ObjectScheme,
     ParsedUrl, PinnedStore, SecretResolver, StoreId, StorePolicy, StoreRegistry, Tail,

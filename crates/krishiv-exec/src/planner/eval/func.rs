@@ -5,7 +5,7 @@
 use std::sync::{Arc, OnceLock};
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
+use arrow_array::{Array, ArrayRef, ListArray, MapArray, RecordBatch, StructArray};
 use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::map::DedupPolicy;
@@ -131,10 +131,14 @@ fn wide_literal(l: &Literal) -> Result<ArrayRef> {
     recarried_array(&a, &client_arrow_type(a.data_type()))
 }
 
-/// Whether `a` and `b` differ at most in the nullability of nested fields.
+/// Whether `a` and `b` differ at most in the nullability and tags of nested
+/// fields (an interval's fields live in its field's tag; a binding has only the
+/// carrier to read).
 pub(super) fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
     match (a, b) {
-        (ArrowType::List(x), ArrowType::List(y)) => same_shape(x.data_type(), y.data_type()),
+        (ArrowType::List(x), ArrowType::List(y)) | (ArrowType::Map(x, _), ArrowType::Map(y, _)) => {
+            same_shape(x.data_type(), y.data_type())
+        }
         (ArrowType::Struct(x), ArrowType::Struct(y)) => {
             x.len() == y.len()
                 && x.iter()
@@ -158,6 +162,26 @@ pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
                     list.offsets().clone(),
                     relabeled(list.values(), f.data_type())?,
                     list.nulls().cloned(),
+                )
+                .map_err(|e| internal(&e.to_string()))?,
+            ))
+        }
+        ArrowType::Map(f, sorted) if array.data_type() != to => {
+            let map = array
+                .as_map_opt()
+                .ok_or_else(|| internal("a relabelled map is not a map"))?;
+            let entries: ArrayRef = Arc::new(map.entries().clone());
+            let entries = relabeled(&entries, f.data_type())?;
+            let entries = entries
+                .as_struct_opt()
+                .ok_or_else(|| internal("relabelled map entries are not a struct"))?;
+            Ok(Arc::new(
+                MapArray::try_new(
+                    Arc::clone(f),
+                    map.offsets().clone(),
+                    entries.clone(),
+                    map.nulls().cloned(),
+                    *sorted,
                 )
                 .map_err(|e| internal(&e.to_string()))?,
             ))
