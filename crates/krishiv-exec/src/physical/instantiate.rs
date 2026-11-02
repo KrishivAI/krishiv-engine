@@ -63,9 +63,9 @@ use crate::join::{
 };
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
-    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, NullOf, Predicate, Project,
-    ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown, ScanPushdowns, Sort,
-    SortKey, TopN,
+    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, LateFetch, NullOf,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown,
+    ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -633,6 +633,26 @@ impl Instantiation<'_> {
                 let op = group_limit_op(&input.schema, limit)?;
                 Ok(operator(input, op))
             }
+            PhysNode::LateFetch {
+                input,
+                scan,
+                file_col,
+                row_col,
+                output,
+            } => {
+                let input = self.node(input)?;
+                // Not a scan of its own: the row id names each file, so the
+                // task's splits don't apply.
+                let fetch = Arc::new(LateFetch::new(
+                    &input.schema,
+                    self.worker.tables.provider(&scan.scan)?.scan()?,
+                    scan.projection.clone(),
+                    *file_col,
+                    *row_col,
+                    output.clone(),
+                )?);
+                Ok(breaker(input, Arc::clone(&fetch) as Arc<dyn Sink>, fetch))
+            }
             PhysNode::TopN {
                 input,
                 keys,
@@ -703,6 +723,12 @@ impl Instantiation<'_> {
     fn scan(&self, s: &ScanNode) -> Result<Built> {
         let factory = self.worker.tables.provider(&s.scan)?.scan()?;
         let factory = self.splits(s.id, factory)?;
+        if s.row_id && !factory.supports_take() {
+            return Err(internal(format!(
+                "scan {} has a row id its table can't read back",
+                s.id.0
+            )));
+        }
         let table = factory.table_schema();
         let mut filters = Vec::new();
         if let Some(f) = &s.filter {
@@ -727,6 +753,7 @@ impl Instantiation<'_> {
             projection: Some(s.projection.clone()),
             filters,
             dynamic,
+            row_id: s.row_id,
             ..ScanPushdowns::default()
         })?;
         Ok(Built {

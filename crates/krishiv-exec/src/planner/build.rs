@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
+use krishiv_common::config::{ConfigValue, LATE_FETCH_MAX_ROWS};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::{ColumnPath, FilterId};
 use krishiv_optimizer::PlanStats;
@@ -39,7 +40,9 @@ use super::subquery::SubqueryValue;
 use super::{PhysicalPlanner, PlanningContext};
 use crate::error::Result;
 use crate::operator::{Operator, Source};
-use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
+use crate::operators::{
+    FetchSlot, FilterPushdown, LateFetch, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN,
+};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
     SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op,
@@ -632,6 +635,9 @@ impl<'a> Planner<'a> {
             && usize::try_from(total).is_ok_and(|t| t <= TopN::MAX_ROWS)
         {
             let deterministic = krishiv_optimizer::plan_is_deterministic(sorted);
+            if let Some(fetched) = self.late_fetch(sorted, order, skip, n, deterministic)? {
+                return Ok(fetched);
+            }
             let sorted = self.plan(sorted)?;
             let top = self.top_n(sorted, order, total, deterministic)?;
             if skip == 0 {
@@ -651,6 +657,146 @@ impl<'a> Planner<'a> {
         };
         let input = self.require(input, Distribution::Single)?;
         Ok(Self::skip_rows(input, skip, n))
+    }
+
+    /// `ORDER BY order LIMIT n OFFSET skip` over a scan that reads only the
+    /// sort keys and the filter's columns, and fetches the other columns for
+    /// the rows kept, when that's cheaper (design P2-T063 §4).
+    fn late_fetch(
+        &mut self,
+        sorted: &Arc<LogicalPlan>,
+        order: &[SortOrder],
+        skip: u64,
+        n: u64,
+        deterministic: bool,
+    ) -> Result<Option<Planned>> {
+        // A projection of plain columns only picks columns of the fetch's output.
+        let (below, picked) = match &sorted.node {
+            PlanNode::Project { input, exprs }
+                if exprs
+                    .iter()
+                    .all(|e| matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Column(_)))) =>
+            {
+                (input, sorted.resolved_output())
+            }
+            _ => (sorted, None),
+        };
+        let (scan, filter) = match &below.node {
+            PlanNode::Scan(scan) => (scan, None),
+            PlanNode::Filter { input, predicate } => match &input.node {
+                PlanNode::Scan(scan) if !has_subquery(predicate) => (scan, Some(predicate)),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let max_rows = self
+            .cx
+            .config
+            .get(&LATE_FETCH_MAX_ROWS)
+            .and_then(ConfigValue::as_int)
+            .and_then(|m| u64::try_from(m).ok())
+            .unwrap_or(0);
+        let total = n.saturating_add(skip);
+        if n == 0 || total > max_rows || order.iter().any(|o| has_subquery(&o.expr)) {
+            return Ok(None);
+        }
+        let provider = self.cx.tables.provider(scan)?;
+        let factory = provider.scan()?;
+        if !factory.supports_take() {
+            return Ok(None);
+        }
+        // A fetch costs every deferred chunk of each unit it touches, a plain
+        // scan at most those of all units.
+        let Some(units) = provider.scan_units() else {
+            return Ok(None);
+        };
+        if n.min(units) > units / 4 {
+            return Ok(None);
+        }
+        let mut read = HashSet::new();
+        for e in order.iter().map(|o| &o.expr).chain(filter) {
+            columns_read(e, &mut read);
+        }
+        let (kept, deferred): (Vec<_>, Vec<_>) = scan
+            .output
+            .iter()
+            .cloned()
+            .partition(|c| read.contains(&c.id) || !factory.in_files(&c.name));
+        if deferred.is_empty() {
+            return Ok(None);
+        }
+        let narrow = krishiv_plan::Scan {
+            output: kept,
+            ..scan.clone()
+        };
+        let input = self.scan_reading(below, &narrow, filter, true)?;
+        let width = narrow.output.len();
+        let (Some(&file_attr), Some(&row_attr)) =
+            (input.layout.get(width), input.layout.get(width + 1))
+        else {
+            return Err(internal("a scan without its row id"));
+        };
+        let mut top = self.top_n(input, order, total, deterministic)?;
+        if skip != 0 {
+            top = Self::skip_rows(top, skip, n);
+        }
+        let file_col = top.column(file_attr)?;
+        let row_col = top.column(row_attr)?;
+        let mut fetched = 0;
+        let output = scan
+            .output
+            .iter()
+            .map(|c| {
+                if narrow.output.iter().any(|k| k.id == c.id) {
+                    return Ok(FetchSlot::Input(top.column(c.id)?));
+                }
+                fetched += 1;
+                Ok(FetchSlot::Fetched(fetched - 1))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let projection: Vec<ColumnPath> = deferred
+            .iter()
+            .map(|c| ColumnPath::new(c.name.clone()))
+            .collect();
+        let schema = LateFetch::new(
+            &top.schema,
+            factory,
+            projection.clone(),
+            file_col,
+            row_col,
+            output.clone(),
+        )?
+        .schema();
+        let detail = format!("{} [{}]", source_name(scan), columns(&deferred));
+        let layout = scan.output.iter().map(|c| c.id).collect();
+        let fetch = ScanNode {
+            id: self.next_scan_id()?,
+            scan: krishiv_plan::Scan {
+                output: deferred,
+                ..scan.clone()
+            },
+            projection,
+            filter: None,
+            runtime_filters: Vec::new(),
+            row_stage: self.rf.row_stage(),
+            row_id: false,
+        };
+        let fetched = top.wrap(
+            |input| PhysNode::LateFetch {
+                input,
+                scan: fetch,
+                file_col,
+                row_col,
+                output,
+            },
+            schema,
+            layout,
+            ("LateFetch", detail),
+        );
+        Ok(Some(match picked {
+            Some(columns) => select(fetched, &columns, "Project")?,
+            None => fetched,
+        }))
     }
 
     /// The `Limit` operator over `input`.
@@ -918,11 +1064,32 @@ impl<'a> Planner<'a> {
         self.stats.has_statistics(plan)
     }
 
+    fn next_scan_id(&mut self) -> Result<ScanId> {
+        let id = ScanId(self.next_scan);
+        self.next_scan = self
+            .next_scan
+            .checked_add(1)
+            .ok_or_else(|| internal("scan id overflow"))?;
+        Ok(id)
+    }
+
     fn scan(
         &mut self,
         plan: &Arc<LogicalPlan>,
         scan: &krishiv_plan::Scan,
         filter: Option<&Arc<Expr>>,
+    ) -> Result<Planned> {
+        self.scan_reading(plan, scan, filter, false)
+    }
+
+    /// A scan; with `row_id`, its output ends in the row id, in two columns
+    /// the plan above doesn't name.
+    fn scan_reading(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        scan: &krishiv_plan::Scan,
+        filter: Option<&Arc<Expr>>,
+        row_id: bool,
     ) -> Result<Planned> {
         // Table metadata only: the scan itself is built when the plan is
         // instantiated.
@@ -964,13 +1131,10 @@ impl<'a> Planner<'a> {
         let schema = factory.output_schema(&ScanPushdowns {
             projection: Some(projection.clone()),
             filters: pushed,
+            row_id,
             ..ScanPushdowns::default()
         })?;
-        let id = ScanId(self.next_scan);
-        self.next_scan = self
-            .next_scan
-            .checked_add(1)
-            .ok_or_else(|| internal("scan id overflow"))?;
+        let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
             let name = source_name(scan);
@@ -991,6 +1155,10 @@ impl<'a> Planner<'a> {
             Vec::new()
         };
         let exact = scan_filter_plan.as_ref().is_some_and(|f| f.exact);
+        let mut layout: Vec<AttrId> = scan.output.iter().map(|c| c.id).collect();
+        if row_id {
+            layout.extend([self.fresh_id(), self.fresh_id()]);
+        }
         let mut planned = Planned {
             schema,
             node: PhysNode::Scan(ScanNode {
@@ -1000,8 +1168,9 @@ impl<'a> Planner<'a> {
                 filter: scan_filter_plan,
                 runtime_filters: Vec::new(),
                 row_stage: self.rf.row_stage(),
+                row_id,
             }),
-            layout: scan.output.iter().map(|c| c.id).collect(),
+            layout,
             explain: ExplainNode::leaf("Scan", detail),
             sites,
             placement: Placement::Unknown,
@@ -1680,6 +1849,13 @@ fn carrier_cast_target(
 }
 
 /// The id of a plain (or aliased plain) column expression.
+fn columns_read(e: &Expr, out: &mut HashSet<AttrId>) {
+    if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node {
+        out.insert(c.id);
+    }
+    e.for_each_child(&mut |c| columns_read(c, out));
+}
+
 pub(crate) fn column_of(e: &Expr) -> Option<AttrId> {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
@@ -1904,6 +2080,7 @@ mod attach_tests {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: crate::operators::RowStageSettings::default(),
+            row_id: false,
         })
     }
 

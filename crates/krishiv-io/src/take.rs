@@ -29,6 +29,7 @@ use crate::request::{
     ColumnPath, FieldMapping, ROW_INDEX_COLUMN, RowFilterPolicy, RowSelection, ScanRequest,
 };
 use crate::scan::{ScanOptions, ScanStream};
+use crate::scan_gate::ScanGate;
 
 /// The rows of one file to read.
 #[derive(Debug, Clone)]
@@ -111,6 +112,13 @@ impl TakeStream {
             self.next += 1;
         }
         Ok(Some(batch))
+    }
+
+    /// The same read, sharing the query's decode budget with its scans.
+    #[must_use]
+    pub fn with_gate(mut self, gate: Arc<ScanGate>) -> Self {
+        self.stream = self.stream.map(|s| s.with_gate(gate));
+        self
     }
 
     /// The scan's reader, once something was to be read.

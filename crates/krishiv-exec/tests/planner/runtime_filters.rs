@@ -63,7 +63,7 @@ const MODES: [(&str, &[(&str, &str)]); 6] = [
     ),
 ];
 
-fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
+pub(super) fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
     let mut config = krishiv_common::config::Config::new();
     config.set("spark.sql.ansi.enabled", "true").unwrap();
     for (k, v) in mode {
@@ -73,7 +73,7 @@ fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
 }
 
 /// Rows and the runtime filter counters of one run.
-fn run(plan: &Runnable) -> (Vec<RecordBatch>, Counters) {
+pub(super) fn run(plan: &Runnable) -> (Vec<RecordBatch>, Counters) {
     let root = TreePool::new(&limited(1 << 30));
     let (out, query) = super::run_in(plan, &root);
     let out = out.unwrap_or_else(|e| panic!("{e}\n{plan}"));
@@ -101,7 +101,7 @@ fn limited(bytes: usize) -> MemoryConfig {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct Counters {
+pub(super) struct Counters {
     rows_dropped: u64,
     units_pruned: u64,
     splits_skipped: u64,
@@ -152,7 +152,7 @@ fn tpch_results_do_not_depend_on_runtime_filters() {
 
 /// One table of the randomized joins: every key type, NULLs, and runs of
 /// equal keys in row groups of 64 rows.
-fn table(rng: &mut u64, rows: usize, domain: i32, nulls: u32) -> RecordBatch {
+pub(super) fn table(rng: &mut u64, rows: usize, domain: i32, nulls: u32) -> RecordBatch {
     let mut next = || {
         *rng ^= *rng << 13;
         *rng ^= *rng >> 7;
@@ -241,7 +241,7 @@ fn narrow(x: f64) -> f32 {
     x as f32
 }
 
-fn write(dir: &Path, name: &str, batch: &RecordBatch) {
+pub(super) fn write(dir: &Path, name: &str, batch: &RecordBatch) {
     let o = FormatOptions::defaults(ParquetFormat.options());
     let mut enc = ParquetFormat::encoder_with(&batch.schema(), &o, |p| {
         p.set_max_row_group_row_count(Some(64))

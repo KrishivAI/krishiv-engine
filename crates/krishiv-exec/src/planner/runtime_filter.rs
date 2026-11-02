@@ -318,6 +318,7 @@ mod tests {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: crate::operators::RowStageSettings::default(),
+            row_id: false,
         });
         assert!(reads_source(&scan, &files("a.parquet")));
         assert!(!reads_source(&scan, &files("b.parquet")));

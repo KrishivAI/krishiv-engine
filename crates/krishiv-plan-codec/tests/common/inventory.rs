@@ -21,7 +21,7 @@ use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
 };
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind,
@@ -166,6 +166,7 @@ pub(crate) fn table_scan() -> ScanNode {
             min_rows: 1000,
             max_pass_rate: 0.75,
         },
+        row_id: false,
     }
 }
 
@@ -189,6 +190,7 @@ pub(crate) fn file_scan() -> ScanNode {
         filter: None,
         runtime_filters: Vec::new(),
         row_stage: RowStageSettings::default(),
+        row_id: false,
     }
 }
 
@@ -806,6 +808,24 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Sort {
                 input: boxed(scan()),
                 keys: keys.clone(),
+            },
+        ),
+        (
+            "late_fetch",
+            PhysNode::LateFetch {
+                input: boxed(PhysNode::TopN {
+                    input: boxed(PhysNode::Scan(ScanNode {
+                        row_id: true,
+                        ..file_scan()
+                    })),
+                    keys: keys.clone(),
+                    limit: 10,
+                    bound: None,
+                }),
+                scan: file_scan(),
+                file_col: 2,
+                row_col: 3,
+                output: vec![FetchSlot::Input(0), FetchSlot::Fetched(0)],
             },
         ),
         (

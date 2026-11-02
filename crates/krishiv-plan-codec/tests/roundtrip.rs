@@ -57,6 +57,7 @@ variants!(
     WriteFiles,
     Exchange,
     SharedRead,
+    LateFetch,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -82,6 +83,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
         PhysNode::Exchange(_) => Variant::Exchange,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
+        PhysNode::LateFetch { .. } => Variant::LateFetch,
     }
 }
 
@@ -464,6 +466,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "late_fetch"
             | "sort_merge_join"
             | "partial_aggregate"
             | "shared_subplan"

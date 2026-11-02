@@ -200,6 +200,10 @@ pub trait FileMetadata: Any + Send + Sync + fmt::Debug {
     fn needs(&self) -> MetadataNeeds {
         MetadataNeeds::default()
     }
+    /// How many units (row groups) the file has, when the footer says.
+    fn unit_count(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Whether files of a format can be read in byte ranges.

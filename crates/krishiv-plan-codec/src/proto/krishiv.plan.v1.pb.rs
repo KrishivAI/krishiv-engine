@@ -133,7 +133,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -190,6 +190,42 @@ pub mod node {
         /// feature: sort_merge_join
         #[prost(message, tag = "21")]
         SortMergeJoin(super::SortMergeJoinNode),
+        /// feature: late_fetch
+        #[prost(message, tag = "22")]
+        LateFetch(super::LateFetchNode),
+    }
+}
+/// feature: late_fetch
+/// The rows of `input` with columns read from their files by row id.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LateFetchNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    /// The table and the columns to read.
+    #[prost(message, optional, tag = "2")]
+    pub scan: ::core::option::Option<ScanNode>,
+    #[prost(uint64, tag = "3")]
+    pub file_col: u64,
+    #[prost(uint64, tag = "4")]
+    pub row_col: u64,
+    #[prost(message, repeated, tag = "5")]
+    pub output: ::prost::alloc::vec::Vec<FetchSlot>,
+}
+/// feature: late_fetch
+/// Where a column of a `LateFetchNode`'s output comes from.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FetchSlot {
+    #[prost(oneof = "fetch_slot::Kind", tags = "1, 2")]
+    pub kind: ::core::option::Option<fetch_slot::Kind>,
+}
+/// Nested message and enum types in `FetchSlot`.
+pub mod fetch_slot {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(uint64, tag = "1")]
+        Input(u64),
+        #[prost(uint64, tag = "2")]
+        Fetched(u64),
     }
 }
 /// feature: shared_subplan
@@ -800,6 +836,9 @@ pub struct ScanNode {
     pub runtime_filters: ::prost::alloc::vec::Vec<ScanRuntimeFilter>,
     #[prost(message, optional, tag = "8")]
     pub row_stage: ::core::option::Option<RowStageSettings>,
+    /// feature: late_fetch
+    #[prost(bool, tag = "9")]
+    pub row_id: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnPath {
