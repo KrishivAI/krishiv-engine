@@ -345,6 +345,8 @@ pub struct ScanUnitMetrics {
     pub units_pruned: u64,
     /// Pages skipped by the page index (stage 3).
     pub pages_pruned: u64,
+    /// Row groups whose page index failed a check and was not used.
+    pub page_index_rejected: u64,
     /// Rows decoded.
     pub rows: u64,
     /// Bytes pushed into the decoder.

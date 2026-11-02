@@ -25,8 +25,22 @@ use crate::error::FormatError;
 
 /// The largest Bloom bitset read from a file, as arrow-rs's
 /// `BITSET_MAX_LENGTH`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Bloom stage and the sparse fetch of P2-T080b use it"
+    )
+)]
 pub(super) const BLOOM_MAX_BYTES: u64 = 128 * 1024 * 1024;
 /// The Bloom bitset is whole 32-byte blocks.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Bloom stage and the sparse fetch of P2-T080b use it"
+    )
+)]
 const BLOOM_BLOCK_BYTES: u64 = 32;
 
 /// Why an index or Bloom filter is not used.
@@ -219,6 +233,13 @@ pub(super) fn column_index(bytes: &[u8], ty: PhysicalType, pages: usize) -> R<Co
 ///
 /// # Errors
 /// [`Rejected`] for a malformed header or an impossible size.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Bloom stage and the sparse fetch of P2-T080b use it"
+    )
+)]
 pub(super) fn bloom_header(bytes: &[u8], declared: &Range<u64>) -> R<(u64, usize)> {
     let (num_bytes, header_len) = thrift_guard::bloom_header(bytes)?;
     let num_bytes = u64::from(num_bytes);
@@ -249,6 +270,13 @@ pub(super) fn bloom_header(bytes: &[u8], declared: &Range<u64>) -> R<(u64, usize
 ///
 /// # Errors
 /// [`Rejected`] for a header that fails the page-header walk.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Bloom stage and the sparse fetch of P2-T080b use it"
+    )
+)]
 pub(super) fn sparse_pages(bytes: &[u8], start: u64, pages: &[PageLocation]) -> R<()> {
     let end = start + bytes.len() as u64;
     for p in pages {

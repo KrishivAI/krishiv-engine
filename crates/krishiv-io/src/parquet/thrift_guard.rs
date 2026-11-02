@@ -121,6 +121,13 @@ pub(super) fn check(footer: &[u8]) -> Result<(), &'static str> {
 /// # Errors
 /// What is wrong with the walk, or that the struct does not start with
 /// `numBytes`, or that `numBytes` is negative.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Bloom stage and the sparse fetch of P2-T080b use it"
+    )
+)]
 pub(super) fn bloom_header(buf: &[u8]) -> Result<(u32, usize), &'static str> {
     let limit = buf.len().saturating_mul(8).saturating_add(1024);
     let walked = walk_struct(buf, Schema::Any, &mut 0, limit)?;
