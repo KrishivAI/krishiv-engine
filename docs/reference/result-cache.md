@@ -61,6 +61,16 @@ hit (metadata_age_ms=1532)
 a non-deterministic, clock or session function, reads a temporary or in-memory table, ...). Without the
 setting the plan text is unchanged.
 
+A second line gives the store's state and its counters since the process started, for telling whether
+the cache is earning its memory:
+
+```text
+store: 3 entries, 51584 bytes; since start: 12 hits, 4 misses, 7 stored, 2 invalidated
+```
+
+`invalidated` counts entries dropped by a write, `REFRESH TABLE`, `CLEAR CACHE` or a drop, one per
+entry; entries that expired or were evicted for room are not counted there.
+
 ### Limits
 
 The cache holds batches outside the query memory pool, so `krishiv.memory.limit` does not bound it; its
