@@ -22,7 +22,6 @@ use prost_reflect::{DescriptorPool, DynamicMessage};
 /// The fixtures that must be rejected, and with which error class. Every
 /// other fixture must translate.
 const UNSUPPORTED: &[(&str, ErrorClass)] = &[
-    ("alias_multi", ErrorClass::KrishivUnsupportedFeature),
     ("aggregate_pivot", ErrorClass::KrishivUnsupportedFeature),
     ("distinct", ErrorClass::KrishivUnsupportedFeature),
     (
