@@ -1372,6 +1372,49 @@ impl Resolver<'_> {
                 .cloned()
                 .collect(),
         };
+        // A qualified star reaches the columns a `USING` join merged
+        // away, ahead of the output columns as in Spark.
+        let out = match cx.rels {
+            [r] if s.plan_id.is_none()
+                && s.regex.is_none()
+                && !s.qualifier.is_empty()
+                && cx.agg_scope.is_none()
+                && r.hidden
+                    .iter()
+                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs)) =>
+            {
+                // Spark lists the merged-away columns first, then the output.
+                let mut all: Vec<_> = r
+                    .hidden
+                    .iter()
+                    .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                    .cloned()
+                    .collect();
+                all.extend(out);
+                all
+            }
+            _ => out,
+        };
+        // A quoted column regex keeps the columns whose names it matches in full (ignoring case
+        // unless the session is case sensitive).
+        let had_columns = !out.is_empty();
+        let out = match &s.regex {
+            Some(pattern) => {
+                let matcher = krishiv_functions::scalar::FullMatch::new(pattern, !cs)
+                    .map_err(|e| AnalysisError::new(e, origin))?;
+                let mut kept = Vec::with_capacity(out.len());
+                for a in out {
+                    if matcher
+                        .is_match(&a.col.name)
+                        .map_err(|e| AnalysisError::new(e, origin))?
+                    {
+                        kept.push(a);
+                    }
+                }
+                kept
+            }
+            None => out,
+        };
         let out = match s.position {
             Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
             Some(n) => {
@@ -1385,7 +1428,9 @@ impl Resolver<'_> {
             }
             None => out,
         };
-        if out.is_empty() && !s.qualifier.is_empty() {
+        // A qualified regex that matches nothing selects nothing; only a qualifier no column
+        // answers to cannot be expanded.
+        if out.is_empty() && !s.qualifier.is_empty() && !(s.regex.is_some() && had_columns) {
             return Err(AnalysisError::new(
                 CannotResolveStarExpand {
                     target_string: quoted(&s.qualifier),
@@ -1950,7 +1995,7 @@ impl Resolver<'_> {
                             name,
                             vec![kids[first].shown(), kids[second].shown()]
                                 .into_iter()
-                                .map(|k| Expr::clone(&k))
+                                .map(|k| bare_variable(&k))
                                 .collect(),
                         )
                         .with_origin(e.origin),
@@ -5324,11 +5369,37 @@ impl Resolver<'_> {
         // nothing below resolves them either, they stay ambiguous rather
         // than unresolved.
         let mut lenient_dup = false;
-        for (i, level) in [Some(scope), extra].into_iter().enumerate() {
+        // The columns a `USING` join merged away answer to a qualified name.
+        let joined: Vec<Attr>;
+        let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
+            ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
+            ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            // A join condition reads the merged-away columns of both inputs.
+            (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
+                joined = rels.iter().flat_map(|r| r.hidden.iter().cloned()).collect();
+                Some(&joined[..])
+            }
+            _ => None,
+        };
+        for (i, level) in [Some(scope), extra, hidden].into_iter().enumerate() {
             let Some(level) = level else { continue };
             let lenient = cx.lenient && i == 0;
             match self.find(level, &c.name, origin, lenient) {
                 Ok(Some((a, used))) => {
+                    // A `HAVING` prefers a grouping column to a select-list alias of the same
+                    // name (Spark 4.2: "HAVING condition should prefer table columns over
+                    // aliases").
+                    if i == 0
+                        && !in_agg
+                        && matches!(cx.windows, WindowUse::Having)
+                        && let Some(keys) = extra
+                        && let Ok(Some((k, k_used))) = self.find(keys, &c.name, origin, false)
+                        && k.col.id != a.col.id
+                        && self.serves_path(&k, &c.name[k_used..])
+                    {
+                        self.used(&k);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None, false);
+                    }
                     self.used(&a);
                     return self.resolve_attr(&a, used, &c.name, origin, None, false);
                 }
@@ -5455,8 +5526,17 @@ impl Resolver<'_> {
                 win: None,
                 outer: None,
                 lateral: Vec::new(),
-                shown: Some(Arc::new(
-                    Expr::new(ExprNode::Column(c.clone())).with_origin(origin),
+                // Inside another expression's name Spark spells a variable
+                // `variablereference(system.session.v=<value>)`; a bare select item keeps `v`.
+                shown: Some(named_as(
+                    name,
+                    format!(
+                        "variablereference(system.session.{}={})",
+                        name.to_lowercase(),
+                        var.value
+                    ),
+                    c,
+                    origin,
                 )),
             });
         }
@@ -5579,6 +5659,23 @@ impl Resolver<'_> {
             }
         }
         Ok(None)
+    }
+
+    /// Whether the struct fields `rest` exist below the column `k` (a path longer than the column
+    /// reads fields; a column that holds none of them leaves the name to another candidate).
+    fn serves_path(&self, k: &Attr, rest: &[String]) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        let mut ty = &k.col.data_type;
+        for part in rest {
+            let krishiv_types::DataType::Struct(s) = ty else {
+                return false;
+            };
+            let Some(f) = s.fields().iter().find(|f| same(f.name(), part, cs)) else {
+                return false;
+            };
+            ty = f.data_type();
+        }
+        true
     }
 
     /// `struct` with named children as `named_struct`, or `None` when every
@@ -5868,6 +5965,17 @@ impl Resolver<'_> {
             );
             ty = field_ty;
         }
+        // A dotted column path that reads fields is named by the last field (Spark wraps the
+        // resolved path in an alias), but spelled in full inside other names.
+        let shown = Some(named_as(
+            &parent,
+            pretty(&base, None),
+            &crate::ColumnRef {
+                name: Vec::new(),
+                plan_id: None,
+            },
+            origin,
+        ));
         Ok(Bound {
             expr: base,
             ty,
@@ -5875,7 +5983,7 @@ impl Resolver<'_> {
             win: None,
             outer,
             lateral: Vec::new(),
-            shown: None,
+            shown,
         })
     }
 
@@ -6955,6 +7063,46 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
         return None;
     }
     crate::Builtin::from_name(name).filter(|b| !b.is_analyzer_internal())
+}
+
+/// The marker part of the shown column [`named_as`] builds.
+const NAMED_AS: &str = "\u{1}named";
+
+/// The shown form of an expression that a bare select item names `top` but that the names of
+/// other expressions spell `text` (a session variable, a field read through a dotted column
+/// path): a column whose parts are the marker, `top` and `text`, printed as the last of them.
+fn named_as(top: &str, text: String, like: &crate::ColumnRef, origin: Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec![NAMED_AS.to_owned(), top.to_owned(), text],
+            ..like.clone()
+        }))
+        .with_origin(origin),
+    )
+}
+
+/// The name a bare select item takes from a [`named_as`] shown form.
+pub(super) fn bare_name(e: &Expr) -> Option<&str> {
+    match &e.node {
+        ExprNode::Column(c) => match c.name.as_slice() {
+            [m, top, _] if m == NAMED_AS => Some(top),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `e` with a session variable shown by its own name (Spark names `date + v` over the variable
+/// as written, unlike every other call).
+fn bare_variable(e: &Arc<Expr>) -> Expr {
+    match (bare_name(e), &e.node) {
+        (Some(top), ExprNode::Column(c)) => Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec![top.to_owned()],
+            ..c.clone()
+        }))
+        .with_origin(e.origin),
+        _ => Expr::clone(e),
+    }
 }
 
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
@@ -8127,6 +8275,7 @@ mod tests {
     #[test]
     fn stars_print_as_sql() {
         let star = Expr::new(ExprNode::Star(crate::Star {
+            regex: None,
             replace: Vec::new(),
             position: None,
             qualifier: Vec::new(),
