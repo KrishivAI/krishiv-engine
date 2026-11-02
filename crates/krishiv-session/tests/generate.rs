@@ -957,3 +957,24 @@ fn an_ambiguous_generator_column_prints_without_internal_qualifiers() {
         assert!(err.to_string().contains(want), "{q}: {err}");
     }
 }
+
+// Spark names the function in lower case in WRONG_NUM_ARGS.
+#[test]
+fn a_generator_arity_error_names_the_function_in_lower_case() {
+    let s = Session::new().unwrap();
+    for (q, name) in [
+        ("select Posexplode(1, 2)", "`posexplode`"),
+        ("select EXPLODE()", "`explode`"),
+    ] {
+        let err = error_of(&s, q);
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::WrongNumArgsWithoutSuggestion,
+            "{q}"
+        );
+        assert!(
+            err.to_string().contains(&format!("The {name} requires")),
+            "{q}: {err}"
+        );
+    }
+}
