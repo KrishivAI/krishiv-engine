@@ -11,25 +11,25 @@ use std::time::Duration;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type, TimestampMicrosecondType};
-use arrow_array::{BooleanArray, RecordBatch};
+use arrow_array::{BinaryViewArray, BooleanArray, Int32Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::testing::Break;
 use krishiv_exec::{
-    ExecConfig, ExecNode, FileScan, FileSelections, FileWrite, FileWriteSink, FilterPushdown,
-    FnPredicate, GlobalState, LocalState, MemoryScan, PipelineBuilder, PushedFilter, QueryContext,
-    QueryId, QueryRunner, ScanPushdown, ScanPushdowns, Sink, SinkStatus, Source, TaskContext,
-    TokioExecutor, WorkloadClass,
+    ExecConfig, ExecNode, FetchSlot, FileScan, FileSelections, FileWrite, FileWriteSink,
+    FilterPushdown, FnPredicate, GlobalState, LateFetch, LocalState, MemoryScan, PipelineBuilder,
+    PushedFilter, QueryContext, QueryId, QueryRunner, ScanPushdown, ScanPushdowns, Sink,
+    SinkStatus, Source, TaskContext, TokioExecutor, WorkloadClass,
 };
 use krishiv_io::io::FaultStore;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{FilePartition, FileSplit, SplitConfig};
 use krishiv_io::{
     ByteRange, CmpOp, ColumnPath, DirectoryWrite, FileFormat, FileRef, IoConfig, IoCounters,
-    IoScheduler, MetadataCols, MetadataNeeds, PushdownExpr, RowSelection, SaveMode, ScalarValue,
-    ScanOptions, StoreId, StorePolicy, WriteOptions,
+    IoScheduler, MetadataCols, MetadataNeeds, PushdownExpr, RowFile, RowSelection, SaveMode,
+    ScalarValue, ScanOptions, StoreId, StorePolicy, WriteOptions,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_testkit::file_format::mock::MockFormat;
@@ -1178,4 +1178,84 @@ fn a_bad_write_setting_fails_when_the_write_is_planned() {
     .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     assert!(listed(&env, "x").is_empty());
+}
+
+/// A late fetch of rows of two files, the second replaced after the row ids
+/// were made if `replace`: the rows in their order, or the read's error.
+fn late_fetch_of_two_files(replace: bool) -> (Env, Result<Vec<RecordBatch>, KrishivError>) {
+    let env = Env::new(None).unwrap();
+    let files = three_files(&env);
+    let (first, second) = (RowFile::encode(&files[0]), RowFile::encode(&files[1]));
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("file", DataType::BinaryView, false),
+        Field::new("row", DataType::Int64, false),
+    ]));
+    let input = RecordBatch::try_new(
+        Arc::clone(&input_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
+            Arc::new(BinaryViewArray::from(vec![
+                second.as_slice(),
+                first.as_slice(),
+                second.as_slice(),
+                first.as_slice(),
+            ])),
+            Arc::new(Int64Array::from(vec![7, 900, 3, 5])),
+        ],
+    )
+    .unwrap();
+    let input = MemoryScan::try_new(Arc::clone(&input_schema), vec![Batch::new(input)]).unwrap();
+    if replace {
+        let path = &files[1].path;
+        let bytes = env.block_on(async {
+            let got = object_store::ObjectStoreExt::get(env.inner.as_ref(), path)
+                .await
+                .unwrap();
+            got.bytes().await.unwrap()
+        });
+        let mut changed = bytes.to_vec();
+        changed[4] ^= 0xFF;
+        env.put_raw(path, changed).unwrap();
+    }
+    let scan = scan_of(&env, files, splits(1 << 30), ScanOptions::default());
+    let fetch = LateFetch::new(
+        &input_schema,
+        Arc::new(scan),
+        vec![ColumnPath::new("i")],
+        1,
+        2,
+        vec![FetchSlot::Input(0), FetchSlot::Fetched(0)],
+    )
+    .unwrap();
+    let plan = Arc::new(Break(
+        Arc::new(Leaf(Arc::new(input))) as Arc<dyn ExecNode>,
+        Arc::new(fetch),
+        true,
+    ));
+    let out = env.block_on(run(&env.query, plan, 2));
+    (env, out)
+}
+
+/// The rows come back in the order they went in, whichever file they are in.
+#[test]
+fn a_late_fetch_keeps_its_rows_order_across_files() {
+    let (env, out) = late_fetch_of_two_files(false);
+    let out = out.unwrap();
+    let got: Vec<i32> = out
+        .iter()
+        .flat_map(|b| b.column(1).as_primitive::<Int32Type>().values().to_vec())
+        .collect();
+    assert_eq!(got, [1007, 900, 1003, 5]);
+    assert_eq!(env.root.reserved(), 0);
+}
+
+/// A file replaced after its rows' ids were made fails the query, never a
+/// short or wrong result, and the rows and all that was fetched are released.
+#[test]
+fn a_late_fetch_of_a_changed_file_fails_and_frees_its_memory() {
+    let (env, out) = late_fetch_of_two_files(true);
+    let e = out.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivFileChangedDuringRead);
+    assert_eq!(env.root.reserved(), 0);
 }

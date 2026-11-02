@@ -482,6 +482,7 @@ mod top_n_bound {
         let only_nulls = bound(&keys, 1, false, true);
         assert_eq!(passing(&only_nulls, &keys), [false, true]);
         assert!(!only_nulls.is_empty() || only_nulls.nulls_pass());
+        assert_eq!(passing(&round_trip(&only_nulls), &keys), [false, true]);
         assert!(KeyFilter::top_n_bound(&keys, 1, &DataType::Int32, false, false).is_none());
     }
 
@@ -532,6 +533,15 @@ mod top_n_bound {
         assert_eq!(passing(&f, &keys), [true, true, false]);
         let f = round_trip(&bound(&keys, 1, true, true));
         assert_eq!(passing(&f, &keys), [false, true, true]);
+    }
+
+    #[test]
+    fn a_numeric_bound_round_trips_with_its_nulls() {
+        let keys = Int32Array::from(vec![Some(1), Some(2), Some(3), None]);
+        let f = round_trip(&bound(&keys, 1, false, true));
+        assert_eq!(passing(&f, &keys), [true, true, false, true]);
+        let f = round_trip(&bound(&keys, 1, true, false));
+        assert_eq!(passing(&f, &keys), [false, true, true, false]);
     }
 
     /// Whatever order drivers publish in, a filter only tightens.

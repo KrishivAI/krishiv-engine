@@ -390,6 +390,9 @@ impl Source for LateFetch {
                 l.wanted = self.plan(&held.batches)?;
                 l.held = held.reservations;
                 let parts: Vec<&RecordBatch> = held.batches.iter().map(Batch::data).collect();
+                // The copy rides on the sink's reservations, which are sized
+                // for what it copies; both exist only until this block ends,
+                // and at most `krishiv.exec.lateFetch.maxRows` rows are held.
                 if let Some(first) = parts.first() {
                     let all = arrow_select::concat::concat_batches(&first.schema(), parts.clone())
                         .map_err(|e| internal(format!("late fetch: {e}")))?;
