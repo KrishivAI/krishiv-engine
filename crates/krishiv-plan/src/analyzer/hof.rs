@@ -35,6 +35,7 @@ use krishiv_types::DataType;
 
 use super::AnalysisError;
 use super::bind::{addr, same, unsupported};
+use super::coerce;
 use super::exprs::{Bound, Ctx, Cx, SPARK_DOC_ROOT};
 use super::resolve::Resolver;
 use crate::{BoundColumn, Expr, ExprNode, FunctionCall, Origin};
@@ -286,6 +287,9 @@ impl Resolver<'_> {
                 done.push((key(i), bound));
             }
         }
+        if h == Hof::MapZipWith {
+            self.widen_map_keys(&mut done, key(0), key(1));
+        }
         let values: Vec<Option<DataType>> = h
             .values()
             .iter()
@@ -303,6 +307,55 @@ impl Resolver<'_> {
             }
         }
         Ok(done)
+    }
+
+    /// `map_zip_with` over maps whose key types differ: both maps are cast
+    /// to the keys' wider type (Spark's `MapZipWithCoercion`, which skips a
+    /// pair whose cast could fail or has no wider type, leaving the result
+    /// rule to raise `MAP_ZIP_WITH_DIFF_TYPES`).
+    fn widen_map_keys(&self, done: &mut [(usize, Bound)], first: usize, second: usize) {
+        let pos = |k: usize| done.iter().position(|(a, _)| *a == k);
+        let (Some(i), Some(j)) = (pos(first), pos(second)) else {
+            return;
+        };
+        let (Some(DataType::Map(a)), Some(DataType::Map(b))) =
+            (&done[i].1.ty.data_type, &done[j].1.ty.data_type)
+        else {
+            return;
+        };
+        if a.key_type().equals_structurally(b.key_type(), true) {
+            return;
+        }
+        let arg = |t| coerce::Arg {
+            ty: Some(t),
+            nullable: false,
+            literal: None,
+        };
+        let rules = coerce::Rules::new(self.ctx.conf.ansi, self.ctx.conf.case_sensitive);
+        let Some(Some(wide)) = coerce::wider_type(&arg(a.key_type()), &arg(b.key_type()), rules)
+        else {
+            return;
+        };
+        if coerce::force_nullable(a.key_type(), &wide)
+            || coerce::force_nullable(b.key_type(), &wide)
+        {
+            return;
+        }
+        let with_key = |m: &krishiv_types::MapType| {
+            DataType::Map(
+                krishiv_types::MapType::new(
+                    wide.clone(),
+                    m.value_type().clone(),
+                    m.value_contains_null(),
+                )
+                .into(),
+            )
+        };
+        let (ta, tb) = (with_key(a), with_key(b));
+        for (idx, to) in [(i, ta), (j, tb)] {
+            let cast = self.implicit_cast_as(&done[idx].1, Some(to), false);
+            done[idx].1 = cast;
+        }
     }
 
     /// Binds the lambda `node` at `position` against the value arguments

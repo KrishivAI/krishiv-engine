@@ -60,6 +60,15 @@ pub(super) struct Rules {
 }
 
 impl Rules {
+    /// The rules for `ansi` and `case_sensitive`, with the defaults of the rest.
+    pub(super) const fn new(ansi: bool, case_sensitive: bool) -> Self {
+        Self {
+            ansi,
+            case_sensitive,
+            concat_binary_as_string: false,
+        }
+    }
+
     /// The rules of `call`.
     fn of(call: &CallTypes<'_>) -> Self {
         Self {
