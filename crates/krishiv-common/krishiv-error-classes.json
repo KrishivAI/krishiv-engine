@@ -89,6 +89,12 @@
     ],
     "sqlState" : "22018"
   },
+  "KRISHIV_MCP_STATEMENT_NOT_ALLOWED" : {
+    "message" : [
+      "The read-only MCP server runs one read statement; this statement is of class <statementClass>."
+    ],
+    "sqlState" : "42501"
+  },
   "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
     "message" : [
       "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."
@@ -106,6 +112,12 @@
       "Matching the pattern <pattern> in <functionName> exceeded the backtracking limit of <limit> steps on one input, so the query was stopped. Simplify the pattern (nested or overlapping quantifiers such as `(a+)+` backtrack exponentially). Spark on the JVM has no such limit and would keep running."
     ],
     "sqlState" : "54000"
+  },
+  "KRISHIV_RESERVED_NAME" : {
+    "message" : [
+      "The name <name> is reserved for the engine's own <kind>: nothing can be created, replaced or dropped in the \"system\" catalog. Choose a different name."
+    ],
+    "sqlState" : "42939"
   },
   "KRISHIV_RESERVED_TEMP_VIEW_NAME" : {
     "message" : [

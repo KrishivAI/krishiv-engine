@@ -89,6 +89,18 @@ fuzz_target!(|data: &[u8]| {
             ));
             r.metadata_cols.row_index = true;
             requests.push(r);
+            // The page-index stage is off for row-index requests: these
+            // reach the index guards (a 32- and a 64-bit literal, the type
+            // of the column decides which prunes).
+            for value in [ScalarValue::Int32(0), ScalarValue::Int64(0)] {
+                let mut r = ScanRequest::all(Arc::clone(&schema));
+                r.predicate = Some(PushdownExpr::cmp(
+                    ColumnPath::new(first.name()),
+                    CmpOp::Gt,
+                    value,
+                ));
+                requests.push(r);
+            }
         }
         let half = file.size / 2;
         for req in &requests {

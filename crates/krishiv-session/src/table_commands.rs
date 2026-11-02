@@ -160,7 +160,11 @@ pub(crate) struct TableName {
 }
 
 impl TableName {
-    fn resolve(parts: &[String], current: &str, env: &QueryEnv) -> Result<Self, KrishivError> {
+    pub(crate) fn resolve(
+        parts: &[String],
+        current: &str,
+        env: &QueryEnv,
+    ) -> Result<Self, KrishivError> {
         let fold = |s: &str| {
             if env.analysis.conf.case_sensitive {
                 s.to_owned()
@@ -1773,8 +1777,20 @@ impl Session {
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
+        self.drop_named_table(&name, &env, d.if_exists).await?;
+        self.empty_frame().await
+    }
+
+    /// `DROP TABLE` for a resolved name; also what `saveAsTable` in overwrite
+    /// mode runs before it creates the table again.
+    async fn drop_named_table(
+        &self,
+        name: &TableName,
+        env: &QueryEnv,
+        if_exists: bool,
+    ) -> Result<(), KrishivError> {
         // `DROP TABLE` on a permanent view is refused as Spark's `DropTableCommand` does.
-        if self.temp_entry_of(&name, &env) {
+        if self.temp_entry_of(name, env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
             self.state.cache.invalidate_table(&name.name);
@@ -1791,7 +1807,7 @@ impl Session {
             }
             // Checked before the metadata goes: a refused delete must not orphan the files.
             let dir = self.deletable_dir(&table).await?;
-            self.forget_cached(&name);
+            self.forget_cached(name);
             self.state
                 .catalog
                 .store
@@ -1799,10 +1815,10 @@ impl Session {
             if let Some(dir) = dir {
                 remove_dir(&dir)?;
             }
-        } else if !d.if_exists {
+        } else if !if_exists {
             return Err(name.not_found());
         }
-        self.empty_frame().await
+        Ok(())
     }
 
     /// `TRUNCATE TABLE name`: removes the table's files and keeps its
@@ -2211,6 +2227,263 @@ impl Session {
         Ok(())
     }
 
+    /// The access check the SQL path makes for the statement a table write
+    /// stands for: `CREATE TABLE ... AS SELECT` (`Create` in the namespace) or
+    /// `INSERT INTO` (`Modify` on the table). The DataFrame writers reach
+    /// the command path without a statement, so the equivalent one is parsed
+    /// and asked about through the same `authorize_statement`; the table name
+    /// is quoted part by part, so it cannot add to the statement. The reads of
+    /// the DataFrame are checked by its own analysis.
+    async fn authorize_table_write(
+        &self,
+        name: &TableName,
+        create: bool,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let text = if create {
+            "CREATE TABLE {} AS SELECT 1"
+        } else {
+            "INSERT INTO {} SELECT 1"
+        };
+        self.authorize_equivalent(name, text, env).await
+    }
+
+    /// [`Self::authorize_table_write`] for any statement `text` (with `{}`
+    /// standing for the quoted table name) the call stands for.
+    async fn authorize_equivalent(
+        &self,
+        name: &TableName,
+        text: &str,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let quoted = format!(
+            "`{}`.`{}`",
+            name.namespace.replace('`', "``"),
+            name.name.replace('`', "``")
+        );
+        let text = text.replace("{}", &quoted);
+        let statement = krishiv_sql::parse_statement(&text, &env.parser).map_err(|e| e.error)?;
+        let class = krishiv_sql::classify(&statement);
+        self.authorize_statement(&statement, class, env).await
+    }
+
+    /// What a `create` of a new table checks before it changes anything,
+    /// so an overwrite can check it before it drops the old one.
+    fn validate_new_table(&self, name: &TableName, spec: &V2WriteSpec) -> Result<(), KrishivError> {
+        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+            return Err(unsupported("partitioned tables"));
+        }
+        self.warehouse_dir()?;
+        self.provider_of(spec.provider.clone())?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
+        self.check_namespace(name)?;
+        if spec.options.values().any(|v| v.as_plain().is_none()) {
+            return Err(unsupported("secret table options"));
+        }
+        Ok(())
+    }
+
+    /// The table a `DataFrameWriter` call names.
+    fn writer_table_name(&self, table: &str, env: &QueryEnv) -> Result<TableName, KrishivError> {
+        let parsed = krishiv_sql::parse_multipart_identifier(table, &self.parser_options())
+            .map_err(|e| e.error)?;
+        let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
+        TableName::resolve(&parts, &self.state.catalog.current_namespace(), env)
+    }
+
+    /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
+    /// table is created from the DataFrame's schema (an existing one in
+    /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
+    /// `ignore` leaves an existing table alone, `append` adds the rows by
+    /// column name (names that do not match the table's, a format other than
+    /// its, or a `partition_by` fail with `KRISHIV_UNSUPPORTED_FEATURE`), and
+    /// `overwrite` drops the table and creates it again, after the checks that
+    /// can refuse the new table and the `UNSUPPORTED_OVERWRITE.TABLE` check
+    /// (a query that reads the table it replaces); a temporary view of the
+    /// same name makes it `KRISHIV_UNSUPPORTED_FEATURE`.
+    pub(crate) async fn exec_save_as_table(
+        &self,
+        df: &DataFrame,
+        spec: V2WriteSpec,
+        mode: krishiv_io::SaveMode,
+    ) -> Result<(), KrishivError> {
+        use krishiv_io::SaveMode;
+        let env = self.query_env();
+        let name = self.writer_table_name(&spec.table, &env)?;
+        let exists = self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some();
+        match (mode, exists) {
+            (SaveMode::Ignore, true) => {
+                // A no-op create is still authorized, as the SQL path does, so a denial
+                // cannot tell an existing table from a missing one.
+                self.authorize_table_write(&name, true, &env).await
+            }
+            (SaveMode::Append, true) => {
+                // Asked first, as `insertInto` does: what is reported about a table the caller
+                // may not write must not depend on its metadata.
+                self.authorize_table_write(&name, false, &env).await?;
+                let table = self.table_for_write(&name, "INSERT", &env)?;
+                // Spark refuses an append whose format or partitioning differs
+                // from the table's.
+                if !spec.partitioned_by.is_empty() {
+                    return Err(unsupported("partitioned tables"));
+                }
+                if spec
+                    .provider
+                    .as_deref()
+                    .is_some_and(|p| !p.eq_ignore_ascii_case(&table.provider))
+                {
+                    return Err(unsupported(
+                        "saveAsTable append with a format other than the table's",
+                    ));
+                }
+                let schema = df.schema().await?;
+                let case_sensitive = env.analysis.conf.case_sensitive;
+                let same = |a: &str, b: &str| {
+                    if case_sensitive {
+                        a == b
+                    } else {
+                        a.eq_ignore_ascii_case(b)
+                    }
+                };
+                let mut order = Vec::with_capacity(table.columns.len());
+                for c in &table.columns {
+                    let mut hits = schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().as_str())
+                        .filter(|h| same(h, &c.name));
+                    match (hits.next(), hits.next()) {
+                        (Some(h), None) => order.push(h.to_owned()),
+                        _ => break,
+                    }
+                }
+                if order.len() != table.columns.len() || order.len() != schema.fields().len() {
+                    return Err(unsupported(
+                        "saveAsTable append with column names that differ from the table's",
+                    ));
+                }
+                // Built directly: a name with dots or a star is one plain column.
+                let by_name = df.select(order.iter().map(|h| {
+                    crate::column::Column::new(krishiv_plan::Expr::new(
+                        krishiv_plan::ExprNode::Column(krishiv_plan::ColumnRef {
+                            name: vec![h.clone()],
+                            plan_id: None,
+                        }),
+                    ))
+                }));
+                self.exec_write_v2(&by_name, spec, V2Mode::Append).await
+            }
+            (SaveMode::Overwrite, true) => {
+                // Spark drops the table and creates it again. Everything that can
+                // refuse the new table is checked before the old one goes.
+                if self.temp_entry_of(&name, &env) {
+                    return Err(unsupported(
+                        "saveAsTable overwrite of a name a temporary view shadows",
+                    ));
+                }
+                self.authorize_equivalent(&name, "DROP TABLE {}", &env)
+                    .await?;
+                self.authorize_table_write(&name, true, &env).await?;
+                // `UNSUPPORTED_OVERWRITE.TABLE`: the query reads the table it replaces.
+                let analysis = df.analysis().await?;
+                if crate::catalog::reads_stored_table(
+                    analysis.analyzed.plan.root(),
+                    &name.namespace,
+                    &name.name,
+                    &self.state.catalog.current_namespace(),
+                ) {
+                    return Err(krishiv_common::error::UnsupportedOverwriteTable {
+                        table: name.quoted(),
+                    }
+                    .into());
+                }
+                self.validate_new_table(&name, &spec)?;
+                // What the write itself would refuse (a format the engine does not
+                // write, duplicate output columns, options the format rejects) must
+                // not come after the drop.
+                let provider = self.provider_of(spec.provider.clone())?;
+                let schema = df.schema().await?;
+                self.check_write_ready(&provider, &spec.options, &schema, &env)?;
+                // The write asks the policy about the table's directory, in the form
+                // `write_files` asks it (`locate_write_path`), and the create refuses
+                // a directory that is already there other than the old table's own;
+                // both before the drop.
+                let location =
+                    managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+                let at =
+                    self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
+                self.authorize_write_path(&at).await?;
+                // A managed table's own directory goes with it; any other one in the way stays.
+                let own = self
+                    .state
+                    .catalog
+                    .store
+                    .table(&name.namespace, &name.name)
+                    .is_some_and(|t| t.managed && t.location == location);
+                if location.exists() && !own {
+                    return Err(LocationAlreadyExists {
+                        identifier: name.quoted(),
+                        location: location.display().to_string(),
+                    }
+                    .into());
+                }
+                // What is left after this point is the write itself (query errors, I/O): as in
+                // Spark's V1 overwrite, a failure there leaves no table.
+                self.drop_named_table(&name, &env, true).await?;
+                self.exec_write_v2(df, spec, V2Mode::Create).await
+            }
+            // `ErrorIfExists` on an existing table fails in the create.
+            _ => self.exec_write_v2(df, spec, V2Mode::Create).await,
+        }
+    }
+
+    /// `DataFrameWriter.insertInto`: `errorifexists`, `ignore` and `append`
+    /// are all `INSERT INTO` by position (Spark's `insertInto` ignores the
+    /// first two); `overwrite` is `INSERT OVERWRITE` by position, as the SQL
+    /// statement runs it.
+    pub(crate) async fn exec_insert_into(
+        &self,
+        df: &DataFrame,
+        table: &str,
+        mode: krishiv_io::SaveMode,
+    ) -> Result<(), KrishivError> {
+        let overwrite = mode == krishiv_io::SaveMode::Overwrite;
+        let env = self.query_env();
+        let name = self.writer_table_name(table, &env)?;
+        self.authorize_equivalent(
+            &name,
+            if overwrite {
+                "INSERT OVERWRITE TABLE {} SELECT 1"
+            } else {
+                "INSERT INTO {} SELECT 1"
+            },
+            &env,
+        )
+        .await?;
+        let found = self.table_for_write(
+            &name,
+            if overwrite {
+                "INSERT OVERWRITE"
+            } else {
+                "INSERT"
+            },
+            &env,
+        )?;
+        let target = InsertTarget {
+            listed: &[],
+            by_name: false,
+            overwrite,
+            statics: &[],
+        };
+        self.insert_rows(&name, &found, df, &target).await
+    }
+
     /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`
     /// is `CREATE TABLE name AS SELECT` over `df` (one code path, a failed
     /// write leaves no table), `Append` is `INSERT INTO name` by position.
@@ -2228,6 +2501,8 @@ impl Session {
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
         let name = TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?;
+        self.authorize_table_write(&name, mode != V2Mode::Append, &env)
+            .await?;
         match mode {
             // An append ignores the layout the builder was given: the
             // existing table's layout rules.

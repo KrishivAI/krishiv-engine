@@ -109,6 +109,7 @@ pub(super) const NAMES: &[&str] = &[
     "convert_timezone",
     "extract",
     "date_part",
+    "datepart",
     "current_date",
     "curdate",
     "current_timestamp",
@@ -1236,7 +1237,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             })
         }
         (
-            "extract" | "date_part",
+            "extract" | "date_part" | "datepart",
             [f, DataType::Time64(TimeUnit::Nanosecond)]
             | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32],
         ) if is_string(f) => {
@@ -1299,7 +1300,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Some(_)) => return Some((listed, Err(bad_types(listed, args)))),
             }
         }
-        ("extract" | "date_part", [f, t]) if is_string(f) => match field(&args[0]) {
+        ("extract" | "date_part" | "datepart", [f, t]) if is_string(f) => match field(&args[0]) {
             Err(e) => return Some((listed, Err(e))),
             // `date_part(NULL, x)` is a NULL `double`, whatever `x` is.
             Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {

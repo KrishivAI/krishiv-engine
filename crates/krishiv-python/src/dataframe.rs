@@ -318,7 +318,11 @@ impl PyDataFrame {
     /// `DataFrameWriter.save` collected as one call). The mapping from the
     /// facade's collected writer state to [`DataFrameWriter`] lives here,
     /// in `krishiv-session`, not in the facade.
-    #[pyo3(signature = (format, mode, path, options=None, partition_by=None))]
+    #[pyo3(signature = (format, mode, path, options=None, partition_by=None, bucket_by=None, sort_by=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one bridge call carrying the whole writer state"
+    )]
     fn write(
         &self,
         py: Python<'_>,
@@ -327,14 +331,63 @@ impl PyDataFrame {
         path: &str,
         options: Option<Vec<(String, String)>>,
         partition_by: Option<Vec<String>>,
+        bucket_by: Option<(i32, Vec<String>)>,
+        sort_by: Option<Vec<String>>,
     ) -> PyResult<()> {
         let df = self.inner.clone();
         let (format, mode, path) = (format.to_owned(), mode.to_owned(), path.to_owned());
         let options = options.unwrap_or_default();
         let partition_by = partition_by.unwrap_or_default();
         block_on(py, async move {
-            df.write_to(&format, &mode, &path, options, partition_by)
-                .await
+            df.write_to_with(
+                &format,
+                &mode,
+                &path,
+                options,
+                partition_by,
+                bucket_by,
+                sort_by,
+            )
+            .await
+        })
+    }
+
+    /// Writes the rows to the table `table` (PySpark's `saveAsTable`, or
+    /// `insertInto` when `insert_into` is set) with the collected writer state.
+    /// The mapping lives in `krishiv-session`, not in the facade.
+    #[pyo3(signature = (insert_into, table, format, mode, options=None, partition_by=None, bucket_by=None, sort_by=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one bridge call carrying the whole writer state"
+    )]
+    fn write_table(
+        &self,
+        py: Python<'_>,
+        insert_into: bool,
+        table: &str,
+        format: Option<&str>,
+        mode: &str,
+        options: Option<Vec<(String, String)>>,
+        partition_by: Option<Vec<String>>,
+        bucket_by: Option<(i32, Vec<String>)>,
+        sort_by: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let df = self.inner.clone();
+        let (table, format, mode) = (table.to_owned(), format.map(str::to_owned), mode.to_owned());
+        let options = options.unwrap_or_default();
+        let partition_by = partition_by.unwrap_or_default();
+        block_on(py, async move {
+            df.write_table_with(
+                insert_into,
+                &table,
+                format.as_deref(),
+                &mode,
+                options,
+                partition_by,
+                bucket_by,
+                sort_by,
+            )
+            .await
         })
     }
 
