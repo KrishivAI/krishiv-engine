@@ -365,12 +365,6 @@ pub(crate) struct QueryCatalog {
     /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
     /// from under the query between substitution and planning.
     pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
-    /// The pinned tables a planned query's run releases: the ones its own
-    /// planning pinned (a table it only reads belongs to an earlier
-    /// expansion and stays).
-    releasable: Mutex<BTreeSet<String>>,
-    /// Memory held for pinned tables, by hidden name; released with them.
-    held: Mutex<HashMap<String, krishiv_memory::Reservation>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -419,8 +413,6 @@ impl QueryCatalog {
             session,
             cache,
             pinned: Mutex::new(HashMap::new()),
-            releasable: Mutex::new(BTreeSet::new()),
-            held: Mutex::new(HashMap::new()),
             files,
             scans,
             loaded: Mutex::new(HashMap::new()),
@@ -437,46 +429,6 @@ impl QueryCatalog {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(name, table);
-    }
-
-    /// Keeps `memory` reserved for as long as `name` stays pinned.
-    pub(crate) fn hold_reservation(&self, name: String, memory: krishiv_memory::Reservation) {
-        self.held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(name, memory);
-    }
-
-    /// Marks `names` as pinned by a planning call whose plan, when run,
-    /// releases them.
-    pub(crate) fn mark_releasable(&self, names: Vec<String>) {
-        self.releasable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(names);
-    }
-
-    /// Those of `candidates` marked releasable, forgotten as such.
-    pub(crate) fn take_releasable(&self, candidates: &[String]) -> Vec<String> {
-        let mut marked = self
-            .releasable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        candidates
-            .iter()
-            .filter(|c| marked.remove(*c))
-            .cloned()
-            .collect()
-    }
-
-    /// Releases the snapshots pinned under the hidden `names`.
-    pub(crate) fn unpin_cached(&self, names: &[String]) {
-        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        for n in names {
-            pinned.remove(n);
-            held.remove(n);
-        }
     }
 
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
@@ -922,7 +874,13 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
     fn go<'a>(node: &'a PhysNode, out: &mut Leaves<'a>) {
         match node {
             PhysNode::Scan(scan) => out.scans.push(scan),
-            PhysNode::OneRow | PhysNode::SharedRead { .. } => {}
+            PhysNode::OneRow | PhysNode::SharedRead { .. } | PhysNode::LoopRef { .. } => {}
+            PhysNode::UnionLoop {
+                anchor, recursive, ..
+            } => {
+                go(anchor, out);
+                go(recursive, out);
+            }
             PhysNode::Range(_) => out.range = true,
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
@@ -1594,7 +1552,9 @@ impl Expander<'_> {
             }
             .into());
         };
-        let lowered = krishiv_sql::lower(&query, (stored.next_source)()).map_err(|e| e.error)?;
+        let lowered =
+            krishiv_sql::lower_with(&query, (stored.next_source)(), stored.parser.case_sensitive)
+                .map_err(|e| e.error)?;
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
         let previous_path = self.view_path.replace(view.path.clone());

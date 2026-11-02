@@ -56,6 +56,13 @@ memory), `disk.rs` (frames and `lag`/`lead`/`nth_value` of a partition on disk: 
 the sort also uses to prune each sorted batch while that pays; the planner infers it for a filter over the window,
 `planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
+`loops.rs` (T180 unit 5b) `UnionLoopSource`: a recursive CTE (`PhysNode::UnionLoop`/`LoopRef`) as one source. The anchor and each
+round of the recursive term run as queries of their own over a child `QueryContext` (child memory pool, cancelled with the
+outer query); every batch goes downstream at once and into the round's working table (`shared.rs` `Output::open/append`,
+spilled to the query's scope under pressure), which the next round's `LoopRef` reads (`SharedSource::over`). `Detached`
+(`instantiate.rs`) re-instantiates the recursive term per round with the loop tables bound; shared plans are built again each
+round. Limits (`LoopLimits`) are plan data. Not done: seeded random functions continue their stream across rounds, a
+nondeterministic enclosing CTE is evaluated once per round, rounds' metrics are not folded into EXPLAIN ANALYZE.
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
 worker that runs it; the planner validates nodes with the same builders). `PhysicalPlan::shared` (P2-T198): subplans
