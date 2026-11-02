@@ -10,6 +10,17 @@
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
     "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`. A reader ignores members it does not know." },
+    "environment": {
+      "type": "object",
+      "description": "The build that wrote the document (added in minor 1). Never configuration values. A reader ignores it.",
+      "required": ["krishiv_version", "os", "arch"],
+      "additionalProperties": false,
+      "properties": {
+        "krishiv_version": { "type": "string" },
+        "os": { "type": "string" },
+        "arch": { "type": "string" }
+      }
+    },
     "usage": {
       "type": "object",
       "description": "Measured usage (T138): sums of the operators' counters. Derived, so a reader recomputes it. Object-store counts, principal and tags follow with the session context (T136).",

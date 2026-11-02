@@ -610,6 +610,7 @@ fn schema_matches_the_writer() {
         &props["query"]["properties"]["memory"],
         &doc["query"]["memory"],
     );
+    check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(&props["usage"]["properties"]["scan"], &doc["usage"]["scan"]);
     check(&props["pipelines"]["items"], &doc["pipelines"][0]);

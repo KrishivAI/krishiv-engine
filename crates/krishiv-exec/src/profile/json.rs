@@ -7,7 +7,8 @@
 //! or mistyped member it knows, but ignores members it does not know (a
 //! newer `minor` only adds members) and keeps an unknown metric kind as
 //! text, so a document written by a later minor still loads. `usage` is
-//! derived from the operators, so it is written and not read back.
+//! derived from the operators, so it is written and not read back, as is `environment` (the build that
+//! wrote the document; no configuration values, so nothing secret).
 
 use std::borrow::Cow;
 use std::time::Duration;
@@ -66,6 +67,11 @@ impl QueryProfile {
             "plan": plan_json(&self.plan),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
             "usage": usage_json(&QueryUsage::of(m)),
+            "environment": {
+                "krishiv_version": env!("CARGO_PKG_VERSION"),
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+            },
         })
     }
 
