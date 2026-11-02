@@ -23,7 +23,6 @@
 //! of `rows` values or a literal as a one-row array. The result always has
 //! `rows` values, also when every argument is a literal.
 
-mod aes;
 mod args;
 mod arith;
 mod array;
@@ -464,7 +463,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 33] = [
+const FAMILIES: [(&[&str], Binder); 32] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -473,7 +472,6 @@ const FAMILIES: [(&[&str], Binder); 33] = [
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
-    (aes::NAMES, aes::bind),
     (interval::NAMES, interval::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
@@ -548,15 +546,6 @@ pub fn is_argument_pure(name: &str) -> bool {
     ]
     .iter()
     .any(|names| names.contains(&lower.as_str()))
-}
-
-/// Whether `name` over constant arguments is one value for every row and
-/// batch, so an enclosing call over it is constant too: the argument-pure
-/// families ([`is_argument_pure`]) and the number family (`hex`, `unhex`,
-/// `conv`, `format_number`, ...), which reads nothing but its arguments.
-#[must_use]
-pub fn is_constant_of_constants(name: &str) -> bool {
-    is_argument_pure(name) || number::NAMES.contains(&name.to_ascii_lowercase().as_str())
 }
 
 /// Binds the scalar function `name` (ASCII case-insensitive) to `args`.

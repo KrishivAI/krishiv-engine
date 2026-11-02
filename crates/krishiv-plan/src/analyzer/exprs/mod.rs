@@ -357,14 +357,6 @@ enum Step {
     Link(usize, Arc<Expr>, Ctx),
 }
 
-/// `err` with its message parameters masked when raised under an AES key.
-fn mask_if(secret: bool, mut err: AnalysisError) -> AnalysisError {
-    if secret {
-        err.error = err.error.with_redacted_parameters();
-    }
-    err
-}
-
 impl Resolver<'_> {
     /// Binds `e` in `cx`, post-order with an explicit stack; a node shared
     /// within the expression is bound once.
@@ -387,9 +379,6 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
-        if self.secret_scope {
-            self.secret.insert(addr(&**e));
-        }
         self.expr_depth += 1;
         let r = if self.expr_depth.is_multiple_of(RESOLVE_STEP) {
             on_big_stack(|| self.expr_in_on_stack(top, e, cx))
@@ -398,9 +387,6 @@ impl Resolver<'_> {
             self.expr_in_on_stack(top, e, cx)
         };
         self.expr_depth -= 1;
-        if self.expr_depth == 0 {
-            self.secret.clear();
-        }
         r
     }
 
@@ -415,10 +401,6 @@ impl Resolver<'_> {
         // Rewritten calls stay alive for the pass: `done` is keyed by
         // address.
         let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
-        // The key argument of an AES call and everything under it (kept on
-        // the resolver, see `Resolver::secret`): an error raised there
-        // never shows the key (ADR 0042), so its message parameters are
-        // masked.
         let mut stack = vec![Step::Enter(Arc::clone(e), top)];
         while let Some(step) = stack.pop() {
             match step {
@@ -426,25 +408,8 @@ impl Resolver<'_> {
                     if done.contains_key(&(addr(&*x), ctx)) {
                         continue;
                     }
-                    if let ExprNode::Function(f) = &x.node
-                        && super::is_aes_function(&f.name)
-                        && let Some(key) = f.args.get(1)
-                    {
-                        self.secret.insert(addr(&**key));
-                    }
-                    let is_secret = self.secret.contains(&addr(&*x));
-                    if is_secret {
-                        let set = &mut self.secret;
-                        x.for_each_child(&mut |c| {
-                            set.insert(addr(&**c));
-                        });
-                    }
-                    let mask = |err: AnalysisError| mask_if(is_secret, err);
-                    if let Some(rewritten) = self.star_args(&x, cx).map_err(mask)? {
+                    if let Some(rewritten) = self.star_args(&x, cx)? {
                         rewritten_calls.push(Arc::clone(&rewritten));
-                        if is_secret {
-                            self.secret.insert(addr(&*rewritten));
-                        }
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
@@ -466,13 +431,10 @@ impl Resolver<'_> {
                         && (hof(f).is_some() || super::hof::has_direct_lambda(f))
                     {
                         let Some(h) = hof(f) else {
-                            return Err(mask(super::hof::not_higher_order(&f.name, x.origin)));
+                            return Err(super::hof::not_higher_order(&f.name, x.origin));
                         };
                         let kids = self.child_ctx(&x, ctx);
-                        let prev = std::mem::replace(&mut self.secret_scope, is_secret);
-                        let bound_kids = self.hof_children(f, h, &kids, cx, x.origin);
-                        self.secret_scope = prev;
-                        for (key, bound) in bound_kids.map_err(mask)? {
+                        for (key, bound) in self.hof_children(f, h, &kids, cx, x.origin)? {
                             let step = kids
                                 .iter()
                                 .find(|(c, _)| addr(&**c) == key)
@@ -495,7 +457,7 @@ impl Resolver<'_> {
                         );
                         continue;
                     }
-                    self.unknown_routine_first(&x).map_err(mask)?;
+                    self.unknown_routine_first(&x)?;
                     stack.push(Step::Exit(Arc::clone(&x), ctx));
                     let kids = self.child_ctx(&x, ctx);
                     stack.extend(kids.into_iter().rev().map(|(c, k)| Step::Enter(c, k)));
@@ -511,11 +473,7 @@ impl Resolver<'_> {
                         .iter()
                         .filter_map(|(c, k)| done.get(&(addr(&**c), *k)).cloned())
                         .collect();
-                    let is_secret = self.secret.contains(&addr(&*x));
-                    let prev = std::mem::replace(&mut self.secret_scope, is_secret);
-                    let b = self.expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx);
-                    self.secret_scope = prev;
-                    let b = b.map_err(|err| mask_if(is_secret, err))?;
+                    let b = self.expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx)?;
                     done.insert((addr(&*x), ctx), b);
                 }
             }
