@@ -401,9 +401,6 @@ impl Session {
                 self.ordered_frame(&["key", "value"], &[], rows).await
             }
             ShowKind::CreateTable { name, serde, .. } => {
-                if *serde {
-                    return Err(unsupported("SHOW CREATE TABLE ... AS SERDE"));
-                }
                 let env = self.query_env();
                 let name = self.table_name(name, &env)?;
                 self.require_current_profile("SHOW CREATE TABLE")?;
@@ -415,6 +412,11 @@ impl Session {
                     .into());
                 }
                 let table = self.stored_relation(&name)?;
+                // A view prints the same either way; a data source table has no serde to show,
+                // and Spark's error for it is not modelled yet.
+                if *serde && table.view.is_none() {
+                    return Err(unsupported("SHOW CREATE TABLE ... AS SERDE on a table"));
+                }
                 if table.view.is_some() {
                     self.authorize_view_select(&name.namespace, &name.name, &env)
                         .await?;
@@ -619,7 +621,12 @@ impl Session {
                     .await
             }
             DescribeKind::Query { query, .. } => {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
                 let rows = analysis
@@ -939,7 +946,7 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
         r#""location":{}"#,
         json_str(&format!("file:{}", location.display()))
     ));
-    let options = storage_options(t);
+    let options = &t.options;
     if !options.is_empty() {
         f.push(format!(
             r#""storage_properties":{}"#,
@@ -1015,22 +1022,13 @@ fn bucket_rows(t: &CatalogTable) -> Vec<(String, String)> {
     ]
 }
 
-/// The table's options as Spark shows them: the `header` the engine adds to CSV tables is not one of them.
-fn storage_options(t: &CatalogTable) -> std::collections::BTreeMap<String, String> {
-    t.options
-        .iter()
-        .filter(|(k, v)| !(t.provider == "csv" && k.as_str() == "header" && v.as_str() == "true"))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
-}
-
 /// `Location` and `Storage Properties` (`CatalogStorageFormat.toLinkedHashMap`) at `location`.
 fn storage_rows(t: &CatalogTable, location: &std::path::Path) -> Vec<(String, String)> {
     let mut rows = vec![(
         "Location".to_owned(),
         format!("file:{}", location.display()),
     )];
-    let options = storage_options(t);
+    let options = &t.options;
     if !options.is_empty() {
         rows.push((
             "Storage Properties".to_owned(),
@@ -1129,6 +1127,15 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         if let Some(c) = &t.comment {
             out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
         }
+        if !t.properties.is_empty() {
+            let props = t
+                .properties
+                .iter()
+                .map(|(k, v)| format!("  {} = {}", sql_literal(k), sql_literal(redact(k, v))))
+                .collect::<Vec<_>>()
+                .join(",\n");
+            out.push_str(&format!("TBLPROPERTIES (\n{props})\n"));
+        }
         if let Some(mode) = crate::view_schema::effective_mode(view.schema_mode, binding_enabled) {
             out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
         }
@@ -1170,9 +1177,9 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             .collect::<Vec<_>>()
             .join(",\n")
     };
-    let options = storage_options(t);
+    let options = &t.options;
     if !options.is_empty() {
-        out.push_str(&format!("OPTIONS (\n{})\n", pairs(&options)));
+        out.push_str(&format!("OPTIONS (\n{})\n", pairs(options)));
     }
     partitioning(&mut out);
     if let Some(c) = &t.comment {

@@ -11,8 +11,9 @@ use krishiv_common::error::{
     NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
-use krishiv_types::{ArrayType, DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DayTimeField, DecimalType, YearMonthField};
 
+use super::math::is_ansi_interval;
 use super::{Aggregate, Execution};
 use crate::signature::{
     ArgType, CallTypes, Constant, FunctionKind, InputBuilder, InputType, Inputs,
@@ -275,6 +276,35 @@ fn clock_timestamp_ntz(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::TimestampNtz, false))
 }
 
+/// `current_time([p])`: `TIME(p)`, `p` a foldable integer in `[0, 6]`
+/// (`TIME(6)` without it); never NULL.
+fn clock_time(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let precision = match c.constant(0) {
+        None if c.args().is_empty() => 6,
+        Some(Constant::Integral(n)) if (0..=6).contains(n) => u8::try_from(*n).unwrap_or(6),
+        Some(Constant::Integral(n)) => {
+            return Err(DatatypeMismatchValueOutOfRange {
+                sql_expr: format!("\"current_time({n})\""),
+                expr_name: "precision".to_owned(),
+                value_range: "[0, 6]".to_owned(),
+                current_value: n.to_string(),
+            }
+            .into());
+        }
+        Some(Constant::Error(e)) => return Err(e.clone()),
+        _ => {
+            return Err(DatatypeMismatchNonFoldableInput {
+                sql_expr: format!("\"current_time({})\"", c.sql(0).unwrap_or_default()),
+                input_name: "`precision`".to_owned(),
+                input_type: "\"INT\"".to_owned(),
+                input_expr: format!("\"{}\"", c.sql(0).unwrap_or_default()),
+            }
+            .into());
+        }
+    };
+    Ok(ArgType::new(DataType::Time { precision }, false))
+}
+
 fn user(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::String, false))
 }
@@ -411,24 +441,91 @@ fn strings() -> Vec<Spec> {
 
 /// The field of `extract`/`date_part`: `Ok(None)` for a NULL field.
 fn extract_field(c: &CallTypes<'_>) -> Result<Option<DatePart>, KrishivError> {
-    let name = match c.constant(0) {
-        Some(Constant::String(s)) => s,
-        Some(Constant::Null) => return Ok(None),
-        _ => {
-            return Err(NonFoldableArgument {
-                func_name: "`date_part`".to_owned(),
-                param_name: "`field`".to_owned(),
-                param_type: "\"STRING\"".to_owned(),
-            }
-            .into());
-        }
+    let Some(name) = extract_name(c)? else {
+        return Ok(None);
     };
-    DatePart::parse(name).map(Some).ok_or_else(|| {
-        InvalidExtractField {
-            field: format!("`{name}`"),
-            expr: format!("\"{}\"", c.sql(1).unwrap_or_default()),
+    DatePart::parse(name)
+        .map(Some)
+        .ok_or_else(|| invalid_extract_field(c, name))
+}
+
+fn invalid_extract_field(c: &CallTypes<'_>, name: &str) -> KrishivError {
+    InvalidExtractField {
+        field: format!("`{name}`"),
+        expr: format!("\"{}\"", c.sql(1).unwrap_or_default()),
+    }
+    .into()
+}
+
+/// The literal field of `extract`/`date_part`; `None` for a NULL one.
+fn extract_name<'a>(c: &CallTypes<'a>) -> Result<Option<&'a str>, KrishivError> {
+    match c.constant(0) {
+        Some(Constant::String(s)) => Ok(Some(s)),
+        Some(Constant::Null) => Ok(None),
+        _ => Err(NonFoldableArgument {
+            func_name: "`date_part`".to_owned(),
+            param_name: "`field`".to_owned(),
+            param_type: "\"STRING\"".to_owned(),
         }
-        .into()
+        .into()),
+    }
+}
+
+/// Spark's `ExtractIntervalPart.parseExtractField`: the names an interval
+/// takes, fewer than a date's, and only the fields its type holds.
+fn interval_field(name: &str, t: &DataType) -> Option<DatePart> {
+    use DayTimeField as D;
+    use YearMonthField as Y;
+    let part = match name.to_ascii_uppercase().as_str() {
+        "YEAR" | "Y" | "YEARS" | "YR" | "YRS" => DatePart::Year,
+        "MONTH" | "MON" | "MONS" | "MONTHS" => DatePart::Month,
+        "DAY" | "D" | "DAYS" => DatePart::Day,
+        "HOUR" | "H" | "HOURS" | "HR" | "HRS" => DatePart::Hour,
+        "MINUTE" | "M" | "MIN" | "MINS" | "MINUTES" => DatePart::Minute,
+        "SECOND" | "S" | "SEC" | "SECONDS" | "SECS" => DatePart::Second,
+        _ => return None,
+    };
+    let holds = match (t, part) {
+        (DataType::CalendarInterval, _) => true,
+        (DataType::YearMonthInterval { start, .. }, DatePart::Year) => *start == Y::Year,
+        (DataType::YearMonthInterval { end, .. }, DatePart::Month) => *end == Y::Month,
+        (DataType::DayTimeInterval { start, end }, _) => {
+            let field = match part {
+                DatePart::Day => D::Day,
+                DatePart::Hour => D::Hour,
+                DatePart::Minute => D::Minute,
+                DatePart::Second => D::Second,
+                _ => return None,
+            };
+            (*start..=*end).contains(&field)
+        }
+        _ => false,
+    };
+    holds.then_some(part)
+}
+
+const fn is_interval(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::YearMonthInterval { .. }
+            | DataType::DayTimeInterval { .. }
+            | DataType::CalendarInterval
+    )
+}
+
+/// `extract`/`date_part` of an interval: a month, hour or minute is a `TINYINT`.
+fn interval_extract_result(c: &CallTypes<'_>, t: &DataType) -> Result<ArgType, KrishivError> {
+    let nullable = c.args().get(1).is_some_and(|a| a.nullable);
+    let Some(name) = extract_name(c)? else {
+        return Ok(ArgType::new(DataType::Double, true));
+    };
+    let part = interval_field(name, t).ok_or_else(|| invalid_extract_field(c, name))?;
+    Ok(match part {
+        DatePart::Month | DatePart::Hour | DatePart::Minute => {
+            ArgType::new(DataType::Byte, nullable)
+        }
+        DatePart::Second => ArgType::new(DataType::Decimal(DecimalType::try_new(8, 6)?), nullable),
+        _ => ArgType::new(DataType::Integer, nullable),
     })
 }
 
@@ -439,6 +536,9 @@ fn is_time_field(part: DatePart) -> bool {
 /// `extract(field FROM source)`: the date fields read a `DATE` (a
 /// timestamp is cast), the time fields a timestamp (a date is cast).
 fn extract_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.data_type(1).is_some_and(is_interval) {
+        return vec![exact(DataType::String), InputType::Any];
+    }
     let source = match extract_field(c) {
         Ok(Some(part)) if is_time_field(part) => InputType::OneOf(
             [DataType::Timestamp, DataType::TimestampNtz]
@@ -454,6 +554,9 @@ fn extract_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 }
 
 fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if let Some(t) = c.data_type(1).filter(|t| is_interval(t)) {
+        return interval_extract_result(c, t);
+    }
     let nullable = c.args().get(1).is_some_and(|a| a.nullable);
     Ok(match extract_field(c)? {
         // `date_part(NULL, x)` is a NULL `double`.
@@ -514,7 +617,27 @@ fn seconds_input() -> InputType {
     ))
 }
 
+/// The `(date[, time[, zone]])` forms of `make_timestamp`.
+fn make_timestamp_date_inputs(n: usize) -> Vec<InputType> {
+    let time = InputType::OneOf(
+        (0..=6)
+            .map(|precision| DataType::Time { precision })
+            .collect(),
+    );
+    [
+        InputType::Strict(DataType::Date),
+        time,
+        exact(DataType::String),
+    ]
+    .into_iter()
+    .take(n)
+    .collect()
+}
+
 fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.args().len() <= 3 {
+        return make_timestamp_date_inputs(c.args().len());
+    }
     let mut inputs = vec![exact(DataType::Integer); 5];
     inputs.push(seconds_input());
     if c.args().len() == 7 {
@@ -523,7 +646,10 @@ fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     inputs
 }
 
-fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+fn make_timestamp_ntz_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.args().len() <= 2 {
+        return make_timestamp_date_inputs(c.args().len());
+    }
     let mut inputs = vec![exact(DataType::Integer); 5];
     inputs.push(seconds_input());
     inputs
@@ -532,7 +658,9 @@ fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
 /// A malformed field is NULL with ANSI off and always for the `try_`
 /// forms, so the result may be null then whatever the arguments.
 fn make_timestamp_result(c: &CallTypes<'_>, ty: DataType, try_form: bool) -> ArgType {
-    ArgType::new(ty, try_form || !c.ansi() || c.any_nullable())
+    // The date forms have no field that can be malformed.
+    let can_fail = c.args().len() > 3 && (try_form || !c.ansi());
+    ArgType::new(ty, can_fail || c.any_nullable())
 }
 
 fn make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -549,6 +677,54 @@ fn make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 fn try_make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(make_timestamp_result(c, DataType::TimestampNtz, true))
+}
+
+/// The seconds of `make_dt_interval` and `make_interval`: `DECIMAL(18,6)`.
+fn interval_seconds_input() -> InputType {
+    exact(DataType::Decimal(
+        DecimalType::try_new(18, 6).unwrap_or(DecimalType::USER_DEFAULT),
+    ))
+}
+
+fn make_dt_interval_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 3];
+    inputs.push(interval_seconds_input());
+    inputs
+}
+
+fn make_interval_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+    let mut inputs = vec![exact(DataType::Integer); 6];
+    inputs.push(interval_seconds_input());
+    inputs
+}
+
+fn make_ym_interval(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let ty = DataType::YearMonthInterval {
+        start: YearMonthField::Year,
+        end: YearMonthField::Month,
+    };
+    Ok(ArgType::new(ty, c.any_nullable()))
+}
+
+fn make_dt_interval(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let ty = DataType::DayTimeInterval {
+        start: DayTimeField::Day,
+        end: DayTimeField::Second,
+    };
+    Ok(ArgType::new(ty, c.any_nullable()))
+}
+
+/// An overflow is NULL with ANSI off, so the result may be null then whatever
+/// the arguments.
+fn make_interval(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        DataType::CalendarInterval,
+        !c.ansi() || c.any_nullable(),
+    ))
+}
+
+fn try_make_interval(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::CalendarInterval, true))
 }
 
 fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
@@ -607,7 +783,7 @@ fn timestamp_ntz_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// Whether `t` is a numeric type (Spark's `NumericType`).
-fn is_numeric_type(t: &DataType) -> bool {
+pub(super) fn is_numeric_type(t: &DataType) -> bool {
     matches!(
         t,
         DataType::Byte
@@ -996,6 +1172,19 @@ fn datetime() -> Vec<Spec> {
         timestamp_ntz_result,
     ));
     out.extend(scalar(
+        &["make_ym_interval"],
+        &Inputs::Expects(vec![exact(DataType::Integer); 2]),
+        make_ym_interval,
+    ));
+    out.extend(scalar(
+        &["make_dt_interval"],
+        &Inputs::Built(InputBuilder(make_dt_interval_inputs)),
+        make_dt_interval,
+    ));
+    let calendar = Inputs::Built(InputBuilder(make_interval_inputs));
+    out.extend(scalar(&["make_interval"], &calendar, make_interval));
+    out.extend(scalar(&["try_make_interval"], &calendar, try_make_interval));
+    out.extend(scalar(
         &["make_date"],
         &Inputs::Expects(vec![exact(DataType::Integer)]),
         make_date_result,
@@ -1061,6 +1250,11 @@ fn datetime() -> Vec<Spec> {
         clock_timestamp,
     ));
     out.extend(scalar(
+        &["current_time"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        clock_time,
+    ));
+    out.extend(scalar(
         &["current_user", "user", "session_user"],
         &Inputs::Any,
         user,
@@ -1091,21 +1285,34 @@ fn sum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             d.scale().into(),
         )?,
         Some(DataType::Double | DataType::Float) | None => DataType::Double,
+        // An ANSI interval keeps its fields.
+        Some(t) if is_ansi_interval(t) => t.clone(),
         Some(_) => DataType::Long,
     };
     Ok(ArgType::new(t, true))
 }
 
-/// `avg`: `decimal(min(38, p + 4), min(38, s + 4))`, else `double`.
+/// `avg`: `decimal(min(38, p + 4), min(38, s + 4))`, an ANSI interval's
+/// default fields, else `double`.
 fn avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = match c.data_type(0) {
         Some(DataType::Decimal(d)) => bounded_decimal(
             u32::from(d.precision()).saturating_add(4),
             u32::from(d.scale()).saturating_add(4),
         )?,
+        Some(t) if is_ansi_interval(t) => default_interval(t),
         _ => DataType::Double,
     };
     Ok(ArgType::new(t, true))
+}
+
+/// The default fields of the ANSI interval family of `t`.
+fn default_interval(t: &DataType) -> DataType {
+    if matches!(t, DataType::YearMonthInterval { .. }) {
+        DataType::DEFAULT_YEAR_MONTH_INTERVAL
+    } else {
+        DataType::DEFAULT_DAY_TIME_INTERVAL
+    }
 }
 
 fn count(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -1124,7 +1331,10 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// not.
 pub(super) fn spark_orderable(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) => false,
+        DataType::Map(_)
+        | DataType::CalendarInterval
+        | DataType::Geometry { .. }
+        | DataType::Geography { .. } => false,
         DataType::Array(a) => spark_orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| spark_orderable(f.data_type())),
         _ => true,
@@ -1139,11 +1349,17 @@ pub(super) fn spark_orderable(t: &DataType) -> bool {
 /// executor compares with: an array or interval field) is
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
 fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
-    if let Some(t) = c.data_type(0)
-        && matches!(t, DataType::Struct(_))
-        && !krishiv_kernels::r#struct::comparable(&t.to_arrow())
-    {
-        if spark_orderable(t) {
+    if let Some(t) = c.data_type(0) {
+        if !spark_orderable(t) {
+            return Err(DatatypeMismatchInvalidOrderingType {
+                sql_expr: format!("\"{function}({})\"", c.sql(0).unwrap_or_default()),
+                function_name: format!("`{function}`"),
+                data_type: format!("\"{}\"", t.sql()),
+            }
+            .into());
+        }
+        if matches!(t, DataType::Struct(_)) && !krishiv_kernels::r#struct::comparable(&t.to_arrow())
+        {
             return Err(KrishivUnsupportedFeature {
                 feature: format!(
                     "{function} over {}, a struct with a field the struct comparator does not take",
@@ -1152,12 +1368,6 @@ fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, Krishiv
             }
             .into());
         }
-        return Err(DatatypeMismatchInvalidOrderingType {
-            sql_expr: format!("\"{function}({})\"", c.sql(0).unwrap_or_default()),
-            function_name: format!("`{function}`"),
-            data_type: format!("\"{}\"", t.sql()),
-        }
-        .into());
     }
     min_max(c)
 }
@@ -1437,15 +1647,17 @@ fn try_avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     avg(c)
 }
 
-/// Spark's `PercentileBase.dataType` over the types this engine
-/// represents: `double`, or `array<double>` for an array percentage.
-/// (Spark keeps an ANSI interval child as an interval; this engine has
-/// no interval type, so an interval never reaches typing.)
-pub fn exact_percentile_result(array: bool) -> DataType {
+/// Spark's `PercentileBase.dataType`: `double`, or an ANSI interval child's
+/// default fields; an array of it for an array percentage.
+pub fn exact_percentile_result(child: Option<&DataType>, array: bool) -> DataType {
+    let value = match child {
+        Some(t) if is_ansi_interval(t) => default_interval(t),
+        _ => DataType::Double,
+    };
     if array {
-        DataType::Array(ArrayType::new(DataType::Double, false).into())
+        DataType::Array(ArrayType::new(value, false).into())
     } else {
-        DataType::Double
+        value
     }
 }
 
@@ -1469,14 +1681,17 @@ fn array_percentage(c: &CallTypes<'_>, i: usize) -> bool {
 /// is `percentile(child, 0.5)`): [`exact_percentile_result`].
 fn percentile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(
-        exact_percentile_result(array_percentage(c, 1)),
+        exact_percentile_result(c.data_type(0), array_percentage(c, 1)),
         true,
     ))
 }
 
 /// Spark's `Median`: `percentile(child, 0.5)`.
-fn median(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType::new(DataType::Double, true))
+fn median(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        exact_percentile_result(c.data_type(0), false),
+        true,
+    ))
 }
 
 /// Spark's `ApproximatePercentile.dataType`: the child's type, or an
@@ -1491,10 +1706,11 @@ fn percentile_approx(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 /// Spark's `PercentileCont` / `PercentileDisc` result over the user
 /// form (the percentage is the only argument): `double`, or
-/// `array<double>` for an array percentage.
+/// `array<double>` for an array percentage. The analyzer retypes it from the
+/// ordering key.
 fn percentile_ordered(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(
-        exact_percentile_result(array_percentage(c, 0)),
+        exact_percentile_result(None, array_percentage(c, 0)),
         true,
     ))
 }
@@ -1815,6 +2031,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
     out.extend(super::misc::specs());
+    out.extend(super::geo::specs());
     out.extend(super::url::specs());
     out.extend(super::csv::specs());
     out.extend(super::xml::specs());

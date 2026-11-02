@@ -215,6 +215,62 @@ pub(super) fn typed_literal(
 
 /// Whether `value` is one of Spark's special date/timestamp spellings
 /// (`now`, `today`, ...), which depend on the session's clock and zone.
+/// The type a typed datetime literal denotes.
+#[derive(Clone, Copy)]
+pub(super) enum SpecialKind {
+    /// `DATE`.
+    Date,
+    /// `TIMESTAMP` / `TIMESTAMP_LTZ`: an instant.
+    Instant,
+    /// `TIMESTAMP_NTZ` (or `TIMESTAMP` under `spark.sql.timestampType`).
+    Local,
+}
+
+pub(super) fn special_kind(kind: TypedLiteralKind, timestamp_ntz: bool) -> SpecialKind {
+    match kind {
+        TypedLiteralKind::Date => SpecialKind::Date,
+        TypedLiteralKind::TimestampNtz => SpecialKind::Local,
+        TypedLiteralKind::Timestamp if timestamp_ntz => SpecialKind::Local,
+        _ => SpecialKind::Instant,
+    }
+}
+
+/// The clock expression Spark's special value `now`, `today`, `tomorrow` or
+/// `yesterday` stands for, of the literal's type.
+pub(super) fn special_clock(special: &str, kind: SpecialKind) -> Expr {
+    let day = |offset: &str| match offset {
+        "tomorrow" => Expr::function(
+            "date_add",
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
+        ),
+        "yesterday" => Expr::function(
+            "date_sub",
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
+        ),
+        _ => Expr::function("current_date", Vec::new()),
+    };
+    let cast = |expr: Expr, to: DataType| {
+        Expr::new(ExprNode::Cast {
+            expr: Arc::new(expr),
+            to,
+            mode: CastMode::Ansi,
+        })
+    };
+    match (kind, special) {
+        (SpecialKind::Date, d) => day(d),
+        (SpecialKind::Instant, "now") => Expr::function("current_timestamp", Vec::new()),
+        (SpecialKind::Local, "now") => Expr::function("localtimestamp", Vec::new()),
+        (SpecialKind::Instant, d) => cast(day(d), DataType::Timestamp),
+        (SpecialKind::Local, d) => cast(day(d), DataType::TimestampNtz),
+    }
+}
+
 pub(super) fn is_special(value: &str) -> bool {
     let v = value.trim().to_ascii_lowercase();
     ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())

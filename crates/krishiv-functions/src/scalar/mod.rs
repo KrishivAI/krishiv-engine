@@ -38,7 +38,9 @@ mod csv;
 mod datetime;
 mod element;
 mod format;
+mod geo;
 mod hash;
+mod interval;
 mod json;
 mod json_tuple;
 mod map;
@@ -57,7 +59,7 @@ mod vector;
 mod xml;
 
 pub use json::schema_of_json_ddl;
-pub use regex::{extract_all_pieces, split_regex};
+pub use regex::{FullMatch, extract_all_pieces, split_regex};
 pub use xml::schema_of_xml_ddl;
 
 use std::fmt;
@@ -461,7 +463,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 30] = [
+const FAMILIES: [(&[&str], Binder); 32] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -470,6 +472,7 @@ const FAMILIES: [(&[&str], Binder); 30] = [
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
+    (interval::NAMES, interval::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
     (json_tuple::NAMES, json_tuple::bind),
@@ -483,6 +486,7 @@ const FAMILIES: [(&[&str], Binder); 30] = [
     (codec::NAMES, codec::bind),
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
+    (geo::NAMES, geo::bind),
     (csv::NAMES, csv::bind),
     (format::NAMES, format::bind),
     (xml::NAMES, xml::bind),
@@ -508,7 +512,7 @@ pub fn scalar_names() -> Vec<&'static str> {
 
 /// Whether the result of the scalar function `name` depends only on its
 /// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math, arithmetic, struct and map families, and the zone-free
+/// encoding families), math, arithmetic, interval, struct and map families, and the zone-free
 /// JSON functions (`schema_of_json`, `json_array_length`, `json_object_keys`,
 /// `get_json_object`; `from_json` and `to_json` read the session time zone for
 /// timestamps, and the map family also reads
@@ -535,6 +539,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         codec::NAMES,
         math::NAMES,
         arith::NAMES,
+        interval::NAMES,
         map::NAMES,
         r#struct::NAMES,
     ]

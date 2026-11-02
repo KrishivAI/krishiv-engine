@@ -923,11 +923,19 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::UnionLoop {
                 id,
                 max_level,
+                limit,
                 output,
                 ..
             } => {
                 self.u8(31);
                 self.put(&id.to_le_bytes());
+                match limit {
+                    None => self.u8(0),
+                    Some(n) => {
+                        self.u8(1);
+                        self.put(&n.to_le_bytes());
+                    }
+                }
                 match max_level {
                     None => self.u8(0),
                     Some(n) => {
@@ -1137,6 +1145,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 except,
                 replace,
                 position,
+                regex,
                 plan_id,
             }) => {
                 self.u8(3);
@@ -1152,6 +1161,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 if let Some(n) = position {
                     self.len(*n);
+                }
+                if let Some(r) = regex {
+                    self.str(r);
                 }
             }
             ExprNode::Function(FunctionCall {

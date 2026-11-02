@@ -273,6 +273,49 @@ impl Resolver<'_> {
                 .cloned()
                 .collect(),
         };
+        // A qualified star reaches the columns a `USING` join merged
+        // away, ahead of the output columns as in Spark.
+        let out = match cx.rels {
+            [r] if s.plan_id.is_none()
+                && s.regex.is_none()
+                && !s.qualifier.is_empty()
+                && cx.agg_scope.is_none()
+                && r.hidden
+                    .iter()
+                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs)) =>
+            {
+                // Spark lists the merged-away columns first, then the output.
+                let mut all: Vec<_> = r
+                    .hidden
+                    .iter()
+                    .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                    .cloned()
+                    .collect();
+                all.extend(out);
+                all
+            }
+            _ => out,
+        };
+        // A quoted column regex keeps the columns whose names it matches in full (ignoring case
+        // unless the session is case sensitive).
+        let had_columns = !out.is_empty();
+        let out = match &s.regex {
+            Some(pattern) => {
+                let matcher = krishiv_functions::scalar::FullMatch::new(pattern, !cs)
+                    .map_err(|e| AnalysisError::new(e, origin))?;
+                let mut kept = Vec::with_capacity(out.len());
+                for a in out {
+                    if matcher
+                        .is_match(&a.col.name)
+                        .map_err(|e| AnalysisError::new(e, origin))?
+                    {
+                        kept.push(a);
+                    }
+                }
+                kept
+            }
+            None => out,
+        };
         let out = match s.position {
             Some(n) if (1..=out.len()).contains(&n) => vec![out[n - 1].clone()],
             Some(n) => {
@@ -286,7 +329,9 @@ impl Resolver<'_> {
             }
             None => out,
         };
-        if out.is_empty() && !s.qualifier.is_empty() {
+        // A qualified regex that matches nothing selects nothing; only a qualifier no column
+        // answers to cannot be expanded.
+        if out.is_empty() && !s.qualifier.is_empty() && !(s.regex.is_some() && had_columns) {
             return Err(AnalysisError::new(
                 CannotResolveStarExpand {
                     target_string: quoted(&s.qualifier),

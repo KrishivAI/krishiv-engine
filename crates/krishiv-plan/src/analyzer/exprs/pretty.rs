@@ -501,7 +501,8 @@ pub(super) fn call(
             Some(
                 Builtin::DateAddYmInterval
                 | Builtin::TimestampAddYmInterval
-                | Builtin::TimestampAddInterval,
+                | Builtin::TimestampAddInterval
+                | Builtin::DateAddInterval,
             ),
             2,
         ) => format!("{} + {}", k[0], k[1]),

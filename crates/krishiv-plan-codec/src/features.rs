@@ -129,6 +129,7 @@ registry! {
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
     (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
+    (late_fetch, LateFetch, POST_MIGRATION_READER_VERSION, Optimization, "The `LateFetch` node and a scan's row id: a top-N that ranks a narrow scan and reads the other columns of its rows afterwards."),
     (legacy_charset_switches, LegacyCharsetSwitches, POST_MIGRATION_READER_VERSION, Semantic, "The session's `encode`/`decode` switches (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`); without them a worker would refuse the charset or raise on malformed input."),
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
@@ -145,6 +146,7 @@ registry! {
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
+    (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -313,12 +315,15 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
     match construct {
         Construct::Node(node) => match node {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
+            PhysNode::LateFetch { .. } => Some(Feature::LateFetch),
+            PhysNode::Scan(s) => s.row_id.then_some(Feature::LateFetch),
             PhysNode::HashJoin(j) => j.single_match.then_some(Feature::JoinSingleMatch),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::Generate { .. } => Some(Feature::Generate),
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
+            PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             // A partitioned write needs a reader that
@@ -331,8 +336,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                     Feature::PartitionedWrites
                 }
             }),
-            PhysNode::Scan(_)
-            | PhysNode::OneRow
+            PhysNode::OneRow
             | PhysNode::Filter { .. }
             | PhysNode::Project { .. }
             | PhysNode::ReplicateRows { .. }
@@ -531,8 +535,11 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
         PhysNode::Scan(_)
+        | PhysNode::LateFetch { .. }
         | PhysNode::OneRow
         | PhysNode::SharedRead { .. }
+        | PhysNode::UnionLoop { .. }
+        | PhysNode::LoopRef { .. }
         | PhysNode::Range(_)
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
@@ -621,7 +628,7 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
             _ => {}
         }
     }
-    if let PhysNode::Scan(scan) = node {
+    if let PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
     }
     out
@@ -652,6 +659,9 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
+        | PhysNode::LateFetch { .. }
+        | PhysNode::UnionLoop { .. }
+        | PhysNode::LoopRef { .. }
         | PhysNode::Limit { .. }
         | PhysNode::Range(_)
         | PhysNode::Sort { .. }

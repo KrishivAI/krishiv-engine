@@ -52,7 +52,8 @@ pub use classify::{
 pub use error::{ParseError, parse_exception_suffix};
 pub use frontend::Frontend;
 pub use lower::{
-    lower, lower_expression, lower_select_item, parse_and_lower, parse_and_lower_named_expression,
+    lower, lower_expression, lower_select_item, lower_with, parse_and_lower,
+    parse_and_lower_named_expression,
 };
 pub use params::{ParameterMarker, parameter_markers};
 pub use redact::redact_sql;
@@ -114,6 +115,12 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.viewSchemaBindingMode` (on by default): a view may
     /// take `WITH SCHEMA ...`; off, the clause is `FEATURE_NOT_ENABLED`.
     pub view_schema_binding: bool,
+    /// `spark.sql.parser.quotedRegexColumnNames`: a backquoted name in a select item is a regular
+    /// expression over the column names.
+    pub quoted_regex_column_names: bool,
+    /// `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+    /// a select list with no aggregate call filters rows like `WHERE`.
+    pub having_without_group_by_as_where: bool,
 }
 
 impl Default for ParserOptions {
@@ -155,6 +162,11 @@ impl ParserOptions {
             ),
             case_sensitive: on("spark.sql.caseSensitive", false),
             view_schema_binding: on("spark.sql.legacy.viewSchemaBindingMode", true),
+            quoted_regex_column_names: on("spark.sql.parser.quotedRegexColumnNames", false),
+            having_without_group_by_as_where: on(
+                "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
+                false,
+            ),
         }
     }
 }

@@ -37,11 +37,12 @@ fn map_at(c: &CallTypes<'_>, i: usize) -> Option<MapType> {
     }
 }
 
-/// Whether the type contains a map (Spark's `checkForMapKeyType`, without
-/// the variant case: Krishiv has no variant type).
-fn contains_map(t: &DataType) -> bool {
+/// Whether the type contains a map, a geometry or a geography: none orders,
+/// so none is a map key (Spark's `checkForMapKeyType`, without the variant
+/// case: Krishiv has no variant type).
+pub(super) fn contains_map(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) => true,
+        DataType::Map(_) | DataType::Geometry { .. } | DataType::Geography { .. } => true,
         DataType::Array(a) => contains_map(a.element_type()),
         DataType::Struct(s) => s.fields().iter().any(|f| contains_map(f.data_type())),
         _ => false,

@@ -57,6 +57,27 @@ use crate::store::{
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc"];
 
+/// The short name of a data source written fully qualified, as Spark maps its built-in classes
+/// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
+fn short_provider(written: &str) -> String {
+    let lower = written.to_lowercase();
+    for prefix in [
+        "org.apache.spark.sql.execution.datasources.",
+        "org.apache.spark.sql.",
+    ] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let name = rest.split('.').next().unwrap_or(rest);
+            if PROVIDERS.contains(&name) {
+                return name.to_owned();
+            }
+        }
+    }
+    if lower == "com.databricks.spark.csv" {
+        return "csv".to_owned();
+    }
+    lower
+}
+
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -153,9 +174,8 @@ impl TableName {
             [catalog, ns, name] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                 (fold(ns), fold(name), false)
             }
-            [catalog, _, _] => {
-                return Err(unsupported(&format!("tables in the catalog `{catalog}`")));
-            }
+            // No other catalog is registered, so a longer name is a namespace of several parts in
+            // the session catalog, which takes one.
             _ => {
                 return Err(KrishivError::from(RequiresSinglePartNamespace {
                     session_catalog: crate::catalog::CATALOG.to_owned(),
@@ -371,6 +391,9 @@ impl Session {
             .first()
             .cloned()
             .unwrap_or_else(|| self.state.catalog.current_namespace());
+        if v.temporary && !v.global && v.using.is_some() && v.query.is_none() {
+            return self.create_datasource_temp_view(v, &env, original).await;
+        }
         if v.temporary || v.global {
             return Err(unsupported("qualified and datasource temporary views"));
         }
@@ -413,7 +436,12 @@ impl Session {
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
             .to_owned();
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -591,6 +619,119 @@ impl Session {
         self.create_temp_view(&view, true).await
     }
 
+    /// `CREATE TEMPORARY VIEW name (col type, ...) USING format [OPTIONS (...)]`: a read of the
+    /// format's files (the `path` option), typed by the declared columns. Nothing is read until a
+    /// query uses the view.
+    async fn create_datasource_temp_view(
+        &self,
+        v: &CreatePermanentView,
+        env: &QueryEnv,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let parts = crate::access::ddl_parts(&v.name, env)?;
+        let [name] = parts.as_slice() else {
+            return Err(unsupported("qualified datasource temporary views"));
+        };
+        if crate::catalog::is_reserved_view_name(name) {
+            return Err(crate::catalog::reserved_temp_view_name(name));
+        }
+        // The parser rejects IF NOT EXISTS on temporary views, as Spark does.
+        let exists = self
+            .state
+            .catalog
+            .exists(name, env.analysis.conf.case_sensitive);
+        if exists && !v.or_replace {
+            return Err(krishiv_common::error::TempTableOrViewAlreadyExists {
+                relation_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        let columns = v
+            .columns
+            .iter()
+            .map(|c| {
+                let (ColumnName::Ident(ident), Some(spec)) = (&c.name, &c.data_type) else {
+                    return Err(unsupported(
+                        "datasource views without declared column types",
+                    ));
+                };
+                Ok(TableColumn {
+                    name: ident.value.clone(),
+                    data_type: spec.to_data_type()?,
+                    nullable: !c.not_null,
+                })
+            })
+            .collect::<Result<Vec<_>, KrishivError>>()?;
+        if columns.is_empty() {
+            return Err(unsupported(
+                "datasource views without declared column types",
+            ));
+        }
+        let mut options = options_of(&v.options, original);
+        let path_key = options
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("path"))
+            .cloned();
+        let paths = path_key
+            .and_then(|k| options.remove(&k))
+            .map(|p| vec![OptionValue::from_user("path", p)])
+            .unwrap_or_default();
+        // Spark resolves the data source when the view is created.
+        let written = v
+            .using
+            .as_ref()
+            .map(|u| {
+                u.parts
+                    .iter()
+                    .map(|p| p.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .unwrap_or_default();
+        let provider = self.provider_of(Some(short_provider(&written)))?;
+        // The policy is asked before the path is looked at, so a denial never tells whether it exists.
+        for path in paths.iter().filter_map(OptionValue::as_plain) {
+            let qualified = self.qualify_path(path)?;
+            self.authorize_path(
+                Path::new(&qualified),
+                &[Privilege::Select],
+                StatementClass::Ddl,
+            )
+            .await?;
+        }
+        if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
+            let local = path.strip_prefix("file:").unwrap_or(path);
+            if !path.contains("://") && !std::path::Path::new(local).exists() {
+                return Err(krishiv_common::error::PathNotFound {
+                    path: format!("file:{local}"),
+                }
+                .into());
+            }
+        }
+        let source = krishiv_plan::ReadSource::Files {
+            format: provider,
+            paths,
+            options: options
+                .into_iter()
+                .map(|(k, val)| {
+                    let val = OptionValue::from_user(&k, val);
+                    (k, val)
+                })
+                .collect(),
+        };
+        self.state.catalog.put(
+            name,
+            crate::catalog::TempTable::Files {
+                source,
+                columns,
+                known: true,
+            },
+        );
+        // A replaced view must not keep serving the rows of the old one.
+        self.state.cache.invalidate_table(name);
+        self.empty_frame().await
+    }
+
     /// `DROP VIEW global_temp.name`: the global temporary view, when the name is one.
     fn drop_global_temp_view(
         &self,
@@ -702,7 +843,12 @@ impl Session {
                 schema_binding: None,
                 ..
             } => {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -789,13 +935,22 @@ impl Session {
             .table(&name.namespace, &name.name)
             .is_some_and(|t| t.view.is_some())
         {
+            if matches!(a.action, AlterTableAction::SetComment(_)) {
+                // Spark's error for a view here is not recorded in the goldens yet.
+                return Err(unsupported("COMMENT ON TABLE of a view"));
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
                 operation: "`ALTER TABLE`".to_owned(),
                 view_name: name.quoted(),
             }
             .into());
         }
-        let table = self.table_for_write(&name, "ALTER TABLE", &env)?;
+        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
+            "COMMENT ON TABLE"
+        } else {
+            "ALTER TABLE"
+        };
+        let table = self.table_for_write(&name, operation, &env)?;
         let mut changed = (*table).clone();
         match &a.action {
             AlterTableAction::AddColumns(defs) => {
@@ -891,6 +1046,9 @@ impl Session {
                         changed.properties.insert(k, v);
                     }
                 }
+            }
+            AlterTableAction::SetComment(comment) => {
+                changed.comment = comment.clone();
             }
             AlterTableAction::UnsetTblProperties { keys, .. } => {
                 for key in options_of(keys, original).keys() {
@@ -1124,8 +1282,18 @@ impl Session {
         }
         let mut options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
-        let external = t.external || t.location.is_some();
-        let location = match &t.location {
+        // A `path` option is the table's location, as in Spark.
+        let path_key = options
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("path"))
+            .cloned();
+        let location_text = match (&t.location, path_key) {
+            (Some(l), _) => Some(l.clone()),
+            (None, Some(k)) => options.remove(&k),
+            (None, None) => None,
+        };
+        let external = t.external || location_text.is_some();
+        let location = match &location_text {
             Some(l) if l.is_empty() => {
                 return Err(krishiv_common::error::InvalidEmptyLocation {
                     location: l.clone(),
@@ -1135,11 +1303,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
-        }
         let mut table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1307,8 +1470,12 @@ impl Session {
         let location = table.location.clone();
         self.authorize_path(&location, &[Privilege::Create], StatementClass::Ddl)
             .await?;
-        std::fs::create_dir_all(&location)
-            .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        // Spark creates the directory of a managed table only; an external table's location is
+        // made by its first write.
+        if table.managed {
+            std::fs::create_dir_all(&location)
+                .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        }
         // Tables are never replaced, so nothing comes back from the store to clean up.
         self.state.catalog.store.create_table(table, mode)?;
         Ok(())
@@ -1401,7 +1568,12 @@ impl Session {
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
     ) -> Result<(), KrishivError> {
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         self.create_table_from(table, &df, mode, layout).await
     }
@@ -1488,8 +1660,10 @@ impl Session {
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
         let source = self.table_name(&t.source, &env)?;
-        // Spark's `CreateTableLikeCommand` copies the partition columns and the bucket specification.
+        // Spark's `CreateTableLikeCommand` copies the partition columns, the bucket specification and the
+        // storage options, under any provider.
         let mut layout = TableLayout::default();
+        let mut options = BTreeMap::new();
         let (columns, source_provider) = if let Some(s) = self
             .state
             .catalog
@@ -1500,6 +1674,7 @@ impl Session {
                 .partition_columns
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
+            options.clone_from(&s.options);
             (s.columns.clone(), s.provider.clone())
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
@@ -1543,10 +1718,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        let mut options = BTreeMap::new();
-        if provider == "csv" {
-            options.insert("header".to_owned(), "true".to_owned());
-        }
         let table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1803,7 +1974,14 @@ impl Session {
             }
             .into());
         }
-        if self.temp_entry_of(name, env) {
+        let global = name
+            .namespace
+            .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+            && self.state.catalog.exists(
+                &crate::catalog::global_key(&name.name),
+                env.analysis.conf.case_sensitive,
+            );
+        if self.temp_entry_of(name, env) || global {
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: format!("`{operation}`"),
                 view_name: name.quoted(),
@@ -1854,7 +2032,12 @@ impl Session {
                 .iter()
                 .for_each(|r| scalar_subqueries(r, &mut subqueries));
             for query in &subqueries {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 DataFrame::new(self.clone(), Arc::clone(plan.root()))
                     .analyzed_in(self.query_env())
                     .await?;
@@ -1866,7 +2049,12 @@ impl Session {
                 );
             }
         }
-        let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            &c.query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let listed: Vec<String> = c
             .columns
@@ -2062,11 +2250,6 @@ impl Session {
                 return Err(unsupported("secret table options"));
             };
             options.insert(k.clone(), text.to_owned());
-        }
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
         }
         let table = CatalogTable {
             namespace: name.namespace.clone(),

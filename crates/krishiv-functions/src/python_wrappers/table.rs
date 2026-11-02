@@ -20,8 +20,33 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    (
+        "stack",
+        "generator: rewritten by the analyzer, no PySpark function",
+    ),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
+    ("current_time", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "st_asbinary",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_geogfromwkb",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_geomfromwkb",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_setsrid",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_srid",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
     (
         "time_from_micros",
         "TIME has no Python mapping yet (P2-T181)",
@@ -216,6 +241,22 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
 
 /// Registry names whose wrapper is written by hand in `functions.py`.
 pub(super) const HANDWRITTEN: &[(&str, &str)] = &[
+    (
+        "make_ym_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "make_dt_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "make_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "try_make_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
     ("count", "`count(\"*\")` is `count(*)`"),
     ("log", "`log(col)` is `ln(col)`; `log(base, col)` is `log`"),
     (

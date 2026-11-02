@@ -133,7 +133,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -187,9 +187,51 @@ pub mod node {
         /// feature: generate
         #[prost(message, tag = "20")]
         Generate(super::GenerateNode),
+        /// feature: union_loop
+        #[prost(message, tag = "22")]
+        UnionLoop(super::UnionLoopNode),
+        /// feature: union_loop
+        #[prost(message, tag = "23")]
+        LoopRef(super::LoopRefNode),
         /// feature: sort_merge_join
         #[prost(message, tag = "21")]
         SortMergeJoin(super::SortMergeJoinNode),
+        /// feature: late_fetch
+        #[prost(message, tag = "24")]
+        LateFetch(super::LateFetchNode),
+    }
+}
+/// feature: late_fetch
+/// The rows of `input` with columns read from their files by row id.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LateFetchNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    /// The table and the columns to read.
+    #[prost(message, optional, tag = "2")]
+    pub scan: ::core::option::Option<ScanNode>,
+    #[prost(uint64, tag = "3")]
+    pub file_col: u64,
+    #[prost(uint64, tag = "4")]
+    pub row_col: u64,
+    #[prost(message, repeated, tag = "5")]
+    pub output: ::prost::alloc::vec::Vec<FetchSlot>,
+}
+/// feature: late_fetch
+/// Where a column of a `LateFetchNode`'s output comes from.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FetchSlot {
+    #[prost(oneof = "fetch_slot::Kind", tags = "1, 2")]
+    pub kind: ::core::option::Option<fetch_slot::Kind>,
+}
+/// Nested message and enum types in `FetchSlot`.
+pub mod fetch_slot {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(uint64, tag = "1")]
+        Input(u64),
+        #[prost(uint64, tag = "2")]
+        Fetched(u64),
     }
 }
 /// feature: shared_subplan
@@ -323,6 +365,45 @@ pub struct ReplicateRowsNode {
     #[prost(message, repeated, tag = "4")]
     pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
 }
+/// feature: union_loop
+/// A recursive common table expression: the anchor runs once, then the
+/// recursive term runs round after round, reading the previous round through
+/// its LoopRefNode, until a round is empty or a limit is reached.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UnionLoopNode {
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    #[prost(uint32, tag = "2")]
+    pub anchor: u32,
+    #[prost(uint32, tag = "3")]
+    pub recursive: u32,
+    #[prost(uint64, repeated, tag = "4")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "5")]
+    pub limits: ::core::option::Option<LoopLimits>,
+    #[prost(bool, repeated, tag = "6")]
+    pub nullable: ::prost::alloc::vec::Vec<bool>,
+}
+/// feature: union_loop
+/// The bounds on a loop, decided at planning.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LoopLimits {
+    #[prost(uint32, tag = "1")]
+    pub level: u32,
+    #[prost(uint64, tag = "2")]
+    pub rows: u64,
+    #[prost(uint64, optional, tag = "3")]
+    pub pushed_limit: ::core::option::Option<u64>,
+}
+/// feature: union_loop
+/// The previous round of the enclosing loop with the same id.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LoopRefNode {
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+}
 /// feature: generate
 /// Each input row once per element of an array or map (explode, posexplode,
 /// inline): the input's columns, then the generated ones.
@@ -389,6 +470,9 @@ pub struct TopNNode {
     pub keys: ::prost::alloc::vec::Vec<SortKey>,
     #[prost(uint64, tag = "3")]
     pub limit: u64,
+    /// ignorable: a reader that skips it offers no bound, and scans only prune less.
+    #[prost(uint64, optional, tag = "4")]
+    pub bound: ::core::option::Option<u64>,
 }
 /// feature: window
 /// Window functions over an input sorted by the partitioning columns, then
@@ -590,6 +674,11 @@ pub struct AggregateExpr {
     /// folded HyperLogLog++ addressing bits).
     #[prost(uint32, tag = "16")]
     pub hll_precision: u32,
+    /// feature: interval_types (an array result of ANSI intervals only: the Arrow
+    /// IPC `Schema` flatbuffer of its element field, whose metadata holds the
+    /// interval's fields; empty otherwise).
+    #[prost(bytes = "vec", tag = "17")]
+    pub result_element: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {
@@ -797,6 +886,9 @@ pub struct ScanNode {
     pub runtime_filters: ::prost::alloc::vec::Vec<ScanRuntimeFilter>,
     #[prost(message, optional, tag = "8")]
     pub row_stage: ::core::option::Option<RowStageSettings>,
+    /// feature: late_fetch
+    #[prost(bool, tag = "9")]
+    pub row_id: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnPath {

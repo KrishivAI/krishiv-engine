@@ -242,11 +242,37 @@ impl Resolver<'_> {
         // nothing below resolves them either, they stay ambiguous rather
         // than unresolved.
         let mut lenient_dup = false;
-        for (i, level) in [Some(scope), extra].into_iter().enumerate() {
+        // The columns a `USING` join merged away answer to a qualified name.
+        let joined: Vec<Attr>;
+        let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
+            ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
+            ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            // A join condition reads the merged-away columns of both inputs.
+            (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
+                joined = rels.iter().flat_map(|r| r.hidden.iter().cloned()).collect();
+                Some(&joined[..])
+            }
+            _ => None,
+        };
+        for (i, level) in [Some(scope), extra, hidden].into_iter().enumerate() {
             let Some(level) = level else { continue };
             let lenient = cx.lenient && i == 0;
             match self.find(level, &c.name, origin, lenient) {
                 Ok(Some((a, used))) => {
+                    // A `HAVING` prefers a grouping column to a select-list alias of the same
+                    // name (Spark 4.2: "HAVING condition should prefer table columns over
+                    // aliases").
+                    if i == 0
+                        && !in_agg
+                        && matches!(cx.windows, WindowUse::Having)
+                        && let Some(keys) = extra
+                        && let Ok(Some((k, k_used))) = self.find(keys, &c.name, origin, false)
+                        && k.col.id != a.col.id
+                        && self.serves_path(&k, &c.name[k_used..])
+                    {
+                        self.used(&k);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None);
+                    }
                     self.used(&a);
                     return self.resolve_attr(&a, used, &c.name, origin, None);
                 }
@@ -373,8 +399,17 @@ impl Resolver<'_> {
                 win: None,
                 outer: None,
                 lateral: Vec::new(),
-                shown: Some(Arc::new(
-                    Expr::new(ExprNode::Column(c.clone())).with_origin(origin),
+                // Inside another expression's name Spark spells a variable
+                // `variablereference(system.session.v=<value>)`; a bare select item keeps `v`.
+                shown: Some(named_as(
+                    name,
+                    format!(
+                        "variablereference(system.session.{}={})",
+                        name.to_lowercase(),
+                        var.value
+                    ),
+                    c,
+                    origin,
                 )),
             });
         }
@@ -497,6 +532,23 @@ impl Resolver<'_> {
             }
         }
         Ok(None)
+    }
+
+    /// Whether the struct fields `rest` exist below the column `k` (a path longer than the column
+    /// reads fields; a column that holds none of them leaves the name to another candidate).
+    fn serves_path(&self, k: &Attr, rest: &[String]) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        let mut ty = &k.col.data_type;
+        for part in rest {
+            let krishiv_types::DataType::Struct(s) = ty else {
+                return false;
+            };
+            let Some(f) = s.fields().iter().find(|f| same(f.name(), part, cs)) else {
+                return false;
+            };
+            ty = f.data_type();
+        }
+        true
     }
 
     /// `struct` with named children as `named_struct`, or `None` when every
@@ -789,6 +841,17 @@ impl Resolver<'_> {
             );
             ty = field_ty;
         }
+        // A dotted column path that reads fields is named by the last field (Spark wraps the
+        // resolved path in an alias), but spelled in full inside other names.
+        let shown = Some(named_as(
+            &parent,
+            pretty(&base, None),
+            &crate::ColumnRef {
+                name: Vec::new(),
+                plan_id: None,
+            },
+            origin,
+        ));
         Ok(Bound {
             expr: base,
             ty,
@@ -796,7 +859,7 @@ impl Resolver<'_> {
             win: None,
             outer,
             lateral: Vec::new(),
-            shown: None,
+            shown,
         })
     }
 

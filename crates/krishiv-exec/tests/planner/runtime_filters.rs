@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 use super::Runnable;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
-    StringViewArray,
+    ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int32Array,
+    Int64Array, RecordBatch, StringViewArray, TimestampMicrosecondArray,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{FileFormat as _, FormatOptions};
 use krishiv_memory::{MemoryConfig, TreePool};
@@ -63,7 +63,7 @@ const MODES: [(&str, &[(&str, &str)]); 6] = [
     ),
 ];
 
-fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
+pub(super) fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
     let mut config = krishiv_common::config::Config::new();
     config.set("spark.sql.ansi.enabled", "true").unwrap();
     for (k, v) in mode {
@@ -73,7 +73,7 @@ fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
 }
 
 /// Rows and the runtime filter counters of one run.
-fn run(plan: &Runnable) -> (Vec<RecordBatch>, Counters) {
+pub(super) fn run(plan: &Runnable) -> (Vec<RecordBatch>, Counters) {
     let root = TreePool::new(&limited(1 << 30));
     let (out, query) = super::run_in(plan, &root);
     let out = out.unwrap_or_else(|e| panic!("{e}\n{plan}"));
@@ -101,7 +101,7 @@ fn limited(bytes: usize) -> MemoryConfig {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct Counters {
+pub(super) struct Counters {
     rows_dropped: u64,
     units_pruned: u64,
     splits_skipped: u64,
@@ -152,7 +152,7 @@ fn tpch_results_do_not_depend_on_runtime_filters() {
 
 /// One table of the randomized joins: every key type, NULLs, and runs of
 /// equal keys in row groups of 64 rows.
-fn table(rng: &mut u64, rows: usize, domain: i32, nulls: u32) -> RecordBatch {
+pub(super) fn table(rng: &mut u64, rows: usize, domain: i32, nulls: u32) -> RecordBatch {
     let mut next = || {
         *rng ^= *rng << 13;
         *rng ^= *rng >> 7;
@@ -241,7 +241,7 @@ fn narrow(x: f64) -> f32 {
     x as f32
 }
 
-fn write(dir: &Path, name: &str, batch: &RecordBatch) {
+pub(super) fn write(dir: &Path, name: &str, batch: &RecordBatch) {
     let o = FormatOptions::defaults(ParquetFormat.options());
     let mut enc = ParquetFormat::encoder_with(&batch.schema(), &o, |p| {
         p.set_max_row_group_row_count(Some(64))
@@ -669,4 +669,237 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
         waits("SELECT a.v FROM big a JOIN big b ON a.k64 = b.k64"),
         [false]
     );
+}
+
+/// `ORDER BY ... LIMIT` queries whose rows have one right answer: `v` breaks
+/// every tie. The first key is what a top-N bounds: NULLs on either side,
+/// NaN and signed zeros, decimals, strings, an `OFFSET`, a filter, and more
+/// rows than the table has.
+const TOP_N: [&str; 12] = [
+    "SELECT k32, v FROM big ORDER BY k32, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32 NULLS LAST, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32 DESC, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32 DESC NULLS FIRST, v LIMIT 5",
+    "SELECT x, v FROM big ORDER BY x, v LIMIT 7",
+    "SELECT x, v FROM big ORDER BY x DESC, v LIMIT 7",
+    "SELECT f, v FROM big ORDER BY f DESC NULLS FIRST, v LIMIT 7",
+    "SELECT d51, v FROM big ORDER BY d51, v LIMIT 5",
+    "SELECT s, v FROM big ORDER BY s DESC, v LIMIT 5",
+    "SELECT k64, v FROM big ORDER BY k64, v LIMIT 5 OFFSET 3",
+    "SELECT k64, v FROM big WHERE v > 10 ORDER BY k64 DESC, v LIMIT 5",
+    "SELECT k32, v FROM big ORDER BY k32, v LIMIT 5000",
+];
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
+    /// A top-N's bound drops only rows it would drop itself.
+    #[test]
+    fn top_n_results_do_not_depend_on_its_bound(
+        seed in 1u64..u64::MAX,
+        domain in prop_oneof![Just(4i32), Just(400)],
+        nulls in 0u32..30,
+        rows_in in prop_oneof![Just(100usize), Just(1500)],
+    ) {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut rng = seed;
+        write(dir.path(), "big.parquet", &table(&mut rng, rows_in, domain, nulls));
+        let sources = [("big", vec!["big.parquet".to_owned()])];
+        let mut t = parquet_files(dir.path(), &sources, true, &rt);
+        for q in TOP_N {
+            configured(&mut t, MODES[0].1);
+            let off = rows(&run(&t.plan_sql(q).unwrap()).0);
+            configured(&mut t, MODES[1].1);
+            let plan = t.plan_sql(q).unwrap();
+            prop_assert!(plan.to_string().contains("bound #"), "{}:\n{}", q, plan);
+            prop_assert_eq!(&rows(&run(&plan).0), &off, "{}:\n{}", q, plan);
+        }
+    }
+}
+
+/// A bound on a boolean, date or timestamp key drops only rows the top-N
+/// would drop itself, NULLs on either side included.
+#[test]
+fn a_top_n_bound_on_booleans_dates_and_timestamps_changes_no_result() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let rows_in = 1500_i32;
+    let key = |i: i32| ((i * 37) % 11 != 0).then_some((i * 37) % 200);
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(
+            (0..rows_in)
+                .map(|i| key(i).map(|k| k % 3 == 0))
+                .collect::<BooleanArray>(),
+        ),
+        Arc::new((0..rows_in).map(key).collect::<Date32Array>()),
+        Arc::new(
+            (0..rows_in)
+                .map(|i| key(i).map(|k| i64::from(k) * 1_000_000))
+                .collect::<TimestampMicrosecondArray>()
+                .with_timezone("UTC"),
+        ),
+        Arc::new((0..rows_in).collect::<Int32Array>()),
+    ];
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Boolean, true),
+        Field::new("d", DataType::Date32, true),
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
+        Field::new("v", DataType::Int32, false),
+    ]));
+    let batch = RecordBatch::try_new(schema, columns).unwrap();
+    write(dir.path(), "big.parquet", &batch);
+    let sources = [("big", vec!["big.parquet".to_owned()])];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    for column in ["b", "d", "ts"] {
+        for order in ["", " NULLS LAST", " DESC", " DESC NULLS FIRST"] {
+            let q = format!("SELECT {column}, v FROM big ORDER BY {column}{order}, v LIMIT 5");
+            configured(&mut t, MODES[0].1);
+            let off = rows(&run(&t.plan_sql(&q).unwrap()).0);
+            configured(&mut t, MODES[1].1);
+            let plan = t.plan_sql(&q).unwrap();
+            assert!(plan.to_string().contains("bound #"), "{q}:\n{plan}");
+            assert_eq!(rows(&run(&plan).0), off, "{q}:\n{plan}");
+        }
+    }
+}
+
+/// The bound prunes a clustered key's row groups, and isn't planned where it
+/// could change a result.
+#[test]
+fn a_top_n_bound_prunes_and_stays_away_from_what_it_could_change() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 7;
+    let big = table(&mut rng, 4000, 4000, 0);
+    let mut keys: Vec<i32> = big
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap()
+        .values()
+        .to_vec();
+    keys.sort_unstable();
+    let mut cols = big.columns().to_vec();
+    cols[0] = Arc::new(Int32Array::from(keys));
+    let big = RecordBatch::try_new(big.schema(), cols).unwrap();
+    write(dir.path(), "big.parquet", &big);
+    let sources = [("big", vec!["big.parquet".to_owned()])];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    configured(&mut t, &[]);
+    let plan = t
+        .plan_sql("SELECT k32, v FROM big ORDER BY k32 NULLS LAST LIMIT 3")
+        .unwrap();
+    let (_, c) = run(&plan);
+    assert!(c.units_pruned + c.rows_dropped > 0, "{c:?}\n{plan}");
+    for q in [
+        // ANSI division may raise: the filter must see every row.
+        "SELECT k32, v FROM big WHERE 100 / v > 0 ORDER BY k32 LIMIT 3",
+        // Dropped rows would move what `rand()` returns for later ones.
+        "SELECT k32, v FROM big WHERE rand() < 2 ORDER BY k32 LIMIT 3",
+        // The key is computed.
+        "SELECT k32, v FROM big ORDER BY k32 + 1 LIMIT 3",
+        "SELECT k32, v FROM big ORDER BY k32 LIMIT 0",
+    ] {
+        let plan = t.plan_sql(q).unwrap();
+        assert!(!plan.to_string().contains("bound #"), "{q}:\n{plan}");
+    }
+    configured(&mut t, MODES[0].1);
+    let plan = t
+        .plan_sql("SELECT k32, v FROM big ORDER BY k32 LIMIT 3")
+        .unwrap();
+    assert!(!plan.to_string().contains("bound #"), "{plan}");
+}
+
+/// Bytes the scans read with runtime filters on and off, per query of a data
+/// set (the variables of [`runtime_filter_bench`], one run of each mode): the
+/// results must agree, and the queries in `KRISHIV_RF_BENCH_FEWER` must read
+/// fewer bytes with filters on (P2-T058's acceptance). Run with
+/// `cargo test --release -p krishiv-exec --test planner runtime_filter_bytes -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs a benchmark data set"]
+fn runtime_filter_bytes() {
+    let dir = std::env::var("KRISHIV_RF_BENCH_DIR").expect("KRISHIV_RF_BENCH_DIR");
+    let suite = std::env::var("KRISHIV_RF_BENCH_SUITE").unwrap_or_else(|_| "tpcds".to_owned());
+    let fewer = std::env::var("KRISHIV_RF_BENCH_FEWER").unwrap_or_default();
+    let fewer: Vec<&str> = fewer.split(',').filter(|q| !q.is_empty()).collect();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| {
+            let p = e.ok()?.path();
+            (p.extension()? == "parquet").then(|| p.file_stem()?.to_str().map(str::to_owned))?
+        })
+        .collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut t = super::tpch::parquet_dir(Path::new(&dir), &names, true, &rt);
+    let queries = super::tpch::root().join(format!("bench/queries/{suite}"));
+    let mut files: Vec<_> = std::fs::read_dir(&queries)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+        .collect();
+    files.sort();
+    if let Ok(only) = std::env::var("KRISHIV_RF_BENCH_QUERIES") {
+        files.retain(|f| {
+            only.split(',')
+                .any(|q| f.file_stem().is_some_and(|s| s == q))
+        });
+    }
+    let mib: usize = std::env::var("KRISHIV_RF_BENCH_MEMORY_MIB")
+        .ok()
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(8192);
+    let root = TreePool::new(&limited(mib << 20));
+    let (mut mismatched, mut not_fewer) = (Vec::new(), Vec::new());
+    println!("query|off MiB|on MiB|on/off");
+    for f in files {
+        let q = f.file_stem().unwrap().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(&f).unwrap();
+        let mut run_mode = |on: bool| {
+            configured(&mut t, MODES[usize::from(on)].1);
+            let plan = t.plan_sql(&text).map_err(|e| e.to_string())?;
+            let (out, query) = super::run_in(&plan, &root);
+            let bytes: u64 = query
+                .metrics()
+                .operators
+                .values()
+                .flat_map(|e| &e.extra)
+                .filter(|(name, _)| name.as_ref() == "scan_bytes")
+                .map(|(_, v)| v.value().unwrap_or(0))
+                .sum();
+            Ok::<_, String>((sorted(&out.map_err(|e| e.to_string())?), bytes))
+        };
+        let (off, off_bytes, on, on_bytes) = match (run_mode(false), run_mode(true)) {
+            (Ok((off, a)), Ok((on, b))) => (off, a, on, b),
+            (Err(e), _) | (_, Err(e)) => {
+                println!("{q}|not run: {}", e.lines().next().unwrap_or(""));
+                continue;
+            }
+        };
+        if on != off {
+            mismatched.push(q.clone());
+        }
+        if fewer.contains(&q.as_str()) && on_bytes >= off_bytes {
+            not_fewer.push(q.clone());
+        }
+        #[expect(clippy::cast_precision_loss, reason = "a report")]
+        let (a, b) = (off_bytes as f64, on_bytes as f64);
+        let m = f64::from(1 << 20);
+        println!("{q}|{:.1}|{:.1}|{:.3}", a / m, b / m, b / a.max(1.0));
+    }
+    assert!(mismatched.is_empty(), "results differ: {mismatched:?}");
+    assert!(not_fewer.is_empty(), "no fewer bytes: {not_fewer:?}");
 }

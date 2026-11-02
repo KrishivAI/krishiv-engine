@@ -40,6 +40,7 @@ impl Column {
         let node = if parts.last().is_some_and(|p| p == "*") {
             parts.pop();
             ExprNode::Star(Star {
+                regex: None,
                 replace: Vec::new(),
                 position: None,
                 qualifier: parts,

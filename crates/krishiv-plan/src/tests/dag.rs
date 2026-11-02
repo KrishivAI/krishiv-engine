@@ -248,6 +248,7 @@ fn loop_identifiers_do_not_change_the_normalized_hash() {
             anchor: one(),
             recursive: reference,
             max_level: None,
+            limit: None,
             output: Vec::new(),
         };
         Plan::try_new(LogicalPlan::new(node)).unwrap()

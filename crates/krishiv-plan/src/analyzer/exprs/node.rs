@@ -85,6 +85,34 @@ impl Resolver<'_> {
                     })
                 }
             }
+            // `DATE 'today'` and `TIMESTAMP 'now'`: Spark's special values read
+            // the clock; they bind as the clock calls they stand for (the
+            // query-start instant), `epoch` as a constant.
+            ExprNode::TypedLiteral { kind, value }
+                if *kind != TypedLiteralKind::Time && is_special(value) =>
+            {
+                let special = value.trim().to_ascii_lowercase();
+                if special == "epoch" {
+                    let text = match special_kind(*kind, self.ctx.conf.timestamp_ntz) {
+                        SpecialKind::Date => "1970-01-01",
+                        SpecialKind::Instant => "1970-01-01 00:00:00+00:00",
+                        SpecialKind::Local => "1970-01-01 00:00:00",
+                    };
+                    let literal = typed_literal(*kind, text, &self.ctx.conf, e.origin)?;
+                    let ty = ArgType {
+                        nullable: false,
+                        data_type: literal_type(&literal),
+                    };
+                    return Ok(Bound {
+                        expr: Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(e.origin)),
+                        ..keep(ty)
+                    });
+                }
+                let call =
+                    special_clock(&special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
+                        .with_origin(e.origin);
+                return self.expr(&Arc::new(call), cx);
+            }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
                 let ty = ArgType {
@@ -321,6 +349,32 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
+                // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`
+                // and the numeric forms of `make_timestamp` produce a
+                // `TIMESTAMP_NTZ` (a zone argument is ignored) and Spark
+                // still names them as written.
+                if !session_qualified
+                    && self.ctx.conf.timestamp_ntz
+                    && let Some((ntz, take)) = ntz_variant(lookup_name, &kids[..n])
+                {
+                    let call = Expr::function(
+                        ntz,
+                        kids[..take].iter().map(|k| Expr::clone(&k.expr)).collect(),
+                    )
+                    .with_origin(e.origin);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..take]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            lookup_name.to_ascii_lowercase(),
+                            kids[..n].iter().map(|k| Expr::clone(&k.shown())).collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
+                }
                 if !session_qualified
                     && let Some(b) =
                         self.interval_operator(lookup_name, e.origin, &kids[..n], cx)?
@@ -354,7 +408,7 @@ impl Resolver<'_> {
                             name,
                             vec![kids[first].shown(), kids[second].shown()]
                                 .into_iter()
-                                .map(|k| Expr::clone(&k))
+                                .map(|k| bare_variable(&k))
                                 .collect(),
                         )
                         .with_origin(e.origin),
@@ -546,6 +600,23 @@ impl Resolver<'_> {
                 // Only for built-ins: a qualified session UDF named `assert_true`
                 // takes its arguments as written, as do the other built-in
                 // constructors below and the conditional rewrites.
+                // The catalog probes up to six arguments, too few to see
+                // these limits.
+                if is_builtin_entry(&entry)
+                    && let Some((least, total, _)) = interval_defaults(entry.id.name())
+                    && n > total
+                {
+                    let counts: Vec<String> = (least..=total).map(|c| c.to_string()).collect();
+                    return Err(AnalysisError::new(
+                        WrongNumArgsWithoutSuggestion {
+                            function_name: format!("`{}`", entry.id.name()),
+                            expected_num: format!("[{}]", counts.join(", ")),
+                            actual_num: n.to_string(),
+                            docroot: SPARK_DOC_ROOT.to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 let mut owned: Vec<Bound>;
                 let (kids, n) = if is_builtin_entry(&entry)
                     && entry.id.name() == "assert_true"
@@ -581,6 +652,24 @@ impl Resolver<'_> {
                     }
                     (&owned[..], 5)
                 } else if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "st_geomfromwkb" | "st_asbinary")
+                    && n == 1
+                {
+                    // `st_geomfromwkb(wkb)` is `st_geomfromwkb(wkb, 0)` and
+                    // `st_asbinary(g)` is `st_asbinary(g, 'NDR')`.
+                    owned = kids[..n].to_vec();
+                    owned.push(if entry.id.name() == "st_asbinary" {
+                        default_argument(
+                            Literal::String("NDR".to_owned()),
+                            DataType::String,
+                            false,
+                            e.origin,
+                        )
+                    } else {
+                        default_argument(Literal::Integer(0), DataType::Integer, false, e.origin)
+                    });
+                    (&owned[..], 2)
+                } else if is_builtin_entry(&entry)
                     && matches!(entry.id.name(), "locate" | "position")
                     && n == 2
                 {
@@ -596,6 +685,39 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 3)
+                } else if is_builtin_entry(&entry)
+                    && let Some((least, total, seconds)) = interval_defaults(entry.id.name())
+                    && (least..total).contains(&n)
+                {
+                    // `make_dt_interval(1)` is `make_dt_interval(1, 0, 0,
+                    // 0.000000)`; Spark names the column with the defaults.
+                    owned = kids[..n].to_vec();
+                    owned.extend((n..total).map(|at| {
+                        if seconds && at + 1 == total {
+                            let seconds =
+                                DecimalType::try_new(18, 6).unwrap_or(DecimalType::USER_DEFAULT);
+                            default_argument(
+                                Literal::Decimal {
+                                    unscaled: 0,
+                                    data_type: seconds,
+                                },
+                                DataType::Decimal(seconds),
+                                false,
+                                e.origin,
+                            )
+                        } else {
+                            default_argument(
+                                Literal::Integer(0),
+                                DataType::Integer,
+                                false,
+                                e.origin,
+                            )
+                        }
+                    }));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], total)
                 } else if is_builtin_entry(&entry) && entry.id.name() == "sort_array" && n == 1 {
                     // `sort_array(arr)` is `sort_array(arr, true)`.
                     owned = kids[..n].to_vec();
@@ -1000,7 +1122,7 @@ impl Resolver<'_> {
                         .map_or_else(|| "void".to_owned(), |t| t.catalog_string());
                     (
                         rebuilt(ExprNode::Literal(Literal::String(name))),
-                        Some(expr),
+                        shown.or(Some(expr)),
                     )
                 } else {
                     (expr, shown)

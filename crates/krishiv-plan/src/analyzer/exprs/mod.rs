@@ -205,6 +205,7 @@ fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
 const LITERAL_FUNCTIONS: &[(&str, &str)] = &[
     ("current_date", "current_date"),
     ("current_timestamp", "current_timestamp"),
+    ("current_time", "current_time"),
     ("current_user", "current_user"),
     ("user", "current_user"),
     ("session_user", "current_user"),
@@ -229,8 +230,51 @@ fn with_children(e: &Expr, kids: Vec<Arc<Expr>>) -> Arc<Expr> {
     Arc::new(x)
 }
 
+/// The `TIMESTAMP_NTZ` function a timestamp-producing call runs as under
+/// `spark.sql.timestampType = TIMESTAMP_NTZ`, with how many of `kids` it
+/// takes: `to_timestamp` over a string, date or timestamp, and the numeric
+/// forms of `make_timestamp` / `try_make_timestamp` (the optional zone is
+/// ignored). `None` for any other call.
+fn ntz_variant(name: &str, kids: &[Bound]) -> Option<(&'static str, usize)> {
+    let is = |n: &str| name.eq_ignore_ascii_case(n);
+    if is("to_timestamp") && (1..=2).contains(&kids.len()) {
+        let ok = matches!(
+            kids[0].ty.data_type,
+            Some(
+                DataType::String
+                    | DataType::Date
+                    | DataType::Timestamp
+                    | DataType::TimestampNtz
+                    | DataType::Null
+            )
+        );
+        return ok.then_some(("to_timestamp_ntz", kids.len()));
+    }
+    if (6..=7).contains(&kids.len()) {
+        if is("make_timestamp") {
+            return Some(("make_timestamp_ntz", 6));
+        }
+        if is("try_make_timestamp") {
+            return Some(("try_make_timestamp_ntz", 6));
+        }
+    }
+    None
+}
+
 /// The shown form of a call whose bound form is `expr`, the arguments
 /// `cast` of `kids`: the call over what `kids` show, when that differs.
+/// An interval constructor's short calls: the fewest arguments it takes, its
+/// full arity and whether the last is seconds (`0.000000`, not `0`).
+fn interval_defaults(name: &str) -> Option<(usize, usize, bool)> {
+    match name {
+        "make_ym_interval" => Some((0, 2, false)),
+        "make_dt_interval" => Some((0, 4, true)),
+        "make_interval" => Some((0, 7, true)),
+        "try_make_interval" => Some((1, 7, true)),
+        _ => None,
+    }
+}
+
 fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> {
     let differs = kids.iter().any(|k| k.shown.is_some())
         || kids
@@ -662,6 +706,46 @@ impl Resolver<'_> {
 }
 
 /// The checks of a call that is not a window's function, out of line (the
+/// The marker part of the shown column [`named_as`] builds.
+const NAMED_AS: &str = "\u{1}named";
+
+/// The shown form of an expression that a bare select item names `top` but that the names of
+/// other expressions spell `text` (a session variable, a field read through a dotted column
+/// path): a column whose parts are the marker, `top` and `text`, printed as the last of them.
+fn named_as(top: &str, text: String, like: &crate::ColumnRef, origin: Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec![NAMED_AS.to_owned(), top.to_owned(), text],
+            ..like.clone()
+        }))
+        .with_origin(origin),
+    )
+}
+
+/// The name a bare select item takes from a [`named_as`] shown form.
+pub(super) fn bare_name(e: &Expr) -> Option<&str> {
+    match &e.node {
+        ExprNode::Column(c) => match c.name.as_slice() {
+            [m, top, _] if m == NAMED_AS => Some(top),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `e` with a session variable shown by its own name (Spark names `date + v` over the variable
+/// as written, unlike every other call).
+fn bare_variable(e: &Arc<Expr>) -> Expr {
+    match (bare_name(e), &e.node) {
+        (Some(top), ExprNode::Column(c)) => Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec![top.to_owned()],
+            ..c.clone()
+        }))
+        .with_origin(e.origin),
+        _ => Expr::clone(e),
+    }
+}
+
 /// binding frame stays small): a window function needs `OVER`; an
 /// aggregate holds no aggregate and no window. A window aggregate
 /// (`sum(sum(x)) OVER w`) may hold both.
@@ -838,6 +922,7 @@ mod tests {
     #[test]
     fn stars_print_as_sql() {
         let star = Expr::new(ExprNode::Star(crate::Star {
+            regex: None,
             replace: Vec::new(),
             position: None,
             qualifier: Vec::new(),

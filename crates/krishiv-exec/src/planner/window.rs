@@ -144,7 +144,7 @@ impl Planner<'_> {
         let input = match top {
             Some(n) if !input.placement.satisfies(Distribution::Single) => {
                 let detail = format!("{n}, {}", orders(&sorted_by));
-                Self::local_top_n(input, &keys, n, detail)?
+                Self::local_top_n(input, &keys, n, detail, None)?
             }
             _ => input,
         };
@@ -174,6 +174,7 @@ impl Planner<'_> {
                     input,
                     keys,
                     limit: n,
+                    bound: None,
                 },
                 schema,
                 layout,
@@ -307,9 +308,9 @@ impl Planner<'_> {
         ) {
             return Err(unsupported(&format!("the window aggregate {name}")));
         }
-        // An exact percentile keeps every value of a frame in a map the
-        // frame evaluator does not reserve memory for: it is computed only
-        // over the whole partition or a running frame, which share one map.
+        // An exact percentile keeps every value of a frame in one map, which
+        // the frame evaluator has no way to remove rows from: it is computed
+        // only over the whole partition or a running frame, which share it.
         if matches!(
             lowered.function,
             AggregateFunction::Percentile { .. } | AggregateFunction::PercentileDisc { .. }
@@ -326,16 +327,19 @@ impl Planner<'_> {
         if c.f.distinct {
             return Err(unsupported("DISTINCT window aggregates"));
         }
-        Ok(WindowFunction::Aggregate(aggregate_expr(
-            function,
-            args.to_vec(),
-            // A window applies the call's filter itself (as the
-            // `WindowFunctionPlan`'s own filter column); the accumulator's
-            // mask stays empty.
-            None,
-            &input.schema,
-            c.output.name.clone(),
-        )?))
+        Ok(WindowFunction::Aggregate(
+            aggregate_expr(
+                function,
+                args.to_vec(),
+                // A window applies the call's filter itself (as the
+                // `WindowFunctionPlan`'s own filter column); the accumulator's
+                // mask stays empty.
+                None,
+                &input.schema,
+                c.output.name.clone(),
+            )?
+            .with_array_result(&c.output.data_type.to_arrow()),
+        ))
     }
 }
 

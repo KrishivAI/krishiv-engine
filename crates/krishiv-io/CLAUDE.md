@@ -14,7 +14,7 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
 re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
-`scan.rs` ScanStream · `runtime_filter/` (P2-T163): `RuntimeFilter` (snapshots numbered by generation; the
+`scan.rs` ScanStream · `take.rs` (P2-T063) rows by position for a late fetch: `take`, `TakeRequest`, `TakeStream`, `RowFile` (the versioned row id naming a file); a format offers it through `Capabilities::random_access` · `runtime_filter/bound.rs` (P2-T063) a top-N's bound as a `KeyFilter`, run by the Parquet row filter as its own first pass · `runtime_filter/` (P2-T163): `RuntimeFilter` (snapshots numbered by generation; the
 atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per scan level), `KeyFilter` and
 `KeyFilterBuilder` (min/max, value set, Bloom filter), `normalize_key_bytes` and `widens_to` (the single key
 normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes),
@@ -22,7 +22,7 @@ and a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMod
 directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
 IoContext (reads, uploads, listing), coalescing, metadata cache, cloud store registry (`stores.rs`: S3, GCS and
 Azure stores built per session from Spark `fs.*` keys, behind the `cloud` feature),
-multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `pace.rs` prefix pacing
+multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `local_listing.rs` the local store reads use (`LocalFileSystem` whose listing re-reads when an entry vanished; writes use `beneath.rs`), `pace.rs` prefix pacing
 (`StorePolicy`, per-store; single-flight footer reads live in `cache.rs`).
 `parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer
 (one tail read, checked against the file size, engine types, exact-only row-group statistics, calendar markers) ·
@@ -49,7 +49,7 @@ Paths are relative to this crate.
 - `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer
 - `src/scan_gate.rs` `ScanGate`, admission of the decode working sets of a query's scan streams (ADR 0007)
 - `src/parquet/thrift_guard.rs` structural check of a footer before arrow-rs decodes it
-- `src/csv/mod.rs` CSV format
+- `src/csv/mod.rs` CSV format; `src/text/codec.rs` the Hadoop codecs of CSV/JSON/text files (gzip, deflate, bzip2, lz4, snappy; zstd is not a Spark text codec). Compressed files are read whole by the split at byte 0; fixtures `tests/fixtures/spark-4.2.0/compressed-text/` (`tests/scripts/gen_compressed_text.py`, `check_compressed_text_written.py`)
 
 ## Extension points
 - New format: implement `FileFormat` in a module like `src/parquet/`, route all bytes through `IoContext`, and instantiate `krishiv_testkit::file_format_conformance!`.

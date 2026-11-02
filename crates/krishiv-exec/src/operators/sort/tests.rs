@@ -1025,6 +1025,45 @@ fn a_part_with_a_shared_prefix_sorts_past_it() {
     assert!(order.windows(2).all(|w| row(&w[0]) <= row(&w[1])));
 }
 
+/// Slices of very different lengths, some empty, with many equal keys: the
+/// merge gives the order of a sort by `(key, slice, row)`, whichever run of a
+/// pair is the shorter.
+#[test]
+fn merging_the_slices_gives_the_order_of_sorting_them() {
+    let schema = int_schema();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0)]).unwrap();
+    for (sizes, distinct) in [
+        (vec![1000, 1, 1, 1, 1], 7),
+        (vec![1, 1, 1, 1, 1000], 7),
+        (vec![300, 0, 5, 0, 700, 40, 40, 0], 13),
+        (vec![64; 33], 1000),
+        (vec![10; 3], 1),
+    ] {
+        let memory: Vec<Slice> = sizes
+            .iter()
+            .enumerate()
+            .map(|(b, &rows)| {
+                let at = move |r: i64| (r * 31 + b as i64 * 17) % distinct;
+                let column: ArrayRef = Arc::new(Int64Array::from_iter_values((0..rows).map(at)));
+                let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column]).unwrap();
+                let s = Arc::new(SortedBatch::new(Batch::new(batch), &keys, None).unwrap());
+                let all = 0..s.order.len();
+                (s, all)
+            })
+            .collect();
+        let mut want: Vec<(u32, u32)> = memory
+            .iter()
+            .zip(0_u32..)
+            .flat_map(|((s, _), i)| (0_u32..).take(s.order.len()).map(move |r| (i, r)))
+            .collect();
+        want.sort_unstable_by(|&a, &b| {
+            let row = |(s, r): (u32, u32)| memory[s as usize].0.rows.row(r as usize);
+            row(a).cmp(&row(b)).then(a.cmp(&b))
+        });
+        assert_eq!(sort_slices(&memory).unwrap(), want, "{sizes:?}");
+    }
+}
+
 #[test]
 fn the_shared_prefix_of_nothing_sorts_nothing() {
     let schema = int_schema();

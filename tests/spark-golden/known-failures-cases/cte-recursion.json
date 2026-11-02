@@ -1,7 +1,6 @@
 {
   "cases": {
     "depends-on-command": [
-      49,
       53
     ],
     "query-features": [
@@ -18,11 +17,9 @@
       82,
       83,
       84,
-      85,
-      93
+      85
     ],
     "sql-commands": [
-      48,
       52,
       66
     ]

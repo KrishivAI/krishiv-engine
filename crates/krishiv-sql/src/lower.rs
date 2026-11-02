@@ -60,7 +60,8 @@ const MAX_GROUPING_SETS: usize = 1 << 16;
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
 pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> R<Plan> {
-    lower(&parse_query(sql, options)?, source).map_err(|e| e.redacted_in(sql))
+    lower_with(&parse_query(sql, options)?, source, options.case_sensitive)
+        .map_err(|e| e.redacted_in(sql))
 }
 
 /// Lowers `query` into an unresolved plan whose spans index `source`.
@@ -71,12 +72,21 @@ pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> 
 /// decimal bounds, unsupported cast types) and `FAILED_TO_PARSE_TOO_COMPLEX`
 /// for plans deeper than `MAX_DEPTH`.
 pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
+    lower_with(query, source, false)
+}
+
+/// [`lower`] with `spark.sql.caseSensitive`: CTE names match exactly.
+///
+/// # Errors
+/// As for [`lower`].
+pub fn lower_with(query: &Query, source: SourceId, case_sensitive: bool) -> R<Plan> {
     let mut l = Lowerer {
         source,
         depth: 0,
         root: query.span,
         windows: Vec::new(),
         recursive: 0,
+        case_sensitive,
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -97,6 +107,7 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
         root: expr.span,
         windows: Vec::new(),
         recursive: 0,
+        case_sensitive: false,
     };
     l.expr(expr)
 }
@@ -113,6 +124,7 @@ pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> 
         root: item.span,
         windows: Vec::new(),
         recursive: 0,
+        case_sensitive: false,
     };
     l.select_item(item)
 }
@@ -174,7 +186,14 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
 
 /// Whether `plan` (subquery plans included) reads the table `name`, the
 /// way an unresolved CTE reference is spelled.
-fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
+fn reads_table(plan: &LogicalPlan, name: &str, exact: bool) -> bool {
+    let same = |a: &str| {
+        if exact {
+            a == name
+        } else {
+            a.eq_ignore_ascii_case(name)
+        }
+    };
     enum Step<'a> {
         Plan(&'a LogicalPlan),
         Expr(&'a IrExpr),
@@ -189,7 +208,7 @@ fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
                 }
                 if let PlanNode::Read(ReadSource::Table { name: n, .. }) = &p.node
                     && let [n] = n.as_slice()
-                    && n.eq_ignore_ascii_case(name)
+                    && same(n)
                 {
                     return true;
                 }
@@ -201,7 +220,7 @@ fn reads_table(plan: &LogicalPlan, name: &str) -> bool {
                         if !hidden {
                             stack.push(Step::Plan(&c.plan));
                         }
-                        hidden |= c.name.eq_ignore_ascii_case(name);
+                        hidden |= same(&c.name);
                     }
                     if !hidden {
                         stack.push(Step::Plan(input));
@@ -238,6 +257,8 @@ struct Lowerer {
     /// there `LIMIT ALL` stays a limit (of `i32::MAX` rows), because it
     /// lifts the recursion row limit of the CTE it reads.
     recursive: usize,
+    /// `spark.sql.caseSensitive`: a CTE name matches its references exactly.
+    case_sensitive: bool,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -454,7 +475,7 @@ impl Lowerer {
                 };
                 let mut body = self.query(&c.query)?;
                 let columns: Vec<String> = c.columns.iter().map(|i| i.value.clone()).collect();
-                if with.recursive && reads_table(&body, &c.name.value) {
+                if with.recursive && reads_table(&body, &c.name.value, self.case_sensitive) {
                     body = self.recursive_cte(&body, c, &columns, max_level)?;
                 }
                 if !columns.is_empty() {
@@ -504,7 +525,10 @@ impl Lowerer {
             locals.extend(ctes.iter().cloned());
             inner = input;
         }
-        if locals.iter().any(|l| reads_table(&l.plan, name)) {
+        if locals
+            .iter()
+            .any(|l| reads_table(&l.plan, name, self.case_sensitive))
+        {
             return Err(err(InvalidRecursiveCte {}, c.span));
         }
         let (anchor, recursive) = match &inner.node {
@@ -513,16 +537,16 @@ impl Lowerer {
                 by_name: false,
                 ..
             } if inputs.len() == 2
-                && !reads_table(&inputs[0], name)
-                && reads_table(&inputs[1], name) =>
+                && !reads_table(&inputs[0], name, self.case_sensitive)
+                && reads_table(&inputs[1], name, self.case_sensitive) =>
             {
                 (Arc::clone(&inputs[0]), Arc::clone(&inputs[1]))
             }
             PlanNode::Distinct { input }
                 if matches!(&input.node, PlanNode::Union { inputs, .. }
                     if inputs.len() == 2
-                        && !reads_table(&inputs[0], name)
-                        && reads_table(&inputs[1], name)) =>
+                        && !reads_table(&inputs[0], name, self.case_sensitive)
+                        && reads_table(&inputs[1], name, self.case_sensitive)) =>
             {
                 return Err(err(UnionNotSupportedInRecursiveCte {}, c.span));
             }
@@ -579,6 +603,7 @@ impl Lowerer {
                 anchor,
                 recursive: arc(recursive),
                 max_level,
+                limit: None,
                 output: Vec::new(),
             },
             c.span,
@@ -718,10 +743,29 @@ impl Lowerer {
         Ok(plan)
     }
 
+    /// A `HAVING` condition as Spark's `AstBuilder` reads it: a predicate, or else cast to boolean.
+    fn having_predicate(&mut self, h: &Expr) -> R<Arc<IrExpr>> {
+        let predicate = self.expr(h)?;
+        Ok(arc(if is_predicate(&predicate) {
+            predicate
+        } else {
+            let span = h.span;
+            self.ex(
+                ExprNode::Cast {
+                    expr: arc(predicate),
+                    to: krishiv_types::DataType::Boolean,
+                    mode: CastMode::Default,
+                },
+                span,
+            )
+        }))
+    }
+
     fn pipe_op(&mut self, plan: LogicalPlan, op: &PipeOp) -> R<LogicalPlan> {
         let star = |l: &Self, except: Vec<Vec<String>>| {
             arc(l.ex(
                 ExprNode::Star(Star {
+                    regex: None,
                     replace: Vec::new(),
                     position: None,
                     qualifier: Vec::new(),
@@ -849,6 +893,7 @@ impl Lowerer {
                     let value = arc(self.expr(&a.value)?);
                     let star = self.ex(
                         ExprNode::Star(Star {
+                            regex: None,
                             qualifier: Vec::new(),
                             except: Vec::new(),
                             replace: vec![(name.value.clone(), value)],
@@ -901,6 +946,7 @@ impl Lowerer {
                     let key = match self.position(e) {
                         Some(position) => arc(self.ex(
                             ExprNode::Star(Star {
+                                regex: None,
                                 qualifier: Vec::new(),
                                 except: Vec::new(),
                                 replace: Vec::new(),
@@ -1265,6 +1311,7 @@ impl Lowerer {
         );
         let star = self.ex(
             ExprNode::Star(Star {
+                regex: None,
                 replace: Vec::new(),
                 position: None,
                 qualifier: vec![qualifier],
@@ -1316,7 +1363,18 @@ impl Lowerer {
             }
             items.push(self.select_item(item)?);
         }
-        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
+        // `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+        // a select list with no aggregate call filters the rows (as `WHERE` does; aggregates in
+        // it are `INVALID_WHERE_CONDITION`) instead of making the query one global group.
+        let having_filter = s.having_as_where
+            && s.group_by.is_none()
+            && s.having.is_some()
+            && !aggregates
+            && !has_generator;
+        if s.group_by.is_none()
+            && (s.having.is_none() || having_filter)
+            && !(aggregates && has_generator)
+        {
             plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
@@ -1324,6 +1382,16 @@ impl Lowerer {
                 },
                 s.span,
             );
+            if let Some(h) = s.having.as_ref().filter(|_| having_filter) {
+                let predicate = self.having_predicate(h)?;
+                plan = self.node(
+                    PlanNode::Filter {
+                        input: arc(plan),
+                        predicate,
+                    },
+                    s.span,
+                );
+            }
         } else {
             let grouping = match &s.group_by {
                 Some(g) => self.grouping(g)?,
@@ -1338,22 +1406,7 @@ impl Lowerer {
                 s.span,
             );
             if let Some(h) = &s.having {
-                let predicate = self.expr(h)?;
-                // As Spark's AstBuilder: a `HAVING` that is not a predicate is
-                // cast to boolean.
-                let predicate = arc(if is_predicate(&predicate) {
-                    predicate
-                } else {
-                    let span = h.span;
-                    self.ex(
-                        ExprNode::Cast {
-                            expr: arc(predicate),
-                            to: krishiv_types::DataType::Boolean,
-                            mode: CastMode::Default,
-                        },
-                        span,
-                    )
-                });
+                let predicate = self.having_predicate(h)?;
                 plan = self.node(
                     PlanNode::Filter {
                         input: arc(plan),
@@ -1866,19 +1919,10 @@ impl Lowerer {
                     "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
                     _ => None,
                 };
-                if name.parts.len() == 1 && lname == "json_tuple" {
-                    // `FROM json_tuple(json, k1, ...)` is the select list
-                    // `SELECT json_tuple(json, k1, ...)` over one row.
-                    let one_row = self.node(PlanNode::OneRowRelation, tf.span);
-                    let call = arc(self.call("json_tuple", lowered, tf.span));
-                    self.node(
-                        PlanNode::Project {
-                            input: arc(one_row),
-                            exprs: vec![call],
-                        },
-                        tf.span,
-                    )
-                } else if let (Some(kind), 1) = (kind, name.parts.len()) {
+                // `FROM json_tuple(..)` stays a table function: the analyzer
+                // runs it as the select list `SELECT json_tuple(..)` over one
+                // row, and its alias-count error differs from a subquery's.
+                if let (Some(kind), 1) = (kind, name.parts.len()) {
                     if let Some(a) = args.iter().find(|a| a.name.is_some()) {
                         return Err(unsupported("table-valued functions", a.span));
                     }
@@ -2029,7 +2073,11 @@ impl Lowerer {
                     base
                 }
             }
-            ExprKind::Wildcard { qualifier, except } => self.ex(
+            ExprKind::Wildcard {
+                qualifier,
+                except,
+                regex,
+            } => self.ex(
                 ExprNode::Star(Star {
                     replace: Vec::new(),
                     position: None,
@@ -2038,6 +2086,7 @@ impl Lowerer {
                         .iter()
                         .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
                         .collect(),
+                    regex: regex.as_deref().map(str::to_owned),
                     plan_id: None,
                 }),
                 sp,
