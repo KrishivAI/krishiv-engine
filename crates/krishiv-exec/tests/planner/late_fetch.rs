@@ -201,6 +201,30 @@ fn late_fetch_stays_away_from_tables_that_skip_files() {
     }
 }
 
+/// A shared body ending in a late fetch is ordered, so each reader keeps its
+/// order.
+#[test]
+fn a_shared_body_ending_in_a_late_fetch_is_read_in_order() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 13;
+    let mut t = tables(dir.path(), &table(&mut rng, 3000, 400, 5), &rt);
+    configured(&mut t, &[]);
+    let plan = t
+        .plan_sql(
+            "WITH c AS (SELECT s, v, k32 FROM big WHERE rand() < 2 ORDER BY k32, v LIMIT 5) \
+             SELECT k32, v FROM c UNION ALL SELECT k32, v FROM c",
+        )
+        .unwrap();
+    let explain = plan.plan.explain_all().to_string();
+    assert!(explain.contains("LateFetch"), "{explain}");
+    assert_eq!(plan.plan.shared().len(), 1, "{explain}");
+    assert!(plan.plan.shared()[0].ordered, "{explain}");
+    let out = rows(&run(&plan).0);
+    assert_eq!(out.len(), 10, "{out:?}");
+    assert_eq!(out[..5], out[5..], "{out:?}");
+}
+
 /// Under a memory limit the fetch reserves what it holds and still finishes.
 #[test]
 fn late_fetch_runs_under_a_small_memory_limit() {
