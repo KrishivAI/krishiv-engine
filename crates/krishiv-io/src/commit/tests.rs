@@ -1565,3 +1565,40 @@ fn adoption_skips_copy_in_progress_files() {
         "{visible:?}"
     );
 }
+
+/// A write that created the log of an empty directory and failed takes the log away again; a log that
+/// adopted files, or one with a commit after it, stays.
+#[test]
+fn a_failed_first_write_removes_the_log_it_created() {
+    let env = Env::memory();
+    let log = |dir: &str| {
+        crate::commit_log::CommitLog::new(
+            &env.io,
+            env.store.clone(),
+            Path::from(dir),
+            dir.to_owned(),
+        )
+    };
+    // An empty directory: the write created the log, so it can take it away.
+    let w = env
+        .begin("empty", SaveMode::Append, "job-1")
+        .unwrap()
+        .unwrap();
+    let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+    assert!(w.created_empty_log());
+    assert!(env.rt.block_on(log("empty").exists()).unwrap());
+    assert!(env.rt.block_on(log("empty").remove_initial()).unwrap());
+    assert!(!env.rt.block_on(log("empty").exists()).unwrap());
+    // A directory with files: they are adopted, so the log is not "created empty".
+    env.put("full/part-00000.parquet");
+    let w = env
+        .begin("full", SaveMode::Append, "job-2")
+        .unwrap()
+        .unwrap();
+    let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+    assert!(!w.created_empty_log());
+    // A log with a commit after version 0 is never removed.
+    env.write_logged("done", SaveMode::Append, "job-3", 2, true);
+    assert!(!env.rt.block_on(log("done").remove_initial()).unwrap());
+    assert!(env.rt.block_on(log("done").exists()).unwrap());
+}

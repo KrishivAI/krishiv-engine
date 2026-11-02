@@ -285,6 +285,20 @@ impl<'a> CommitLog<'a> {
         }
     }
 
+    /// Removes version 0 if it is the whole log (nothing was committed after it): a write that created
+    /// the log of an empty directory and then failed puts the directory back as it was. `true` if it
+    /// was removed.
+    ///
+    /// # Errors
+    /// Storage failures.
+    pub async fn remove_initial(&self) -> Result<bool> {
+        if self.snapshot().await?.version != Some(0) {
+            return Ok(false);
+        }
+        self.io.delete(&self.store, &self.entry_path(0)).await?;
+        Ok(true)
+    }
+
     fn conflict(&self, version: u64) -> KrishivError {
         krishiv_common::error::KrishivConcurrentCommit {
             root: self.display.clone(),

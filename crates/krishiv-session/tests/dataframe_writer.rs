@@ -568,11 +568,7 @@ fn csv_unknown_compression_codec_fails_with_codec_not_available() {
         err.error_class().name(),
         "CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION"
     );
-    // Nothing is written; the commit log of the new directory (initialized before the files) may be there.
-    let left: Vec<_> = std::fs::read_dir(dir.path().join("t"))
-        .map(|d| d.map(|e| e.unwrap().file_name()).collect())
-        .unwrap_or_default();
-    assert!(left.iter().all(|n| n == "_krishiv_log"), "{left:?}");
+    assert!(!dir.path().join("t").exists());
 }
 
 #[test]
