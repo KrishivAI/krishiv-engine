@@ -196,7 +196,14 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
       - name: Values the budget approvals are recorded against
         if: steps.measure.outputs.result == 'measured'
-        run: .github/scripts/approval-values.sh budgets "$RUNNER_TEMP/budgets/budgets-current.json" > "$RUNNER_TEMP/budgets.values"
+        # A base that predates the script has no recorded values: the label then counts only
+        # when applied after the head arrived, as before.
+        run: |
+          if [ -x .github/scripts/approval-values.sh ]; then
+            .github/scripts/approval-values.sh budgets "$RUNNER_TEMP/budgets/budgets-current.json" > "$RUNNER_TEMP/budgets.values"
+          else
+            : > "$RUNNER_TEMP/budgets.values"
+          fi
       - name: Resolve budget-approved label
         if: steps.measure.outputs.result == 'measured'
         env:
@@ -324,7 +331,14 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
       - name: Values the wheel-size approval is recorded against
         if: steps.measure.outputs.result == 'measured'
-        run: .github/scripts/approval-values.sh wheels "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" > "$RUNNER_TEMP/wheels.values"
+        # A base that predates the script has no recorded values: the label then counts only
+        # when applied after the head arrived, as before.
+        run: |
+          if [ -x .github/scripts/approval-values.sh ]; then
+            .github/scripts/approval-values.sh wheels "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" > "$RUNNER_TEMP/wheels.values"
+          else
+            : > "$RUNNER_TEMP/wheels.values"
+          fi
       - name: Resolve budget-approved label
         if: steps.measure.outputs.result == 'measured'
         env:
