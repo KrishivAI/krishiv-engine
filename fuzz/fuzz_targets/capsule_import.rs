@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use arrow_array::ffi::to_ffi;
 use arrow_array::{
-    Array, ArrayRef, DictionaryArray, Int8Array, Int32Array, Int64Array, ListArray, StringArray,
-    StructArray, types::Int8Type,
+    Array, ArrayRef, DictionaryArray, FixedSizeListArray, Int8Array, Int32Array, Int64Array,
+    LargeStringArray, ListArray, StringArray, StringViewArray, StructArray, types::Int8Type,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::ffi::FFI_ArrowSchema;
@@ -67,6 +67,8 @@ fn swaps(original: &CStr) -> &'static [&'static CStr] {
         b"l" => &[c"i", c"b", c"l"],
         b"i" => &[c"b", c"i"],
         b"u" => &[c"z", c"u"],
+        b"U" => &[c"u", c"z", c"U"],
+        b"vu" => &[c"vz", c"vu"],
         b"z" => &[c"u", c"z"],
         b"+s" => &[c"+l", c"+L", c"+s"],
         b"+l" => &[c"+s", c"+l"],
@@ -85,7 +87,7 @@ fn batch(kind: u8) -> StructArray {
     };
     let ids: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
     let names: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None, Some("ccc")]));
-    match kind % 4 {
+    match kind % 8 {
         0 => StructArray::from(vec![col("id", ids, true), col("name", names, true)]),
         1 => {
             let list = ListArray::new(
@@ -103,6 +105,28 @@ fn batch(kind: u8) -> StructArray {
             );
             let full: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
             StructArray::from(vec![col("d", Arc::new(d), true), col("id", full, false)])
+        }
+        4 => {
+            // A view column with a long string: one variadic data buffer.
+            let v: ArrayRef = Arc::new(StringViewArray::from(vec![
+                Some("short"),
+                None,
+                Some("a string long enough to live in a variadic data buffer"),
+            ]));
+            StructArray::from(vec![col("v", v, true)])
+        }
+        5 => {
+            let l: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("a"), None, Some("ccc")]));
+            StructArray::from(vec![col("l", l, true), col("id", ids, true)])
+        }
+        6 => {
+            let f: ArrayRef = Arc::new(FixedSizeListArray::new(
+                Arc::new(Field::new_list_field(DataType::Int32, true)),
+                2,
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                None,
+            ));
+            StructArray::from(vec![col("f", f, true)])
         }
         _ => {
             let inner = StructArray::from(vec![col("n", names, true)]);
@@ -154,7 +178,14 @@ fn quiet_panics() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     // `ffi.rs` contains arrow-rs panics on corrupt headers and reports them as errors; print
     // them instead of letting libFuzzer's hook abort. A panic that escapes still crashes.
-    ONCE.call_once(|| std::panic::set_hook(Box::new(|info| eprintln!("contained: {info}"))));
+    ONCE.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            eprintln!("contained: {info}");
+            if std::env::var_os("RUST_BACKTRACE").is_some() {
+                eprintln!("{}", std::backtrace::Backtrace::force_capture());
+            }
+        }));
+    });
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -199,7 +230,7 @@ fuzz_target!(|data: &[u8]| {
                 // interface carries no buffer sizes), so a positive value only slices.
                 0 => {
                     // Within the original extent, given the current offset (mutations compose).
-                    let room = (len + off - (*a).offset).max(0);
+                    let room = (len + off - (*a).offset.max(0)).max(0);
                     (*a).length = if v < 0 { v } else { v % (room + 1) };
                 }
                 1 => (*a).null_count = v,
@@ -213,6 +244,8 @@ fuzz_target!(|data: &[u8]| {
                 4 => (*a).n_children = lowered(v, (*a).n_children),
                 5 => {
                     let n = usize::try_from((*a).n_buffers).unwrap_or(0);
+                    // Sound: arrow-rs's `buffers` points into its own `Vec`, and its release
+                    // frees through `private_data`, never through this list.
                     if n > 0 {
                         let slot = (*a)
                             .buffers

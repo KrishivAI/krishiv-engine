@@ -616,11 +616,15 @@ fn validated_batch(schema: SchemaRef, data: &ArrayData) -> Result<RecordBatch, K
     if data.null_count() > 0 {
         return Err(invalid("a table's struct array has null rows"));
     }
-    let columns: Vec<_> = data
-        .child_data()
-        .iter()
-        .map(|child| arrow_array::make_array(child.slice(data.offset(), data.len())))
-        .collect();
+    // Slicing and building the arrays can still panic on data `validate_full` accepted (a
+    // fixed-size list whose parent offset leaves its values short, found by the
+    // `capsule_import` fuzz target), so it is contained like the validation.
+    let columns: Vec<_> = catch_panic(|| {
+        data.child_data()
+            .iter()
+            .map(|child| arrow_array::make_array(child.slice(data.offset(), data.len())))
+            .collect()
+    })?;
     let options = RecordBatchOptions::new().with_row_count(Some(data.len()));
     RecordBatch::try_new_with_options(schema, columns, &options)
         .map_err(|e| invalid(arrow_message(&e)))
