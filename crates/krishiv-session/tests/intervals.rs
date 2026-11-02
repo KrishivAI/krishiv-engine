@@ -25,7 +25,12 @@ struct Answer {
 
 fn answer(session: &Session, expr: &str) -> Answer {
     block_on(async {
-        let df = match session.sql(&format!("SELECT {expr}")).await {
+        let sql = if expr.starts_with("SELECT ") {
+            expr.to_owned()
+        } else {
+            format!("SELECT {expr}")
+        };
+        let df = match session.sql(&sql).await {
             Ok(df) => df,
             Err(e) => {
                 return Answer {
@@ -71,9 +76,10 @@ fn answer(session: &Session, expr: &str) -> Answer {
     })
 }
 
-fn fixture() -> R<Value> {
+fn fixture(name: &str) -> R<Value> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/spark-4.2.0/interval-arithmetic.json");
+        .join("../../tests/fixtures/spark-4.2.0")
+        .join(name);
     Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
 }
 
@@ -81,14 +87,55 @@ fn fixture() -> R<Value> {
 /// `INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION`.
 const WITHOUT_SUGGESTION: &str = "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION";
 
+/// Spark raises a day-time cast's field out of range with no class either.
+const FIELD_OUT_OF_RANGE: &str = "INVALID_INTERVAL_FORMAT.INTERVAL_PARSING";
+
 #[test]
 fn intervals_match_spark() -> R {
-    let doc = fixture()?;
+    matches_spark("interval-arithmetic.json")
+}
+
+/// Unit 4's casts, aggregates and functions (`--section functions`).
+#[test]
+fn interval_functions_match_spark() -> R {
+    matches_spark("interval-functions.json")
+}
+
+/// Saturated to Spark's `long` of microseconds, which the nanosecond field of
+/// `Interval(MonthDayNano)` can't hold: a named refusal, tracked in the design
+/// note's as-built section.
+const PAST_THE_NANOSECOND_FIELD: [&str; 2] = [
+    "cast('2147483647 days' as interval) * 2",
+    "cast('1 month 2 days 3 seconds' as interval) * cast('Infinity' as double)",
+];
+
+/// Casts between an interval and a number or string inside an array, map or
+/// struct: a named refusal, tracked in the design note's as-built section. The
+/// nested cast takes a leaf's type from the Arrow carrier, which holds no fields.
+const NESTED_INTERVAL_CASTS: [&str; 8] = [
+    "cast(map(1, interval '1' month) as map<int, int>)",
+    "cast(map(1, 3) as map<int, interval month>)",
+    "cast(array('1') as array<interval day>)",
+    "cast(array('1 day') as array<interval>)",
+    "cast(array(interval '1' month) as array<int>)",
+    "cast(array(1) as array<interval month>)",
+    "cast(named_struct('a', interval '1' day) as struct<a:bigint>)",
+    "cast(named_struct('a', 1) as struct<a:interval day>)",
+];
+
+/// `datepart` itself comes with PR #392; the case stays for when it lands.
+const WAITS_FOR_DATEPART: &str = "datepart('hour', interval '3' hour)";
+
+fn matches_spark(file: &str) -> R {
+    let doc = fixture(file)?;
     let cases = doc["cases"].as_array().ok_or("no cases")?;
     assert!(cases.len() > 150, "{} cases", cases.len());
     let mut wrong = Vec::new();
     for case in cases {
         let expr = case["expr"].as_str().ok_or("no expr")?;
+        if expr == WAITS_FOR_DATEPART {
+            continue;
+        }
         let session = Session::new()?;
         let zone = case["zone"].as_str().ok_or("zone")?;
         block_on(session.sql(&format!("SET spark.sql.session.timeZone = {zone}")))?;
@@ -102,8 +149,21 @@ fn intervals_match_spark() -> R {
             value: text("value"),
             error_class: text("error_class").or_else(|| text("value_error_class")),
         };
+        if (!ansi && PAST_THE_NANOSECOND_FIELD.contains(&expr))
+            || NESTED_INTERVAL_CASTS.contains(&expr)
+        {
+            want.value = None;
+            want.error_class = Some("KRISHIV_UNSUPPORTED_FEATURE".to_owned());
+        }
         if want.error_class.as_deref() == Some("UNCLASSIFIED") {
-            want.error_class = Some(WITHOUT_SUGGESTION.to_owned());
+            want.error_class = Some(if expr.starts_with("cast('") {
+                FIELD_OUT_OF_RANGE.to_owned()
+            } else if expr.starts_with("timestamp") || expr.starts_with("date") {
+                // Java's bare `long overflow`.
+                "DATETIME_OVERFLOW".to_owned()
+            } else {
+                WITHOUT_SUGGESTION.to_owned()
+            });
         }
         if got != want {
             wrong.push(format!("{expr}\n   got {got:?}\n  want {want:?}"));
@@ -115,24 +175,6 @@ fn intervals_match_spark() -> R {
         wrong.len(),
         wrong.join("\n")
     );
-    Ok(())
-}
-
-/// Spark answers these in an interval type. Until they run (P2-T001b unit 4)
-/// they say so, rather than that an interval is not an interval.
-#[test]
-fn interval_arguments_not_built_yet_are_named_as_unsupported() -> R {
-    let session = Session::new()?;
-    for q in [
-        "SELECT sum(i) FROM VALUES (interval '1' day) AS t(i)",
-        "SELECT avg(i) FROM VALUES (interval '1' month) AS t(i)",
-        "SELECT try_sum(i) FROM VALUES (interval '1' day) AS t(i)",
-        "SELECT try_avg(i) FROM VALUES (interval '1' day) AS t(i)",
-        "SELECT abs(interval '1' day)",
-    ] {
-        let e = block_on(session.sql(q)).err().ok_or(q)?;
-        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{q}");
-    }
     Ok(())
 }
 
@@ -167,6 +209,45 @@ fn rows(session: &Session, sql: &str) -> R<Vec<String>> {
         }
         Ok(out)
     })
+}
+
+/// Columns with a NULL, not literals; answers from Spark 4.2.0.
+#[test]
+fn interval_functions_read_columns() -> R {
+    let session = Session::new()?;
+    block_on(session.sql(
+        "CREATE TEMPORARY VIEW iv AS SELECT * FROM VALUES \
+         (INTERVAL '-1 02:03:04.5' DAY TO SECOND, INTERVAL '-14' MONTH, 1), \
+         (NULL, NULL, 2) AS t(d, m, k)",
+    ))?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT abs(d) = INTERVAL '1 02:03:04.5' DAY TO SECOND, abs(m) = INTERVAL '14' MONTH, \
+             sign(d), signum(m), extract(day FROM d), extract(hour FROM d), \
+             extract(minute FROM d), extract(second FROM d), extract(month FROM m), \
+             date_part('hour', CAST(d AS INTERVAL HOUR)) FROM iv ORDER BY k"
+        )?,
+        [
+            "true|true|-1.0|-1.0|-1|-2|-3|-4.500000|-2|-2",
+            "NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL"
+        ]
+    );
+    Ok(())
+}
+
+/// Spark 4.2.0 sorts these to `[INTERVAL '1' DAY, INTERVAL '2' DAY]`.
+#[test]
+fn array_sort_orders_intervals() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT element_at(array_sort(array(INTERVAL '2' DAY, INTERVAL '1' DAY)), 1)"
+        )?,
+        ["INTERVAL '1' DAY"]
+    );
+    Ok(())
 }
 
 /// Columns, not literals: `try_*` goes row by row only past a failure, and
@@ -254,9 +335,10 @@ fn a_cast_to_a_coarser_end_field_drops_what_is_below_it() -> R {
              element_at(CAST(array(INTERVAL '13' MONTH) AS ARRAY<INTERVAL YEAR>), 1) \
              = INTERVAL '1' YEAR, \
              CAST(named_struct('a', INTERVAL '13' MONTH, 'b', INTERVAL '1.5' SECOND) \
-             AS STRUCT<a: INTERVAL YEAR, b: INTERVAL SECOND>).b = INTERVAL '1.5' SECOND"
+             AS STRUCT<a: INTERVAL YEAR, b: INTERVAL SECOND>).b = INTERVAL '1.5' SECOND, \
+             CAST(INTERVAL '1.5' SECOND AS INTERVAL SECOND) = INTERVAL '1.5' SECOND"
         )?,
-        ["2025-01-01|true|true|true|true|true|true"]
+        ["2025-01-01|true|true|true|true|true|true|true"]
     );
     block_on(session.sql(
         "CREATE TEMPORARY VIEW n AS SELECT * FROM VALUES \
@@ -328,6 +410,56 @@ fn a_try_function_evaluates_a_nondeterministic_operand_once_per_row() -> R {
         )?,
         ["true", "true", "true"]
     );
+    Ok(())
+}
+
+#[test]
+fn interval_constructors_read_columns_row_by_row() -> R {
+    let session = Session::new()?;
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT coalesce(CAST(make_interval(y, 0, 0, d, 0, 0, s) AS STRING), 'null') \
+             FROM VALUES (1, 2, 1.5), (NULL, 2, 1.5), (0, 0, 0.0) t(y, d, s)"
+        )?,
+        ["1 years 2 days 1.5 seconds", "null", "0 seconds"]
+    );
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT coalesce(CAST(make_dt_interval(d, 1) AS STRING), 'null') \
+             FROM VALUES (1), (NULL) t(d)"
+        )?,
+        ["INTERVAL '1 01:00:00' DAY TO SECOND", "null"]
+    );
+    assert_eq!(
+        rows(
+            &session,
+            "SELECT coalesce(CAST(try_make_interval(y) AS STRING), 'null') \
+             FROM VALUES (1), (2147483647) t(y)"
+        )?,
+        ["1 years", "null"]
+    );
+    Ok(())
+}
+
+/// Spark answers these; NULL would be a wrong result.
+#[test]
+fn a_constructed_calendar_interval_past_the_nanosecond_field_is_refused() -> R {
+    let session = Session::new()?;
+    for ansi in [true, false] {
+        block_on(session.sql(&format!("SET spark.sql.ansi.enabled = {ansi}")))?;
+        for expr in [
+            "make_interval(0, 0, 0, 0, 0, 0, 999999999999.999999)",
+            "try_make_interval(0, 0, 0, 0, 2147483647)",
+        ] {
+            assert_eq!(
+                answer(&session, expr).error_class.as_deref(),
+                Some("KRISHIV_UNSUPPORTED_FEATURE"),
+                "{expr}"
+            );
+        }
+    }
     Ok(())
 }
 

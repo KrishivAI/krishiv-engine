@@ -358,14 +358,6 @@ pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef
     Ok(Arc::new(out))
 }
 
-/// The size of a year-month type's end field, in months.
-const fn month_unit(end: YearMonthField) -> i32 {
-    match end {
-        YearMonthField::Year => 12,
-        YearMonthField::Month => 1,
-    }
-}
-
 /// The microseconds a day-time type with this end field keeps a multiple of;
 /// SECOND keeps its fraction.
 const fn micro_step(end: DayTimeField) -> i64 {
@@ -382,7 +374,8 @@ pub(super) fn truncate_interval(to: &DataType, a: &dyn Array) -> Result<ArrayRef
     use krishiv_kernels::interval::{truncate_day_time, truncate_year_month};
     Ok(match to {
         DataType::YearMonthInterval { end, .. } => {
-            Arc::new(truncate_year_month(a.as_primitive(), month_unit(*end)))
+            let unit = i32::try_from(month_unit(*end)).map_err(|e| internal(&e.to_string()))?;
+            Arc::new(truncate_year_month(a.as_primitive(), unit))
         }
         DataType::DayTimeInterval { end, .. } => {
             Arc::new(truncate_day_time(a.as_primitive(), micro_step(*end)))
@@ -409,6 +402,222 @@ impl PhysExpr for IntervalToString {
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let v = self.e.eval(batch, partition)?;
         let out = render_interval(&self.from, v.array().as_ref())?;
+        Ok(match v {
+            Value::Scalar(_) => Value::Scalar(out),
+            Value::Array(_) => Value::Array(out),
+        })
+    }
+}
+
+/// A cast from or to a year-month or day-time interval other than to a string,
+/// or from a string to a calendar interval.
+pub(super) fn is_interval_cast(from: Option<&DataType>, to: &DataType) -> bool {
+    let ansi = |t: &DataType| {
+        matches!(
+            t,
+            DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }
+        )
+    };
+    from.is_some_and(ansi) && *to != DataType::String
+        || ansi(to)
+        || (*to == DataType::CalendarInterval && from.is_none())
+}
+
+/// The size of a year-month type's end field, in months.
+const fn month_unit(end: YearMonthField) -> i64 {
+    match end {
+        YearMonthField::Year => 12,
+        YearMonthField::Month => 1,
+    }
+}
+
+/// The size of a day-time type's end field, in microseconds.
+const fn micro_unit(end: DayTimeField) -> i64 {
+    match end {
+        DayTimeField::Day => 86_400_000_000,
+        DayTimeField::Hour => 3_600_000_000,
+        DayTimeField::Minute => 60_000_000,
+        DayTimeField::Second => 1_000_000,
+    }
+}
+
+/// A cast from or to an ANSI interval (`is_interval_cast`). The source type is
+/// `None` for a number or a string.
+#[derive(Debug)]
+struct IntervalCast {
+    e: Arc<dyn PhysExpr>,
+    from: Option<DataType>,
+    to: DataType,
+    arrow: ArrowType,
+    try_cast: bool,
+}
+
+pub(super) fn interval_cast(
+    e: Arc<dyn PhysExpr>,
+    from: Option<DataType>,
+    to: &DataType,
+    mode: CastMode,
+) -> Result<Arc<dyn PhysExpr>> {
+    Ok(Arc::new(IntervalCast {
+        e,
+        from,
+        to: to.clone(),
+        arrow: to.to_arrow(),
+        try_cast: mode == CastMode::Try,
+    }))
+}
+
+impl IntervalCast {
+    fn apply(&self, a: &ArrayRef) -> Result<ArrayRef> {
+        use krishiv_kernels::interval_cast as k;
+        let render = |v: i64| match &self.from {
+            Some(DataType::YearMonthInterval { start, end }) => {
+                let months = i32::try_from(v).unwrap_or_default();
+                krishiv_types::interval::year_month_string(months, *start, *end)
+            }
+            Some(DataType::DayTimeInterval { start, end }) => {
+                krishiv_types::interval::day_time_string(v, *start, *end)
+            }
+            _ => v.to_string(),
+        };
+        let from_name = self
+            .from
+            .as_ref()
+            .map_or_else(|| type_name_of(a.data_type()), DataType::sql);
+        let to_name = self.to.sql();
+        let names = k::CastNames {
+            from: &from_name,
+            to: &to_name,
+            text: &render,
+        };
+        let out: ArrayRef =
+            match (&self.from, &self.to) {
+                (Some(DataType::YearMonthInterval { .. }), DataType::YearMonthInterval { .. })
+                | (Some(DataType::DayTimeInterval { .. }), DataType::DayTimeInterval { .. }) => {
+                    truncate_interval(&self.to, a.as_ref())?
+                }
+                (Some(from), to) => {
+                    let unit = match from {
+                        DataType::YearMonthInterval { end, .. } => month_unit(*end),
+                        DataType::DayTimeInterval { end, .. } => micro_unit(*end),
+                        other => return Err(internal(&format!("an interval cast of {other:?}"))),
+                    };
+                    match to {
+                        DataType::Decimal(_) => {
+                            k::interval_to_decimal(a.as_ref(), unit, &self.arrow, self.try_cast)?
+                        }
+                        _ => k::interval_to_integral(
+                            a.as_ref(),
+                            unit,
+                            &self.arrow,
+                            self.try_cast,
+                            names,
+                        )?,
+                    }
+                }
+                (None, to)
+                    if matches!(
+                        a.data_type(),
+                        ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::LargeUtf8
+                    ) =>
+                {
+                    string_to_interval(a, to, self.try_cast)?
+                }
+                (None, DataType::YearMonthInterval { end, .. }) => Arc::new(
+                    k::number_to_year_month(a.as_ref(), month_unit(*end), self.try_cast, names)?,
+                ),
+                (None, DataType::DayTimeInterval { end, .. }) => Arc::new(k::number_to_day_time(
+                    a.as_ref(),
+                    micro_unit(*end),
+                    self.try_cast,
+                    names,
+                )?),
+                (None, other) => return Err(internal(&format!("an interval cast to {other:?}"))),
+            };
+        Ok(out)
+    }
+}
+
+/// A string column as `to`. A string that is no calendar interval is NULL in
+/// every mode; for an ANSI interval only `TRY_CAST` gives NULL.
+fn string_to_interval(a: &ArrayRef, to: &DataType, try_cast: bool) -> Result<ArrayRef> {
+    use arrow_array::builder::{
+        DurationMicrosecondBuilder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
+    };
+    use arrow_array::types::IntervalMonthDayNano;
+    use krishiv_types::interval_parse::{cast_to_day_time, cast_to_year_month, parse_string};
+    let view = to_view(a)?;
+    let strings = view.as_string_view();
+    Ok(match to {
+        DataType::YearMonthInterval { start, end } => {
+            let mut out = IntervalYearMonthBuilder::with_capacity(strings.len());
+            for v in strings {
+                match v.map(|s| cast_to_year_month(s, *start, *end)) {
+                    Some(Ok(m)) => out.append_value(m),
+                    Some(Err(e)) if !try_cast => return Err(e),
+                    _ => out.append_null(),
+                }
+            }
+            Arc::new(out.finish())
+        }
+        DataType::DayTimeInterval { start, end } => {
+            let mut out = DurationMicrosecondBuilder::with_capacity(strings.len());
+            for v in strings {
+                match v.map(|s| cast_to_day_time(s, *start, *end)) {
+                    Some(Ok(m)) => out.append_value(m),
+                    Some(Err(e)) if !try_cast => return Err(e),
+                    _ => out.append_null(),
+                }
+            }
+            Arc::new(out.finish())
+        }
+        DataType::CalendarInterval => {
+            let mut out = IntervalMonthDayNanoBuilder::with_capacity(strings.len());
+            for v in strings {
+                match v.map(parse_string) {
+                    Some(Ok((c, _))) => out.append_value(IntervalMonthDayNano::new(
+                        c.months,
+                        c.days,
+                        c.micros.saturating_mul(1_000),
+                    )),
+                    _ => out.append_null(),
+                }
+            }
+            Arc::new(out.finish())
+        }
+        other => return Err(internal(&format!("a string cast to {other:?}"))),
+    })
+}
+
+/// Spark's SQL name of a number's Arrow type, for `CAST_OVERFLOW`.
+fn type_name_of(t: &ArrowType) -> String {
+    match t {
+        ArrowType::Int8 => "TINYINT".to_owned(),
+        ArrowType::Int16 => "SMALLINT".to_owned(),
+        ArrowType::Int32 => "INT".to_owned(),
+        ArrowType::Int64 => "BIGINT".to_owned(),
+        ArrowType::Decimal64(p, s) | ArrowType::Decimal128(p, s) => format!("DECIMAL({p},{s})"),
+        other => other.to_string(),
+    }
+}
+
+impl PhysExpr for IntervalCast {
+    fn data_type(&self) -> &ArrowType {
+        &self.arrow
+    }
+
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
+    fn nullable(&self) -> bool {
+        // A string that is no calendar interval is NULL in every mode.
+        self.e.nullable() || self.try_cast || self.to == DataType::CalendarInterval
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
+        let out = self.apply(v.array())?;
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),
             Value::Array(_) => Value::Array(out),

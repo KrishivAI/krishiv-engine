@@ -13,21 +13,24 @@
 //! None of these depend on ANSI. Fractions round `HALF_UP`, as Spark's
 //! `DoubleMath`, `IntMath`, `LongMath` and `BigDecimal.setScale` do.
 
+use std::sync::Arc;
+
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray as _;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, ArrowPrimitiveType, DurationMicrosecondArray, Int32Array, IntervalYearMonthArray,
-    PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, Decimal128Array, DurationMicrosecondArray, Float64Array,
+    Int32Array, IntervalYearMonthArray, PrimitiveArray,
 };
 use arrow_buffer::i256;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 
 use crate::cast::datetime::utc_to_local;
-use crate::datetime::{TimeZoneRules, map2};
+use crate::datetime::{DatePart, TimeZoneRules, map2};
 use crate::error::KernelError;
 use crate::ops::Operand;
 
@@ -58,6 +61,47 @@ pub enum ScaleOp {
     Multiply,
     /// `/`.
     Divide,
+}
+
+/// Year-month `l div r` (`IntegralDivide`): a `bigint` truncated towards zero.
+/// A zero divisor is NULL unless `ansi`; `MIN div -1` wraps at the `int`, ANSI on
+/// or off.
+///
+/// # Errors
+/// `DIVIDE_BY_ZERO` under `ansi`.
+pub fn integral_divide_year_month(
+    l: Operand<'_, IntervalYearMonthType>,
+    r: Operand<'_, IntervalYearMonthType>,
+    ansi: bool,
+) -> Result<PrimitiveArray<Int64Type>, KernelError> {
+    map2::<_, _, Int64Type>(
+        l,
+        r,
+        // Past the zero check, only `MIN div -1` has no quotient: it wraps to `MIN`.
+        |a, b| (b != 0).then(|| i64::from(a.checked_div(b).unwrap_or(a))),
+        !ansi,
+        KernelError::divide_by_zero,
+    )
+}
+
+/// Day-time `l div r` (`IntegralDivide`): a `bigint` truncated towards zero. A
+/// zero divisor is NULL unless `ansi`; `MIN div -1` wraps, ANSI on or off.
+///
+/// # Errors
+/// `DIVIDE_BY_ZERO` under `ansi`.
+pub fn integral_divide_day_time(
+    l: Operand<'_, DurationMicrosecondType>,
+    r: Operand<'_, DurationMicrosecondType>,
+    ansi: bool,
+) -> Result<PrimitiveArray<Int64Type>, KernelError> {
+    map2::<_, _, Int64Type>(
+        l,
+        r,
+        // Past the zero check, only `MIN div -1` has no quotient: it wraps to `MIN`.
+        |a, b| (b != 0).then(|| a.checked_div(b).unwrap_or(a)),
+        !ansi,
+        KernelError::divide_by_zero,
+    )
 }
 
 /// Year-month `l op r`; an overflow is NULL if `null_on_overflow`.
@@ -155,6 +199,158 @@ pub fn negate_day_time(
     a: &DurationMicrosecondArray,
 ) -> Result<DurationMicrosecondArray, KernelError> {
     negate(a, i64::checked_neg)
+}
+
+/// `abs` of an interval: Spark's `MathUtils.negateExact`, which raises in every
+/// ANSI mode and names no `try_` function.
+fn abs<T>(
+    a: &PrimitiveArray<T>,
+    message: &str,
+    f: impl Fn(T::Native) -> Option<T::Native>,
+) -> Result<PrimitiveArray<T>, KernelError>
+where
+    T: ArrowPrimitiveType,
+{
+    let mut out = PrimitiveBuilder::<T>::with_capacity(a.len());
+    for (row, v) in a.iter().enumerate() {
+        match v {
+            Some(v) => {
+                let abs =
+                    f(v).ok_or_else(|| KernelError::arithmetic_overflow(row, message, None))?;
+                out.append_value(abs);
+            }
+            None => out.append_null(),
+        }
+    }
+    Ok(out.finish())
+}
+
+/// `abs` of a year-month interval; `message` is the Spark version's overflow
+/// text.
+///
+/// # Errors
+/// `ARITHMETIC_OVERFLOW`.
+pub fn abs_year_month(
+    a: &IntervalYearMonthArray,
+    message: &str,
+) -> Result<IntervalYearMonthArray, KernelError> {
+    abs(a, message, i32::checked_abs)
+}
+
+/// `abs` of a day-time interval; `message` is the Spark version's overflow
+/// text.
+///
+/// # Errors
+/// `ARITHMETIC_OVERFLOW`.
+pub fn abs_day_time(
+    a: &DurationMicrosecondArray,
+    message: &str,
+) -> Result<DurationMicrosecondArray, KernelError> {
+    abs(a, message, i64::checked_abs)
+}
+
+/// `sign` of a year-month interval: -1, 0 or 1 as a double.
+#[must_use]
+pub fn sign_year_month(a: &IntervalYearMonthArray) -> Float64Array {
+    a.unary(|v| f64::from(v.signum()))
+}
+
+/// `sign` of a day-time interval: -1, 0 or 1 as a double.
+#[must_use]
+pub fn sign_day_time(a: &DurationMicrosecondArray) -> Float64Array {
+    a.unary(|v| match v.cmp(&0) {
+        std::cmp::Ordering::Less => -1.0,
+        std::cmp::Ordering::Equal => 0.0,
+        std::cmp::Ordering::Greater => 1.0,
+    })
+}
+
+/// The Arrow type of `part` read from an interval: Spark's `ByteType` for a
+/// month, hour or minute, whose range is small.
+#[must_use]
+pub const fn interval_part_type(part: DatePart) -> DataType {
+    match part {
+        DatePart::Month | DatePart::Hour | DatePart::Minute => DataType::Int8,
+        DatePart::Second => DataType::Decimal128(8, 6),
+        _ => DataType::Int32,
+    }
+}
+
+/// The hour, minute or second of a day-time duration, each below its next
+/// field and keeping the sign. A calendar interval's microseconds read the same,
+/// so 25 hours has hour 1 there too.
+fn time_part(a: &DurationMicrosecondArray, part: DatePart) -> Result<ArrayRef, KernelError> {
+    Ok(match part {
+        DatePart::Hour => Arc::new(
+            a.unary::<_, Int8Type>(|v| i8::try_from(v / 3_600_000_000 % 24).unwrap_or_default()),
+        ),
+        DatePart::Minute => Arc::new(
+            a.unary::<_, Int8Type>(|v| i8::try_from(v / 60_000_000 % 60).unwrap_or_default()),
+        ),
+        DatePart::Second => {
+            let out: Decimal128Array = a.unary(|v| i128::from(v % 60_000_000));
+            let out = out
+                .with_precision_and_scale(8, 6)
+                .map_err(|e| KernelError::internal(e.to_string()))?;
+            Arc::new(out)
+        }
+        other => {
+            return Err(KernelError::internal(format!(
+                "the {other:?} of a duration"
+            )));
+        }
+    })
+}
+
+/// The year or month of a month count, keeping the sign.
+fn month_part(a: &IntervalYearMonthArray, part: DatePart) -> Result<ArrayRef, KernelError> {
+    Ok(match part {
+        DatePart::Year => Arc::new(a.unary::<_, Int32Type>(|v| v / 12)),
+        DatePart::Month => {
+            Arc::new(a.unary::<_, Int8Type>(|v| i8::try_from(v % 12).unwrap_or_default()))
+        }
+        other => {
+            return Err(KernelError::internal(format!(
+                "the {other:?} of a month count"
+            )));
+        }
+    })
+}
+
+/// Spark's `ExtractIntervalPart`: `part` of a column of any of the three
+/// interval types. The analyzer has checked that the type holds the field.
+///
+/// # Errors
+/// An internal error for another column type or field.
+pub fn interval_part(a: &dyn Array, part: DatePart) -> Result<ArrayRef, KernelError> {
+    match a.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            month_part(a.as_primitive::<IntervalYearMonthType>(), part)
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            let a = a.as_primitive::<DurationMicrosecondType>();
+            match part {
+                DatePart::Day => Ok(Arc::new(extract_days(a))),
+                _ => time_part(a, part),
+            }
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let a = a.as_primitive::<IntervalMonthDayNanoType>();
+            match part {
+                DatePart::Year | DatePart::Month => {
+                    month_part(&a.unary::<_, IntervalYearMonthType>(|v| v.months), part)
+                }
+                DatePart::Day => Ok(Arc::new(a.unary::<_, Int32Type>(|v| v.days))),
+                _ => time_part(
+                    &a.unary::<_, DurationMicrosecondType>(|v| v.nanoseconds / 1_000),
+                    part,
+                ),
+            }
+        }
+        other => Err(KernelError::internal(format!(
+            "the {part:?} of a column of {other}"
+        ))),
+    }
 }
 
 /// Spark's `ExtractANSIIntervalDays`: the whole days of a day-time interval.
@@ -639,6 +835,80 @@ mod tests {
         assert_eq!(
             (out.value(0), out.value(1), out.is_null(2)),
             (60, -60, true)
+        );
+    }
+
+    #[test]
+    fn abs_raises_on_the_lowest_value_and_keeps_nulls() {
+        let m = IntervalYearMonthArray::from(vec![Some(-14), None, Some(3)]);
+        let out = abs_year_month(&m, "overflow").unwrap();
+        assert_eq!(out.iter().collect::<Vec<_>>(), [Some(14), None, Some(3)]);
+        let low = IntervalYearMonthArray::from(vec![i32::MIN]);
+        let e = abs_year_month(&low, "overflow").unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ArithmeticOverflow);
+        let d = DurationMicrosecondArray::from(vec![Some(-5), None]);
+        let out = abs_day_time(&d, "overflow").unwrap();
+        assert_eq!(out.iter().collect::<Vec<_>>(), [Some(5), None]);
+        let low = DurationMicrosecondArray::from(vec![i64::MIN]);
+        let e = abs_day_time(&low, "overflow").unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ArithmeticOverflow);
+    }
+
+    #[test]
+    fn sign_is_zero_for_zero() {
+        let m = IntervalYearMonthArray::from(vec![-3, 0, 3]);
+        assert_eq!(sign_year_month(&m).values().as_ref(), [-1.0, 0.0, 1.0]);
+        let d = DurationMicrosecondArray::from(vec![i64::MIN, 0, i64::MAX]);
+        assert_eq!(sign_day_time(&d).values().as_ref(), [-1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn parts_of_each_interval_type_keep_the_sign() {
+        use arrow_array::IntervalMonthDayNanoArray;
+        use arrow_array::types::IntervalMonthDayNano;
+        let int32 = |a: ArrayRef| a.as_primitive::<Int32Type>().value(0);
+        let int8 = |a: ArrayRef| a.as_primitive::<Int8Type>().value(0);
+        let second = |a: ArrayRef| a.as_primitive::<Decimal128Type>().value(0);
+
+        let m = IntervalYearMonthArray::from(vec![-14]);
+        assert_eq!(int32(interval_part(&m, DatePart::Year).unwrap()), -1);
+        assert_eq!(int8(interval_part(&m, DatePart::Month).unwrap()), -2);
+        interval_part(&m, DatePart::Day).unwrap_err();
+
+        // -1 day 2:03:04.5
+        let d = DurationMicrosecondArray::from(vec![-93_784_500_000]);
+        assert_eq!(int32(interval_part(&d, DatePart::Day).unwrap()), -1);
+        assert_eq!(int8(interval_part(&d, DatePart::Hour).unwrap()), -2);
+        assert_eq!(int8(interval_part(&d, DatePart::Minute).unwrap()), -3);
+        assert_eq!(
+            second(interval_part(&d, DatePart::Second).unwrap()),
+            -4_500_000
+        );
+        interval_part(&d, DatePart::Year).unwrap_err();
+
+        // 14 months, 40 days and 25:03:04.5.
+        let c = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(
+            14,
+            40,
+            90_184_500_000_000,
+        )]);
+        assert_eq!(int32(interval_part(&c, DatePart::Year).unwrap()), 1);
+        assert_eq!(int8(interval_part(&c, DatePart::Month).unwrap()), 2);
+        assert_eq!(int32(interval_part(&c, DatePart::Day).unwrap()), 40);
+        assert_eq!(int8(interval_part(&c, DatePart::Hour).unwrap()), 1);
+        assert_eq!(int8(interval_part(&c, DatePart::Minute).unwrap()), 3);
+        assert_eq!(
+            second(interval_part(&c, DatePart::Second).unwrap()),
+            4_500_000
+        );
+
+        let other = Int32Array::from(vec![1]);
+        interval_part(&other, DatePart::Day).unwrap_err();
+        assert_eq!(interval_part_type(DatePart::Hour), DataType::Int8);
+        assert_eq!(interval_part_type(DatePart::Year), DataType::Int32);
+        assert_eq!(
+            interval_part_type(DatePart::Second),
+            DataType::Decimal128(8, 6)
         );
     }
 }
