@@ -12,8 +12,10 @@ use parquet::file::properties::WriterProperties;
 
 use super::tests::{Env, rows, write};
 use crate::request::{
-    CmpOp, Collation, ColumnPath, PushdownExpr, RowFilterPolicy, RowLevel, ScalarValue, ScanRequest,
+    CmpOp, Collation, ColumnPath, PushdownExpr, RowFilterPolicy, RowLevel, RowSelection,
+    ScalarValue, ScanRequest,
 };
+use crate::runtime_filter::{FilterId, KeyFilter, RuntimeFilter};
 use crate::{FormatOptions, MetadataNeeds};
 
 use super::ParquetFormat;
@@ -256,20 +258,157 @@ fn nothing_outside_the_predicate_reads_everything() {
     req.predicate = Some(k_is_zero());
     req.row_filter = RowFilterPolicy::On;
     assert_eq!(rows(&env.scan(&f, &req, &o).unwrap()), 15_000);
-    // A row index needs every row of a decoded row group.
+}
+
+/// The positions of `out`'s rows, checking that each row holds what was
+/// written at its position, so filtered row numbers aren't shifted.
+fn positions(out: &[RecordBatch]) -> Vec<i64> {
+    let mut seen = Vec::new();
+    for b in out {
+        let index = b.column(2).as_primitive::<Int64Type>();
+        for (row, position) in payloads(std::slice::from_ref(b)).iter().zip(index.values()) {
+            assert_eq!(row.1, format!("row {position}"));
+            seen.push(*position);
+        }
+    }
+    seen
+}
+
+/// Row numbers stay file-absolute under the filter, whatever row groups and
+/// rows it and a selection leave out.
+#[test]
+fn a_row_index_counts_the_file_under_a_filter_and_a_selection() {
+    let env = Env::new();
+    let (f, o, _) = file(&env);
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
     let mut req = ScanRequest::new(schema, vec![ColumnPath::new("k"), ColumnPath::new("v")]);
     req.predicate = Some(k_is_zero());
     req.row_filter = RowFilterPolicy::On;
     req.metadata_cols.row_index = true;
-    let out = env.scan(&f, &req, &o).unwrap();
-    assert_eq!(rows(&out), 15_000);
-    let last = out.last().unwrap();
-    assert_eq!(
-        last.column(2)
-            .as_primitive::<Int64Type>()
-            .value(last.num_rows() - 1),
-        14_999
+    let zeros: Vec<i64> = (0..i64::from(3 * RG))
+        .filter(|i| match *i / i64::from(RG) {
+            0 => i % 200 == 0,
+            1 => *i == i64::from(RG) + 7,
+            _ => i % i64::from(RG) < 10,
+        })
+        .collect();
+    assert_eq!(positions(&env.scan(&f, &req, &o).unwrap()), zeros);
+    // A selection drops row group 0 and part of the others.
+    let start = u64::try_from(RG).unwrap();
+    req.selection = Some(RowSelection::from_ranges(vec![
+        start + 7..start + 8,
+        2 * start + 5..3 * start,
+    ]));
+    let want: Vec<i64> = zeros
+        .iter()
+        .copied()
+        .filter(|i| *i == i64::from(RG) + 7 || *i >= 2 * i64::from(RG) + 5)
+        .collect();
+    assert_eq!(positions(&env.scan(&f, &req, &o).unwrap()), want);
+}
+
+/// A runtime filter holding the top-N bound `k <= 0`.
+fn bound_on_k() -> (Arc<RuntimeFilter>, Arc<KeyFilter>) {
+    let filter = Arc::new(RuntimeFilter::new(
+        FilterId(1),
+        ColumnPath::new("k"),
+        DataType::Int32,
+    ));
+    let key = Int32Array::from(vec![0]);
+    let bound = KeyFilter::top_n_bound(&key, 0, &DataType::Int32, false, false).unwrap();
+    (filter, Arc::new(bound))
+}
+
+/// `k` and `v` of the file, with the bound `filter` on `k`.
+fn bounded_request(
+    env: &Env,
+    f: &crate::FileRef,
+    o: &FormatOptions,
+    filter: &Arc<RuntimeFilter>,
+) -> ScanRequest {
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, f, MetadataNeeds::default(), o),
+        )
+        .unwrap()
+        .schema();
+    let mut req = ScanRequest::new(
+        Arc::clone(&schema),
+        vec![ColumnPath::new("k"), ColumnPath::new("v")],
     );
+    req.dynamic
+        .push(crate::ScanFilter::new(Arc::clone(filter), &schema).unwrap());
+    req
+}
+
+/// The bound is a pass of its own: it needs no static predicate, doesn't
+/// wait for a measurement, and stays out when the query may raise.
+#[test]
+fn a_top_n_bound_filters_without_a_static_predicate() {
+    let env = Env::new();
+    let (f, o, _) = file(&env);
+    let (filter, bound) = bound_on_k();
+    filter.tighten(bound);
+    let mut req = bounded_request(&env, &f, &o, &filter);
+    let (out, metrics) = env.scan_metered(&f, &req, &o).unwrap();
+    assert_eq!(rows(&out), 36);
+    assert!(payloads(&out).iter().all(|(k, _)| *k == 0));
+    assert_eq!(metrics.units_filtered, 3);
+    assert_eq!(metrics.row_filter_rows, 15_000);
+    assert_eq!(metrics.row_filter_kept, 36);
+
+    req.row_level = RowLevel::Prefix(None);
+    let (out, metrics) = env.scan_metered(&f, &req, &o).unwrap();
+    assert!(rows(&out) > 36);
+    assert_eq!(metrics.row_filter_rows, 0);
+
+    // Only `k` is read: the bound's pass would save nothing.
+    let mut narrow = bounded_request(&env, &f, &o, &filter);
+    narrow.projection = vec![ColumnPath::new("k")];
+    let (_, metrics) = env.scan_metered(&f, &narrow, &o).unwrap();
+    assert_eq!(metrics.row_filter_rows, 0);
+}
+
+/// A bound published mid-scan reaches the next row group.
+#[test]
+fn a_tightened_bound_reaches_the_next_row_group() {
+    let env = Env::new();
+    let (f, o, _) = file(&env);
+    let (filter, bound) = bound_on_k();
+    let req = bounded_request(&env, &f, &o, &filter);
+    let total = env.rt.block_on(async {
+        let pool: Arc<dyn krishiv_memory::MemoryPool> =
+            krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+        let id = pool.register("scan", None);
+        let mut s = crate::ScanStream::open(
+            &env.io,
+            &ParquetFormat,
+            f.clone(),
+            crate::ByteRange::whole(f.size),
+            &req,
+            &o,
+            krishiv_memory::Reservation::new(pool, id),
+            crate::ScanOptions::default(),
+        )
+        .await
+        .unwrap();
+        let mut total = s.next_batch().await.unwrap().unwrap().num_rows();
+        filter.tighten(bound);
+        while let Some(b) = s.next_batch().await.unwrap() {
+            total += b.num_rows();
+        }
+        total
+    });
+    assert_eq!(total, 5000 + 1 + 10);
 }
 
 /// A column arrow-rs reads as `UInt32` is compared as Spark reads it

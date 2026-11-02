@@ -38,6 +38,7 @@ mod csv;
 mod datetime;
 mod element;
 mod format;
+mod geo;
 mod hash;
 mod interval;
 mod json;
@@ -462,7 +463,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 31] = [
+const FAMILIES: [(&[&str], Binder); 32] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -485,6 +486,7 @@ const FAMILIES: [(&[&str], Binder); 31] = [
     (codec::NAMES, codec::bind),
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
+    (geo::NAMES, geo::bind),
     (csv::NAMES, csv::bind),
     (format::NAMES, format::bind),
     (xml::NAMES, xml::bind),

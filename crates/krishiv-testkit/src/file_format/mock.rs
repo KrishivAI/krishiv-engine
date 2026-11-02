@@ -107,6 +107,14 @@ static OPTIONS: OptionSchema = OptionSchema {
             doc: "Report files as self-describing (false: read like CSV, with the table schema).",
         },
         OptionSpec {
+            name: "positionalRowIndex",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: None,
+            metadata_key: false,
+            doc: "Report a row index that is positional (false: counted, as a text format's is).",
+        },
+        OptionSpec {
             name: "encryptionKey",
             kind: OptionKind::Secret,
             default: OptionDefault::None,
@@ -1089,6 +1097,10 @@ impl FileFormat for MockFormat {
             c.selection = true;
             c.page_checksums = true;
             c.write = true;
+            c.random_access = o
+                .bool("positionalRowIndex")
+                .unwrap_or(true)
+                .then_some(krishiv_io::Granularity::Unit);
             c
         }
     }
@@ -1165,6 +1177,13 @@ impl FileFormat for MockFormat {
                 && prune(p, &u.stats) == TriState::False
             {
                 plan.pruned_by_statistics += 1;
+                continue;
+            }
+            if req
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.within(u.first_row..u.first_row + u.rows).is_empty())
+            {
                 continue;
             }
             plan.units.push(ScanUnit {

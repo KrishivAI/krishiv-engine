@@ -1421,12 +1421,12 @@ fn session_and_clock_functions() {
         result("localtimestamp", &[], &[]).unwrap(),
         ty(DataType::TimestampNtz)
     );
-    // `current_time` is a `TIME`, which Krishiv has no type for: it stays
-    // known-unsupported where Spark has it (4.1+).
+    // `current_time` is a `TIME`, evaluated since P2-T181.
     assert!(matches!(
         builtins().lookup("current_time", SparkProfile::V4_2),
-        Lookup::KnownUnsupported
+        Lookup::Found(_)
     ));
+
     // `shuffle` needs an array type the engine has no representation for:
     // it stays known-unsupported where Spark has it.
     assert!(matches!(

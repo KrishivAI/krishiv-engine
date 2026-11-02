@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use arrow_array::ArrayRef;
 use arrow_schema::DataType;
-use krishiv_io::{ColumnPath, DisabledReason, FilterId, FilterSnapshot, RuntimeFilter};
+use krishiv_io::{ColumnPath, DisabledReason, FilterId, FilterSnapshot, KeyFilter, RuntimeFilter};
 
 use crate::error::{Result, internal};
 pub use crate::physical::{ValueId, Version};
@@ -163,6 +163,15 @@ pub trait ValueService: Send + Sync + fmt::Debug {
     /// or a second version of a value.
     fn publish(&self, partial: Partial) -> Result<Publication>;
 
+    /// Offers what a producer knows so far about the runtime filter `id` (a
+    /// top-N's bound). The partials merge to the tightest, and any one alone
+    /// is valid, so this neither waits for other producer partitions nor
+    /// completes the value.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for an undeclared filter.
+    fn tighten(&self, id: FilterId, keys: Arc<KeyFilter>) -> Result<()>;
+
     /// The view of `id` its consumers read.
     ///
     /// # Errors
@@ -282,6 +291,11 @@ impl ValueService for LocalValues {
             .cell
             .clone()
             .ok_or_else(|| internal(format!("runtime filter {id} without a cell")))
+    }
+
+    fn tighten(&self, id: FilterId, keys: Arc<KeyFilter>) -> Result<()> {
+        self.filter(id)?.tighten(keys);
+        Ok(())
     }
 
     fn publish(&self, partial: Partial) -> Result<Publication> {
