@@ -114,6 +114,35 @@ impl Drop for WaitGuard<'_> {
     }
 }
 
+/// `sql` without its leading `EXPLAIN [mode]` words, so a statement saved
+/// from an explain tool can be profiled again.
+fn strip_explain(sql: &str) -> &str {
+    const MODES: [&str; 6] = [
+        "analyze",
+        "extended",
+        "formatted",
+        "cost",
+        "codegen",
+        "verbose",
+    ];
+    let mut rest = sql.trim();
+    while rest
+        .get(..7)
+        .is_some_and(|w| w.eq_ignore_ascii_case("explain"))
+        && rest[7..].starts_with(char::is_whitespace)
+    {
+        rest = rest[7..].trim_start();
+        if let Some(mode) = MODES.iter().find(|m| {
+            rest.get(..m.len())
+                .is_some_and(|w| w.eq_ignore_ascii_case(m))
+                && rest[m.len()..].starts_with(char::is_whitespace)
+        }) {
+            rest = rest[mode.len()..].trim_start();
+        }
+    }
+    rest
+}
+
 /// A tool's answer: the text and whether it is an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
@@ -371,11 +400,25 @@ impl Tools {
                     .ok_or_else(|| arg_err("`table` is required".to_owned()))?;
                 let name = ident(table).map_err(|e| plain_err(&e))?;
                 let rows = uint_arg(args, "sample_rows")?.unwrap_or(5).min(20);
+                // The `system` catalog is not in the session catalog store
+                // `DESCRIBE` reads: its columns are the header of its rows.
+                let is_system =
+                    krishiv_sql::parse_multipart_identifier(table, &ParserOptions::default())
+                        .ok()
+                        .is_some_and(|p| {
+                            p.parts.len() == 2 && p.parts[0].value.eq_ignore_ascii_case("system")
+                        });
+                if is_system {
+                    limits.max_rows = limits.max_rows.min(usize::try_from(rows).unwrap_or(20));
+                    return Ok(self
+                        .run(&format!("SELECT * FROM {name} LIMIT {rows}"), &limits)
+                        .await);
+                }
                 let schema = self.run(&format!("DESCRIBE TABLE {name}"), &limits).await;
                 if schema.is_error || rows == 0 {
                     return Ok(schema);
                 }
-                limits.max_rows = usize::try_from(rows).unwrap_or(20);
+                limits.max_rows = limits.max_rows.min(usize::try_from(rows).unwrap_or(20));
                 let sample = self
                     .run(&format!("SELECT * FROM {name} LIMIT {rows}"), &limits)
                     .await;
@@ -507,7 +550,7 @@ impl Tools {
             sql: one_line,
             // A statement over the budget is not kept: replaying a prefix
             // would run a different query.
-            full: (sql.chars().count() <= HISTORY_SQL_CHARS).then(|| sql.to_owned()),
+            full: (sql.chars().count() <= HISTORY_SQL_CHARS).then(|| strip_explain(sql).to_owned()),
         });
     }
 

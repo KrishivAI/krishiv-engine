@@ -349,3 +349,41 @@ async fn a_long_statement_cannot_be_replayed_and_a_timeout_is_recorded_as_error(
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn describe_reaches_system_tables_and_respects_the_row_cap() {
+    let (d, _) = fixture();
+    let (text, err) = call(
+        &fixture().1,
+        "describe_table",
+        json!({"table": "system.capabilities", "sample_rows": 2}),
+    )
+    .await;
+    assert!(!err && text.contains("worker_id:string"), "{text}");
+    let mut config = McpConfig::new(d.path().join("data"));
+    config.max_rows = 1;
+    let t = Tools::new(config);
+    let (text, err) = call(
+        &t,
+        "describe_table",
+        json!({"table": "nums", "sample_rows": 20}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    // Two header lines and at most one row each for the schema and the sample.
+    let table_lines = text
+        .lines()
+        .filter(|l| l.starts_with("| ") && !l.contains("---"))
+        .count();
+    assert!(table_lines <= 4, "{table_lines} {text}");
+}
+
+#[tokio::test]
+async fn a_profile_of_an_explain_replays_the_underlying_query() {
+    let (_d, t) = fixture();
+    call(&t, "explain", json!({"sql": "SELECT count(*) FROM nums"})).await;
+    let (text, err) = call(&t, "get_query_profile", json!({"query_id": "q1"})).await;
+    assert!(!err, "{text}");
+    let (text, err) = call(&t, "get_query_profile", json!({"query_id": "q2"})).await;
+    assert!(!err, "profiling a profile: {text}");
+}
