@@ -22,7 +22,9 @@
 //! Each reader's frame is in the headroom the flush phase reserves
 //! ([`readers`]). What this module holds beyond that (batches kept past their
 //! read, states) is charged to the pool directly, never drawing the credit
-//! the readers need.
+//! the readers need. Batches a frame holds are optional, since it can fold
+//! from the file: a charge with no such way back ([`Shed`]) takes them back
+//! from the partition's other frames before it fails the query.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -46,6 +48,61 @@ const OUTPUT_BYTES: usize = 16 + size_of::<(usize, usize)>();
 /// A reservation for `consumer` that takes from the pool, not its credit.
 fn direct(consumer: &ConsumerHandle) -> Reservation {
     Reservation::new(Arc::clone(consumer.pool()), consumer.id())
+}
+
+/// The frames of the partition's other functions, whose held batches a
+/// charge with no other way to run takes back: a frame holds what the pool
+/// grants, so without this it can leave a later function nothing.
+pub(super) struct Shed<'a> {
+    before: &'a mut [Option<Framed>],
+    after: &'a mut [Option<Framed>],
+}
+
+impl<'a> Shed<'a> {
+    /// Function `j` among `framed`, and the others as its [`Shed`]. `None`
+    /// if `j` does not read the file.
+    pub(super) fn around(
+        framed: &'a mut [Option<Framed>],
+        j: usize,
+    ) -> Option<(&'a mut Framed, Self)> {
+        let (before, rest) = framed.split_at_mut_checked(j)?;
+        let (own, after) = rest.split_first_mut()?;
+        Some((own.as_mut()?, Self { before, after }))
+    }
+
+    /// All of `framed`, for a function that is not among them.
+    pub(super) fn all(framed: &'a mut [Option<Framed>]) -> Self {
+        Self {
+            before: framed,
+            after: &mut [],
+        }
+    }
+
+    /// No frames: while the partition is written, before they open.
+    pub(super) fn none() -> Self {
+        Self::all(&mut [])
+    }
+
+    /// Grows `charge` by `bytes`; while refused, one more frame gives its
+    /// batches up, and folds from the file from then on.
+    pub(super) fn grow(&mut self, charge: &mut Reservation, bytes: usize) -> Result<()> {
+        let mut refused = match charge.try_grow(bytes) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        for framed in self.before.iter_mut().chain(self.after.iter_mut()) {
+            if let Some(Framed::Held(h)) = framed
+                && h.0.charge.size() > 0
+            {
+                h.0.release();
+                match charge.try_grow(bytes) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => refused = e,
+                }
+            }
+        }
+        Err(refused.into())
+    }
 }
 
 /// A forward reader of the partition's rows.
@@ -160,6 +217,9 @@ pub(super) struct Current<'a> {
     pub(super) peers: &'a [(usize, usize)],
     pub(super) keys: Option<&'a RangeKeys>,
     pub(super) counters: &'a Counters,
+    pub(super) file: &'a SpillFile,
+    pub(super) consumer: &'a Arc<ConsumerHandle>,
+    pub(super) query: &'a QueryContext,
 }
 
 /// [`FrameKeys`] of a batch's rows.
@@ -323,7 +383,7 @@ impl Values {
     }
 
     /// Reads a batch, keeping values from number `min` on.
-    fn load(&mut self, min: usize) -> Result<()> {
+    fn load(&mut self, min: usize, shed: &mut Shed<'_>) -> Result<()> {
         let at = self.stream.end;
         let Some(b) = self.stream.next()? else {
             self.done = true;
@@ -351,9 +411,7 @@ impl Values {
         self.seen += values.len();
         self.drop_before(min);
         if !values.is_empty() && first + values.len() > min {
-            self.charge
-                .try_grow(self.frame)
-                .map_err(krishiv_common::error::KrishivError::from)?;
+            shed.grow(&mut self.charge, self.frame)?;
             self.held.push_back(Chunk {
                 first,
                 values,
@@ -365,9 +423,9 @@ impl Values {
 
     /// The row of value number `k` (`IGNORE NULLS`), keeping values from
     /// number `min` on; `None` past the last.
-    fn row_of(&mut self, k: usize, min: usize) -> Result<Option<usize>> {
+    fn row_of(&mut self, k: usize, min: usize, shed: &mut Shed<'_>) -> Result<Option<usize>> {
         while self.seen <= k && !self.done {
-            self.load(min)?;
+            self.load(min, shed)?;
         }
         Ok(self
             .held
@@ -382,12 +440,13 @@ impl Values {
         &mut self,
         targets: &[Option<usize>],
         fallback: Option<&ArrayRef>,
+        shed: &mut Shed<'_>,
     ) -> Result<ArrayRef> {
         let min = targets.iter().flatten().min().copied();
         let max = targets.iter().flatten().max().copied();
         if let (Some(min), Some(max)) = (min, max) {
             while self.seen <= max && !self.done {
-                self.load(min)?;
+                self.load(min, shed)?;
             }
             self.drop_before(min);
         }
@@ -537,19 +596,17 @@ fn fold_from_file(
     env: &Env,
     j: usize,
     frames: &[(usize, usize)],
-    file: &SpillFile,
-    consumer: &Arc<ConsumerHandle>,
-    query: &QueryContext,
+    c: &Current<'_>,
+    shed: &mut Shed<'_>,
 ) -> Result<ArrayRef> {
+    let (file, consumer, query) = (c.file, c.consumer, c.query);
     let a = aggregate_of(&env.plan.functions[j])?;
     let mut charge = direct(consumer).unguarded();
     let state = crate::aggregate::Accumulator::new(a, env.ansi)?
         .group_bytes()
         .max(64)
         .saturating_add(size_of::<Fold>());
-    charge
-        .try_grow(state.saturating_mul(frames.len()))
-        .map_err(krishiv_common::error::KrishivError::from)?;
+    shed.grow(&mut charge, state.saturating_mul(frames.len()))?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
         folds.push(Fold::new(a, env.ansi)?);
@@ -568,7 +625,7 @@ fn fold_from_file(
                 let (from, until) = (s.max(pos), e.min(to));
                 if from < until {
                     let rows = part.slice(from - pos, until - from);
-                    fold_batch(env, j, fold, &rows, &none[..until - from])?;
+                    fold_batch(env, j, fold, &rows, &none[..until - from], shed)?;
                 }
             }
             pos = to;
@@ -756,27 +813,34 @@ impl Framed {
         }))
     }
 
+    /// A frame holds the rows `[lo, hi)`; `false` if it does not.
+    #[cfg(test)]
+    pub(super) fn hold_rows(&mut self, lo: usize, hi: usize) -> Result<bool> {
+        match self {
+            Self::Held(h) => h.0.hold(lo, hi, 0),
+            _ => Ok(false),
+        }
+    }
+
     /// The values of function `j` over the batch's rows.
     pub(super) fn column(
         &mut self,
         env: &Env,
         j: usize,
         c: &Current<'_>,
-        file: &SpillFile,
-        consumer: &Arc<ConsumerHandle>,
-        query: &QueryContext,
+        shed: &mut Shed<'_>,
     ) -> Result<ArrayRef> {
         match self {
-            Self::Offset { values } => values.column(c),
-            Self::Nth(nth) => nth.column(c),
-            Self::Prefix(p) => p.column(env, j, c, query),
-            Self::Held(h) => h.0.column(env, j, c, file, consumer, query),
+            Self::Offset { values } => values.column(c, shed),
+            Self::Nth(nth) => nth.column(c, shed),
+            Self::Prefix(p) => p.column(env, j, c, shed),
+            Self::Held(h) => h.0.column(env, j, c, shed),
         }
     }
 }
 
 impl OffsetFn {
-    fn column(&mut self, c: &Current<'_>) -> Result<ArrayRef> {
+    fn column(&mut self, c: &Current<'_>, shed: &mut Shed<'_>) -> Result<ArrayRef> {
         let n = c.batch.num_rows();
         let col = c
             .batch
@@ -813,12 +877,12 @@ impl OffsetFn {
                 frames::viewed(col)
             })
             .transpose()?;
-        self.values.gather(&targets, fallback.as_ref())
+        self.values.gather(&targets, fallback.as_ref(), shed)
     }
 }
 
 impl Nth {
-    fn column(&mut self, c: &Current<'_>) -> Result<ArrayRef> {
+    fn column(&mut self, c: &Current<'_>, shed: &mut Shed<'_>) -> Result<ArrayRef> {
         let frames = self.edges.frames(c)?;
         let skip = usize::try_from(self.n.saturating_sub(1)).unwrap_or(usize::MAX);
         let mut targets = Vec::with_capacity(frames.len());
@@ -834,13 +898,13 @@ impl Nth {
                     let k = counter.before(s)?.saturating_add(skip);
                     let keep = *min.get_or_insert(k);
                     self.values
-                        .row_of(k, keep)?
+                        .row_of(k, keep, shed)?
                         .filter(|&row| row < e)
                         .map(|_| k)
                 }
             });
         }
-        self.values.gather(&targets, None)
+        self.values.gather(&targets, None, shed)
     }
 }
 
@@ -850,7 +914,7 @@ impl Prefix {
         env: &Env,
         j: usize,
         c: &Current<'_>,
-        query: &QueryContext,
+        shed: &mut Shed<'_>,
     ) -> Result<ArrayRef> {
         let ends: Vec<usize> = self.edges.frames(c)?.into_iter().map(|f| f.1).collect();
         let n = ends.len();
@@ -865,7 +929,7 @@ impl Prefix {
         }
         let stop = ends.last().copied().unwrap_or(0);
         while self.folded < stop {
-            query.check_cancelled()?;
+            c.query.check_cancelled()?;
             let (b, r) = self.stream.at(self.folded)?;
             let to = stop.min(self.stream.end);
             let m = to - self.folded;
@@ -882,7 +946,7 @@ impl Prefix {
                     k += 1;
                 }
             }
-            let kept = fold_batch(env, j, &mut self.fold, &b.slice(r, m), &snap)?;
+            let kept = fold_batch(env, j, &mut self.fold, &b.slice(r, m), &snap, shed)?;
             // A long frame end reads many batches for one output batch: only
             // those holding a wanted end stay, as many as the output has rows.
             if k > 0 {
@@ -904,16 +968,14 @@ impl Held {
         env: &Env,
         j: usize,
         c: &Current<'_>,
-        file: &SpillFile,
-        consumer: &Arc<ConsumerHandle>,
-        query: &QueryContext,
+        shed: &mut Shed<'_>,
     ) -> Result<ArrayRef> {
         let f = &env.plan.functions[j];
         let a = aggregate_of(f)?;
         let frames = self.edges.frames(c)?;
         let live = || frames.iter().filter(|(s, e)| s < e);
         let (Some(lo), Some(hi)) = (live().map(|f| f.0).min(), live().map(|f| f.1).max()) else {
-            return self.no_frames(env, j, c, &frames, a, file, consumer, query);
+            return self.no_frames(env, j, c, &frames, a, shed);
         };
         // Results per frame, inputs per row held.
         let eval = frames::cost(a, f, (hi - lo).max(frames.len()))?;
@@ -934,14 +996,14 @@ impl Held {
         }
         self.release();
         c.counters.file_folds.fetch_add(1, Ordering::Relaxed);
-        fold_from_file(env, j, &frames, file, consumer, query)
+        fold_from_file(env, j, &frames, c, shed)
     }
 
     /// A batch whose frames are all empty: nothing held moves, because later
     /// frames may still read those rows (`ROWS BETWEEN 1000 PRECEDING AND 900
     /// PRECEDING` reads the first rows only after 900 empty frames). A row of
-    /// the current batch gives the evaluation its input.
-    #[expect(clippy::too_many_arguments, reason = "`column`'s context, passed on")]
+    /// the current batch gives the evaluation its input. Without room for
+    /// that, the frame gives its batches up and folds from the file.
     fn no_frames(
         &mut self,
         env: &Env,
@@ -949,14 +1011,13 @@ impl Held {
         c: &Current<'_>,
         frames: &[(usize, usize)],
         a: &AggregateExpr,
-        file: &SpillFile,
-        consumer: &Arc<ConsumerHandle>,
-        query: &QueryContext,
+        shed: &mut Shed<'_>,
     ) -> Result<ArrayRef> {
         let f = &env.plan.functions[j];
         let eval = frames::cost(a, f, frames.len().max(1))?;
         if self.charge.try_grow(eval).is_err() {
-            return fold_from_file(env, j, frames, file, consumer, query);
+            self.release();
+            return fold_from_file(env, j, frames, c, shed);
         }
         let row = Slice {
             batch: c.batch,

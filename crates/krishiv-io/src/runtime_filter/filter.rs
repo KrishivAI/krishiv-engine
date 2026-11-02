@@ -14,6 +14,7 @@ use hashbrown::HashTable;
 
 use super::FilterId;
 use super::bloom::RuntimeBloom;
+use super::bound::TopNBound;
 use super::hash::{RowHash, row_hashes};
 use super::key::{
     KeyRange, KeyValue, Norm, NormalizedKeys, float_bits, for_each_bytes, normalize_key_bytes,
@@ -414,6 +415,7 @@ impl KeyFilterBuilder {
             empty: self.rows == 0,
             keys: self.rows,
             key_type: self.key_type,
+            bound: None,
         }
     }
 }
@@ -470,6 +472,8 @@ pub struct KeyFilter {
     pub(crate) empty: bool,
     /// Non-null keys the producer stored (with duplicates).
     pub(crate) keys: u64,
+    /// A top-N's bound, on the non-null keys.
+    pub(crate) bound: Option<TopNBound>,
 }
 
 impl KeyFilter {
@@ -596,7 +600,13 @@ impl KeyFilter {
                 _ => BooleanBuffer::new_unset(n),
             };
         }
-        let pass = evaluate(self.range.as_ref(), &self.member, keys, valid);
+        let pass = match &self.bound {
+            Some(b) => {
+                let pass = b.pass(keys);
+                valid.map_or_else(|| pass.clone(), |v| &pass & v)
+            }
+            None => evaluate(self.range.as_ref(), &self.member, keys, valid),
+        };
         match valid {
             Some(v) if self.nulls_pass => &pass | &!v,
             _ => pass,
@@ -634,6 +644,20 @@ impl KeyFilter {
             });
         }
         let mut conj = Vec::new();
+        if let Some((value, op)) = self
+            .bound
+            .as_ref()
+            .and_then(|b| b.comparison(&self.key_type))
+            && let Some(v) = value_scalar(&value, &self.key_type)
+        {
+            match retype(&v, &self.key_type, column_type, op) {
+                Some(Retyped::Exact(value)) => {
+                    conj.push(PushdownExpr::cmp(column.clone(), op, value));
+                }
+                Some(Retyped::Never) => conj.push(PushdownExpr::Constant(false)),
+                Some(Retyped::Always) | None => {}
+            }
+        }
         if let Some((lo, hi)) = self.range_scalars() {
             for (v, op) in [(lo, CmpOp::GtEq), (hi, CmpOp::LtEq)] {
                 match retype(&v, &self.key_type, column_type, op) {

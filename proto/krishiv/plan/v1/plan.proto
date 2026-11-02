@@ -156,6 +156,28 @@ message Node {
     LoopRefNode loop_ref = 23;
     // feature: sort_merge_join
     SortMergeJoinNode sort_merge_join = 21;
+    // feature: late_fetch
+    LateFetchNode late_fetch = 24;
+  }
+}
+
+// feature: late_fetch
+// The rows of `input` with columns read from their files by row id.
+message LateFetchNode {
+  uint32 input = 1;
+  // The table and the columns to read.
+  ScanNode scan = 2;
+  uint64 file_col = 3;
+  uint64 row_col = 4;
+  repeated FetchSlot output = 5;
+}
+
+// feature: late_fetch
+// Where a column of a `LateFetchNode`'s output comes from.
+message FetchSlot {
+  oneof kind {
+    uint64 input = 1;
+    uint64 fetched = 2;
   }
 }
 
@@ -334,6 +356,8 @@ message TopNNode {
   uint32 input = 1;
   repeated SortKey keys = 2;
   uint64 limit = 3;
+  // ignorable: a reader that skips it offers no bound, and scans only prune less.
+  optional uint64 bound = 4;
 }
 
 // feature: window
@@ -747,6 +771,8 @@ message ScanNode {
   optional ScanFilter filter = 6;
   repeated ScanRuntimeFilter runtime_filters = 7;
   RowStageSettings row_stage = 8;
+  // feature: late_fetch
+  bool row_id = 9;
 }
 
 message ColumnPath {

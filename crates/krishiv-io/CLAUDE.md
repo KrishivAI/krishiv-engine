@@ -14,7 +14,7 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
 re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
-`scan.rs` ScanStream · `runtime_filter/` (P2-T163): `RuntimeFilter` (snapshots numbered by generation; the
+`scan.rs` ScanStream · `take.rs` (P2-T063) rows by position for a late fetch: `take`, `TakeRequest`, `TakeStream`, `RowFile` (the versioned row id naming a file); a format offers it through `Capabilities::random_access` · `runtime_filter/bound.rs` (P2-T063) a top-N's bound as a `KeyFilter`, run by the Parquet row filter as its own first pass · `runtime_filter/` (P2-T163): `RuntimeFilter` (snapshots numbered by generation; the
 atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per scan level), `KeyFilter` and
 `KeyFilterBuilder` (min/max, value set, Bloom filter), `normalize_key_bytes` and `widens_to` (the single key
 normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes),
