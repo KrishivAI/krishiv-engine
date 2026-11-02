@@ -437,3 +437,158 @@ fn corrupt_encodings_are_refused() {
     bytes.extend_from_slice(&99i64.to_le_bytes());
     assert!(KeyFilter::decode(&bytes).is_err());
 }
+
+mod top_n_bound {
+    use std::sync::Arc;
+
+    use arrow_array::{Array, Float64Array, Int32Array, StringViewArray};
+    use arrow_schema::DataType;
+
+    use super::round_trip;
+    use crate::request::{ColumnPath, PushdownExpr};
+    use crate::runtime_filter::{FilterId, FilterSnapshot, KeyFilter, RuntimeFilter};
+
+    fn passing(f: &KeyFilter, column: &dyn arrow_array::Array) -> Vec<bool> {
+        let mask = f.evaluate(column).unwrap_or_else(|| panic!("no answer"));
+        assert_eq!(mask.null_count(), 0, "a runtime filter mask has no nulls");
+        mask.iter().map(|b| b == Some(true)).collect()
+    }
+
+    fn bound(column: &dyn arrow_array::Array, row: usize, desc: bool, first: bool) -> KeyFilter {
+        KeyFilter::top_n_bound(column, row, column.data_type(), desc, first)
+            .unwrap_or_else(|| panic!("no bound"))
+    }
+
+    #[test]
+    fn ties_pass_and_nulls_follow_their_rank() {
+        let keys = Int32Array::from(vec![Some(1), Some(5), None, Some(9), Some(5)]);
+        let last_first = bound(&keys, 1, false, false);
+        assert_eq!(
+            passing(&last_first, &keys),
+            [true, true, false, false, true]
+        );
+        let nulls_first = bound(&keys, 1, false, true);
+        assert_eq!(
+            passing(&nulls_first, &keys),
+            [true, true, true, false, true]
+        );
+        let desc = bound(&keys, 1, true, false);
+        assert_eq!(passing(&desc, &keys), [false, true, false, true, true]);
+    }
+
+    #[test]
+    fn a_null_bound_keeps_only_nulls_or_is_no_bound() {
+        let keys = Int32Array::from(vec![Some(1), None]);
+        let only_nulls = bound(&keys, 1, false, true);
+        assert_eq!(passing(&only_nulls, &keys), [false, true]);
+        assert!(!only_nulls.is_empty() || only_nulls.nulls_pass());
+        assert_eq!(passing(&round_trip(&only_nulls), &keys), [false, true]);
+        assert!(KeyFilter::top_n_bound(&keys, 1, &DataType::Int32, false, false).is_none());
+    }
+
+    /// NaN is the greatest float: never past an ascending bound's rows, and
+    /// always kept by a descending one.
+    #[test]
+    fn floats_compare_in_the_sort_order() {
+        let keys = Float64Array::from(vec![1.0, f64::NAN, -0.0, 0.0, 3.0]);
+        let asc = bound(&keys, 3, false, false);
+        assert_eq!(passing(&asc, &keys), [false, false, true, true, false]);
+        let desc = bound(&keys, 0, true, false);
+        assert_eq!(passing(&desc, &keys), [true, true, false, false, true]);
+        assert!(
+            KeyFilter::top_n_bound(&keys, 1, &DataType::Float64, false, false).is_none(),
+            "every row ranks at or before a NaN"
+        );
+    }
+
+    /// Statistics leave NaN out, so a descending float bound must not prune
+    /// a unit by its maximum.
+    #[test]
+    fn a_descending_float_bound_has_no_statistics_comparison() {
+        let keys = Float64Array::from(vec![1.0]);
+        let column = ColumnPath::new("x");
+        let lowered = Arc::new(bound(&keys, 0, true, false))
+            .lower(&column, &DataType::Float64, FilterId(1), 1)
+            .unwrap_or_else(|| panic!("no predicate"));
+        let PushdownExpr::And(conj) = lowered else {
+            panic!("{lowered:?}");
+        };
+        assert!(
+            matches!(conj.as_slice(), [PushdownExpr::Membership { .. }]),
+            "{conj:?}"
+        );
+        let lowered = Arc::new(bound(&keys, 0, false, false))
+            .lower(&column, &DataType::Float64, FilterId(1), 1)
+            .unwrap_or_else(|| panic!("no predicate"));
+        let PushdownExpr::And(conj) = lowered else {
+            panic!("{lowered:?}");
+        };
+        assert_eq!(conj.len(), 2, "{conj:?}");
+    }
+
+    #[test]
+    fn strings_compare_as_bytes_and_a_bound_round_trips() {
+        let keys = StringViewArray::from(vec!["apple", "banana", "cherry"]);
+        let f = round_trip(&bound(&keys, 1, false, false));
+        assert_eq!(passing(&f, &keys), [true, true, false]);
+        let f = round_trip(&bound(&keys, 1, true, true));
+        assert_eq!(passing(&f, &keys), [false, true, true]);
+    }
+
+    #[test]
+    fn a_numeric_bound_round_trips_with_its_nulls() {
+        let keys = Int32Array::from(vec![Some(1), Some(2), Some(3), None]);
+        let f = round_trip(&bound(&keys, 1, false, true));
+        assert_eq!(passing(&f, &keys), [true, true, false, true]);
+        let f = round_trip(&bound(&keys, 1, true, false));
+        assert_eq!(passing(&f, &keys), [false, true, true, false]);
+    }
+
+    /// Whatever order drivers publish in, a filter only tightens.
+    #[test]
+    fn a_filter_only_tightens() {
+        let keys = Int32Array::from(vec![10, 5, 7, 3]);
+        let filter = RuntimeFilter::new(FilterId(1), ColumnPath::new("x"), DataType::Int32);
+        assert_eq!(
+            filter.tighten(Arc::new(bound(&keys, 0, false, false))),
+            Some(1)
+        );
+        assert_eq!(
+            filter.tighten(Arc::new(bound(&keys, 1, false, false))),
+            Some(2)
+        );
+        assert_eq!(
+            filter.tighten(Arc::new(bound(&keys, 2, false, false))),
+            None
+        );
+        assert_eq!(
+            filter.tighten(Arc::new(bound(&keys, 1, false, false))),
+            None
+        );
+        assert_eq!(
+            filter.tighten(Arc::new(bound(&keys, 3, false, false))),
+            Some(3)
+        );
+        let FilterSnapshot::Tightening(current) = filter.published().snapshot.clone() else {
+            panic!("not tightening");
+        };
+        assert_eq!(passing(&current, &keys), [false, false, false, true]);
+    }
+
+    #[test]
+    fn a_descending_bound_tightens_upwards_and_nulls_are_tightest() {
+        let keys = Int32Array::from(vec![Some(1), Some(2), None]);
+        assert!(bound(&keys, 1, true, false).tighter_than(&bound(&keys, 0, true, false)));
+        assert!(!bound(&keys, 0, true, false).tighter_than(&bound(&keys, 1, true, false)));
+        let nulls = bound(&keys, 2, false, true);
+        assert!(nulls.tighter_than(&bound(&keys, 0, false, true)));
+        assert!(!bound(&keys, 0, false, true).tighter_than(&nulls));
+    }
+
+    #[test]
+    fn floats_tighten_in_the_sort_order() {
+        let keys = Float64Array::from(vec![-1.0, 2.0]);
+        assert!(bound(&keys, 0, false, false).tighter_than(&bound(&keys, 1, false, false)));
+        assert!(!bound(&keys, 1, false, false).tighter_than(&bound(&keys, 0, false, false)));
+    }
+}

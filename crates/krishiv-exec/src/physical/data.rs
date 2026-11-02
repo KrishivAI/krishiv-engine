@@ -115,6 +115,7 @@ value_types!(
     arrow_schema::Schema,
     arrow_schema::Field,
     arrow_schema::DataType,
+    krishiv_types::DataType,
     // The resolved logical IR is data with a canonical encoding
     // (`krishiv_plan::encode`); a registry function id is a name plus an
     // in-process lookup handle that is never part of a key.

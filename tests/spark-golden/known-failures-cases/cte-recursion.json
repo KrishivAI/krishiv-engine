@@ -1,7 +1,6 @@
 {
   "cases": {
     "depends-on-command": [
-      49,
       53
     ],
     "query-features": [
@@ -9,7 +8,6 @@
       27,
       28,
       61,
-      67,
       75,
       77,
       79,
@@ -21,9 +19,7 @@
       85
     ],
     "sql-commands": [
-      48,
-      52,
-      66
+      52
     ]
   },
   "file": "cte-recursion",

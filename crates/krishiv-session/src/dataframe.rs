@@ -2011,9 +2011,31 @@ impl DataFrameWriter {
         session
             .on_executor(async move {
                 let a = df.analysis().await?;
+                // Files hold a geometry or geography as a WKB column with a
+                // Parquet logical type (P2-T181 unit U3); until it lands, a
+                // spatial value is not written as the `{srid, wkb}` struct
+                // Spark cannot read.
+                if a.analyzed
+                    .output
+                    .iter()
+                    .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
+                {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
+                    }
+                    .into());
+                }
                 // A write reads the cache like any other action.
                 let (physical, _) = df.physical_cached(&a).await?;
-                df.session.write_files(physical, &a.env, target).await
+                let types: Vec<_> = a
+                    .analyzed
+                    .output
+                    .iter()
+                    .map(|c| c.data_type.clone())
+                    .collect();
+                df.session
+                    .write_files(physical, &a.env, target, &types)
+                    .await
             })
             .await
     }
@@ -2056,8 +2078,6 @@ impl DataFrameWriter {
     }
 
     /// Writes the rows as JSON files under `path` (PySpark's `write.json`).
-    /// The engine has no JSON writer yet: the write fails with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -2065,8 +2085,8 @@ impl DataFrameWriter {
     /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
     /// # s.register_batches("t", schema, vec![])?;
     /// let out = dir.path().join("t");
-    /// let e = futures::executor::block_on(s.table("t").write().json(out.to_str().unwrap())).unwrap_err();
-    /// assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    /// futures::executor::block_on(s.table("t").write().json(out.to_str().unwrap()))?;
+    /// assert!(out.is_dir());
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     ///

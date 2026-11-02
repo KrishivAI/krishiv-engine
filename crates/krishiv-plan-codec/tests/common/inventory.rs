@@ -21,7 +21,7 @@ use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
 };
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind,
@@ -129,6 +129,7 @@ pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
         max_records_per_file: 600,
         target_file_bytes: 1 << 20,
         partition_by: Vec::new(),
+        column_types: std::collections::BTreeMap::new(),
     }
 }
 
@@ -166,6 +167,7 @@ pub(crate) fn table_scan() -> ScanNode {
             min_rows: 1000,
             max_pass_rate: 0.75,
         },
+        row_id: false,
     }
 }
 
@@ -189,6 +191,7 @@ pub(crate) fn file_scan() -> ScanNode {
         filter: None,
         runtime_filters: Vec::new(),
         row_stage: RowStageSettings::default(),
+        row_id: false,
     }
 }
 
@@ -854,11 +857,30 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "late_fetch",
+            PhysNode::LateFetch {
+                input: boxed(PhysNode::TopN {
+                    input: boxed(PhysNode::Scan(ScanNode {
+                        row_id: true,
+                        ..file_scan()
+                    })),
+                    keys: keys.clone(),
+                    limit: 10,
+                    bound: None,
+                }),
+                scan: file_scan(),
+                file_col: 2,
+                row_col: 3,
+                output: vec![FetchSlot::Input(0), FetchSlot::Fetched(0)],
+            },
+        ),
+        (
             "top_n",
             PhysNode::TopN {
                 input: boxed(scan()),
                 keys,
                 limit: 10,
+                bound: None,
             },
         ),
         (
@@ -1157,6 +1179,22 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 input: boxed(scan()),
                 write: Some(WritePlan {
                     partition_by: vec![1, 0],
+                    ..write_plan()
+                }),
+            },
+        ),
+        (
+            "write_files_column_types",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(WritePlan {
+                    column_types: BTreeMap::from([(
+                        0,
+                        krishiv_types::DataType::DayTimeInterval {
+                            start: krishiv_types::DayTimeField::Day,
+                            end: krishiv_types::DayTimeField::Hour,
+                        },
+                    )]),
                     ..write_plan()
                 }),
             },

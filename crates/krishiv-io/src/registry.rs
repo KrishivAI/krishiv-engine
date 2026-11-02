@@ -78,6 +78,8 @@ impl FormatRegistry {
         let _ = r.register(Arc::new(crate::parquet::ParquetFormat));
         let _ = r.register(Arc::new(crate::csv::CsvFormat));
         let _ = r.register(Arc::new(crate::avro::AvroFormat));
+        let _ = r.register(Arc::new(crate::json::JsonFormat));
+        let _ = r.register(Arc::new(crate::text_format::TextFormat));
         r
     }
 
@@ -159,15 +161,15 @@ mod tests {
     #[test]
     fn unknown_names_fail_with_data_source_not_found() {
         let r = FormatRegistry::with_defaults();
-        for name in ["parquet", "PARQUET", "csv", "CSV", "avro", "AVRO"] {
+        for name in [
+            "parquet", "PARQUET", "csv", "CSV", "avro", "AVRO", "json", "JSON", "text", "TEXT",
+        ] {
             assert!(r.get(name).is_ok(), "{name}");
             assert!(r.contains(name), "{name}");
         }
         // Spark built-in sources without an implementation are still
         // unregistered here; reads and writes report them as unsupported.
-        for name in ["orc", "json", "text"] {
-            assert!(!r.contains(name), "{name}");
-        }
+        assert!(!r.contains("orc"));
         for name in ["delta", "nosuchformat"] {
             let Err(e) = r.get(name) else {
                 panic!("unknown format resolved")
@@ -193,6 +195,6 @@ mod tests {
     #[test]
     fn defaults_register_parquet_csv_and_avro() {
         let r = FormatRegistry::with_defaults();
-        assert_eq!(r.names(), ["avro", "csv", "parquet"]);
+        assert_eq!(r.names(), ["avro", "csv", "json", "parquet", "text"]);
     }
 }

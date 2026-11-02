@@ -129,6 +129,7 @@ registry! {
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
     (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
+    (late_fetch, LateFetch, POST_MIGRATION_READER_VERSION, Optimization, "The `LateFetch` node and a scan's row id: a top-N that ranks a narrow scan and reads the other columns of its rows afterwards."),
     (legacy_charset_switches, LegacyCharsetSwitches, POST_MIGRATION_READER_VERSION, Semantic, "The session's `encode`/`decode` switches (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`); without them a worker would refuse the charset or raise on malformed input."),
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
@@ -151,6 +152,7 @@ registry! {
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
     (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
     (window_range_bounds, WindowRangeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds at a value distance from the current row's ordering key (`RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`)."),
+    (write_column_types, WriteColumnTypes, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` naming the Spark types of input columns whose Arrow type doesn't say them (an interval's fields): without them a file's footer and text forms would use other fields."),
     (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
 
@@ -205,6 +207,8 @@ pub enum Construct<'a> {
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
+    /// A `WritePlan` naming the Spark types of input columns.
+    WriteColumnTypes,
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -314,6 +318,8 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
     match construct {
         Construct::Node(node) => match node {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
+            PhysNode::LateFetch { .. } => Some(Feature::LateFetch),
+            PhysNode::Scan(s) => s.row_id.then_some(Feature::LateFetch),
             PhysNode::HashJoin(j) => j.single_match.then_some(Feature::JoinSingleMatch),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
@@ -333,8 +339,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                     Feature::PartitionedWrites
                 }
             }),
-            PhysNode::Scan(_)
-            | PhysNode::OneRow
+            PhysNode::OneRow
             | PhysNode::Filter { .. }
             | PhysNode::Project { .. }
             | PhysNode::ReplicateRows { .. }
@@ -387,6 +392,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // A lambda is plan data behind its own feature: a reader without
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
+        Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         // A type Krishiv does not know cannot be encoded at all. A later
         // feature for a type that can sit inside an array, map or struct
         // (variant, char/varchar, intervals) must look through them: its
@@ -533,6 +539,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
         PhysNode::Scan(_)
+        | PhysNode::LateFetch { .. }
         | PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::UnionLoop { .. }
@@ -545,8 +552,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
-        | PhysNode::Union { .. }
-        | PhysNode::WriteFiles { .. } => {}
+        | PhysNode::Union { .. } => {}
+        PhysNode::WriteFiles { write, .. } => {
+            if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
+                f(Construct::WriteColumnTypes);
+            }
+        }
     }
     for t in types_of(node) {
         visit_type(t, f);
@@ -625,8 +636,11 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
             _ => {}
         }
     }
-    if let PhysNode::Scan(scan) = node {
+    if let PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+    }
+    if let PhysNode::WriteFiles { write: Some(w), .. } = node {
+        out.extend(w.column_types.values());
     }
     out
 }
@@ -656,6 +670,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
+        | PhysNode::LateFetch { .. }
         | PhysNode::UnionLoop { .. }
         | PhysNode::LoopRef { .. }
         | PhysNode::Limit { .. }

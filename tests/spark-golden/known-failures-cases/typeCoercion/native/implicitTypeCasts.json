@@ -7,10 +7,6 @@
     ],
     "datetime": [
       35
-    ],
-    "time-geo-types": [
-      33,
-      34
     ]
   },
   "file": "typeCoercion/native/implicitTypeCasts",

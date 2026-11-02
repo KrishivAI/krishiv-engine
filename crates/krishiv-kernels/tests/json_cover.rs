@@ -1294,7 +1294,7 @@ fn read_nested_lists_structs_and_failfast() {
     assert!(
         read_json(
             &strs(&[Some("1")]),
-            &DataType::Duration(arrow_schema::TimeUnit::Microsecond),
+            &DataType::Duration(arrow_schema::TimeUnit::Second),
             &opts,
             &zone(),
             0
@@ -1530,7 +1530,7 @@ fn write_every_arrow_type() {
         [Some("{\"a\":null,\"b\":1}".to_owned())]
     );
     // Other Arrow types are rejected.
-    let dur: ArrayRef = Arc::new(arrow_array::DurationMicrosecondArray::from(vec![Some(1)]));
+    let dur: ArrayRef = Arc::new(arrow_array::DurationSecondArray::from(vec![Some(1)]));
     assert!(write_json(&dur, &opts, &zone()).is_err());
     // Top-level NULL rows stay NULL.
     let col: ArrayRef = Arc::new(Int32Array::from(vec![None]));

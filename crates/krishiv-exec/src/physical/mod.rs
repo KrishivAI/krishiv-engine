@@ -80,7 +80,7 @@ pub use splits::{
 use crate::aggregate::{AggregateExpr, AggregateOutput};
 use crate::error::Result;
 use crate::join::JoinType;
-use crate::operators::{RowStageSettings, SortKey};
+use crate::operators::{FetchSlot, RowStageSettings, SortKey};
 use crate::planner::ExplainNode;
 use crate::window::{GroupLimitPlan, WindowPlan};
 
@@ -403,6 +403,21 @@ pub enum PhysNode {
         /// The sort keys.
         keys: Vec<SortKey>,
     },
+    /// The rows of `input`, in order, with columns read from their files by
+    /// the row id `input` carries (design P2-T063). `scan` isn't a child: it
+    /// says how to read, and the row id says which file.
+    LateFetch {
+        /// The rows.
+        input: Box<PhysNode>,
+        /// The table and the columns to read, as its `output` and `projection`.
+        scan: ScanNode,
+        /// The column of `input` with each row's encoded file.
+        file_col: usize,
+        /// The column of `input` with each row's position in its file.
+        row_col: usize,
+        /// The output's columns.
+        output: Vec<FetchSlot>,
+    },
     /// The first `limit` rows of `input` in the order of `keys`.
     TopN {
         /// The input.
@@ -411,6 +426,9 @@ pub enum PhysNode {
         keys: Vec<SortKey>,
         /// The row count.
         limit: u64,
+        /// The runtime filter it offers its bound on the first key through,
+        /// to a scan below (design P2-T063).
+        bound: Option<FilterId>,
     },
     /// Window functions over `input`, which is sorted by the plan's
     /// partitioning, then its ordering: the input's columns, then one per
@@ -537,6 +555,9 @@ pub struct ScanNode {
     pub runtime_filters: Vec<ScanRuntimeFilter>,
     /// The runtime filters' row-stage settings.
     pub row_stage: RowStageSettings,
+    /// Whether the output ends in the row id (file, then position) that a
+    /// [`PhysNode::LateFetch`] above reads.
+    pub row_id: bool,
 }
 
 /// A range source: `range(start, end, step, numSlices)` (Spark's `Range`).
@@ -776,6 +797,9 @@ pub struct WritePlan {
     /// A partitioned write sorts its input by these columns directly
     /// below the writer.
     pub partition_by: Vec<usize>,
+    /// The input columns whose Spark type their Arrow type doesn't say (an
+    /// interval's fields), for the writer's footers and text forms.
+    pub column_types: BTreeMap<usize, krishiv_types::DataType>,
 }
 
 impl WritePlan {
@@ -852,7 +876,8 @@ plan_data!(enum PhysNode {
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
-    TopN { input, keys, limit },
+    LateFetch { input, scan, file_col, row_col, output },
+    TopN { input, keys, limit, bound },
     Window { input, window },
     WindowGroupLimit { input, limit },
     Aggregate { input, aggregate },
@@ -875,9 +900,16 @@ plan_data!(struct WritePlan {
     job_uuid,
     max_records_per_file,
     target_file_bytes,
-    partition_by
+    partition_by,
+    column_types
 });
-plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
+plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
+plan_data!(
+    enum FetchSlot {
+        Input(index),
+        Fetched(index),
+    }
+);
 plan_data!(struct RangeNode { start, end, step, num_slices, output });
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
@@ -932,6 +964,7 @@ impl PhysNode {
             Self::Limit { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
+            | Self::LateFetch { input, .. }
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
@@ -975,6 +1008,7 @@ impl PhysNode {
             Self::Limit { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
+            | Self::LateFetch { input, .. }
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
