@@ -196,3 +196,17 @@ fn operators_lists_what_a_finished_query_ran() {
         "{roles:?}"
     );
 }
+
+#[test]
+fn queries_records_statements_refused_before_they_ran() {
+    let s = Session::new().unwrap();
+    assert!(run_all(&s, "SELECT nope FROM range(1)").is_err());
+    assert!(run_all(&s, "SELEC 1").is_err());
+    let rows = strings_in(
+        &s,
+        "SELECT concat_ws('|', state, error_class) FROM system.queries WHERE state NOT IN ('finished', 'running') ORDER BY submitted_at",
+    );
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(rows[0].starts_with("failed|UNRESOLVED_COLUMN"), "{rows:?}");
+    assert!(rows[1].starts_with("failed|PARSE_SYNTAX_ERROR"), "{rows:?}");
+}

@@ -479,6 +479,28 @@ impl QueryLog {
         id
     }
 
+    /// Records a statement that failed before it ran: parsing, analysis or
+    /// an access check. A denial is `denied`; a cancellation `cancelled`.
+    pub(crate) fn record_refused(&self, text: &str, error: &KrishivError) {
+        let id = self.begin(Some(text));
+        let class = error.error_class().name();
+        let state = match class {
+            "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
+            "OPERATION_CANCELED" => "cancelled",
+            _ => "failed",
+        };
+        self.finish(
+            &id,
+            &Finished {
+                state,
+                wall_ns: 0,
+                peak_memory_bytes: 0,
+                error_class: (state != "cancelled").then_some(class),
+                operators: Vec::new(),
+            },
+        );
+    }
+
     /// Marks the query `id` finished (a row evicted meanwhile is gone).
     pub(crate) fn finish(&self, id: &str, done: &Finished<'_>) {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);

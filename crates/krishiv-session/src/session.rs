@@ -508,9 +508,18 @@ impl Session {
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        let (session, query) = (self.clone(), query.to_owned());
-        self.on_executor(async move { session.sql_here(&query).await })
-            .await
+        let (session, text) = (self.clone(), query.to_owned());
+        let result = self
+            .on_executor(async move { session.sql_here(&text).await })
+            .await;
+        // A statement refused before it ran (parse, analysis, access) is a
+        // row of `system.queries` too, with the text as the session may show it.
+        if let Err(error) = &result {
+            self.state
+                .queries
+                .record_refused(krishiv_sql::redact_sql(query).as_str(), error);
+        }
+        result
     }
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
