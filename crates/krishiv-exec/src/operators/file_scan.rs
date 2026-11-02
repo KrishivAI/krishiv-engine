@@ -786,7 +786,12 @@ impl FileScanSource {
     /// filters already published) keeps at most half the bytes, the
     /// morsels share the rows left instead ([`Self::pruned_morsels`]): byte
     /// morsels of clustered data would leave those rows on a driver or two.
-    fn morsels(&self, ctx: &TaskContext, request: &ScanRequest) -> Vec<Vec<MorselSplit>> {
+    fn morsels(
+        &self,
+        ctx: &TaskContext,
+        request: &ScanRequest,
+        partition_filters: &[(usize, ScanFilter)],
+    ) -> Vec<Vec<MorselSplit>> {
         let caps = self.format.capabilities(&self.format_options);
         let splittable = |f: usize| {
             self.files
@@ -797,7 +802,7 @@ impl FileScanSource {
         if self.request.metadata_cols.row_index && caps.random_access.is_none() {
             return krishiv_io::split::morsels(&self.partitions, u64::MAX, splittable);
         }
-        if let Some(m) = self.pruned_morsels(request, drivers, &splittable) {
+        if let Some(m) = self.pruned_morsels(request, partition_filters, drivers, &splittable) {
             return m;
         }
         let target =
@@ -814,9 +819,16 @@ impl FileScanSource {
     /// skips. Also `None` when a filter conjunct above may raise: a small
     /// file stays one morsel, so the first row in file order that raises
     /// is the one reported.
+    ///
+    /// The weights use the table-level predicate, as the planner's
+    /// statistics do; a file whose columns map differently prunes less here
+    /// than in its reader (pruning answers Unknown), so its weight is a
+    /// superset of what it reads. A file a partition filter drops keeps
+    /// nothing. When nothing is kept, each partition is one morsel.
     fn pruned_morsels(
         &self,
         request: &ScanRequest,
+        partition_filters: &[(usize, ScanFilter)],
         drivers: usize,
         splittable: &impl Fn(usize) -> bool,
     ) -> Option<Vec<Vec<MorselSplit>>> {
@@ -834,7 +846,15 @@ impl FileScanSource {
         let mut req = request.clone();
         req.dynamic = Vec::new();
         req.predicate = Some(predicate);
-        let (mut bytes, mut kept_bytes, mut kept_rows) = (0_u64, 0_u64, 0_u64);
+        // Walked in order, the scan gives up as soon as more than half its
+        // bytes are kept, without pruning the rest.
+        let bytes = self
+            .partitions
+            .iter()
+            .flat_map(|p| &p.splits)
+            .map(|s| s.range.len())
+            .fold(0, u64::saturating_add);
+        let (mut kept_bytes, mut kept_rows) = (0_u64, 0_u64);
         let mut kept = Vec::with_capacity(self.partitions.len());
         for p in self.partitions.iter() {
             let mut splits = Vec::with_capacity(p.splits.len());
@@ -843,6 +863,14 @@ impl FileScanSource {
                     return None;
                 }
                 let file = self.files.get(s.file)?;
+                let dropped = !partition_filters.is_empty()
+                    && self
+                        .partition_values(file)
+                        .is_ok_and(|v| dropping_filter(partition_filters, &v).is_some());
+                if dropped {
+                    splits.push(Vec::new());
+                    continue;
+                }
                 let needs = self.scan_options.needs;
                 let meta = self.io.cached_metadata(
                     self.format.as_ref(),
@@ -852,7 +880,6 @@ impl FileScanSource {
                 )?;
                 meta.unit_count()?;
                 let plan = self.format.plan_units(meta.as_ref(), &s.range, &req).ok()?;
-                bytes = bytes.saturating_add(s.range.len());
                 let units: Vec<KeptUnit> = plan
                     .units
                     .iter()
@@ -865,12 +892,12 @@ impl FileScanSource {
                         }
                     })
                     .collect();
+                if kept_bytes.saturating_mul(2) > bytes {
+                    return None;
+                }
                 splits.push(units);
             }
             kept.push(splits);
-        }
-        if kept_bytes.saturating_mul(2) > bytes {
-            return None;
         }
         let morsels = (drivers.max(1) as u64).saturating_mul(MORSELS_PER_DRIVER);
         let target = kept_rows.div_ceil(morsels);
@@ -1364,7 +1391,7 @@ impl Source for FileScanSource {
             request.dynamic = self.runtime.scan_filters(table);
             partition_filters = self.partition_filters();
         }
-        let morsels = self.morsels(ctx, &request);
+        let morsels = self.morsels(ctx, &request, &partition_filters);
         Ok(Arc::new(FileScanGlobal {
             request,
             partition_filters,

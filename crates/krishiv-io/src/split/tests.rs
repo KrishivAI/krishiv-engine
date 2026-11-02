@@ -329,6 +329,15 @@ fn pruned_morsels_share_the_kept_rows() {
         ranges,
         vec![vec![(95, 120)], vec![(120, 150)], vec![(150, 200)]]
     );
+    // Splits and partitions missing from `kept` keep nothing but are read.
+    let parts = [part(0, &[(0, 0, 100), (1, 0, 50)]), part(1, &[(2, 0, 10)])];
+    let k = vec![vec![kept(&[(10, 5)])]];
+    let m = pruned_morsels(&parts, &k, 10);
+    let files: Vec<Vec<usize>> = m
+        .iter()
+        .map(|m| m.iter().map(|p| p.file).collect())
+        .collect();
+    assert_eq!(files, vec![vec![0, 1], vec![2]]);
 }
 
 #[test]

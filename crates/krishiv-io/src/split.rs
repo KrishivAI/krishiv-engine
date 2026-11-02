@@ -270,7 +270,8 @@ pub struct KeptUnit {
 /// again. As with [`morsels`], a morsel never spans two partitions and
 /// reading the morsels in order reads every partition's rows in its order:
 /// a unit's midpoint is never before the cut at its own start, and every
-/// earlier unit ends at or before it.
+/// earlier unit ends at or before it. A partition or split missing from
+/// `kept` keeps nothing.
 #[must_use]
 pub fn pruned_morsels(
     partitions: &[FilePartition],
@@ -279,10 +280,12 @@ pub fn pruned_morsels(
 ) -> Vec<Vec<MorselSplit>> {
     let target_rows = target_rows.max(1);
     let mut out = Vec::new();
-    for (p, kept) in partitions.iter().zip(kept) {
+    for (i, p) in partitions.iter().enumerate() {
+        let kept = kept.get(i).map_or(&[][..], Vec::as_slice);
         let mut current: Vec<MorselSplit> = Vec::new();
         let mut rows: u64 = 0;
-        for (s, units) in p.splits.iter().zip(kept) {
+        for (j, s) in p.splits.iter().enumerate() {
+            let units = kept.get(j).map_or(&[][..], Vec::as_slice);
             let mut start = s.range.start;
             for u in units {
                 if rows > 0 && rows.saturating_add(u.rows) > target_rows {
