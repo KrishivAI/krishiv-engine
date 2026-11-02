@@ -327,9 +327,12 @@ async fn azure_round_trip() {
 
 /// A one-file web server on loopback that honours `Range`, logging each
 /// request line and its `Range` header.
+/// (request line, `Range` header, `Authorization` header) per request.
+type RequestLog = Arc<std::sync::Mutex<Vec<(String, Option<String>, Option<String>)>>>;
+
 struct RangeServer {
     port: u16,
-    log: Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>,
+    log: RequestLog,
 }
 
 fn serve(body: Vec<u8>) -> RangeServer {
@@ -349,6 +352,7 @@ fn serve(body: Vec<u8>) -> RangeServer {
                 }
                 let request = line.trim().to_owned();
                 let mut range = None;
+                let mut auth = None;
                 loop {
                     let mut h = String::new();
                     reader.read_line(&mut h).unwrap();
@@ -359,8 +363,13 @@ fn serve(body: Vec<u8>) -> RangeServer {
                     if let Some(v) = h.to_ascii_lowercase().strip_prefix("range:") {
                         range = Some(v.trim().to_owned());
                     }
+                    if h.to_ascii_lowercase().starts_with("authorization:") {
+                        auth = h.split_once(':').map(|(_, v)| v.trim().to_owned());
+                    }
                 }
-                seen.lock().unwrap().push((request.clone(), range.clone()));
+                seen.lock()
+                    .unwrap()
+                    .push((request.clone(), range.clone(), auth.clone()));
                 let head = request.starts_with("HEAD");
                 let (status, slice) = match range.as_deref().and_then(|r| r.strip_prefix("bytes="))
                 {
@@ -415,7 +424,7 @@ async fn https_store_reads_ranges_only() {
     assert_eq!(&got[0][..], &body[..]);
     let (ids, _) = read_parquet(&got[0]);
     assert_eq!(ids, vec![1, 2, 3]);
-    for (request, range) in server.log.lock().unwrap().iter() {
+    for (request, range, _) in server.log.lock().unwrap().iter() {
         assert!(
             request.starts_with("HEAD") || range.is_some(),
             "a whole-file GET: {request}"
@@ -437,4 +446,70 @@ fn http_urls_name_a_store_by_authority_and_refuse_credentials_and_remote_plain_h
         .ensure(&sched, "http://example.com/x.parquet")
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+/// Reads `url` whole through a registry with `pairs` and checks the bytes;
+/// returns the display path and the registry's `Debug` text.
+async fn read_hf(body: &[u8], pairs: &[(&str, &str)], url: &str) -> (String, String) {
+    let config = test_config(pairs);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let (store, path, display) = registry.ensure(&sched, url).unwrap();
+    let io = sched.context();
+    let meta = io.head(&store, &path).await.unwrap().unwrap();
+    let file = FileRef::from_meta(store, &meta);
+    let got = io.get_ranges(&file, &[0..file.size]).await.unwrap();
+    assert_eq!(&got[0][..], body);
+    (display, format!("{registry:?}"))
+}
+
+/// `hf://datasets/<org>/<name>[@rev]/<path>` resolves to the `resolve`
+/// endpoint, sends the token as a bearer header only when one is set, and
+/// reads the same bytes as `https://` (P2-T195 unit 2).
+#[tokio::test]
+async fn hf_paths_read_through_the_resolve_endpoint_with_a_bearer_token() {
+    let body = parquet_bytes();
+    let server = serve(body.clone());
+    let endpoint = format!("http://127.0.0.1:{}", server.port);
+    let (display, debug) = read_hf(
+        &body,
+        &[
+            ("fs.hf.endpoint", endpoint.as_str()),
+            ("fs.hf.token", "hf_Canary-7"),
+        ],
+        "hf://datasets/acme/tiny@v2/data/t.parquet",
+    )
+    .await;
+    assert_eq!(display, "hf://datasets/acme/tiny@v2/data/t.parquet");
+    assert!(!debug.contains("Canary-7"), "{debug}");
+    read_hf(
+        &body,
+        &[("fs.hf.endpoint", endpoint.as_str())],
+        "hf://datasets/acme/tiny/data/t.parquet",
+    )
+    .await;
+    let log = server.log.lock().unwrap();
+    let first = log.iter().find(|(r, _, _)| r.starts_with("HEAD")).unwrap();
+    assert!(
+        first
+            .0
+            .contains("/datasets/acme/tiny/resolve/v2/data/t.parquet"),
+        "{}",
+        first.0
+    );
+    assert_eq!(first.2.as_deref(), Some("Bearer hf_Canary-7"));
+    let tokenless: Vec<_> = log
+        .iter()
+        .filter(|(r, _, _)| r.contains("/resolve/main/"))
+        .collect();
+    assert!(!tokenless.is_empty());
+    assert!(tokenless.iter().all(|(_, _, a)| a.is_none()));
+    drop(log);
+    for bad in [
+        "hf://models/a/b/c",
+        "hf://datasets/a",
+        "hf://datasets/a b/c/d",
+    ] {
+        assert!(krishiv_io::parse_object_url(bad).is_err(), "{bad}");
+    }
 }

@@ -2022,6 +2022,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "futures",
  "hashbrown",
+ "http",
  "krishiv-common",
  "krishiv-kernels",
  "krishiv-memory",

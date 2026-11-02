@@ -30,6 +30,8 @@ krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-types = { path = "../krishiv-types" }
 memchr.workspace = true
+# Bearer header of `hf://` reads (T195); only with `cloud`.
+http = { workspace = true, optional = true }
 # `fs`: the local store reads use wraps `LocalFileSystem` (`io/local_listing.rs`).
 object_store = { workspace = true, features = ["fs"] }
 # The Parquet reader (P2-T080a): arrow-rs's push decoder and the codecs files
@@ -69,7 +71,7 @@ loom.workspace = true
 # `object_store` (reqwest over rustls). Opt-in so the default build stays
 # inside the dependency and binary-size budgets. Without it, cloud URLs fail
 # with `KRISHIV_UNSUPPORTED_FEATURE`.
-cloud = ["object_store/aws", "object_store/azure", "object_store/gcp", "object_store/http"]
+cloud = ["object_store/aws", "object_store/azure", "object_store/gcp", "object_store/http", "dep:http"]
 
 # The emulator round-trips need the cloud builders.
 [[test]]
