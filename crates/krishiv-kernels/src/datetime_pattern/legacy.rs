@@ -590,6 +590,10 @@ fn month_day_of(year: i64, mut doy: i64) -> (u32, u32) {
 /// `SimpleDateFormat`'s two-digit year window: the 80 years before now to
 /// the 20 after.
 fn window_year(two: i64) -> i64 {
+    // Miri's isolation has no wall clock, so it reads a fixed 2026-07-01.
+    #[cfg(miri)]
+    let now_secs = 1_782_864_000_i64;
+    #[cfg(not(miri))]
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);

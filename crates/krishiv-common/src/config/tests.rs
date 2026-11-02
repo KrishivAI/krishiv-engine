@@ -697,4 +697,13 @@ fn time_parser_policy_parses_and_defaults() {
         Some("LEGACY")
     );
     assert!(c.set("spark.sql.legacy.timeParserPolicy", "NEW").is_err());
+    // The canonical key sets it too.
+    let mut c = Config::new();
+    c.set("krishiv.sql.legacy.timeParserPolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        c.get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(ConfigValue::as_str),
+        Some("LEGACY")
+    );
 }
