@@ -329,3 +329,23 @@ async fn a_long_plan_is_not_cut_at_a_cell() {
         text.len()
     );
 }
+
+#[tokio::test]
+async fn a_long_statement_cannot_be_replayed_and_a_timeout_is_recorded_as_error() {
+    let (_d, t) = fixture();
+    let padded = format!(
+        "SELECT count(*) FROM nums{}WHERE id < 0",
+        " ".repeat(21_000)
+    );
+    call(&t, "run_query", json!({"sql": padded})).await;
+    let (text, err) = call(&t, "get_query_profile", json!({"query_id": "q1"})).await;
+    assert!(err && text.contains("was not kept"), "{text}");
+    // A failing statement is `error` in the history.
+    call(&t, "run_query", json!({"sql": "SELECT nope FROM nums"})).await;
+    let (text, _) = call(&t, "query_history", json!({})).await;
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("q2 ") && l.contains("| error |")),
+        "{text}"
+    );
+}

@@ -101,7 +101,7 @@ struct HistoryEntry {
     ok: bool,
     sql: String,
     /// The statement as run (bounded), for `get_query_profile`.
-    full: String,
+    full: Option<String>,
 }
 
 /// One call waiting in the queue; dropping it (the call got its turn, or the
@@ -464,6 +464,11 @@ impl Tools {
                         "no query `{id}` in this server's history (it keeps the last {HISTORY_DEPTH})"
                     )));
                 };
+                let Some(sql) = sql else {
+                    return Err(arg_err(format!(
+                        "query `{id}` is longer than {HISTORY_SQL_CHARS} characters, so its statement was not kept; run explain_analyze with the statement instead"
+                    )));
+                };
                 limits.allow_heavy = match args.get("allow_heavy") {
                     None | Some(Value::Null) => false,
                     Some(Value::Bool(b)) => *b,
@@ -500,7 +505,9 @@ impl Tools {
             millis: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
             ok,
             sql: one_line,
-            full: sql.chars().take(HISTORY_SQL_CHARS).collect(),
+            // A statement over the budget is not kept: replaying a prefix
+            // would run a different query.
+            full: (sql.chars().count() <= HISTORY_SQL_CHARS).then(|| sql.to_owned()),
         });
     }
 
@@ -548,7 +555,12 @@ impl Tools {
         let id = format!("q{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let started = Instant::now();
         let result = self.execute(sql, limits, &id).await;
-        self.record(&id, started, result.is_ok(), sql);
+        self.record(
+            &id,
+            started,
+            result.as_ref().is_ok_and(|a| !a.is_error),
+            sql,
+        );
         match result {
             Ok(answer) => answer,
             Err(e) => {
