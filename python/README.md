@@ -64,6 +64,15 @@ python -m mypy.stubtest krishiv._native --concise --ignore-disjoint-bases
 The same two checks run as `tests/test_stubs.py` (skipped when mypy is not
 installed); `tests/test_repr.py` covers the notebook rendering.
 
+## Profile viewer (Krishiv extension)
+
+`df.profile()` (or `krishiv.ui(df)`) runs the query as `EXPLAIN ANALYZE` and returns a viewer of its
+`krishiv.query-profile` document: the plan as a tree, each node with its operators' time, rows, blocking
+and spills as bars, and the pipelines on a timeline. In a notebook it renders itself (`_repr_html_`);
+`view.save("profile.html")` writes one self-contained page (no script, no network request).
+`krishiv.ui(profile_json_or_dict)` views a document saved earlier. `df.explain(analyze=True)` prints the
+text form; the viewer reads the JSON of `df.explainString(analyze=True, json=True)`.
+
 ## Free-threaded build (cp314t)
 
 abi3 does not support free-threaded CPython, so that wheel is a separate,

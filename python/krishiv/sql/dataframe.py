@@ -27,6 +27,7 @@ from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
 from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
+from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
 from krishiv.sql.types import StructType, _struct_from_columns
@@ -1850,6 +1851,11 @@ class DataFrame:
         :meth:`explainString` for the text or the JSON document instead of printing.
         """
         print(self.explainString(extended, mode, analyze=analyze, verbose=verbose))
+
+    def profile(self) -> ProfileView:
+        """Runs the query and returns its profile as a viewer (``EXPLAIN ANALYZE``): leave it as
+        the last expression of a notebook cell, or call ``.save("profile.html")``. Krishiv extension."""
+        return ProfileView(self.explainString(analyze=True, json=True))
 
     def explainString(
         self,

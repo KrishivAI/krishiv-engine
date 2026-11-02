@@ -8,9 +8,10 @@ from krishiv import _cpu
 _cpu.ensure_supported()  # before the native module: an old CPU would die with SIGILL there
 
 from krishiv._native import __allocator__, __version__  # noqa: E402
+from krishiv.sql.profile_view import ProfileView, ui  # noqa: E402
 from krishiv.sql.session import SparkSession  # noqa: E402
 
-__all__ = ["SparkSession", "__version__", "build_info", "metrics", "session"]
+__all__ = ["ProfileView", "SparkSession", "__version__", "build_info", "metrics", "session", "ui"]
 
 
 def build_info() -> dict[str, str]:
