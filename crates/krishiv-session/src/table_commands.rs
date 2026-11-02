@@ -55,7 +55,7 @@ use crate::store::{
 };
 
 /// The file formats a table can have.
-const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc"];
+const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
 fn valid_name(name: &str) -> bool {

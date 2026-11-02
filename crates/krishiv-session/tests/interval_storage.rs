@@ -152,7 +152,7 @@ fn a_table_declared_with_interval_columns_takes_inserts() -> R {
 #[test]
 fn no_table_or_file_holds_a_calendar_interval() -> R {
     let s = session()?;
-    for format in ["parquet", "csv", "json"] {
+    for format in ["parquet", "csv", "json", "avro"] {
         assert_eq!(
             class_of(
                 &s,
@@ -521,6 +521,215 @@ fn a_file_krishiv_wrote_has_spark_s_physical_types_and_footer() -> R {
         "{json}"
     );
     assert!(json.contains("\"valueType\":\"interval hour\""), "{json}");
+    Ok(())
+}
+
+const ALL_KINDS_TYPES: [&str; 9] = [
+    "interval year to month",
+    "interval month",
+    "interval day to hour",
+    "interval day to second",
+    "interval second",
+    "array<interval month>",
+    "struct<x:interval day>",
+    "map<string,interval hour>",
+    "interval day",
+];
+
+/// `table`, holding [`ALL_KINDS`], has its types and values.
+fn assert_all_kinds(s: &Session, table: &str) -> R {
+    assert_eq!(types(s, table)?, ALL_KINDS_TYPES);
+    assert_eq!(
+        strings(
+            s,
+            &format!(
+                "SELECT concat_ws('|', cast(a as string), cast(b as string), cast(c as string), \
+                 cast(d as string), cast(e as string), cast(f as string), cast(g as string), \
+                 cast(h as string), coalesce(cast(n as string), 'NULL')) FROM {table}"
+            )
+        )?,
+        [Some(
+            "INTERVAL '1-2' YEAR TO MONTH|INTERVAL '3' MONTH|INTERVAL '1 02' DAY TO HOUR|\
+             INTERVAL '1 02:03:04.5' DAY TO SECOND|INTERVAL '07' SECOND|[INTERVAL '1' MONTH]|\
+             {INTERVAL '1' DAY}|{k -> INTERVAL '02' HOUR}|NULL"
+                .to_owned()
+        )]
+    );
+    Ok(())
+}
+
+#[test]
+fn an_avro_table_keeps_every_interval_type() -> R {
+    let s = session()?;
+    run(&s, &format!("CREATE TABLE t USING avro AS {ALL_KINDS}"))?;
+    assert_all_kinds(&s, "t")
+}
+
+#[test]
+fn an_avro_file_spark_wrote_reads_with_its_types_and_values() -> R {
+    let s = session()?;
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/spark-4.2.0/interval-storage-avro");
+    assert_all_kinds(&s, &format!("avro.`{}`", path.display()))
+}
+
+/// Keeps a file for Spark to read back (`KRISHIV_INTERVAL_AVRO_DIR`).
+#[test]
+fn an_avro_file_krishiv_wrote_has_spark_s_schema_properties() -> R {
+    let s = session()?;
+    let dir = tempfile::tempdir()?;
+    let kept = std::env::var("KRISHIV_INTERVAL_AVRO_DIR").ok();
+    let path = kept.map_or_else(|| dir.path().join("t"), std::path::PathBuf::from);
+    block_on(async {
+        s.sql(ALL_KINDS)
+            .await?
+            .write()
+            .format("avro")
+            .save(path.to_string_lossy().as_ref())
+            .await
+    })?;
+    let part = std::fs::read_dir(&path)?
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().ends_with(".avro"))
+        .ok_or("no part file")?;
+    let bytes = std::fs::read(part.path())?;
+    let text = String::from_utf8_lossy(&bytes);
+    for fragment in [
+        r#"{"type":"int","spark.sql.catalyst.type":"interval year to month"}"#,
+        r#"{"type":"int","spark.sql.catalyst.type":"interval month"}"#,
+        r#"{"type":"long","spark.sql.catalyst.type":"interval day to hour"}"#,
+        r#"{"type":"long","spark.sql.catalyst.type":"interval day to second"}"#,
+        r#"{"type":"long","spark.sql.catalyst.type":"interval second"}"#,
+        r#"{"type":"long","spark.sql.catalyst.type":"interval day"}"#,
+        r#"{"type":"long","spark.sql.catalyst.type":"interval hour"}"#,
+    ] {
+        assert!(text.contains(fragment), "{fragment} in {text}");
+    }
+    Ok(())
+}
+
+/// The cases where Spark's Avro reader and the shared schema mapper agree.
+/// Spark also refuses `smallint` and `decimal` over these columns, which the
+/// mapper allows for every format.
+#[test]
+fn a_stored_avro_interval_reads_under_another_declared_type_as_spark_does() -> R {
+    let s = session()?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("iv");
+    block_on(async {
+        s.sql("SELECT interval '3' month a, interval '1' day b, 14 i, 90000000000 l")
+            .await?
+            .write()
+            .format("avro")
+            .save(path.to_string_lossy().as_ref())
+            .await
+    })?;
+    let read = |schema: &str, column: &str| -> Result<String, KrishivError> {
+        run(&s, "DROP TABLE IF EXISTS declared")?;
+        run(
+            &s,
+            &format!(
+                "CREATE TABLE declared ({schema}) USING avro LOCATION '{}'",
+                path.display()
+            ),
+        )?;
+        block_on(async {
+            let batches = s
+                .sql(&format!("SELECT CAST({column} AS STRING) FROM declared"))
+                .await?
+                .collect()
+                .await?;
+            Ok(batches[0].column(0).as_string_view().value(0).to_owned())
+        })
+    };
+    for (schema, column, expected) in [
+        ("a int", "a", "3"),
+        ("a bigint", "a", "3"),
+        ("a double", "a", "3.0"),
+        ("a interval year", "a", "INTERVAL '0' YEAR"),
+        ("b bigint", "b", "86400000000"),
+        ("b interval hour", "b", "INTERVAL '24' HOUR"),
+        ("i interval month", "i", "INTERVAL '14' MONTH"),
+        ("l interval day", "l", "INTERVAL '1' DAY"),
+    ] {
+        assert_eq!(read(schema, column)?, expected, "{schema}");
+    }
+    for (schema, column) in [
+        ("a string", "a"),
+        ("a interval day", "a"),
+        ("b int", "b"),
+        ("b double", "b"),
+        ("b string", "b"),
+        ("b interval month", "b"),
+        ("i interval day", "i"),
+        ("l interval month", "l"),
+    ] {
+        assert!(read(schema, column).is_err(), "{schema}");
+    }
+    Ok(())
+}
+
+/// `avroSchema` on a write and a read, each answer from Spark 4.2.0.
+#[test]
+fn avro_schema_option_meets_intervals_as_spark_does() -> R {
+    let s = session()?;
+    let dir = tempfile::tempdir()?;
+    let schema =
+        |t: &str| format!(r#"{{"type":"record","name":"r","fields":[{{"name":"a","type":{t}}}]}}"#);
+    let write = |sql: &str, t: &str, to: &str| -> Result<(), KrishivError> {
+        block_on(async {
+            s.sql(sql)
+                .await?
+                .write()
+                .format("avro")
+                .option("avroSchema", &schema(t))
+                .save(dir.path().join(to).to_string_lossy().as_ref())
+                .await
+        })
+    };
+    let table = |to: &str| format!("avro.`{}`", dir.path().join(to).display());
+    let prop = |avro: &str, spark: &str| {
+        format!(r#"{{"type":"{avro}","spark.sql.catalyst.type":"{spark}"}}"#)
+    };
+
+    write("SELECT interval '1-2' year to month a", r#""int""#, "ym")?;
+    assert_eq!(types(&s, &table("ym"))?, ["int"]);
+    assert_eq!(
+        strings(&s, &format!("SELECT a FROM {}", table("ym")))?,
+        [Some("14".to_owned())]
+    );
+    write("SELECT interval '1' day a", r#""long""#, "dt")?;
+    assert_eq!(types(&s, &table("dt"))?, ["bigint"]);
+    assert_eq!(
+        strings(&s, &format!("SELECT a FROM {}", table("dt")))?,
+        [Some("86400000000".to_owned())]
+    );
+    write(
+        "SELECT interval '1' day a",
+        &prop("long", "interval day"),
+        "p",
+    )?;
+    assert_eq!(types(&s, &table("p"))?, ["interval day"]);
+    write("SELECT 5 a", &prop("int", "interval month"), "n")?;
+    assert_eq!(
+        strings(&s, &format!("SELECT a FROM {}", table("n")))?,
+        [Some("INTERVAL '5' MONTH".to_owned())]
+    );
+    assert!(write("SELECT interval '1' month a", r#""long""#, "x1").is_err());
+    assert!(write("SELECT interval '1' day a", r#""int""#, "x2").is_err());
+
+    // A map's interval key has no Avro form.
+    assert!(
+        block_on(async {
+            s.sql("SELECT map(interval '1' day, 1) a")
+                .await?
+                .write()
+                .format("avro")
+                .save(dir.path().join("k").to_string_lossy().as_ref())
+                .await
+        })
+        .is_err()
+    );
     Ok(())
 }
 

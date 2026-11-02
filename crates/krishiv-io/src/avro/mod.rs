@@ -12,6 +12,7 @@
 
 mod decode;
 mod encode;
+mod intervals;
 mod options;
 mod schema;
 
@@ -27,6 +28,7 @@ use futures::future::BoxFuture;
 use krishiv_common::error::CodecNotAvailableWithAvailableCodecsSuggestion;
 
 use self::decode::{AvroDecoder, Parsed, parse_header, parse_long};
+use self::intervals::typed_fields;
 use self::options::{AvroOptions, OPTIONS, Rebase};
 use self::schema::{fields_of_record, schema_kind};
 use crate::error::{FormatError, FormatResult, unsupported};
@@ -175,7 +177,7 @@ fn reader_of(json: &str) -> FormatResult<(AvroSchema, SchemaRef)> {
             "the schema is not a record",
         )));
     }
-    let fields = fields_of_record(&parsed)?;
+    let fields = typed_fields(fields_of_record(&parsed)?, &parsed, json)?;
     Ok((parsed, Arc::new(arrow_schema::Schema::new(fields))))
 }
 
@@ -246,7 +248,7 @@ async fn read_meta(io: &IoContext, file: &FileRef, o: &AvroOptions) -> FormatRes
     let (reader, arrow) = match &o.avro_schema {
         Some(json) => reader_of(json)?,
         None => {
-            let fields = fields_of_record(&writer)?;
+            let fields = typed_fields(fields_of_record(&writer)?, &writer, schema_json)?;
             (writer.clone(), Arc::new(arrow_schema::Schema::new(fields)))
         }
     };
