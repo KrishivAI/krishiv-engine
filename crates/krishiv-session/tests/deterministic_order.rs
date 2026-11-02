@@ -32,6 +32,8 @@ fn repeated_runs_of_unordered_queries_are_byte_identical() {
         "SELECT id, m FROM d WHERE id % 3 = 0",
         "SELECT g, sum(m), avg(m), count(*) FROM d GROUP BY g",
         "SELECT a.id, b.g FROM d a JOIN d b ON a.id = b.id WHERE a.id < 5000",
+        "SELECT id FROM d WHERE id % 5 = 0 UNION ALL SELECT id FROM d WHERE id % 7 = 0",
+        "SELECT g, count(DISTINCT id), sum(m) FROM d GROUP BY g",
     ] {
         let first = shape(&run(&s, sql));
         for i in 1..6 {

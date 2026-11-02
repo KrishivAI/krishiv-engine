@@ -1243,9 +1243,7 @@ impl DataFrame {
         let stream = self.session.run(&physical, &a.env).await?;
         let stream = fill.fill(stream, &self.session.state.cache);
         let stream = match result {
-            Some((settings, key)) => {
-                crate::result_cache::fill(stream, key, generation, settings.max_bytes)
-            }
+            Some((settings, key)) => crate::result_cache::fill(stream, key, generation, settings),
             None => stream,
         };
         Ok(crate::carrier::client_stream(stream))

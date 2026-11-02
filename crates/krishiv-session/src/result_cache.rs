@@ -51,7 +51,29 @@ pub(crate) struct TableId {
 pub(crate) struct ResultKey {
     plan: CacheKey,
     tables: Vec<TableId>,
+    /// The settings that change what a read or an execution returns and that the analysis
+    /// configuration of `plan` does not carry.
+    settings: Vec<(&'static str, String)>,
 }
+
+/// The settings of a query that change its rows without changing its plan.
+const RESULT_SETTINGS: &[&str] = &[
+    "krishiv.deterministicOrder",
+    "spark.sql.files.ignoreCorruptFiles",
+    "spark.sql.files.ignoreMissingFiles",
+    "spark.sql.parquet.binaryAsString",
+    "spark.sql.parquet.int96AsTimestamp",
+    "spark.sql.parquet.datetimeRebaseModeInRead",
+    "spark.sql.parquet.int96RebaseModeInRead",
+    "spark.sql.parquet.inferTimestampNTZ.enabled",
+    "spark.sql.legacy.timeParserPolicy",
+    "spark.sql.mapKeyDedupPolicy",
+    "spark.sql.storeAssignmentPolicy",
+    "spark.sql.legacy.sizeOfNull",
+];
+
+/// The least a stored result is charged: the entry, its key and its table list.
+const ENTRY_OVERHEAD: usize = 1024;
 
 /// The settings of a query's configuration snapshot.
 #[derive(Debug, Clone, Copy)]
@@ -87,6 +109,8 @@ impl Settings {
 struct Entry {
     batches: Vec<RecordBatch>,
     stored: Instant,
+    /// The `krishiv.resultCache.ttl` the entry was stored under (`0s`: never).
+    ttl: Duration,
     bytes: usize,
     /// The lower-case names of the tables read (`namespace.name` and `name`).
     tables: Vec<String>,
@@ -153,7 +177,10 @@ impl ResultCache {
         bytes: usize,
         generation: u64,
         max_bytes: usize,
+        ttl: Duration,
     ) -> bool {
+        // An empty result still costs its entry: bounded by the cap, the count stays bounded.
+        let bytes = bytes.max(ENTRY_OVERHEAD);
         if bytes > max_bytes {
             return false;
         }
@@ -161,6 +188,16 @@ impl ResultCache {
         if self.generation.load(Ordering::Acquire) != generation {
             return false;
         }
+        // Expired entries go first: nothing else would free one nobody asks for again.
+        let mut freed = 0;
+        state.entries.retain(|_, e| {
+            let expired = !e.ttl.is_zero() && e.stored.elapsed() >= e.ttl;
+            if expired {
+                freed += e.bytes;
+            }
+            !expired
+        });
+        state.bytes = state.bytes.saturating_sub(freed);
         if let Some(old) = state.entries.remove(&key) {
             state.bytes = state.bytes.saturating_sub(old.bytes);
         }
@@ -193,6 +230,7 @@ impl ResultCache {
             Entry {
                 batches,
                 stored: Instant::now(),
+                ttl,
                 bytes,
                 tables,
             },
@@ -209,6 +247,25 @@ impl ResultCache {
         let mut freed = 0;
         state.entries.retain(|_, e| {
             let hit = e.tables.iter().any(|t| *t == lowered || *t == short);
+            if hit {
+                freed += e.bytes;
+            }
+            !hit
+        });
+        state.bytes = state.bytes.saturating_sub(freed);
+    }
+
+    /// Drops the entries that read a table whose directory contains `path` or lies inside it:
+    /// a write by path (`df.write().parquet(dir)`) into a table's files changes what it reads.
+    pub(crate) fn invalidate_path(&self, path: &std::path::Path) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        let mut freed = 0;
+        state.entries.retain(|k, e| {
+            let hit = k
+                .tables
+                .iter()
+                .any(|t| t.location.starts_with(path) || path.starts_with(&t.location));
             if hit {
                 freed += e.bytes;
             }
@@ -241,8 +298,40 @@ impl ResultCache {
 struct Found {
     tables: Vec<Vec<String>>,
     files: bool,
+    /// A call whose value is not a function of the data: a non-deterministic function, a clock or
+    /// session function (the registry marks `current_timestamp` deterministic because Spark folds
+    /// it per query), or a session-registered UDF (its identity is a name and a version the
+    /// implementer chooses, not the code).
     nondeterministic: bool,
+    session_udf: bool,
 }
+
+/// The functions that return a clock, the session or the environment: constant within a query,
+/// different between runs, and marked deterministic by the registry.
+const RUN_DEPENDENT: &[&str] = &[
+    "current_timestamp",
+    "now",
+    "current_date",
+    "curdate",
+    "current_time",
+    "localtimestamp",
+    "localtime",
+    "current_timezone",
+    "current_user",
+    "user",
+    "session_user",
+    "current_catalog",
+    "current_database",
+    "current_schema",
+    "current_path",
+    "version",
+    "uuid",
+    "reflect",
+    "java_method",
+    "try_reflect",
+    "input_file_block_start",
+    "input_file_block_length",
+];
 
 fn survey(plan: &Arc<LogicalPlan>) -> Found {
     enum Step<'a> {
@@ -266,8 +355,13 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
             Step::Expr(e) => {
                 match &e.node {
                     ExprNode::Subquery { plan, .. } => stack.push(Step::Plan(plan)),
-                    ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic => {
-                        found.nondeterministic = true;
+                    ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                        if !f.deterministic || RUN_DEPENDENT.contains(&f.id.name()) {
+                            found.nondeterministic = true;
+                        }
+                        if matches!(f.id, krishiv_plan::FunctionId::Udf { .. }) {
+                            found.session_udf = true;
+                        }
                     }
                     _ => {}
                 }
@@ -287,7 +381,10 @@ impl Session {
             return Err("it reads files by path");
         }
         if found.nondeterministic {
-            return Err("it calls a non-deterministic function");
+            return Err("it calls a non-deterministic, clock or session function");
+        }
+        if found.session_udf {
+            return Err("it calls a session-registered function");
         }
         let mut tables = Vec::new();
         for parts in &found.tables {
@@ -314,9 +411,14 @@ impl Session {
         }
         tables.sort();
         tables.dedup();
+        let settings = RESULT_SETTINGS
+            .iter()
+            .map(|k| (*k, crate::conf::get(&a.env.config, k).unwrap_or_default()))
+            .collect();
         Ok(ResultKey {
             plan: CacheKey::of(&a.analyzed),
             tables,
+            settings,
         })
     }
 
@@ -343,7 +445,7 @@ pub(crate) fn fill(
     stream: RecordBatchStream,
     key: ResultKey,
     generation: u64,
-    max_bytes: usize,
+    settings: Settings,
 ) -> RecordBatchStream {
     Box::pin(FillStream {
         inner: stream,
@@ -351,7 +453,8 @@ pub(crate) fn fill(
         batches: Vec::new(),
         bytes: 0,
         generation,
-        max_bytes,
+        max_bytes: settings.max_bytes,
+        ttl: settings.ttl,
         abandoned: false,
     })
 }
@@ -363,6 +466,7 @@ struct FillStream {
     bytes: usize,
     generation: u64,
     max_bytes: usize,
+    ttl: Duration,
     abandoned: bool,
 }
 
@@ -373,7 +477,8 @@ impl Stream for FillStream {
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(batch))) => {
                 if !self.abandoned {
-                    self.bytes = self.bytes.saturating_add(crate::cache::batch_bytes(&batch));
+                    // Whole buffers, not the slice a batch shows: a sliced batch keeps its parent alive.
+                    self.bytes = self.bytes.saturating_add(batch.get_array_memory_size());
                     if self.bytes > self.max_bytes {
                         // Too big to keep: stop holding it.
                         self.abandoned = true;
@@ -394,7 +499,14 @@ impl Stream for FillStream {
                     && let Some(key) = self.key.take()
                 {
                     let batches = std::mem::take(&mut self.batches);
-                    global().insert(key, batches, self.bytes, self.generation, self.max_bytes);
+                    global().insert(
+                        key,
+                        batches,
+                        self.bytes,
+                        self.generation,
+                        self.max_bytes,
+                        self.ttl,
+                    );
                 }
                 Poll::Ready(None)
             }
@@ -426,6 +538,7 @@ mod tests {
 
     use super::*;
     use crate::{Principal, PrincipalKind, Session};
+    use std::sync::OnceLock;
 
     fn session_as(user: &str) -> Session {
         let s = Session::builder()
@@ -582,16 +695,37 @@ mod tests {
         let generation = cache.generation();
         cache.invalidate_table("other");
         assert!(
-            !cache.insert(key.clone(), Vec::new(), 10, generation, 100),
+            !cache.insert(
+                key.clone(),
+                Vec::new(),
+                10,
+                generation,
+                4096,
+                Duration::ZERO
+            ),
             "stale generation"
         );
-        assert!(cache.insert(key, Vec::new(), 10, cache.generation(), 100));
+        assert!(cache.insert(
+            key,
+            Vec::new(),
+            10,
+            cache.generation(),
+            4096,
+            Duration::ZERO
+        ));
         assert_eq!(cache.len(), 1);
         // Oldest entries go first when the cap would be passed.
         let s2 = session_as("bob");
         table(&s2, "rc_race2", "(1)");
         let key2 = key_of(&s2, "SELECT a FROM rc_race2").unwrap();
-        assert!(cache.insert(key2.clone(), Vec::new(), 95, cache.generation(), 100));
+        assert!(cache.insert(
+            key2.clone(),
+            Vec::new(),
+            3500,
+            cache.generation(),
+            4096,
+            Duration::ZERO
+        ));
         assert_eq!(cache.len(), 1, "the first entry made room");
         assert!(cache.lookup(&key2, Duration::ZERO).is_some());
         cache.clear();
@@ -658,11 +792,157 @@ mod tests {
         );
         let text = explain(&s, "SELECT a, rand() FROM rc_ex");
         assert!(
-            text.contains("not cached: it calls a non-deterministic function"),
+            text.contains("not cached: it calls a non-deterministic, clock or session function"),
             "{text}"
         );
         run(&s, "CREATE TEMPORARY VIEW rc_ex_v AS SELECT 1 AS a");
         let text = explain(&s, "SELECT a FROM rc_ex_v");
         assert!(!text.contains("hit"), "{text}");
+    }
+
+    /// `add_one(x) = x + 1`, a session-registered function.
+    #[derive(Debug)]
+    struct AddOne;
+
+    impl krishiv_udf_sdk::ScalarUdf for AddOne {
+        fn name(&self) -> &str {
+            "add_one"
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn signature(&self) -> &krishiv_udf_sdk::Signature {
+            static SIG: OnceLock<krishiv_udf_sdk::Signature> = OnceLock::new();
+            SIG.get_or_init(|| {
+                krishiv_udf_sdk::Signature::Exact(vec![krishiv_udf_sdk::UdfInputType::Exact(
+                    krishiv_types::DataType::Integer,
+                )])
+            })
+        }
+
+        fn return_field(
+            &self,
+            _: &[krishiv_udf_sdk::ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Ok(krishiv_udf_sdk::ReturnField {
+                data_type: krishiv_types::DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            args: &[krishiv_udf_sdk::UdfArg<'_>],
+            _rows: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+            Ok(args[0].array())
+        }
+    }
+
+    #[test]
+    fn clock_session_and_udf_calls_are_never_cached() {
+        let s = session_as("ana");
+        table(&s, "rc_clock", "(1)");
+        for call in [
+            "current_timestamp()",
+            "now()",
+            "current_date()",
+            "current_timezone()",
+            "current_user()",
+            "uuid()",
+            "version()",
+        ] {
+            assert!(
+                key_of(&s, &format!("SELECT a, {call} FROM rc_clock")).is_none(),
+                "`{call}` made the query eligible"
+            );
+        }
+        s.register_udf(AddOne).unwrap();
+        assert!(key_of(&s, "SELECT add_one(a) FROM rc_clock").is_none());
+        let why = block_on(s.on_executor({
+            let s = s.clone();
+            async move {
+                let df = s.sql("SELECT add_one(a) FROM rc_clock").await.unwrap();
+                let a = df.analysis().await.unwrap();
+                Ok::<_, KrishivError>(s.result_verdict(&a).err())
+            }
+        }))
+        .unwrap();
+        assert_eq!(why, Some("it calls a session-registered function"));
+    }
+
+    #[test]
+    fn settings_that_change_rows_are_part_of_the_key() {
+        let s = session_as("ana");
+        table(&s, "rc_set", "(1)");
+        let a = key_of(&s, "SELECT a FROM rc_set").unwrap();
+        s.conf().set("krishiv.deterministicOrder", "true").unwrap();
+        let b = key_of(&s, "SELECT a FROM rc_set").unwrap();
+        assert_ne!(a, b);
+        s.conf()
+            .set("spark.sql.files.ignoreCorruptFiles", "true")
+            .unwrap();
+        assert_ne!(b, key_of(&s, "SELECT a FROM rc_set").unwrap());
+    }
+
+    #[test]
+    fn partition_and_path_changes_drop_the_entry() {
+        let s = session_as("ana");
+        run(
+            &s,
+            "CREATE TABLE rc_part (a INT, p INT) USING parquet PARTITIONED BY (p)",
+        );
+        run(&s, "INSERT INTO rc_part VALUES (1, 1)");
+        let sql = "SELECT a FROM rc_part";
+        let key = key_of(&s, sql).unwrap();
+        // The partitioned read may be unsupported: the entry is only stored when the query ran.
+        if block_on(async { s.sql(sql).await.unwrap().collect().await }).is_ok() && cached(&key) {
+            run(&s, "ALTER TABLE rc_part ADD PARTITION (p = 2)");
+            assert!(!cached(&key), "ADD PARTITION dropped it");
+        }
+        // A write by path into an unpartitioned table's directory.
+        table(&s, "rc_dir", "(1), (2)");
+        let key = key_of(&s, "SELECT a FROM rc_dir").unwrap();
+        run(&s, "SELECT a FROM rc_dir");
+        assert!(cached(&key));
+        let location = key.tables[0].location.clone();
+        block_on(
+            s.table("rc_dir")
+                .write()
+                .mode("append")
+                .parquet(location.to_str().unwrap()),
+        )
+        .unwrap();
+        assert!(
+            !cached(&key),
+            "a write by path into the table's directory dropped it"
+        );
+    }
+
+    #[test]
+    fn empty_results_cost_an_entry_and_expired_entries_go_on_insert() {
+        let cache = ResultCache::default();
+        let s = session_as("ana");
+        table(&s, "rc_mem1", "(1)");
+        let k1 = key_of(&s, "SELECT a FROM rc_mem1").unwrap();
+        let k2 = key_of(&s, "SELECT a + 1 FROM rc_mem1").unwrap();
+        let gen_ = cache.generation();
+        // A cap that holds two empty entries only if each is charged at least its overhead.
+        assert!(cache.insert(
+            k1.clone(),
+            Vec::new(),
+            0,
+            gen_,
+            2 * ENTRY_OVERHEAD,
+            Duration::from_millis(5)
+        ));
+        std::thread::sleep(Duration::from_millis(15));
+        // k1 expired: the next insert drops it without anyone asking for it.
+        assert!(cache.insert(k2, Vec::new(), 0, gen_, 2 * ENTRY_OVERHEAD, Duration::ZERO));
+        assert_eq!(cache.len(), 1);
+        assert!(cache.lookup(&k1, Duration::ZERO).is_none());
     }
 }

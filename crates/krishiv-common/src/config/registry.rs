@@ -704,7 +704,9 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           merges) are merged in the order the input arrives and a query without `ORDER BY` \
           returns its rows in the same order on every run, byte for byte, for the engine's \
           own scans. Costs the parallelism of the query: meant for reproducing a result, \
-          comparing two builds, and tests. Off by default.",
+          comparing two builds, and tests. Memory pressure from other queries in the process \
+          can still change when an operator spills, and so the order of what it returns. Off \
+          by default.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
@@ -745,8 +747,9 @@ pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(64 * MIB)),
     doc: "Most bytes the result cache holds, for the whole process, as Arrow batches outside the \
-          query memory pool. A result larger than the cap is not stored; when a new result \
-          would pass the cap the oldest entries go first. Needs `krishiv.resultCache.enabled`.",
+          query memory pool; the setting of the session that stores a result applies. A result \
+          larger than the cap is not stored; when a new result would pass the cap the oldest \
+          entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
