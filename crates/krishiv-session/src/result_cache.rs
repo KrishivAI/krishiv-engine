@@ -287,19 +287,27 @@ impl ResultCache {
     /// Drops the entries that read a table whose directory contains `path` or lies inside it:
     /// a write by path (`df.write().parquet(dir)`) into a table's files changes what it reads.
     pub(crate) fn invalidate_path(&self, path: &std::path::Path) {
+        // Both sides in one form: the write's path has its links resolved, a table's location is
+        // as it was stored (it may be relative or go through a link).
+        let resolved =
+            |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+        let path = resolved(path);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.generation.fetch_add(1, Ordering::AcqRel);
         let mut freed = 0;
+        let before = state.entries.len();
         state.entries.retain(|k, e| {
-            let hit = k
-                .tables
-                .iter()
-                .any(|t| t.location.starts_with(path) || path.starts_with(&t.location));
+            let hit = k.tables.iter().any(|t| {
+                let location = resolved(&t.location);
+                location.starts_with(&path) || path.starts_with(&location)
+            });
             if hit {
                 freed += e.bytes;
             }
             !hit
         });
+        self.invalidated
+            .fetch_add((before - state.entries.len()) as u64, Ordering::Relaxed);
         state.bytes = state.bytes.saturating_sub(freed);
     }
 
@@ -387,7 +395,11 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
                 match &e.node {
                     ExprNode::Subquery { plan, .. } => stack.push(Step::Plan(plan)),
                     ExprNode::Resolved(ResolvedExpr::Function(f)) => {
-                        if !f.deterministic || RUN_DEPENDENT.contains(&f.id.name()) {
+                        // `unix_timestamp()` and `to_unix_timestamp()` without an argument mean
+                        // "now" and run through their own registry entry.
+                        let reads_clock = f.args.is_empty()
+                            && matches!(f.id.name(), "unix_timestamp" | "to_unix_timestamp");
+                        if !f.deterministic || reads_clock || RUN_DEPENDENT.contains(&f.id.name()) {
                             found.nondeterministic = true;
                         }
                         if matches!(f.id, krishiv_plan::FunctionId::Udf { .. }) {
@@ -1018,5 +1030,37 @@ mod tests {
             1,
             "clearing an empty store invalidates nothing"
         );
+    }
+
+    #[test]
+    fn a_unix_timestamp_without_arguments_is_a_clock() {
+        let s = session_as("ana");
+        table(&s, "rc_unix", "(1)");
+        assert!(key_of(&s, "SELECT unix_timestamp() - a FROM rc_unix").is_none());
+        // With an argument it is a function of its input.
+        assert!(
+            key_of(
+                &s,
+                "SELECT unix_timestamp('2020-01-01 00:00:00') + a FROM rc_unix"
+            )
+            .is_some()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_through_a_link_invalidates_the_table_behind_it() {
+        let s = session_as("ana");
+        table(&s, "rc_link", "(1)");
+        let key = key_of(&s, "SELECT a FROM rc_link").unwrap();
+        run(&s, "SELECT a FROM rc_link");
+        assert!(cached(&key));
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("alias");
+        std::os::unix::fs::symlink(&key.tables[0].location, &link).unwrap();
+        let before = global().stats().5;
+        global().invalidate_path(&link);
+        assert!(!cached(&key), "the entry behind the link went");
+        assert!(global().stats().5 > before, "and was counted");
     }
 }

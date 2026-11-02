@@ -69,7 +69,8 @@ store: 3 entries, 51584 bytes; since start: 12 hits, 4 misses, 7 stored, 2 inval
 ```
 
 `invalidated` counts entries dropped by a write, `REFRESH TABLE`, `CLEAR CACHE` or a drop, one per
-entry; entries that expired or were evicted for room are not counted there.
+entry; entries that expired or were evicted for room are not counted there, and `misses` counts the
+lookups of queries that could be cached (an `EXPLAIN` looks without counting).
 
 ### Limits
 
