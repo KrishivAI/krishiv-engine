@@ -40,6 +40,8 @@ fuzz_target!(|data: &[u8]| {
         consecutive_string_literals: rest.first().is_some_and(|b| b & 1 != 0),
         case_sensitive: rest.first().is_some_and(|b| b & 2 != 0),
         view_schema_binding: rest.first().is_some_and(|b| b & 4 != 0),
+        quoted_regex_column_names: rest.first().is_some_and(|b| b & 8 != 0),
+        having_without_group_by_as_where: rest.first().is_some_and(|b| b & 16 != 0),
     };
     match parse_query(&sql, &options) {
         Ok(q) => {
