@@ -3,9 +3,6 @@
     "depends-on-command": [
       177
     ],
-    "generators": [
-      88
-    ],
     "parser-tail": [
       1
     ],
