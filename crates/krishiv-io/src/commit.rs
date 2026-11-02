@@ -108,8 +108,6 @@ struct LogState {
     base: Option<u64>,
     /// Files visible in the log at that version, relative to the root.
     visible: Vec<String>,
-    /// This write created version 0 of an empty directory (nothing adopted).
-    created_empty: bool,
 }
 
 impl DirectoryWrite {
@@ -192,7 +190,6 @@ impl DirectoryWrite {
     pub async fn logged(mut self, io: &IoContext) -> Result<Self> {
         let log = self.commit_log(io);
         let mut snap = log.snapshot().await?;
-        let mut created_empty = false;
         if snap.version.is_none() {
             // Initialize the log before any task writes a file: the files already here are adopted
             // now, so a first write that dies leaves them visible and its own files outside the log
@@ -220,7 +217,7 @@ impl DirectoryWrite {
             };
             // Version 0 only: a writer that loses this race drops its listing and reads the winner's
             // snapshot (its files may have been replaced since it listed them).
-            created_empty = log.initialize(&init).await? && init.add.is_empty();
+            log.initialize(&init).await?;
             snap = log.snapshot().await?;
         }
         // The log's own objects are never data to replace.
@@ -230,17 +227,8 @@ impl DirectoryWrite {
         self.log = Some(LogState {
             base: snap.version,
             visible: snap.files.into_keys().collect(),
-            created_empty,
         });
         Ok(self)
-    }
-
-    /// Whether this write created the log of an empty directory. If the write then fails,
-    /// [`crate::commit_log::CommitLog::remove_initial`] puts the directory back as it was (a retry is
-    /// not told the location exists).
-    #[must_use]
-    pub fn created_empty_log(&self) -> bool {
-        self.log.as_ref().is_some_and(|l| l.created_empty)
     }
 
     fn commit_log<'a>(&self, io: &'a IoContext) -> CommitLog<'a> {

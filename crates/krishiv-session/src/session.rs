@@ -1778,13 +1778,6 @@ impl Session {
         // opened here, never through a link (P2-T199). The registration
         // lives until the write is over.
         let (store, _registration) = self.anchor_local_write(&at, &job)?;
-        let created_log = std::sync::atomic::AtomicBool::new(false);
-        // A local target that does not exist yet: a failed write must not leave its directories.
-        let new_local_dir = at
-            .display
-            .strip_prefix("file:")
-            .map(std::path::PathBuf::from)
-            .filter(|p| !p.exists());
         let written = async {
             let Some(write) = DirectoryWrite::begin(
                 &io,
@@ -1815,10 +1808,6 @@ impl Session {
             } else {
                 write
             };
-            created_log.store(
-                write.created_empty_log(),
-                std::sync::atomic::Ordering::Relaxed,
-            );
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
                 options: options.clone(),
@@ -1869,26 +1858,6 @@ impl Session {
             Ok(dirs.into_iter().collect())
         }
         .await;
-        if written.is_err() && created_log.load(std::sync::atomic::Ordering::Relaxed) {
-            // The failed write created the log of a directory that was empty: leave it as found.
-            drop(
-                krishiv_io::commit_log::CommitLog::new(
-                    &io,
-                    store.clone(),
-                    at.path.clone(),
-                    at.display.clone(),
-                )
-                .remove_initial()
-                .await,
-            );
-            if let Some(dir) = &new_local_dir {
-                // Empty directories only (`remove_dir` refuses anything else).
-                drop(std::fs::remove_dir(
-                    dir.join(krishiv_io::commit_log::LOG_DIR),
-                ));
-                drop(std::fs::remove_dir(dir));
-            }
-        }
         // A store error after the anchor is open may be a link swapped into
         // the path: the audited denial is what the caller sees then.
         if written.is_err()
