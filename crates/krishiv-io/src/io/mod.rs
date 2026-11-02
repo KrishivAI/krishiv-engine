@@ -566,6 +566,9 @@ impl IoScheduler {
     /// [`MetadataCache::attach_pool`]).
     pub fn attach_memory(&self, pool: &Arc<dyn MemoryPool>) {
         self.cache.attach_pool(pool);
+        if let Some(c) = &self.block_cache {
+            c.attach_pool(pool);
+        }
     }
 
     /// What the block cache has done (`None` when it is off).

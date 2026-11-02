@@ -315,3 +315,116 @@ fn the_disk_part_is_emptied_at_start() {
     .unwrap();
     assert_eq!(std::fs::read_dir(&mine).unwrap().count(), 0);
 }
+
+/// The memory tier is charged to the memory manager (I11): it holds only what the pool grants, and
+/// what it holds is what the pool shows reserved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_memory_tier_is_charged_to_the_pool() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+
+    let r = rig(1 << 30, 8 << 20, true);
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(4 * usize::try_from(BLOCK).unwrap()),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    r.sched.attach_memory(&pool);
+    let cache = r.sched.block_cache.clone().unwrap();
+    let data = pattern(2 << 20, 8);
+    let f = put(&r, "m", data.clone()).await;
+    for start in (0..2_000_000_u64).step_by(100_000) {
+        let from = usize::try_from(start).unwrap();
+        let got =
+            r.io.get_ranges(&f, &[start..start + 100_000])
+                .await
+                .unwrap();
+        assert_eq!(got[0], Bytes::from(data[from..from + 100_000].to_vec()));
+        assert!(cache.memory_used() <= 4 * BLOCK, "{}", cache.memory_used());
+        assert_eq!(root.reserved() as u64, cache.memory_used());
+    }
+    // Blocks that did not fit in memory are on disk: a re-read still hits the cache.
+    let before = r.fault.stats().gets;
+    r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
+    assert_eq!(r.fault.stats().gets, before);
+}
+
+/// Acceptance (8) on real data: the whole of a TPC-H `lineitem.parquet` (set `KRISHIV_TPCH_DIR` to
+/// the directory holding it; SF1 is about 200 MB) scans to the same rows with the cache as without,
+/// cold and warm, and the warm scan reads nothing from the store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs TPC-H Parquet data: KRISHIV_TPCH_DIR"]
+async fn tpch_lineitem_scans_identically_with_the_cache() {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int64Type;
+    use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
+
+    use crate::parquet::ParquetFormat;
+    use crate::{ByteRange, FileFormat, MetadataNeeds, ScanOptions, ScanRequest, ScanStream};
+
+    let dir = std::env::var("KRISHIV_TPCH_DIR").expect("KRISHIV_TPCH_DIR");
+    let bytes = std::fs::read(FsPath::new(&dir).join("lineitem.parquet")).unwrap();
+    let options = ParquetFormat
+        .options()
+        .parse(
+            &std::collections::BTreeMap::new(),
+            &krishiv_common::config::Config::new(),
+        )
+        .unwrap()
+        .0;
+
+    async fn checksum(r: &Rig, file: &FileRef, options: &crate::FormatOptions) -> (usize, i64) {
+        let meta =
+            r.io.read_metadata(&ParquetFormat, file, MetadataNeeds::default(), options)
+                .await
+                .unwrap();
+        let req = ScanRequest::all(meta.schema());
+        let root = TreePool::new(&MemoryConfig::default());
+        let pool: Arc<dyn MemoryPool> = root.child("query", None);
+        let id = pool.register("FileScan", None);
+        let mut stream = ScanStream::open(
+            &r.io,
+            &ParquetFormat,
+            file.clone(),
+            ByteRange::whole(file.size),
+            &req,
+            options,
+            Reservation::new(Arc::clone(&pool), id),
+            ScanOptions::default(),
+        )
+        .await
+        .unwrap();
+        let (mut rows, mut sum) = (0, 0_i64);
+        while let Some(b) = stream.next_batch().await.unwrap() {
+            rows += b.num_rows();
+            // `l_orderkey` is the first column, a bigint.
+            sum = sum.wrapping_add(
+                b.column(0)
+                    .as_primitive::<Int64Type>()
+                    .iter()
+                    .flatten()
+                    .sum::<i64>(),
+            );
+        }
+        (rows, sum)
+    }
+
+    let plain = rig(0, 0, false);
+    let cold = rig(1 << 30, 64 << 20, true);
+    let (pf, cf) = (
+        put(&plain, "lineitem.parquet", bytes.clone()).await,
+        put(&cold, "lineitem.parquet", bytes).await,
+    );
+    let want = checksum(&plain, &pf, &options).await;
+    assert!(want.0 > 0);
+    assert_eq!(checksum(&cold, &cf, &options).await, want);
+    let after_cold = cold.fault.stats().gets;
+    assert_eq!(checksum(&cold, &cf, &options).await, want);
+    assert_eq!(
+        cold.fault.stats().gets,
+        after_cold,
+        "the warm scan reached the store"
+    );
+}

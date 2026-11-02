@@ -30,6 +30,7 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::BoxStream;
+use krishiv_memory::{MemoryPool, Reservation};
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
@@ -124,6 +125,8 @@ struct State {
     tick: u64,
     memory: Lru<Bytes>,
     disk: Lru<u64>,
+    /// The memory tier's bytes, reserved from a pool when one is attached (I11).
+    reservation: Option<Reservation>,
 }
 
 type RunResult = Result<Arc<Vec<Bytes>>, Arc<object_store::Error>>;
@@ -207,6 +210,30 @@ impl BlockCache {
         lock(&self.state).disk.used
     }
 
+    /// Accounts the memory tier in its own child of `pool` (limited to the tier's size): a block
+    /// is held in memory only while the pool grants its bytes. Blocks held so far are dropped.
+    pub fn attach_pool(&self, pool: &Arc<dyn MemoryPool>) {
+        let limit = usize::try_from(self.cfg.memory_bytes).unwrap_or(usize::MAX);
+        let child = pool.child("block-cache", Some(limit));
+        let id = child.register("block-cache", None);
+        let mut st = lock(&self.state);
+        st.memory = Lru::default();
+        st.reservation = Some(Reservation::new(child, id));
+    }
+
+    /// Bytes held in memory now.
+    #[must_use]
+    pub fn memory_used(&self) -> u64 {
+        lock(&self.state).memory.used
+    }
+
+    /// Returns `bytes` of the memory tier to the pool.
+    fn release(st: &mut State, bytes: usize) {
+        if let Some(r) = st.reservation.as_mut() {
+            r.shrink(bytes.min(r.size()));
+        }
+    }
+
     fn file(&self, name: u128) -> PathBuf {
         self.dir.join(format!("{name:032x}.blk"))
     }
@@ -265,6 +292,26 @@ impl BlockCache {
         let tick = Self::next_tick(&mut st);
         for (_, _, old) in st.memory.insert(name, tick, size, bytes.clone()) {
             st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
+            Self::release(&mut st, old.len());
+        }
+        // With a pool, the block's memory must be granted too: evict older blocks while it
+        // refuses, and keep the block on disk only when nothing is left to evict.
+        let want = bytes.len();
+        loop {
+            match st.reservation.as_mut().map(|r| r.try_grow(want)) {
+                None | Some(Ok(())) => break,
+                Some(Err(_)) => {
+                    let Some((key, old)) = st.memory.pop_oldest() else {
+                        break;
+                    };
+                    bump(&self.counters.evictions, u64::from(key != name));
+                    st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
+                    Self::release(&mut st, old.len());
+                    if key == name {
+                        return;
+                    }
+                }
+            }
         }
         while st.memory.used > cap {
             let Some((key, old)) = st.memory.pop_oldest() else {
@@ -274,6 +321,7 @@ impl BlockCache {
                 bump(&self.counters.evictions, 1);
             }
             st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
+            Self::release(&mut st, old.len());
         }
     }
 
