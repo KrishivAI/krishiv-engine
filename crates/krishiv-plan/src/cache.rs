@@ -1232,6 +1232,7 @@ mod tests {
             (
                 "star",
                 unresolved(ExprNode::Star(Star {
+                    regex: None,
                     replace: Vec::new(),
                     position: None,
                     qualifier: vec!["t".into()],

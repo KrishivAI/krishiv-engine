@@ -689,6 +689,7 @@ Merge(
                                                     kind: Wildcard {
                                                         qualifier: [],
                                                         except: [],
+                                                        regex: None,
                                                     },
                                                     span: 27..28,
                                                 },
@@ -734,6 +735,7 @@ Merge(
                                         selection: None,
                                         group_by: None,
                                         having: None,
+                                        having_as_where: false,
                                         windows: [],
                                         qualify: None,
                                         span: 20..35,
