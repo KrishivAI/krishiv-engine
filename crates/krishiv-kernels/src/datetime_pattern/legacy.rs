@@ -715,6 +715,11 @@ impl Parsed {
         let weeky = self.woy.is_some() || self.wom.is_some() || self.dowim.is_some();
         let mode = if weeky {
             self.week_mode()
+        } else if self.dow.is_some() && self.dom.is_none() && self.doy.is_none() {
+            // A weekday alone (with at most a month) is the first such
+            // weekday of the month, as `GregorianCalendar` falls back to
+            // `DAY_OF_WEEK_IN_MONTH` 1.
+            Mode::Dowim
         } else if self.doy.is_some_and(|(_, s)| {
             self.month0
                 .map(|(_, s)| s)
@@ -754,7 +759,9 @@ impl Parsed {
         if days > cutover && days < cutover + 11 {
             return None;
         }
-        if (weeky || self.dow.is_some()) && !self.week_fields_agree(days, year) {
+        if (weeky || self.dow.is_some() || self.doy.is_some())
+            && !self.week_fields_agree(days, year)
+        {
             return None;
         }
         let hour = match (self.hour_of_day, self.hour12) {
@@ -1003,6 +1010,23 @@ mod tests {
     }
 
     // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn a_day_of_year_must_agree_and_a_lone_weekday_is_the_first_of_the_month() {
+        // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+        let d = |y, m, dd| days_from_civil(y, m, dd).unwrap() * MICROS_PER_DAY;
+        assert_eq!(local("yyyy-DDD-MM-dd", "2024-002-01-01"), None);
+        assert_eq!(
+            local("yyyy-DDD-MM-dd", "2024-001-01-01"),
+            Some(d(2024, 1, 1))
+        );
+        assert_eq!(local("yyyy E", "2024 Tue"), Some(d(2024, 1, 2)));
+        assert_eq!(local("yyyy E", "2024 Mon"), Some(d(2024, 1, 1)));
+        assert_eq!(local("yyyy EEEE", "2024 Tuesday"), Some(d(2024, 1, 2)));
+        assert_eq!(local("yyyy-MM E", "2024-03 Tue"), Some(d(2024, 3, 5)));
+        assert_eq!(local("yyyy-MM E", "2024-03 Fri"), Some(d(2024, 3, 1)));
+        assert_eq!(local("yyyy-DDD", "2024-060"), Some(d(2024, 2, 29)));
+    }
+
     #[test]
     fn week_fields_resolve_like_gregorian_calendar() {
         let d = |y, m, dd| days_from_civil(y, m, dd).unwrap() * MICROS_PER_DAY;
