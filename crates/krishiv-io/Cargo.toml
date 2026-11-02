@@ -20,7 +20,9 @@ async-trait.workspace = true
 bytes.workspace = true
 bzip2.workspace = true
 flate2.workspace = true
-lz4_flex = { workspace = true, features = ["safe-encode", "safe-decode", "std"] }
+# Not the `safe-encode`/`safe-decode` features: cargo unifies them workspace-wide and they switch arrow-ipc's LZ4 spill
+# writer to the slow safe path (CodSpeed: `spill_1m_rows::write_lz4` -10.55% on #401).
+lz4_flex = { workspace = true, features = ["std"] }
 snap.workspace = true
 chrono.workspace = true
 # Avro field defaults (`RecordField::default`) are JSON values.
