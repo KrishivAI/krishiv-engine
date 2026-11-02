@@ -28,11 +28,10 @@ use arrow_array::{
 use arrow_buffer::i256;
 use arrow_row::OwnedRow;
 use arrow_schema::DataType;
-use krishiv_common::error::KrishivError;
 use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillReader, SpillWriter};
 use krishiv_types::batch::Batch;
 
-use super::disk::{Current, Framed, current_keys, needs_peer_end};
+use super::disk::{Current, Framed, Shed, current_keys, needs_peer_end};
 use super::eval::{
     Slice, arguments, count_f64, decimal_array, decimal_value, decimals, exact_decimal,
     filter_mask, keeps_values, ntile, passes, picks_bytes, replaces, to_view, too_large, view_type,
@@ -127,6 +126,7 @@ impl Fold {
         mask: Option<&BooleanArray>,
         rows: usize,
         snap: &[bool],
+        shed: &mut Shed<'_>,
     ) -> Result<ArrayRef> {
         if snap.len() != rows {
             return Err(internal(
@@ -163,9 +163,7 @@ impl Fold {
                 // evaluation cost (`eval::cost`); what stays is charged here.
                 if let Some(charge) = charge {
                     let size = acc.size();
-                    charge
-                        .try_grow(size.saturating_sub(charge.size()))
-                        .map_err(KrishivError::from)?;
+                    shed.grow(charge, size.saturating_sub(charge.size()))?;
                     charge.shrink(charge.size().saturating_sub(size));
                 }
                 let ids: Vec<u32> = (2..next).collect();
@@ -322,6 +320,7 @@ pub(super) fn fold_batch(
     fold: &mut Fold,
     b: &RecordBatch,
     snap: &[bool],
+    shed: &mut Shed<'_>,
 ) -> Result<ArrayRef> {
     let f = &env.plan.functions[j];
     let WindowFunction::Aggregate(a) = &f.function else {
@@ -331,7 +330,7 @@ pub(super) fn fold_batch(
     };
     let s = whole_batch(b);
     let mask = filter_mask(f, &s)?;
-    fold.fold(&arguments(a, &s)?, mask.as_ref(), b.num_rows(), snap)
+    fold.fold(&arguments(a, &s)?, mask.as_ref(), b.num_rows(), snap, shed)
 }
 
 /// Per row of `b`: it starts a peer group (`first`: its first row starts
@@ -416,7 +415,7 @@ pub(super) fn copy_partition(
         let none = vec![false; n];
         for (j, fold) in whole.iter_mut().enumerate() {
             if let Some(fold) = fold {
-                fold_batch(env, j, fold, b, &none)?;
+                fold_batch(env, j, fold, b, &none, &mut Shed::none())?;
             }
         }
         crate::join::write_sliced(&mut writer, &Batch::new(b.clone()))?;
@@ -545,7 +544,7 @@ impl Lead {
             let mut values = Vec::with_capacity(self.folds.len());
             for (j, fold) in self.folds.iter_mut().enumerate() {
                 values.push(match fold {
-                    Some(fold) => Some(fold_batch(env, j, fold, &cur, &snap)?),
+                    Some(fold) => Some(fold_batch(env, j, fold, &cur, &snap, &mut Shed::none())?),
                     None => None,
                 });
             }
@@ -730,6 +729,9 @@ impl Emit {
             peers: &peers,
             keys: keys.as_ref(),
             counters: &self.counters,
+            file: &self.disk.file,
+            consumer: &self.consumer,
+            query: &self.query,
         };
         let int = |v: u64| i32::try_from(v).map_err(|_| too_large());
         let row = |i: usize| self.at + i as u64;
@@ -774,17 +776,12 @@ impl Emit {
                         })
                         .collect::<Result<Vec<_>>>()?,
                 )),
-                WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => self.framed[j]
-                    .as_mut()
-                    .ok_or_else(|| internal("an offset function's reader missing".to_owned()))?
-                    .column(
-                        env,
-                        j,
-                        &current,
-                        &self.disk.file,
-                        &self.consumer,
-                        &self.query,
-                    )?,
+                WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+                    let (own, mut shed) = Shed::around(&mut self.framed, j).ok_or_else(|| {
+                        internal("an offset function's reader missing".to_owned())
+                    })?;
+                    own.column(env, j, &current, &mut shed)?
+                }
                 WindowFunction::Aggregate(_) => match f.shape()? {
                     Shape::Whole => {
                         let v = self.disk.whole[j].as_ref().ok_or_else(|| {
@@ -798,19 +795,16 @@ impl Emit {
                         let fold = self.running[j]
                             .as_mut()
                             .ok_or_else(|| internal("a running fold missing".to_owned()))?;
-                        fold_batch(env, j, fold, &b, &vec![true; n])?
+                        let mut shed = Shed::all(&mut self.framed);
+                        fold_batch(env, j, fold, &b, &vec![true; n], &mut shed)?
                     }
-                    Shape::Frame => self.framed[j]
-                        .as_mut()
-                        .ok_or_else(|| internal("a window frame's reader missing".to_owned()))?
-                        .column(
-                            env,
-                            j,
-                            &current,
-                            &self.disk.file,
-                            &self.consumer,
-                            &self.query,
-                        )?,
+                    Shape::Frame => {
+                        let (own, mut shed) =
+                            Shed::around(&mut self.framed, j).ok_or_else(|| {
+                                internal("a window frame's reader missing".to_owned())
+                            })?;
+                        own.column(env, j, &current, &mut shed)?
+                    }
                     Shape::RunningPeers => {
                         let lead = self
                             .lead

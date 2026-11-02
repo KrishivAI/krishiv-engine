@@ -2699,6 +2699,67 @@ proptest! {
     }
 }
 
+/// A charge the pool refuses takes back the batches other functions' frames
+/// hold; without any to take, it fails. The frame then folds from the file.
+#[tokio::test]
+async fn a_refused_charge_takes_batches_back_from_a_frame() {
+    use super::disk::{Framed, Shed};
+    let wide = between(
+        FrameUnits::Rows,
+        FrameBound::Offset(-1000),
+        FrameBound::Offset(1000),
+    );
+    let window = plan(vec![(agg(AggregateFunction::Sum, Some(3)), wide)], false);
+    let rows: Vec<Row> = (0..1_000).map(|i| (None, Some(i), i, Some(i))).collect();
+    let (_dir, scope) = spill_scope();
+    let op = Window::new(schema(), window, true, Some(scope.clone())).unwrap();
+    let limit = 1 << 20;
+    let (root, ctx) = task(limit);
+    let consumer = Arc::clone(ctx.consumer().consumer());
+    let mut credit = ctx.consumer().reservation();
+    credit.try_grow(1 << 16).unwrap();
+    credit.shrink_to_credit(1 << 16);
+    let scratch = ctx
+        .consumer()
+        .reservation()
+        .releasing_to_credit()
+        .for_spill_scratch();
+    let mut writer = scope.writer(schema(), scratch).unwrap();
+    for b in rows.chunks(50).map(batch) {
+        writer.write(&b).unwrap();
+    }
+    let file = writer.finish().unwrap();
+    let f = &op.env.plan.functions[0];
+    let held = Framed::open(&op.env, f, &file, &consumer).unwrap();
+    let mut framed = vec![held];
+    let Some(frame) = framed[0].as_mut() else {
+        panic!("a frame reads the file");
+    };
+    let before = root.reserved();
+    assert!(frame.hold_rows(0, 1_000).unwrap(), "the pool has room");
+    let held = root.reserved() - before;
+
+    let pool = Arc::clone(ctx.query().pool());
+    let mut hog = krishiv_memory::Reservation::new(Arc::clone(&pool), pool.register("hog", None));
+    take_all_but(&mut hog, limit, 0);
+    // From the pool, as the frames' charges are, not from the readers' credit.
+    let mut charge = krishiv_memory::Reservation::new(Arc::clone(consumer.pool()), consumer.id());
+    // Half of what the frame holds, above any part of a quantum left over.
+    let want = held / 2;
+    assert!(
+        Shed::none().grow(&mut charge, want).is_err(),
+        "nothing to take"
+    );
+    Shed::all(&mut framed).grow(&mut charge, want).unwrap();
+    assert_eq!(charge.size(), want);
+    let Some(frame) = framed[0].as_mut() else {
+        panic!("a frame reads the file");
+    };
+    assert!(!frame.hold_rows(0, 1_000).unwrap(), "folds from the file");
+    drop((charge, hog, framed));
+    ctx.consumer().consumer().release_credit();
+}
+
 /// An exact percentile's value map is charged as it grows: distinct values
 /// far beyond the memory left are refused with the memory error (the pool
 /// empty after), and few distinct values over the same rows complete.
