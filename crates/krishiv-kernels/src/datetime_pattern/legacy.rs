@@ -340,7 +340,7 @@ impl LegacyPattern {
                     // A number directly followed by another number in the
                     // pattern reads exactly its run length.
                     let abut =
-                        matches!(self.toks.get(i + 1), Some(Tok::Field(d, _)) if is_numeric(*d))
+                        matches!(self.toks.get(i + 1), Some(Tok::Field(d, dn)) if is_numeric(*d, *dn))
                             .then_some(*n);
                     pos = st.field(&text, pos, *c, *n, abut)?;
                 }
@@ -369,8 +369,9 @@ fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
     local.checked_sub(i64::from(offset).checked_mul(MICROS_PER_SECOND)?)
 }
 
-fn is_numeric(c: char) -> bool {
-    !matches!(c, 'G' | 'E' | 'a' | 'z' | 'Z' | 'X')
+fn is_numeric(c: char, n: usize) -> bool {
+    // Three or more `M` is a month name.
+    !matches!(c, 'G' | 'E' | 'a' | 'z' | 'Z' | 'X') && !(matches!(c, 'M' | 'L') && n >= 3)
 }
 
 fn pad(out: &mut String, v: i64, n: usize) {
@@ -470,6 +471,8 @@ struct Parsed {
     clock: u32,
     year: Option<(i64, u32)>,
     era_bc: bool,
+    /// The year came from `Y`: a week-year, checked against the week's.
+    year_is_week: bool,
     month0: Option<(i64, u32)>,
     dom: Option<(i64, u32)>,
     doy: Option<(i64, u32)>,
@@ -562,6 +565,7 @@ impl Parsed {
                     value
                 };
                 self.year = Some((v, st));
+                self.year_is_week = c == 'Y';
             }
             'M' | 'L' => self.month0 = Some((value - 1, st)),
             'd' => self.dom = Some((value, st)),
@@ -681,7 +685,12 @@ impl Parsed {
     fn week_fields_agree(&self, days: i64, year: i64) -> bool {
         let (y, m, d) = civil_from_days(days);
         let doy = days - days_from_civil(y, 1, 1).unwrap_or(days) + 1;
-        y == year
+        let year_ok = if self.year_is_week {
+            civil_from_days(week_year_anchor(days, y, doy)).0 == year
+        } else {
+            y == year
+        };
+        year_ok
             && self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1)
             && self.dom.is_none_or(|(v, _)| v == i64::from(d))
             && self.doy.is_none_or(|(v, _)| v == doy)
@@ -745,7 +754,7 @@ impl Parsed {
         if days > cutover && days < cutover + 11 {
             return None;
         }
-        if weeky && !self.week_fields_agree(days, year) {
+        if (weeky || self.dow.is_some()) && !self.week_fields_agree(days, year) {
             return None;
         }
         let hour = match (self.hour_of_day, self.hour12) {
@@ -899,6 +908,9 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
         mm = m;
         e = e2;
     }
+    if hh > 23 || mm > 59 {
+        return None;
+    }
     let secs = i32::try_from(hh * 3600 + mm * 60).ok()?;
     Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })))
 }
@@ -926,6 +938,9 @@ fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
         } else {
             (0, e)
         };
+        if hh > 23 || mm > 59 {
+            return None;
+        }
         let secs = i32::try_from(hh * 3600 + mm * 60).ok()?;
         return Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })));
     }
@@ -943,6 +958,20 @@ fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
         return None;
     }
     let id: String = text[pos..e].iter().collect();
+    // A standard-time display name is that fixed offset all year, as
+    // `SimpleDateFormat` reads it (not the region's seasonal rules).
+    let fixed = match id.as_str() {
+        "PST" => Some(-8),
+        "MST" => Some(-7),
+        "CST" => Some(-6),
+        "EST" => Some(-5),
+        "AKST" => Some(-9),
+        "HST" => Some(-10),
+        _ => None,
+    };
+    if let Some(h) = fixed {
+        return Some((e, Zone_::Offset(h * 3600)));
+    }
     crate::datetime::resolve_zone(&id).ok()?;
     Some((e, Zone_::Region(id)))
 }
@@ -993,6 +1022,18 @@ mod tests {
         assert_eq!(local("yyyy-MM-dd", "1582-10-10"), None);
         assert!(local("yyyy-MM-dd", "1582-10-04").is_some());
         assert!(local("yyyy-MM-dd", "1582-10-15").is_some());
+    }
+
+    #[test]
+    fn review_edge_cases() {
+        let l = |p, t| local(p, t);
+        assert_eq!(l("yyyy-MM-dd E", "2024-01-01 Tue"), None);
+        assert!(l("yyyy-MM-dd E", "2024-01-01 Mon").is_some());
+        assert_eq!(l("yyyy-MM-dd XXX", "2024-01-01 +25:00"), None);
+        assert_eq!(l("yyyy-MM-dd XXX", "2024-01-01 +05:99"), None);
+        assert!(l("dMMMyyyy", "12Jan2024").is_some());
+        // Week-year 2020 week 1 starts on 2019-12-29 (Sunday); day 1 = Sunday.
+        assert!(l("YYYY-ww-u", "2020-01-1").is_some());
     }
 
     #[test]
