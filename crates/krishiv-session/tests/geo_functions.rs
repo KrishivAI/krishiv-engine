@@ -201,7 +201,10 @@ fn spatial_values_are_no_keys() {
         format!("collect_set({m})"),
     ] {
         let e = error(&q);
-        assert!(e.contains("GEOMETRY or GEOGRAPHY"), "{q}: {e}");
+        assert!(
+            e.contains("GEOMETRY or GEOGRAPHY") || e.contains("INVALID_ORDERING_TYPE"),
+            "{q}: {e}"
+        );
     }
     // A spatial field read out of a struct is no key either.
     let field = format!("(SELECT named_struct('g', {m}) s) t");

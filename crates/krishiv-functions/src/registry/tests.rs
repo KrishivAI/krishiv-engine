@@ -645,10 +645,10 @@ fn calendar_signatures() {
     // What stays unregistered is known to Spark, so it is not "not found".
     assert!(
         matches!(
-            builtins().lookup("make_interval", SparkProfile::V4_2),
+            builtins().lookup("hll_sketch_agg", SparkProfile::V4_2),
             Lookup::KnownUnsupported
         ),
-        "make_interval"
+        "hll_sketch_agg"
     );
 }
 

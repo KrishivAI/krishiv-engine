@@ -28,6 +28,16 @@ pub fn partial_state_columns(
         return None;
     }
     let name = call.id.name();
+    // An interval's `sum` and `avg` keep months or microseconds with a count,
+    // which the partial form does not lay out: they stay above the join.
+    if matches!(name, "sum" | "avg" | "mean")
+        && matches!(
+            raw_type,
+            DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }
+        )
+    {
+        return None;
+    }
     let out = call.data_type.clone();
     let parts: Vec<(&str, DataType, bool)> = match (name, &out) {
         ("count", _) => vec![("count", DataType::Long, false)],
@@ -96,6 +106,18 @@ mod tests {
             .into_iter()
             .map(|c| (c.name, c.data_type, c.nullable))
             .collect()
+    }
+
+    #[test]
+    fn an_intervals_sum_and_avg_have_no_partial_form() {
+        let day = DataType::DEFAULT_DAY_TIME_INTERVAL;
+        let month = DataType::DEFAULT_YEAR_MONTH_INTERVAL;
+        for raw in [&day, &month] {
+            for name in ["sum", "avg", "mean"] {
+                assert!(partial_state_columns(&call(name, raw.clone()), raw, AttrId(7)).is_none());
+            }
+            assert_eq!(parts(&call("min", raw.clone()), raw).len(), 1);
+        }
     }
 
     #[test]

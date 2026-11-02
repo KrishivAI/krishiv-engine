@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, BinaryArray};
-use arrow_schema::{DataType, TimeUnit};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 
 use crate::error::{Result, internal};
 
@@ -30,7 +30,7 @@ const SEED: i64 = 42;
 const MAX_P: u32 = 30;
 
 /// Whether `t` is a type `approx_count_distinct` hashes here: Spark
-/// hashes every type, but the engine has no interval, nested or
+/// hashes every type, but the engine has no calendar interval, nested or
 /// collated-string hashing in this path yet.
 pub(crate) fn hll_supported(t: &DataType) -> bool {
     matches!(
@@ -46,6 +46,8 @@ pub(crate) fn hll_supported(t: &DataType) -> bool {
             | DataType::Decimal128(..)
             | DataType::Date32
             | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Interval(IntervalUnit::YearMonth)
+            | DataType::Duration(TimeUnit::Microsecond)
             | DataType::Utf8
             | DataType::Utf8View
             | DataType::Binary
@@ -266,8 +268,8 @@ fn estimate_bias(p: u32, e: f64) -> f64 {
 pub(crate) fn hash_of(a: &ArrayRef, i: usize) -> Result<Option<u64>> {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
-        Date32Type, Decimal64Type, Decimal128Type, Float32Type, Int8Type, Int16Type, Int32Type,
-        Int64Type, TimestampMicrosecondType,
+        Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Int8Type,
+        Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
     };
     use krishiv_kernels::hash::routing::{xxh64_seed, xxh64_seed_int, xxh64_seed_long};
     if a.is_null(i) {
@@ -326,6 +328,12 @@ pub(crate) fn hash_of(a: &ArrayRef, i: usize) -> Result<Option<u64>> {
             DataType::Date32 => xxh64_seed_int(a.as_primitive::<Date32Type>().value(i), SEED),
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 xxh64_seed_long(a.as_primitive::<TimestampMicrosecondType>().value(i), SEED)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                xxh64_seed_int(a.as_primitive::<IntervalYearMonthType>().value(i), SEED)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                xxh64_seed_long(a.as_primitive::<DurationMicrosecondType>().value(i), SEED)
             }
             DataType::Utf8View => xxh64_seed(a.as_string_view().value(i).as_bytes(), SEED),
             DataType::Utf8 => xxh64_seed(a.as_string::<i32>().value(i).as_bytes(), SEED),
@@ -2011,6 +2019,7 @@ mod tests {
             arg_type: DataType::Int64,
             name: "h".to_owned(),
             mask: None,
+            element: None,
         };
         let mut a = Accumulator::new(&e, true).unwrap();
         a.resize(1);

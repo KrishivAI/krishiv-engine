@@ -44,6 +44,7 @@ use krishiv_kernels::datetime::{
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
 };
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
+use krishiv_kernels::interval::{interval_part, interval_part_type};
 
 use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -1308,6 +1309,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let source = t.clone();
                 Binding::new(part.result_type(), move |x: &Inputs<'_>| {
                     extract(x, 1, part, &source, &o)
+                })
+            }
+            Ok(Some(part))
+                if matches!(
+                    t,
+                    DataType::Interval(_) | DataType::Duration(TimeUnit::Microsecond)
+                ) =>
+            {
+                Binding::new(interval_part_type(part), move |x: &Inputs<'_>| {
+                    Ok(interval_part(x.column(1)?.as_ref(), part)?)
                 })
             }
             Ok(Some(_)) => return Some((listed, Err(bad_types(listed, args)))),

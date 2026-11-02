@@ -63,22 +63,23 @@ fn corrupt_footer(reason: impl Into<String>) -> FormatError {
 ///
 /// # Errors
 /// `CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION` for zstandard;
-/// `KRISHIV_UNSUPPORTED_FEATURE` for `bzip2` and `xz`.
+/// `KRISHIV_UNSUPPORTED_FEATURE` for `xz`.
 fn block_codec(codec: Codec) -> FormatResult<apache_avro::Codec> {
     use apache_avro::Codec as AvCodec;
     match codec {
         Codec::Null => Ok(AvCodec::Null),
         Codec::Deflate => Ok(AvCodec::Deflate(apache_avro::DeflateSettings::default())),
         Codec::Snappy => Ok(AvCodec::Snappy),
+        Codec::Bzip2 => Ok(AvCodec::Bzip2(apache_avro::Bzip2Settings::default())),
         Codec::Zstandard => Err(FormatError::Other(
             CodecNotAvailableWithAvailableCodecsSuggestion {
                 codec_name: codec.header_name().to_owned(),
-                available_codecs: "uncompressed, deflate, snappy".to_owned(),
+                available_codecs: "uncompressed, deflate, snappy, bzip2".to_owned(),
             }
             .into(),
         )),
-        Codec::Bzip2 | Codec::Xz => Err(FormatError::Other(unsupported(format!(
-            "the Avro {} codec (only uncompressed, snappy and deflate are supported)",
+        Codec::Xz => Err(FormatError::Other(unsupported(format!(
+            "the Avro {} codec (only uncompressed, snappy, deflate and bzip2 are supported)",
             codec.header_name()
         )))),
     }
