@@ -75,6 +75,18 @@ impl ExplainVerbose {
         out
     }
 
+    /// The `planning` member of a profile document: the stages without
+    /// `format` and `version`.
+    #[must_use]
+    pub fn planning_value(&self) -> Value {
+        let mut v: Value = serde_json::from_str(&self.to_json()).unwrap_or_default();
+        if let Some(o) = v.as_object_mut() {
+            o.remove("format");
+            o.remove("version");
+        }
+        v
+    }
+
     /// The JSON document (format [`VERBOSE_FORMAT`], version
     /// [`VERBOSE_VERSION`]; experimental: may change before 1.0).
     #[must_use]
@@ -270,6 +282,23 @@ impl DataFrame {
             .await
     }
 
+    /// As [`Self::explain_analyze`], with the plan at every planning stage
+    /// ([`Self::explain_verbose`]) in the profile's `planning` member.
+    ///
+    /// # Errors
+    /// Analysis, planning and execution errors.
+    pub async fn explain_analyze_verbose(&self) -> Result<QueryProfile, KrishivError> {
+        let df = self.clone();
+        self.session
+            .on_executor(async move {
+                let (verbose, _) = df.verbose_full().await?;
+                let (_, mut profile) = df.profiled(false).await?;
+                profile.planning = Some(verbose.planning_value());
+                Ok(profile)
+            })
+            .await
+    }
+
     /// As [`Self::explain_analyze`], also returning the rows.
     ///
     /// # Errors
@@ -445,8 +474,10 @@ mod tests {
             k
         };
         assert_eq!(keys(&root["properties"]), keys(&doc));
+        let planning = &schema["$defs"]["planning"];
+        assert_eq!(keys(&planning["properties"]), keys(&v.planning_value()));
         assert_eq!(
-            keys(&root["properties"]["steps"]["items"]["properties"]),
+            keys(&planning["properties"]["steps"]["items"]["properties"]),
             keys(&doc["steps"][0])
         );
         assert_eq!(root["properties"]["format"]["const"], VERBOSE_FORMAT);

@@ -10,6 +10,7 @@
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
     "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`. A reader ignores members it does not know." },
+    "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "environment": {
       "type": "object",
       "description": "The build that wrote the document (added in minor 1). Never configuration values. A reader ignores it.",
@@ -186,14 +187,12 @@
   "$defs": {
     "u64": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
-    "explainVerbose": {
+    "planning": {
       "type": "object",
-      "description": "The second root of this file, selected by `format` = `krishiv.explain-verbose` (EXPLAIN VERBOSE as JSON): planning only, no run. The same minor/must-ignore rule applies.",
-      "required": ["format", "version", "parsed", "analyzed", "steps", "optimized", "physical"],
+      "description": "The plan at every planning stage (EXPLAIN ANALYZE VERBOSE, `DataFrame.explain_analyze_verbose`).",
+      "required": ["parsed", "analyzed", "steps", "optimized", "physical"],
       "additionalProperties": false,
       "properties": {
-        "format": { "const": "krishiv.explain-verbose" },
-        "version": { "const": 1 },
         "parsed": { "type": "string" },
         "analyzed": { "type": "string" },
         "steps": {
@@ -213,6 +212,21 @@
         },
         "optimized": { "type": "string" },
         "physical": { "type": "string" }
+      }
+    },
+    "explainVerbose": {
+      "type": "object",
+      "description": "The second root of this file, selected by `format` = `krishiv.explain-verbose` (EXPLAIN VERBOSE as JSON): planning only, no run. The same minor/must-ignore rule applies.",
+      "required": ["format", "version", "parsed", "analyzed", "steps", "optimized", "physical"],
+      "additionalProperties": false,
+      "properties": {
+        "format": { "const": "krishiv.explain-verbose" },
+        "version": { "const": 1 },
+        "parsed": { "$ref": "#/$defs/planning/properties/parsed" },
+        "analyzed": { "$ref": "#/$defs/planning/properties/analyzed" },
+        "steps": { "$ref": "#/$defs/planning/properties/steps" },
+        "optimized": { "$ref": "#/$defs/planning/properties/optimized" },
+        "physical": { "$ref": "#/$defs/planning/properties/physical" }
       }
     }
   }

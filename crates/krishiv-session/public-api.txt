@@ -330,6 +330,7 @@ pub async fn krishiv_session::DataFrame::write_to_table_with(&self, &str, core::
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::collect_with_profile(&self) -> core::result::Result<(alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_exec::profile::QueryProfile), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_analyze(&self) -> core::result::Result<krishiv_exec::profile::QueryProfile, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::explain_analyze_verbose(&self) -> core::result::Result<krishiv_exec::profile::QueryProfile, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_analyze_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose(&self) -> core::result::Result<krishiv_session::ExplainVerbose, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
@@ -403,6 +404,7 @@ pub krishiv_session::ExplainVerbose::physical: alloc::string::String
 pub krishiv_session::ExplainVerbose::steps: alloc::vec::Vec<krishiv_session::OptimizerStep>
 impl krishiv_session::ExplainVerbose
 pub fn krishiv_session::ExplainVerbose::from_json(&str) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::ExplainVerbose::planning_value(&self) -> serde_json::value::Value
 pub fn krishiv_session::ExplainVerbose::to_json(&self) -> alloc::string::String
 pub fn krishiv_session::ExplainVerbose::to_text(&self) -> alloc::string::String
 impl core::clone::Clone for krishiv_session::ExplainVerbose

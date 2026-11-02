@@ -527,6 +527,18 @@ fn a_later_minor_is_read() {
     assert!(QueryProfile::from_json(&v.to_string()).is_err());
 }
 
+/// `planning` round-trips and must be an object.
+#[test]
+fn planning_round_trips() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), false);
+    p.planning = Some(serde_json::json!({"parsed": "p"}));
+    let back = QueryProfile::from_json(&p.to_json()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back, p);
+    let mut v = p.to_json_value();
+    v["planning"] = "x".into();
+    assert!(QueryProfile::from_json(&v.to_string()).is_err());
+}
+
 /// The usage block sums the operators' counters (T138).
 #[test]
 fn usage_equals_the_operator_sums() {
@@ -563,7 +575,12 @@ fn schema_matches_the_writer() {
     );
     let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default())
         .unwrap_or_default();
-    let doc = QueryProfile::new(&plan(matching()), metrics(), true).to_json_value();
+    let mut profile = QueryProfile::new(&plan(matching()), metrics(), true);
+    profile.planning = Some(
+        serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
+        "optimized": "o", "physical": "x"}),
+    );
+    let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
             .as_object()
@@ -610,6 +627,7 @@ fn schema_matches_the_writer() {
         &props["query"]["properties"]["memory"],
         &doc["query"]["memory"],
     );
+    check(&schema["$defs"]["planning"], &doc["planning"]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(&props["usage"]["properties"]["scan"], &doc["usage"]["scan"]);

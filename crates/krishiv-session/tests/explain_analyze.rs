@@ -72,6 +72,26 @@ fn rows(batches: &[RecordBatch]) -> u64 {
 }
 
 #[test]
+fn analyze_verbose_carries_the_planning_stages() {
+    let s = session(2);
+    let df = block_on(s.sql(QUERY)).expect("plans");
+    let p = block_on(df.explain_analyze_verbose()).expect("runs");
+    let planning = p.planning.as_ref().expect("planning");
+    assert!(
+        planning["physical"]
+            .as_str()
+            .is_some_and(|t| t.contains("HashJoin"))
+    );
+    assert!(planning["steps"].as_array().is_some_and(|a| !a.is_empty()));
+    let back = QueryProfile::from_json(&p.to_json()).expect("reads");
+    assert_eq!(back.planning, p.planning);
+    // Plain EXPLAIN ANALYZE writes no planning member.
+    let plain = block_on(df.explain_analyze()).expect("runs");
+    assert!(plain.planning.is_none());
+    assert!(plain.to_json_value().get("planning").is_none());
+}
+
+#[test]
 fn analyze_text_is_stable() {
     let s = session(1);
     let df = block_on(s.sql(QUERY)).unwrap();

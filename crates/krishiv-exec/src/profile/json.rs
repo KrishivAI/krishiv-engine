@@ -37,7 +37,7 @@ impl QueryProfile {
     pub fn to_json_value(&self) -> Value {
         let m = &self.metrics;
         let d = &m.drivers;
-        json!({
+        let mut doc = json!({
             "format": PROFILE_FORMAT,
             "version": PROFILE_VERSION,
             "minor": PROFILE_MINOR,
@@ -72,7 +72,11 @@ impl QueryProfile {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
             },
-        })
+        });
+        if let (Some(p), Some(o)) = (&self.planning, doc.as_object_mut()) {
+            o.insert("planning".to_owned(), p.clone());
+        }
+        doc
     }
 
     /// The profile as one line of JSON.
@@ -142,10 +146,16 @@ impl QueryProfile {
                 return Err(ProfileError::new(format!("operator {} listed twice", id.0)));
             }
         }
+        let planning = match o.get("planning") {
+            None | Some(Value::Null) => None,
+            Some(p) if p.is_object() => Some(p.clone()),
+            Some(_) => return Err(ProfileError::new("planning is not an object")),
+        };
         Ok(Self {
             plan,
             metrics,
             detailed,
+            planning,
         })
     }
 }

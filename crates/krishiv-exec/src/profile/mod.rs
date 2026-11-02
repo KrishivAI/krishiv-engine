@@ -209,6 +209,11 @@ pub struct QueryProfile {
     /// Whether the costlier detailed metrics were collected
     /// ([`ExecConfig::detailed_metrics`](crate::ExecConfig::detailed_metrics)).
     pub detailed: bool,
+    /// The plan at every planning stage (`EXPLAIN ANALYZE VERBOSE`): the
+    /// `planning` member, an object of `parsed`, `analyzed`, `steps`,
+    /// `optimized` and `physical` the session fills; `None` when not asked
+    /// for. Kept as data: this crate does not plan.
+    pub planning: Option<serde_json::Value>,
 }
 
 impl QueryProfile {
@@ -219,6 +224,7 @@ impl QueryProfile {
             plan: ProfileNode::of(plan),
             metrics,
             detailed,
+            planning: None,
         }
     }
 
