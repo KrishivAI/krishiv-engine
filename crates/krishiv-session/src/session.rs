@@ -53,6 +53,7 @@ use krishiv_types::DataType;
 use krishiv_types::batch::{Batch, Weights};
 use krishiv_udf_sdk::{UdfLibrary, guard_call};
 use object_store::ObjectStore;
+#[cfg(not(unix))]
 use object_store::local::LocalFileSystem;
 
 use crate::cache::RelationCache;
@@ -304,6 +305,12 @@ impl SessionBuilder {
         let io =
             IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
         io.attach_memory(&memory);
+        #[cfg(unix)]
+        io.register_whole_listing_store(
+            StoreId::new(LOCAL_STORE),
+            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        #[cfg(not(unix))]
         io.register_store(
             StoreId::new(LOCAL_STORE),
             Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
