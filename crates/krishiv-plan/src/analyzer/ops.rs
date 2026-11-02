@@ -534,7 +534,23 @@ impl Resolver<'_> {
         for e in exprs {
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
-                let expanded = self.expand(s, &cx, e.origin)?;
+                let expanded = match self.expand(s, &cx, e.origin) {
+                    Ok(expanded) => expanded,
+                    Err(err) => {
+                        // `SELECT t1.*` inside a lateral join's right side
+                        // reads the left side's columns.
+                        let names = self.lateral_star(s, &cx);
+                        if names.is_empty() {
+                            return Err(err);
+                        }
+                        for name in names {
+                            let col = Arc::new(Expr::column(name).with_origin(e.origin));
+                            let b = self.bind(&col, &cx)?;
+                            items.push(self.named(b)?);
+                        }
+                        continue;
+                    }
+                };
                 let replaced = self.replacements(s, &expanded, e.origin)?;
                 for (a, with) in expanded.iter().zip(replaced) {
                     let Some(with) = with else {

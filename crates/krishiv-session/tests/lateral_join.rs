@@ -278,3 +278,22 @@ fn a_grouped_aggregate_over_a_non_equality_correlation() -> R {
     );
     Ok(())
 }
+
+#[test]
+fn a_star_of_the_outer_side_inside_the_lateral() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(&s, "select * from t1, lateral (select t1.*)")?,
+        ["0|1|0|1", "1|2|1|2"]
+    );
+    assert_eq!(
+        run(&s, "select * from t1, lateral (select t1.*, t2.* from t2)")?,
+        ["0|1|0|1|0|2", "0|1|0|1|0|3", "1|2|1|2|0|2", "1|2|1|2|0|3"]
+    );
+    // An inner relation of the same name shadows the outer one.
+    assert_eq!(
+        run(&s, "select * from t1, lateral (select t1.* from t2 as t1)")?,
+        ["0|1|0|2", "0|1|0|3", "1|2|0|2", "1|2|0|3"]
+    );
+    Ok(())
+}
