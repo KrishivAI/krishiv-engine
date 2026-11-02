@@ -157,6 +157,10 @@ fn walk_struct(
                 // value truncated to 16 bits, and a delta past `i16::MAX` fails.
                 let id = if header >> 4 == 0 {
                     low16(unzigzag(walk.varint()?))
+                } else if schema == Schema::Any {
+                    // arrow-rs skips such a struct with the previous id always 0,
+                    // so a delta never overflows there, and the id is not used.
+                    0
                 } else {
                     last.checked_add(i16::from(header >> 4))
                         .ok_or("a field id overflows")?
@@ -668,6 +672,17 @@ mod tests {
         let mut short = page(0, &[0x6d, 0x11, 0x11]);
         short.truncate(short.len());
         assert_eq!(check_pages(&short), Err(BINARY_PAST_END));
+    }
+
+    #[test]
+    fn ids_in_a_skipped_struct_do_not_end_the_walk() {
+        // Unknown field 9 is a struct whose first field has the full id 32767
+        // and is followed by a delta-1 field: arrow-rs skips it with the
+        // previous id always 0, and goes on to the next header.
+        let skipped = [0x6c, 0x05, 0xfe, 0xff, 0x03, 0x00, 0x15, 0x00, 0x00];
+        let mut chunk = page(2, &skipped);
+        chunk.extend(page(2, &BOMB));
+        assert_eq!(check_pages(&chunk), Err(COUNT_TOO_LARGE));
     }
 
     #[test]
