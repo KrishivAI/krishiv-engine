@@ -2086,7 +2086,7 @@ impl Lowerer {
                         .iter()
                         .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
                         .collect(),
-                    regex: regex.clone(),
+                    regex: regex.as_deref().map(str::to_owned),
                     plan_id: None,
                 }),
                 sp,

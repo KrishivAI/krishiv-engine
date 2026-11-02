@@ -1382,6 +1382,7 @@ impl Resolver<'_> {
         };
         // A quoted column regex keeps the columns whose names it matches in full (ignoring case
         // unless the session is case sensitive).
+        let had_columns = !out.is_empty();
         let out = match &s.regex {
             Some(pattern) => {
                 let matcher = krishiv_functions::scalar::FullMatch::new(pattern, !cs)
@@ -1412,7 +1413,9 @@ impl Resolver<'_> {
             }
             None => out,
         };
-        if out.is_empty() && !s.qualifier.is_empty() {
+        // A qualified regex that matches nothing selects nothing; only a qualifier no column
+        // answers to cannot be expanded.
+        if out.is_empty() && !s.qualifier.is_empty() && !(s.regex.is_some() && had_columns) {
             return Err(AnalysisError::new(
                 CannotResolveStarExpand {
                     target_string: quoted(&s.qualifier),

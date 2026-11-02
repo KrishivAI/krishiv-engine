@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      19
-    ]
-  },
-  "file": "query_regex_column",
-  "format_version": 1
-}

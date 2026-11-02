@@ -929,7 +929,12 @@ impl Session {
             }
             .into());
         }
-        let table = self.table_for_write(&name, "ALTER TABLE", &env)?;
+        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
+            "COMMENT ON TABLE"
+        } else {
+            "ALTER TABLE"
+        };
+        let table = self.table_for_write(&name, operation, &env)?;
         let mut changed = (*table).clone();
         match &a.action {
             AlterTableAction::AddColumns(defs) => {

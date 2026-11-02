@@ -206,3 +206,27 @@ fn a_dotted_field_path_is_named_by_its_last_field() {
         ["upper(col1.name)"]
     );
 }
+
+/// Semi and anti joins above a `USING` join read the merged-away key too, and output the left side.
+#[test]
+fn semi_and_anti_joins_read_the_merged_away_key() {
+    let s = session();
+    block_on(s.sql(
+        "CREATE TEMPORARY VIEW nt3 AS SELECT * FROM VALUES ('one', 4), ('five', 7) AS nt3(k, v3)",
+    ))
+    .unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT nt1.k FROM nt1 NATURAL JOIN nt2 LEFT SEMI JOIN nt3 ON nt2.k = nt3.k"
+        ),
+        ["one", "one"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT nt2.k FROM nt1 NATURAL JOIN nt2 LEFT ANTI JOIN nt3 ON nt2.k = nt3.k"
+        ),
+        ["two"]
+    );
+}

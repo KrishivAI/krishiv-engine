@@ -92,3 +92,11 @@ fn without_the_setting_a_backquoted_name_is_a_column() {
     let s = Session::new().unwrap();
     assert!(block_on(s.sql("SELECT `(a)?+.+` FROM VALUES (1) AS t(a)")).is_err());
 }
+
+#[test]
+fn a_qualified_regex_that_matches_nothing_selects_nothing() {
+    let s = session();
+    assert!(run(&s, "SELECT t.`(e|f)` FROM t2 t").0.is_empty());
+    // A qualifier no column answers to is still an error.
+    assert!(block_on(s.sql("SELECT nope.`(a)` FROM t2 t")).is_err());
+}

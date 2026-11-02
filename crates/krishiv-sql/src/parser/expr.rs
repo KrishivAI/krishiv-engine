@@ -1080,7 +1080,7 @@ impl Parser<'_> {
             let kind = ExprKind::Wildcard {
                 qualifier: parts,
                 except: Vec::new(),
-                regex: Some(last.value),
+                regex: Some(last.value.into_boxed_str()),
             };
             return Ok(self.mk(kind, start));
         }
