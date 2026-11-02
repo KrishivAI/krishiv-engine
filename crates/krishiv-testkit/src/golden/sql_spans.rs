@@ -10,7 +10,7 @@
 //! differential check that the same tokens with other whitespace and
 //! comments parse to an `==` tree.
 
-use krishiv_sql::ast::{ExprKind, Query, SetExprKind, Span, Statement};
+use krishiv_sql::ast::{BinaryOp, ExprKind, Query, SetExprKind, Span, Statement};
 use krishiv_sql::lexer::tokenize;
 use krishiv_sql::{ParserOptions, parse_query};
 
@@ -87,26 +87,45 @@ fn without_spans<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     out
 }
 
+/// How [`reparsed`] reads the select item back.
+#[derive(Clone, Copy)]
+enum Context {
+    /// `SELECT <text>`: the item itself.
+    Item,
+    /// `SELECT (<text>)`: the item inside the parentheses.
+    Nested,
+    /// `SELECT 1 = <text>`: the right operand of the comparison.
+    Operand,
+}
+
 /// The expression of `SELECT <text>` and, as the select list may read a
-/// leading `ALL` differently, the one inside `SELECT (<text>)`, rendered
-/// like [`without_spans`].
+/// leading `ALL` differently, the one inside `SELECT (<text>)`, and, as an
+/// operand position reads a word that is a keyword at the start of an item
+/// as a name (`NOT` in `1 = NOT + 1`, a column named `NOT`, as Spark's
+/// parser does), the right operand of `SELECT 1 = <text>`, rendered like
+/// [`without_spans`]. With `spark.sql.parser.quotedRegexColumnNames` on it
+/// also parses the item and nested forms with the option off, as a backquoted
+/// name outside a select item is a column. A node's text re-parses to the
+/// node when any of them does.
 fn reparsed(text: &str, options: &ParserOptions) -> Vec<Option<String>> {
-    let parse = |sql: String, nested: bool, options: &ParserOptions| -> Option<String> {
+    let parse = |sql: String, context: Context, options: &ParserOptions| -> Option<String> {
         let q = parse_query(&sql, options).ok()?;
         let SetExprKind::Select(s) = q.body.kind else {
             return None;
         };
         let item = s.projection.first().filter(|i| i.alias.is_none())?;
-        let expr = match &item.expr.kind {
-            ExprKind::Nested(inner) if nested => &**inner,
-            _ if nested => return None,
-            _ => &item.expr,
+        let expr = match (&item.expr.kind, context) {
+            (ExprKind::Nested(inner), Context::Nested) => &**inner,
+            (ExprKind::Binary(_, BinaryOp::Eq, rhs), Context::Operand) => &**rhs,
+            (_, Context::Nested | Context::Operand) => return None,
+            (_, Context::Item) => &item.expr,
         };
         Some(without_spans(format!("{expr:#?}").lines()))
     };
     let mut out = vec![
-        parse(format!("SELECT {text}"), false, options),
-        parse(format!("SELECT ({text})"), true, options),
+        parse(format!("SELECT {text}"), Context::Item, options),
+        parse(format!("SELECT ({text})"), Context::Nested, options),
+        parse(format!("SELECT 1 = {text}"), Context::Operand, options),
     ];
     // A backquoted name outside a select item is a column even where the select list would read
     // it as a regex (`spark.sql.parser.quotedRegexColumnNames`).
@@ -115,8 +134,8 @@ fn reparsed(text: &str, options: &ParserOptions) -> Vec<Option<String>> {
             quoted_regex_column_names: false,
             ..*options
         };
-        out.push(parse(format!("SELECT {text}"), false, &plain));
-        out.push(parse(format!("SELECT ({text})"), true, &plain));
+        out.push(parse(format!("SELECT {text}"), Context::Item, &plain));
+        out.push(parse(format!("SELECT ({text})"), Context::Nested, &plain));
     }
     out
 }
