@@ -627,6 +627,34 @@ fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
     assert_eq!(Feature::WriteColumnTypes.kind(), FeatureKind::Semantic);
 }
 
+/// The header lists each feature of a write, and the Spark types it names
+/// even when its input holds none of them.
+#[test]
+fn a_partitioned_write_with_column_types_lists_every_feature() {
+    let write = krishiv_exec::physical::WritePlan {
+        partition_by: vec![0],
+        column_types: std::collections::BTreeMap::from([(
+            0,
+            krishiv_types::DataType::YearMonthInterval {
+                start: krishiv_types::YearMonthField::Year,
+                end: krishiv_types::YearMonthField::Month,
+            },
+        )]),
+        ..inventory::write_plan()
+    };
+    let features = plan_features(&plan_of(PhysNode::WriteFiles {
+        input: Box::new(PhysNode::OneRow),
+        write: Some(write),
+    }));
+    for feature in [
+        Feature::IntervalTypes,
+        Feature::PartitionedWrites,
+        Feature::WriteColumnTypes,
+    ] {
+        assert!(features.contains(&feature), "{feature}: {features:?}");
+    }
+}
+
 #[test]
 fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
     let bytes = encode(

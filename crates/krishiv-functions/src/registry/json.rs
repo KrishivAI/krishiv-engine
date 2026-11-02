@@ -159,7 +159,7 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         }
         .into());
     }
-    if let Some(map) = non_string_map_key(&parsed) {
+    if has_non_string_map_key(&parsed) {
         // Spark's check names the entries of a map at the top.
         return Err(DatatypeMismatchInvalidJsonMapKeyType {
             sql_expr: if matches!(parsed, DataType::Map(_)) {
@@ -167,7 +167,7 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             } else {
                 sql_expr()
             },
-            schema: format!("\"{}\"", map.sql()),
+            schema: format!("\"{}\"", parsed.sql()),
         }
         .into());
     }
@@ -175,17 +175,18 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(parsed, true))
 }
 
-/// The first map in `t` whose key is not a string.
-fn non_string_map_key(t: &DataType) -> Option<&DataType> {
+/// Whether any map in `t` has a key that is not a string.
+fn has_non_string_map_key(t: &DataType) -> bool {
     match t {
-        DataType::Array(a) => non_string_map_key(a.element_type()),
+        DataType::Array(a) => has_non_string_map_key(a.element_type()),
         DataType::Struct(s) => s
             .fields()
             .iter()
-            .find_map(|f| non_string_map_key(f.data_type())),
-        DataType::Map(m) if m.key_type() != &DataType::String => Some(t),
-        DataType::Map(m) => non_string_map_key(m.value_type()),
-        _ => None,
+            .any(|f| has_non_string_map_key(f.data_type())),
+        DataType::Map(m) => {
+            m.key_type() != &DataType::String || has_non_string_map_key(m.value_type())
+        }
+        _ => false,
     }
 }
 

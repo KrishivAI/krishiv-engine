@@ -206,6 +206,8 @@ pub enum Construct<'a> {
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
+    /// A `WritePlan` naming the Spark types of input columns.
+    WriteColumnTypes,
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -328,9 +330,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
             PhysNode::WriteFiles { write, .. } => write.as_ref().map(|w| {
-                if !w.column_types.is_empty() {
-                    Feature::WriteColumnTypes
-                } else if w.partition_by.is_empty() {
+                if w.partition_by.is_empty() {
                     Feature::WritePlan
                 } else {
                     Feature::PartitionedWrites
@@ -390,6 +390,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // A lambda is plan data behind its own feature: a reader without
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
+        Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         // A type Krishiv does not know cannot be encoded at all. A later
         // feature for a type that can sit inside an array, map or struct
         // (variant, char/varchar, intervals) must look through them: its
@@ -548,8 +549,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
-        | PhysNode::Union { .. }
-        | PhysNode::WriteFiles { .. } => {}
+        | PhysNode::Union { .. } => {}
+        PhysNode::WriteFiles { write, .. } => {
+            if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
+                f(Construct::WriteColumnTypes);
+            }
+        }
     }
     for t in types_of(node) {
         visit_type(t, f);
@@ -630,6 +635,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     }
     if let PhysNode::Scan(scan) = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+    }
+    if let PhysNode::WriteFiles { write: Some(w), .. } = node {
+        out.extend(w.column_types.values());
     }
     out
 }

@@ -232,7 +232,7 @@ pub(crate) fn refuse_calendar_intervals(
     }
 }
 
-/// [`refuse_calendar_intervals`] by provider name, for a declared schema: a
+/// `refuse_calendar_intervals` by provider name, for a declared schema: a
 /// table's columns or a reader's schema.
 ///
 /// # Errors

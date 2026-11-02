@@ -873,6 +873,18 @@ fn from_json_reads_intervals_by_their_fields_at_any_depth() -> R {
     Ok(())
 }
 
+/// Spark 4.2.0 names the whole schema, not the map inside it.
+#[test]
+fn from_json_map_key_error_names_the_whole_schema() -> R {
+    let session = Session::new()?;
+    let err = block_on(session.sql(r#"SELECT from_json('{"a":{"1":1}}', 'a map<int, int>')"#))
+        .err()
+        .ok_or("expected an error")?;
+    let text = err.to_string();
+    assert!(text.contains("STRUCT<a: MAP<INT, INT>>"), "{text}");
+    Ok(())
+}
+
 /// Spark 4.2.0's answers: a value prints its text, `to_json`'s map key an ANSI
 /// interval's number, and `to_csv` the text everywhere.
 #[test]
