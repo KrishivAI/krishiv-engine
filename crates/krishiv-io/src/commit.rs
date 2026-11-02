@@ -215,7 +215,9 @@ impl DirectoryWrite {
                 add: adopted,
                 remove: Vec::new(),
             };
-            log.commit(None, &init).await?;
+            // Version 0 only: a writer that loses this race drops its listing and reads the winner's
+            // snapshot (its files may have been replaced since it listed them).
+            log.initialize(&init).await?;
             snap = log.snapshot().await?;
         }
         // The log's own objects are never data to replace.

@@ -259,6 +259,31 @@ impl<'a> CommitLog<'a> {
         Err(self.conflict(version))
     }
 
+    /// Creates version 0 with `entry` and nothing else: `true` if this call created it, `false` if another
+    /// writer already had. Unlike [`Self::commit`] it never retries on a later version, so a writer that
+    /// lost the race can drop the files it listed and read the winner's snapshot instead.
+    ///
+    /// # Errors
+    /// Storage failures; `KRISHIV_UNSUPPORTED_FEATURE` on a store without put-if-absent.
+    pub async fn initialize(&self, entry: &LogEntry) -> Result<bool> {
+        match self
+            .io
+            .put_if_absent(
+                &self.store,
+                &self.entry_path(0),
+                Bytes::from(encode_entry(entry)),
+            )
+            .await?
+        {
+            PutIfAbsent::Created => Ok(true),
+            PutIfAbsent::Exists => Ok(false),
+            PutIfAbsent::Unsupported => Err(crate::error::unsupported(format!(
+                "the commit log on a store without put-if-absent ({})",
+                self.display
+            ))),
+        }
+    }
+
     fn conflict(&self, version: u64) -> KrishivError {
         krishiv_common::error::KrishivConcurrentCommit {
             root: self.display.clone(),

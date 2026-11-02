@@ -284,3 +284,23 @@ async fn a_lost_answer_on_the_last_attempt_is_still_a_success() {
     fault.fail_next_puts(1);
     assert_eq!(l.commit(None, &e).await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn initialization_creates_version_zero_only() {
+    let s = setup();
+    let l = log(&s);
+    assert!(
+        l.initialize(&entry("a", CommitMode::Append, &["f1"], &[]))
+            .await
+            .unwrap()
+    );
+    // The loser neither retries on version 1 nor adds its listing.
+    assert!(
+        !l.initialize(&entry("b", CommitMode::Append, &["f2"], &[]))
+            .await
+            .unwrap()
+    );
+    let snap = l.snapshot().await.unwrap();
+    assert_eq!(snap.version, Some(0));
+    assert_eq!(names(&snap), ["f1"]);
+}

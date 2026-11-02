@@ -458,3 +458,51 @@ fn a_late_fetch_over_partition_directories_returns_the_plain_rows() {
     block_on(s.sql("SET krishiv.exec.lateFetch.maxRows = 0")).unwrap();
     assert_eq!(rows(&s, &query), on);
 }
+
+#[test]
+fn overlapping_glob_roots_read_each_file_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let root = written(&s, dir.path(), &[2020, 2021], &[Some("eu"), Some("us")]);
+    // `year=2020` and `year=2020/region=eu` overlap: the file under the second is also under the first.
+    let both = rows(
+        &s,
+        &format!("SELECT CAST(id AS STRING) FROM parquet.`{root}/year=2020{{,/region=eu}}`"),
+    );
+    assert_eq!(both, [["1"]]);
+}
+
+#[test]
+fn merge_schema_matches_names_without_regard_to_case_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let root = dir.path().join("merged");
+    let root = root.to_str().unwrap().to_owned();
+    block_on(
+        block_on(s.sql("SELECT 1 AS id"))
+            .unwrap()
+            .write()
+            .parquet(&format!("{root}/p1")),
+    )
+    .unwrap();
+    block_on(
+        block_on(s.sql("SELECT 2 AS ID"))
+            .unwrap()
+            .write()
+            .parquet(&format!("{root}/p2")),
+    )
+    .unwrap();
+    let read = |s: &Session| {
+        let df = s
+            .read()
+            .option("mergeSchema", "true")
+            .option("recursiveFileLookup", "true")
+            .parquet([root.as_str()]);
+        block_on(df.schema()).unwrap().fields().len()
+    };
+    // `id` and `ID` are one column under the default `spark.sql.caseSensitive=false`...
+    assert_eq!(read(&s), 1);
+    // ...and two when names are case sensitive.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(read(&s), 2);
+}

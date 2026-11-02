@@ -182,3 +182,13 @@ fn many_stars_before_a_missing_suffix_stay_cheap() {
     assert!(!glob.matches(&[name.as_str()]));
     assert!(glob.matches(&[format!("{name}b").as_str()]));
 }
+
+#[test]
+fn repeated_brace_groups_are_bounded() {
+    // 2^30 alternatives would exhaust memory; the pattern is refused before they are built.
+    let pattern = "{a,b}".repeat(30);
+    let err = crate::partition::glob::Glob::parse(&pattern).unwrap_err();
+    assert!(err.contains("alternatives"), "{err}");
+    // A reasonable number still works.
+    assert!(crate::partition::glob::Glob::parse(&"{a,b}".repeat(8)).is_ok());
+}

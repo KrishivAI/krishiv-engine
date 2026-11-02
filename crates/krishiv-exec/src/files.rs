@@ -424,6 +424,8 @@ impl FileReads {
                 .await?;
         }
         listed.sort_by(|a, b| a.0.path.as_ref().cmp(b.0.path.as_ref()));
+        // Overlapping roots (`/d/{a,a/b}`, or a glob and a plain path) reach a file twice: it is read once.
+        listed.dedup_by(|a, b| a.0.path == b.0.path && a.0.store == b.0.store);
         let format = match self.formats.get(format) {
             Ok(format) => format,
             Err(e) => {
@@ -462,7 +464,12 @@ impl FileReads {
             .into());
         }
         let schema = if merge {
-            // Every file's own schema, merged by column name in first-seen order.
+            // Every file's own schema, merged by column name in first-seen order; names match
+            // under `spark.sql.caseSensitive` (default false), so `id` and `ID` are one column.
+            let case_sensitive = self
+                .session
+                .get_unregistered("spark.sql.caseSensitive")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
             let mut merged: Option<SchemaRef> = None;
             for file in &files {
                 let one = format
@@ -471,7 +478,7 @@ impl FileReads {
                     .map_err(|e| e.into_error(&file.display_path()))?;
                 merged = Some(match merged {
                     None => one,
-                    Some(m) => merge_schemas(&m, &one)?,
+                    Some(m) => merge_schemas(&m, &one, case_sensitive)?,
                 });
             }
             merged.ok_or_else(|| {
@@ -794,40 +801,57 @@ impl FileReads {
 ///
 /// # Errors
 /// `CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE` when a column has two types.
-fn merge_schemas(a: &SchemaRef, b: &SchemaRef) -> Result<SchemaRef> {
-    let fields = merge_fields(a.fields(), b.fields())?;
+fn merge_schemas(a: &SchemaRef, b: &SchemaRef, case_sensitive: bool) -> Result<SchemaRef> {
+    let fields = merge_fields(a.fields(), b.fields(), case_sensitive)?;
     Ok(Arc::new(arrow_schema::Schema::new_with_metadata(
         fields,
         a.metadata().clone(),
     )))
 }
 
-fn merge_fields(a: &arrow_schema::Fields, b: &arrow_schema::Fields) -> Result<Vec<FieldRef>> {
+fn merge_fields(
+    a: &arrow_schema::Fields,
+    b: &arrow_schema::Fields,
+    case_sensitive: bool,
+) -> Result<Vec<FieldRef>> {
+    let same = |x: &str, y: &str| {
+        if case_sensitive {
+            x == y
+        } else {
+            x.eq_ignore_ascii_case(y)
+        }
+    };
     let mut out: Vec<FieldRef> = Vec::with_capacity(a.len());
     for f in a {
-        match b.iter().find(|g| g.name() == f.name()) {
+        match b.iter().find(|g| same(g.name(), f.name())) {
             None => out.push(Arc::clone(f)),
-            Some(g) => out.push(merge_field(f, g)?),
+            Some(g) => out.push(merge_field(f, g, case_sensitive)?),
         }
     }
     out.extend(
         b.iter()
-            .filter(|g| !a.iter().any(|f| f.name() == g.name()))
+            .filter(|g| !a.iter().any(|f| same(f.name(), g.name())))
             .cloned(),
     );
     Ok(out)
 }
 
-fn merge_field(a: &FieldRef, b: &FieldRef) -> Result<FieldRef> {
+fn merge_field(a: &FieldRef, b: &FieldRef, case_sensitive: bool) -> Result<FieldRef> {
     use arrow_schema::DataType as Arrow;
     let nullable = a.is_nullable() || b.is_nullable();
     let data_type = match (a.data_type(), b.data_type()) {
         (x, y) if x == y => x.clone(),
-        (Arrow::Struct(x), Arrow::Struct(y)) => Arrow::Struct(merge_fields(x, y)?.into()),
+        (Arrow::Struct(x), Arrow::Struct(y)) => {
+            Arrow::Struct(merge_fields(x, y, case_sensitive)?.into())
+        }
         // Collections merge their element (or key and value) types the same way.
-        (Arrow::List(x), Arrow::List(y)) => Arrow::List(merge_field(x, y)?),
-        (Arrow::LargeList(x), Arrow::LargeList(y)) => Arrow::LargeList(merge_field(x, y)?),
-        (Arrow::Map(x, sorted), Arrow::Map(y, _)) => Arrow::Map(merge_field(x, y)?, *sorted),
+        (Arrow::List(x), Arrow::List(y)) => Arrow::List(merge_field(x, y, case_sensitive)?),
+        (Arrow::LargeList(x), Arrow::LargeList(y)) => {
+            Arrow::LargeList(merge_field(x, y, case_sensitive)?)
+        }
+        (Arrow::Map(x, sorted), Arrow::Map(y, _)) => {
+            Arrow::Map(merge_field(x, y, case_sensitive)?, *sorted)
+        }
         (x, y) => {
             let sql = |f: &FieldRef, t: &Arrow| {
                 DataType::from_arrow_field(&arrow_schema::Field::new(f.name(), t.clone(), true))
