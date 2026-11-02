@@ -64,3 +64,10 @@ fn nullability_differing_below_the_top_level_still_compares() {
         "true"
     );
 }
+
+#[test]
+fn arrays_of_untyped_nulls_compare() {
+    assert_eq!(one("SELECT array(NULL) = array(NULL)"), "true");
+    assert_eq!(one("SELECT array(NULL, NULL) < array(NULL)"), "false");
+    assert_eq!(one("SELECT array(NULL) < array(NULL, NULL)"), "true");
+}

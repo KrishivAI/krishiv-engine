@@ -151,7 +151,9 @@ pub fn cmp_rows(
     r: &dyn Array,
     ri: usize,
 ) -> Result<Ordering, KernelError> {
-    match (l.is_null(li), r.is_null(ri)) {
+    // An untyped NULL array has no null buffer: every element is NULL.
+    let null = |a: &dyn Array, i: usize| a.is_null(i) || matches!(a.data_type(), DataType::Null);
+    match (null(l, li), null(r, ri)) {
         (true, true) => return Ok(Ordering::Equal),
         (true, false) => return Ok(Ordering::Less),
         (false, true) => return Ok(Ordering::Greater),

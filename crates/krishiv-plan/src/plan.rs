@@ -645,6 +645,11 @@ pub struct Scan {
     pub version: Option<TableVersion>,
 }
 
+/// Field-metadata key the analyzer puts on every field of the generated
+/// `_metadata` struct, so a table column of that name and shape is never
+/// taken for it.
+pub(crate) const GENERATED_METADATA_KEY: &str = "krishiv.generated_file_metadata";
+
 impl Scan {
     /// The hidden `_metadata` column of a file source this scan outputs
     /// (always last), if it does: a struct of the source's own fields.
@@ -668,9 +673,10 @@ impl Scan {
         ];
         (c.name == "_metadata"
             && !s.fields().is_empty()
-            && s.fields()
-                .iter()
-                .all(|f| FIELDS.iter().any(|n| *n == f.name())))
+            && s.fields().iter().all(|f| {
+                FIELDS.iter().any(|n| *n == f.name())
+                    && f.metadata().as_map().contains_key(GENERATED_METADATA_KEY)
+            }))
         .then_some(c)
     }
 }

@@ -3052,9 +3052,18 @@ impl Resolver<'_> {
         // Columns an earlier `USING` join merged away stay reachable above this join, and its
         // condition may read them (`a NATURAL JOIN b JOIN c ON b.k = c.k`): the inputs are
         // revealed, the join runs over the wide inputs and a projection restores the output.
+        // The `_metadata` of a file table an `ON` condition reads is widened into its input first.
+        let (l0, r0) = (l.clone(), r.clone());
+        let (l, r) = match (&condition, &kind) {
+            (JoinCondition::On(c), k) if !matches!(k, JoinKind::Existence(_)) => (
+                self.reveal_exprs(&l0, std::iter::once(c))?,
+                self.reveal_exprs(&r0, std::iter::once(c))?,
+            ),
+            _ => (l0.clone(), r0.clone()),
+        };
         let wide = if !matches!(kind, JoinKind::Existence(_)) {
             let (wl, wr) = (self.reveal_hidden(&l)?, self.reveal_hidden(&r)?);
-            (wl.out.len() != l.out.len() || wr.out.len() != r.out.len()).then_some((wl, wr))
+            (wl.out.len() != l0.out.len() || wr.out.len() != r0.out.len()).then_some((wl, wr))
         } else {
             None
         };
@@ -3069,24 +3078,15 @@ impl Resolver<'_> {
             let Some((wl, wr)) = &wide else {
                 let mut j = self.make(p.origin, node, out, &[&l, &r]);
                 j.hidden = Self::carried_hidden(&l, &r, kind, (ln, rn)).into();
-                if let PlanNode::Join { condition, .. } = &j.plan.node
-                    && j.hidden.iter().any(|a| a.col.name == METADATA_COLUMN)
-                {
-                    j.widen = Some(Arc::new(Widen::Join {
-                        left: l.clone(),
-                        right: r.clone(),
-                        kind,
-                        condition: condition.clone(),
-                        nullable: (ln, rn),
-                    }));
-                }
+                j.widen = Self::join_widen(&l, &r, kind, &j, (ln, rn));
                 return Ok(j);
             };
             let mut wide_out: Vec<Attr> = wl.out.iter().map(|a| nullable(a, ln)).collect();
             if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
                 wide_out.extend(wr.out.iter().map(|a| nullable(a, rn)));
             }
-            let j = self.make(p.origin, node, wide_out, &[wl, wr]);
+            let mut j = self.make(p.origin, node, wide_out, &[wl, wr]);
+            j.widen = Self::join_widen(wl, wr, kind, &j, (ln, rn));
             let mut res = self.restore(&j, &out);
             res.hidden = Self::carried_hidden(wl, wr, kind, (ln, rn)).into();
             return Ok(res);
@@ -3099,17 +3099,13 @@ impl Resolver<'_> {
                 wide_out.extend(wr.out.iter().map(|a| nullable(a, rn)));
             }
             let visible: HashSet<AttrId> = out.iter().map(|a| a.col.id).collect();
-            (
-                self.make(Origin::UNKNOWN, node, wide_out, &[wl, wr]),
-                Some(visible),
-                true,
-            )
+            let mut j = self.make(Origin::UNKNOWN, node, wide_out, &[wl, wr]);
+            j.widen = Self::join_widen(wl, wr, kind, &j, (ln, rn));
+            (j, Some(visible), true)
         } else {
-            (
-                self.make(Origin::UNKNOWN, node, out, &[&l, &r]),
-                None,
-                false,
-            )
+            let mut j = self.make(Origin::UNKNOWN, node, out, &[&l, &r]);
+            j.widen = Self::join_widen(&l, &r, kind, &j, (ln, rn));
+            (j, None, false)
         };
         let mut res = self.using_project(p.origin, &j, kind, &keys, env, visible.as_ref())?;
         let shown: HashSet<AttrId> = res.out.iter().map(|a| a.col.id).collect();
@@ -3129,6 +3125,30 @@ impl Resolver<'_> {
         };
         res.hidden = hidden.into();
         Ok(res)
+    }
+
+    /// How `j`, a join of `l` and `r`, gets back a `_metadata` column of
+    /// either input: `None` when neither has one.
+    fn join_widen(
+        l: &Rel,
+        r: &Rel,
+        kind: JoinKind,
+        j: &Rel,
+        nullable: (bool, bool),
+    ) -> Option<Arc<Widen>> {
+        let PlanNode::Join { condition, .. } = &j.plan.node else {
+            return None;
+        };
+        let meta = |c: &Rel| c.hidden.iter().any(|a| a.col.name == METADATA_COLUMN);
+        (meta(l) || meta(r)).then(|| {
+            Arc::new(Widen::Join {
+                left: l.clone(),
+                right: r.clone(),
+                kind,
+                condition: condition.clone(),
+                nullable,
+            })
+        })
     }
 
     /// `c` with the columns its `hidden` list names in its output, as far as they can be reached.
@@ -3780,17 +3800,25 @@ pub(super) const METADATA_COLUMN: &str = "_metadata";
 /// The `_metadata` struct: Spark's field names, types and order; `row_index`
 /// only for Parquet.
 fn metadata_type(row_index: bool) -> DataType {
-    use krishiv_types::{StructField, StructType};
+    use krishiv_types::{StructField, StructType, parse_metadata};
+    let mark = || {
+        parse_metadata(&format!(
+            "{{\"{}\":true}}",
+            crate::plan::GENERATED_METADATA_KEY
+        ))
+        .unwrap_or_else(|_| krishiv_types::Metadata::empty())
+    };
+    let field = |n: &str, t: DataType| StructField::new(n, t, false).with_metadata(mark());
     let mut fields = vec![
-        StructField::new("file_path", DataType::String, false),
-        StructField::new("file_name", DataType::String, false),
-        StructField::new("file_size", DataType::Long, false),
-        StructField::new("file_block_start", DataType::Long, false),
-        StructField::new("file_block_length", DataType::Long, false),
-        StructField::new("file_modification_time", DataType::Timestamp, false),
+        field("file_path", DataType::String),
+        field("file_name", DataType::String),
+        field("file_size", DataType::Long),
+        field("file_block_start", DataType::Long),
+        field("file_block_length", DataType::Long),
+        field("file_modification_time", DataType::Timestamp),
     ];
     if row_index {
-        fields.push(StructField::new("row_index", DataType::Long, false));
+        fields.push(field("row_index", DataType::Long));
     }
     DataType::Struct(StructType::new(fields))
 }

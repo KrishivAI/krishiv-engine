@@ -217,3 +217,61 @@ fn a_late_fetched_sort_limit_can_filter_on_the_hidden_column() {
     block_on(s.sql("SET krishiv.exec.lateFetch.maxRows = 100")).unwrap();
     assert_eq!(count(&s, sql), 1);
 }
+
+#[test]
+fn a_table_column_shaped_like_the_hidden_one_is_still_a_table_column() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "CREATE TABLE q(id INT, _metadata STRUCT<file_path: STRING>) USING PARQUET",
+        "INSERT INTO q VALUES (1, named_struct('file_path', 'mine'))",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    assert_eq!(
+        count(&s, "SELECT id FROM q WHERE _metadata.file_path = 'mine'"),
+        1
+    );
+}
+
+#[test]
+fn joins_read_the_hidden_column_in_on_and_using() {
+    let s = session();
+    assert_eq!(
+        count(
+            &s,
+            "SELECT p.id FROM p JOIN c ON p._metadata.file_name IS NOT NULL AND c._metadata.file_name IS NOT NULL AND p.id = c.id"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT p.id FROM p JOIN c ON p._metadata.file_size >= 0 AND c._metadata.file_size >= 0"
+        ),
+        2
+    );
+    assert_eq!(
+        names(&s, "SELECT * FROM p JOIN c ON p._metadata.file_size >= 0"),
+        ["id", "name", "id", "v"]
+    );
+    assert_eq!(
+        count(&s, "SELECT p._metadata.file_name FROM p JOIN c USING (id)"),
+        1
+    );
+    assert_eq!(
+        count(&s, "SELECT c._metadata.file_name FROM p NATURAL JOIN c"),
+        1
+    );
+}
+
+#[test]
+fn a_qualifier_naming_a_table_wins_over_a_struct_column_in_nested_except() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        names(
+            &s,
+            "SELECT t.* EXCEPT (b) FROM (SELECT named_struct('a', 1, 'b', 2) AS t, 3 AS b) t"
+        ),
+        ["t"]
+    );
+}

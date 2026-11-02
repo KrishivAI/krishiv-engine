@@ -448,7 +448,10 @@ impl Resolver<'_> {
         let mut entries: Vec<(String, Arc<Expr>, DataType)> = Vec::new();
         let mut drops: Vec<Vec<Vec<String>>> = Vec::new();
         // `data` or `data.s2`: a struct column, or a struct field below one.
-        let struct_qualifier = if s.qualifier.is_empty() {
+        // A table or alias of the name wins over a struct column of it.
+        let struct_qualifier = if s.qualifier.is_empty()
+            || self.qualifier_matches_scope(&s.qualifier, cx)
+        {
             None
         } else {
             match self.find(cx.scope, &s.qualifier, origin, false)? {
